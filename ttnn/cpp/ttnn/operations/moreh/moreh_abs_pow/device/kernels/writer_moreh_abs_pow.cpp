@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -17,21 +20,22 @@ void kernel_main() {
     uint32_t cb_id{16};
     const auto cb_id_output = cb_id++;
 
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-
     constexpr auto output_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto s = TensorAccessor(output_args, output_addr);
+
+    Noc noc;
+    DataflowBuffer dfb_output(cb_id_output);
 
     const auto start_tile_idx = tile_offset;
-    const auto output_l1_read_addr = get_read_ptr(cb_id_output);
+    const auto output_tile_bytes = get_tile_size(cb_id_output);
 
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             const auto tile_idx = start_tile_idx + row_idx * Wt + col_idx;
-            cb_wait_front(cb_id_output, 1);
-            noc_async_write_tile(tile_idx, s, output_l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_output, 1);
+            dfb_output.wait_front(1);
+            noc.async_write(dfb_output, s, output_tile_bytes, {.offset_bytes = 0}, {.page_id = tile_idx});
+            noc.async_write_barrier();
+            dfb_output.pop_front(1);
         }
     }
 }  // void kernel_main()

@@ -4,9 +4,15 @@
 
 #pragma once
 
+#include <optional>
+#include <vector>
+
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::ternary {
 
@@ -41,21 +47,7 @@ struct TernaryDeviceOperation {
     };
 
     struct TernaryProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
@@ -67,6 +59,13 @@ struct TernaryDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // scalar_input_a/b are excluded from the hash; re-applied each dispatch. Mirrors the factory.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::ternary

@@ -17,6 +17,7 @@ struct AllGatherAsyncDeviceOperation {
     using operation_attributes_t = AllGatherAsyncParams;
     using tensor_args_t = AllGatherAsyncInputs;
     using spec_return_value_t = TensorSpec;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory, AllGatherViaBroadcastFactory>;
@@ -27,9 +28,12 @@ struct AllGatherAsyncDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
+
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 };
 
 std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(

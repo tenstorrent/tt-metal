@@ -33,10 +33,7 @@
 #if !defined(WATCHER_DISABLE_CB_SANITIZE)
 #include "internal/circular_buffer_interface.h"
 #endif
-
-#if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#endif
+#include "risc_common.h"
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -48,6 +45,19 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_TARGET true
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+// Quasar DM reaches L1 through two aliased views of the same physical memory: the cached view
+// [MEM_L1_BASE, +MEM_L1_SIZE) and the uncached alias [MEM_L1_UNCACHED_BASE, +MEM_L1_SIZE).
+// A valid access lies wholly within one view. Crossing the seam is not a contiguous transfer:
+// the bytes below the seam hit the top of physical L1 and the bytes at or above it hit the bottom,
+// so such an access is illegal. Returns true when [addr, addr+len) is entirely contained in a single view.
+inline bool debug_l1_access_within_single_view(uint64_t addr, uint64_t len) {
+    bool in_cached_view = (addr + len <= MEM_L1_BASE + MEM_L1_SIZE);
+    bool in_uncached_view = (addr >= MEM_L1_UNCACHED_BASE) && (addr + len <= MEM_L1_UNCACHED_BASE + MEM_L1_SIZE);
+    return in_cached_view || in_uncached_view;
+}
+#endif
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
@@ -153,28 +163,61 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
 }
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
-inline bool debug_valid_reg_addr(uint64_t addr, uint64_t len) {
+inline bool debug_valid_reg_addr(
+    uint64_t addr, uint64_t len, AddressableCoreType core_type = AddressableCoreType::TENSIX) {
+    uint32_t num_streams;
+    switch (core_type) {
+        case AddressableCoreType::ETH: num_streams = ETH_NOC_NUM_STREAMS; break;
+#if defined(ARCH_BLACKHOLE)
+        // DRISCs are an addressable core only on BH
+        case AddressableCoreType::DRAM: num_streams = DRAM_NOC_NUM_STREAMS; break;
+#endif
+        default: num_streams = NOC_NUM_STREAMS; break;
+    }
     return (((addr >= NOC_OVERLAY_START_ADDR) &&
-             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * num_streams)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0)) &&
            (len == 4);
 }
 
-inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write) {
+inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write, bool is_local_buffer = false) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Local buffers may use the cached view or the uncached alias (and must not straddle the seam).
+    // Remote NOC target offsets are always physical (cached-range) and must stay within MEM_L1_SIZE.
+    if (is_local_buffer) {
+        if (!debug_l1_access_within_single_view(addr, len)) {
+            return DebugSanitizeNocAddrOverflow;
+        }
+    } else {
+        if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
+            return DebugSanitizeNocAddrOverflow;
+        }
+    }
+#else
     if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+#endif
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
     if (write && (addr < MEM_MAP_READ_ONLY_END)) {
         return DebugSanitizeNocAddrMailbox;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // The read-only region is aliased into the uncached view; a write there hits the same reserved
+    // memory. Only local buffers use the alias (remote targets are physical, bounded above). Raw
+    // address kept for reporting.
+    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE &&
+        addr < MEM_L1_UNCACHED_BASE + MEM_MAP_READ_ONLY_END) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
 #endif
     return DebugSanitizeOK;
 }
@@ -230,11 +273,34 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     return DebugSanitizeOK;
 }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_DRISC)
+inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) {
+    if (addr + len <= addr) {
+        return DebugSanitizeNocAddrZeroLength;
+    }
+    if (addr < MEM_DRISC_L1_BASE) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+    if (addr + len > MEM_DRISC_L1_BASE + MEM_DRISC_L1_SIZE) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < MEM_DRISC_MAILBOX_END)) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
+    return DebugSanitizeOK;
+}
+#endif
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
 // Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
 // circular buffer stays within that buffer's allocated region.  Only runs on
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
 // Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
+// Effectively BH/WH-only: Quasar uses DFBs (separate g_dfb_interface) and never populates
+// cb_interface[], so every slot is fifo_size == 0 and this returns OK -- no alias handling needed.
 inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         LocalCBInterface& cb = get_local_cb_interface(i);
@@ -258,13 +324,15 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     // Address is not inside any known CB; other checks will validate it.
     return DebugSanitizeOK;
 }
-#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC
 
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
-//  - for Quasar, multiple DMs share one NOC so CAS is used; address is remapped from uncached to
-//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
+//  - for Quasar, multiple DMs share one NOC and may race to report errors; a static lock in the
+//    DM firmware's shared .bss is atomically claimed (amoswap) so only the first writer proceeds.
+//    A static suffices since TRISCs never reach this code, avoiding a mailbox struct size increase.
+//    Metadata is written to the cached L1 alias of the mailbox, then flushed to make it visible to host.
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -287,9 +355,9 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     if (addr >= MEM_L1_UNCACHED_BASE) {
         san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
     }
-    uint16_t expected = DebugSanitizeOK;
-    if (__atomic_compare_exchange_n(
-            &san->return_code, &expected, DebugSanitizeWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+    static volatile uint32_t s_sanitize_lock = 0;
+    uint32_t old = __atomic_exchange_n(&s_sanitize_lock, 0xDEADBEEFu, __ATOMIC_ACQ_REL);
+    if (!old)
 #else
     if (san->return_code == DebugSanitizeOK)
 #endif
@@ -302,12 +370,9 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         san->is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
         san->return_code = return_code;
-#if defined(ARCH_QUASAR)
-        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        // TODO: Replace with flush_l2_cache_line() once available
-        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-        *flush_reg = reinterpret_cast<uintptr_t>(san);
-        asm volatile("fence" ::: "memory");
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Flush the mailbox metadata range to L1 so host sees all fields via NOC; fence ensures completion
+        flush_l2_cache_range(reinterpret_cast<uintptr_t>(san), sizeof(debug_sanitize_addr_msg_t));
 #endif
     }
 
@@ -438,7 +503,13 @@ uint32_t debug_sanitize_noc_addr(
     uint32_t alignment_mask =
         (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) -
         1;  // Default alignment, only override in certain cases.
-    if (core_type == AddressableCoreType::PCIE) {
+    // Reg-space targets (on DRAM/ETH/TENSIX overlay) bypass the type specific addr validator and
+    // use reg alignment instead
+    if ((core_type == AddressableCoreType::DRAM || core_type == AddressableCoreType::ETH ||
+         core_type == AddressableCoreType::TENSIX) &&
+        debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
+        alignment_mask = NOC_REG_ALIGNMENT_BYTES - 1;
+    } else if (core_type == AddressableCoreType::PCIE) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         debug_sanitize_post_addr_and_hang(
@@ -463,29 +534,26 @@ uint32_t debug_sanitize_noc_addr(
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_dram_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::ETH) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-        }
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     } else if (core_type == AddressableCoreType::TENSIX) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_addr_and_hang(
-                noc_id,
-                noc_addr,
-                l1_addr,
-                noc_len,
-                multicast,
-                dir,
-                DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-        }
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            noc_len,
+            multicast,
+            dir,
+            DEBUG_SANITIZE_NOC_TARGET,
+            debug_valid_worker_addr(
+                noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE, false));  // remote NOC target
     } else {
         // Bad XY
         debug_sanitize_post_addr_and_hang(
@@ -515,11 +583,14 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
-        // Local addr needs to be checked depending on whether we're on eth or tensix.
+        // Local addr needs to be checked depending on core type.
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#elif defined(COMPILE_FOR_DRISC)
+        uint16_t return_code = debug_valid_drisc_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
-        uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+        uint16_t return_code =
+            debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ, true);  // local buffer
 #endif
         debug_sanitize_post_addr_and_hang(
             noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
@@ -537,7 +608,8 @@ void debug_sanitize_noc_and_worker_addr(
         }
     }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
     // Check local L1 address against CB bounds (both read and write directions).
     debug_sanitize_post_addr_and_hang(
         noc_id,
@@ -557,6 +629,11 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
     bool is_virtual_coord = true;
     AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
     if (core_type == AddressableCoreType::DRAM) {
+        // DRISC overlay stream-reg space is a valid DRAM target; skip the throw.
+        uint64_t noc_local_addr = NOC_LOCAL_ADDR(addr);
+        if (debug_valid_reg_addr(noc_local_addr, len, core_type)) {
+            return;
+        }
         debug_sanitize_post_addr_and_hang(
             noc_id,
             addr,
@@ -570,12 +647,19 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 }
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
+    bool illegal = (addr + len <= addr);  // zero length / wraparound
 #if defined(COMPILE_FOR_ERISC)
-    constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
+    illegal = illegal || (addr + len > MEM_ETH_SIZE);
+#elif defined(COMPILE_FOR_DRISC)
+    illegal = illegal || (addr + len > MEM_DRISC_L1_SIZE);
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Access must lie wholly within the cached view or the uncached alias (not straddle the seam).
+    // Report the raw address (not a normalized one) so errors reflect what the kernel used.
+    illegal = illegal || !debug_l1_access_within_single_view(addr, len);
 #else
-    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
+    illegal = illegal || (addr + len > MEM_L1_SIZE);
 #endif
-    if (addr + len <= addr || addr + len > l1_overflow_addr) {
+    if (illegal) {
         debug_sanitize_post_addr_and_hang(
             0,  // unused (not a noc transaction)
             0,  // unused (not a noc transaction)
@@ -636,13 +720,25 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO),                                             \
         NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_AT_LEN_BE),                                                \
         false);
+// Used for inline writes. On tt-1xx, the destination lives in NOC_TARG_ADDR; on Quasar RoCC-backed command
+// buffers, the destination lives in DEST, exposed through the legacy NOC_RET_ADDR aliases.
+#if defined(ARCH_QUASAR)
+#define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)                                                  \
+    DEBUG_SANITIZE_NOC_ADDR(                                                                                 \
+        noc_id,                                                                                              \
+        ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_MID) << 32) |                      \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_LO)),                              \
+        4);
+#else
 #define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)                                                   \
     DEBUG_SANITIZE_NOC_ADDR(                                                                                  \
         noc_id,                                                                                               \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_MID) << 32) |                      \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO), false),                       \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO)),                              \
         4);
+#endif
 #define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                     \
     debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
     LOG_LEN(l)
@@ -704,34 +800,39 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
             l,                                                                                                         \
             false);                                                                                                    \
     }
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)            \
-    {                                                                                                           \
-        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                      \
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
-            noc_id,                                                                                             \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE)                    \
-             << NOC_ADDR_COORD_SHIFT) |                                                                         \
-                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
-            worker_a,                                                                                           \
-            NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                                         \
-            false);                                                                                             \
+// For a (non-inline) write the destination NoC coordinate lives in NOC_RET_ADDR; NOC_TARG_ADDR holds the
+// local source address and the initiating NIU's own coordinate (the write-ack return target). Reconstruct the
+// destination from NOC_RET_ADDR so the sanitizer checks/reports the real target, not the sender's own core.
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)                   \
+    {                                                                                                                  \
+        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                             \
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                         \
+            noc_id,                                                                                                    \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_MID) << 32) | noc_a_lower,         \
+            worker_a,                                                                                                  \
+            NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                                                \
+            false);                                                                                                    \
     }
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                  \
-    {                                                                                                           \
-        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                      \
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
-            noc_id,                                                                                             \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE)                    \
-             << NOC_ADDR_COORD_SHIFT) |                                                                         \
-                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
-            worker_a,                                                                                           \
-            l,                                                                                                  \
-            false);                                                                                             \
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                         \
+    {                                                                                                                  \
+        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                             \
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                         \
+            noc_id,                                                                                                    \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_MID) << 32) | noc_a_lower,         \
+            worker_a,                                                                                                  \
+            l,                                                                                                         \
+            false);                                                                                                    \
     }
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)
+#if defined(WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION)
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast) \
     debug_sanitize_check_linked_transactions(noc_id, 0, 0, 0, multicast, DEBUG_SANITIZE_NOC_WRITE);
+#else
+#define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast)
+#endif
 #define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_access(addr, l);
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 

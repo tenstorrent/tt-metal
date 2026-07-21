@@ -35,7 +35,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-    const std::uint32_t transpose           = params.UNPACK_TRANSPOSE_FACES;
+    const ckernel::Transpose transpose      = params.UNPACK_TRANSPOSE_FACES
+                                                  ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
+                                                  : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -49,6 +51,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
+
+    // Must come after _llk_unpack_hw_configure_, otherwise the ALU stoch-rnd
+    // bits programmed here are overwritten by configure_unpack_AB().
+    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 
     _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
 
@@ -127,7 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -148,31 +154,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
 
-#ifdef ARCH_WORMHOLE
     const bool narrow_tile = (tensor_shape.num_faces_c_dim == 1);
-#endif
 
-#ifdef ARCH_BLACKHOLE
-    // BH configure_pack uses partial_face for BFP exp_section_size, but narrow_tile is unused (defaults to false)
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, false /* narrow_tile */);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
-#endif
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+        formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
-#else
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
-#endif
-
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>(tensor_shape.face_r_dim, narrow_tile);
-#endif
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 
 #ifdef EN_DEST_REUSE
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -191,7 +181,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

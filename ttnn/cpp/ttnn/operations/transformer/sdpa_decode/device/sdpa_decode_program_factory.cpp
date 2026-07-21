@@ -2,18 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_decode_program_factory.hpp"
+#include "sdpa_decode_device_operation.hpp"
 
+#include <bit>
+#include <climits>
+#include <cmath>
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
-#include <cmath>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "ttnn/operation.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -21,8 +26,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
-    const SdpaDecodeParams& operation_attributes, const SdpaDecodeInputs& tensor_args, Tensor& tensor_return_value) {
+ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     // ========== Input Tensors ==========
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
@@ -43,15 +50,21 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const float scale =
         operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
     const uint32_t sliding_window_size = operation_attributes.sliding_window_size.value_or(0);
-    bool share_cache = operation_attributes.share_cache.value_or(false);
+    // capacity_t is in TILE rows (= cache_position_modulo / TILE_HEIGHT); 0 = unbounded.
+    // Validator enforces cache_position_modulo % effective_block_size == 0, so the
+    // tile-aligned divide is exact. Sets the kernel's compile-time wrap modulus on
+    // every page_table lookup so a bounded sliding-window cache can be indexed by
+    // absolute positions.
+    const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0);
+    const uint32_t capacity_t = cache_position_modulo / TILE_HEIGHT;
+    const bool share_cache = operation_attributes.share_cache.value_or(false);
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
     const auto& input_tensor_v = tensor_args.v.value_or(input_tensor_k);
 
-    // ========== Device & Program ==========
+    // ========== Device ==========
     IDevice* device = input_tensor_q.device();
-    Program program = CreateProgram();
 
     // ========== Feature Flags ==========
     const bool is_paged_attention = page_table_tensor.has_value();
@@ -70,13 +83,29 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // ========== Core Dimensions ==========
     // B = batch size, PNH = padded num Q heads, S = sequence length, DH = head dim
+    //
+    // With PagedCacheGeometryOverride.block_size set, this call reads a K/V cache allocated
+    // for a different layer's shape; Q's last dim drives DH. Without it, k_shape[3] is used
+    // and the strict q.head_dim == k.head_dim check in validate keeps legacy callers
+    // byte-identical. Overrides are rejected under MLA in validate; do not apply them when
+    // use_mla is true (same asymmetry fix as chunked prefill).
+    const auto& geo = operation_attributes.paged_cache_geometry;
+    const bool apply_geometry_override = !use_mla && geo.active();
+    const bool has_block_size_override = apply_geometry_override && geo.block_size.has_value();
     uint32_t B = q_shape[1];
     uint32_t PNH = q_shape[2];
     uint32_t S = k_shape[2];
-    uint32_t DH = k_shape[3];
-    uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
+    uint32_t DH = has_block_size_override ? q_shape[3] : k_shape[3];
+    uint32_t vDH = use_mla ? head_dim_v : (has_block_size_override ? q_shape[3] : v_shape[3]);
     uint32_t Bkv = k_shape[0];
-    uint32_t num_kv_heads = k_shape[1];
+    const uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
+    // num_kv_heads from the cache view by default, or from the explicit override
+    // when an HMA cross-group caller is reading a buffer allocated for a different
+    // layer's spec (e.g. Gemma4-26B-A4B sliding kv=8 cache read by a full kv=2
+    // layer). The override drives the kernel's per-block stride and head-parallel
+    // reduction grid the same way the legacy cache shape did.
+    uint32_t num_kv_heads = apply_geometry_override ? geo.num_kv_heads.value_or(k_shape[1]) : k_shape[1];
+    TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
     uint32_t q_heads_parallel_factor = 1;
@@ -88,10 +117,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         B = page_table_tensor->is_sharded() ? page_table_tensor->padded_shape()[0] /
                                                   page_table_tensor->memory_config().shard_spec()->grid.num_cores()
                                             : page_table_tensor->padded_shape()[0];
-        uint32_t block_size = k_shape[2];
-        original_block_size = input_tensor_k.logical_shape()[2];
+        uint32_t block_size = apply_geometry_override ? geo.block_size.value_or(k_shape[2]) : k_shape[2];
+        // original_block_size gates the sub-tile padding mask. With an override active,
+        // validate already enforces it's a multiple of TILE_HEIGHT (no padding path).
+        original_block_size = has_block_size_override ? block_size : input_tensor_k.logical_shape()[2];
         page_block_size_t = block_size / TILE_HEIGHT;
-        S = page_table_tensor.value().padded_shape()[-1] * S;
+        // kv_seq_len = max_num_blocks_per_seq * effective block_size.
+        S = page_table_tensor.value().padded_shape()[-1] * block_size;
         has_block_padding = original_block_size < TILE_HEIGHT;
     }
 
@@ -162,11 +194,15 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // ========== Core Allocation ==========
     const uint32_t max_cores_per_head =
         program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
     const uint32_t num_cores_per_head = std::max(1u, num_cores_per_batch_uncapped / num_kv_heads);
-    const uint32_t num_heads_per_core =
-        std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    uint32_t num_heads_per_core =
+        std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(num_kv_heads) / num_cores_per_batch_uncapped)));
+    while (num_kv_heads % num_heads_per_core != 0) {
+        num_heads_per_core++;
+    }
     const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
     const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     const uint32_t num_output_cores = B;
@@ -331,12 +367,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     }
 
     // All active cores (for tree reduction lookups)
-    std::vector<uint32_t> reduction_group_core_xs(num_active_cores);
-    std::vector<uint32_t> reduction_group_core_ys(num_active_cores);
+    std::vector<uint32_t> reduction_group_core_xs;
+    std::vector<uint32_t> reduction_group_core_ys;
+    reduction_group_core_xs.reserve(num_active_cores);
+    reduction_group_core_ys.reserve(num_active_cores);
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         auto physical = device->worker_core_from_logical_core(core_group[i]);
-        reduction_group_core_xs[i] = physical.x;
-        reduction_group_core_ys[i] = physical.y;
+        reduction_group_core_xs.push_back(physical.x);
+        reduction_group_core_ys.push_back(physical.y);
     }
 
     log_debug(
@@ -373,7 +411,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // DHt granularity for compute loops (must be power of 2)
     uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
     if (dht_granularity != (1u << log2_dht_granularity)) {
         dht_granularity = 1;
         log2_dht_granularity = 0;
@@ -397,7 +435,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const tt::DataFormat mask_df = use_attention_mask
                                        ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                        : tt::DataFormat::Float16_b;
-    const tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat im_df = tt::DataFormat::Float16_b;
     const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
@@ -468,52 +507,68 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             tt::LogOp, "  group[{}]: physical=({}, {})", i, reduction_group_core_xs[i], reduction_group_core_ys[i]);
     }
 
+    // ========== Program Descriptor ==========
+    ProgramDescriptor desc;
+
     // ========== Circular Buffer Creation ==========
     // Unified helper: tile!=nullptr sets tile_dims, buffer!=nullptr sets globally allocated address
-    auto create_cb = [&](CBIndex idx,
-                         uint32_t total_size,
-                         tt::DataFormat df,
-                         uint32_t page_size,
-                         const tt::tt_metal::Tile* tile = nullptr,
-                         Buffer* buffer = nullptr) -> CBHandle {
-        auto config = CircularBufferConfig(total_size, {{idx, df}}).set_page_size(idx, page_size);
+    auto add_cb = [&](CBIndex idx,
+                      uint32_t total_size,
+                      tt::DataFormat df,
+                      uint32_t page_size,
+                      const tt::tt_metal::Tile* tile = nullptr,
+                      Buffer* buffer = nullptr) {
+        CBFormatDescriptor format{
+            .buffer_index = static_cast<uint8_t>(idx),
+            .data_format = df,
+            .page_size = page_size,
+        };
         if (tile != nullptr) {
-            config.set_tile_dims(idx, *tile);
+            format.tile = TileDescriptor{*tile};
         }
+        CBDescriptor cb{
+            .total_size = total_size,
+            .core_ranges = core_grid,
+            .format_descriptors = {format},
+        };
         if (buffer != nullptr) {
-            config.set_globally_allocated_address(*buffer);
+            cb.buffer = buffer;
         }
-        return CreateCircularBuffer(program, core_grid, config);
+        desc.cbs.push_back(std::move(cb));
     };
 
     // Input CBs
-    auto cb_q_in_id = create_cb(
-        CBIndex::c_0, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile, q_locally_available ? q_buffer : nullptr);
-    create_cb(CBIndex::c_1, k_tiles * k_tile_size, k_df, k_tile_size);                        // K input
-    create_cb(CBIndex::c_2, v_tiles * v_tile_size, v_df, v_tile_size);                        // V input
-    create_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
+    add_cb(CBIndex::c_0, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile, q_locally_available ? q_buffer : nullptr);
+    add_cb(CBIndex::c_1, k_tiles * k_tile_size, k_df, k_tile_size);                        // K input
+    add_cb(CBIndex::c_2, v_tiles * v_tile_size, v_df, v_tile_size);                        // V input
+    add_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
     if (use_attention_sink) {
-        create_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+        add_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     }
-    create_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
-    create_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
-    create_cb(CBIndex::c_7, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // l_in
+    add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
+    add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
+    add_cb(CBIndex::c_7, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // l_in
 
     // Optional input CBs (cur_pos and page_table - raw data, no tile dims)
-    CBHandle cb_cur_pos_id = 0;
     if (use_cur_pos_tensor) {
-        cb_cur_pos_id = create_cb(
+        // #44366: cur_pos is consumed by both the writer and compute kernels.
+        // A single shared CB races: whichever consumer pops first drains the
+        // count and the other hangs waiting for tiles. Use one CB per consumer
+        // — c_8 for the writer, c_15 for compute — each with capacity 1. The
+        // reader fills c_8 (from DRAM, or via the aliased sharded buffer)
+        // then does an L1->L1 copy into c_15.
+        add_cb(
             CBIndex::c_8,
             cur_pos_stick_size,
             cur_pos_df,
             cur_pos_stick_size,
             nullptr,
             is_cur_pos_tensor_sharded ? cur_pos_buffer : nullptr);
+        add_cb(CBIndex::c_15, cur_pos_stick_size, cur_pos_df, cur_pos_stick_size);
     }
-    CBHandle cb_page_table_id = 0;
     if (is_paged_attention) {
         uint32_t page_table_cb_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
-        cb_page_table_id = create_cb(
+        add_cb(
             CBIndex::c_9,
             page_table_cb_size,
             page_table_df,
@@ -521,41 +576,41 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             nullptr,
             is_page_table_sharded ? page_table_buffer : nullptr);
     }
-    create_cb(CBIndex::c_10, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile);  // tilized Q
+    add_cb(CBIndex::c_10, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile);  // tilized Q
 
     // Scalar/identity CBs
     const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
-    create_cb(CBIndex::c_11, scale_tiles * col_identity_tile_size, scalar_df, col_identity_tile_size, &full_tile);
-    create_cb(CBIndex::c_12, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);
+    add_cb(CBIndex::c_11, scale_tiles * col_identity_tile_size, scalar_df, col_identity_tile_size, &full_tile);
+    add_cb(CBIndex::c_12, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);
     if (sliding_window_size > 0) {
-        create_cb(CBIndex::c_13, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
+        add_cb(CBIndex::c_13, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
     }
     // Block padding mask (when block_size < TILE_HEIGHT, masks zero-padded rows in each K tile)
     if (has_block_padding) {
-        create_cb(CBIndex::c_14, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
+        add_cb(CBIndex::c_14, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
     }
 
     // Intermediate CBs
-    create_cb(CBIndex::c_24, qk_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-    create_cb(CBIndex::c_25, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-    create_cb(CBIndex::c_26, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-    create_cb(CBIndex::c_27, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_28, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_29, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_30, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_31, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_21, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_22, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_23, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
+    add_cb(CBIndex::c_24, qk_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
+    add_cb(CBIndex::c_25, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
+    add_cb(CBIndex::c_26, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
+    add_cb(CBIndex::c_27, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_28, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_29, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_30, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_31, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_21, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_22, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_23, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
 
     // Output CBs
-    create_cb(CBIndex::c_16, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_17, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_18, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_16, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_17, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_18, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     if (intermed_output_tiles > 0) {
-        create_cb(CBIndex::c_19, intermed_output_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+        add_cb(CBIndex::c_19, intermed_output_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     }
-    auto cb_out_final_id = create_cb(
+    add_cb(
         CBIndex::c_20,
         out_tiles * out_tile_size,
         out_df,
@@ -570,16 +625,18 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
     const uint32_t packed_zero_scalar = pack_two_bfloat16_into_uint32({bfloat_zero_scalar, bfloat_zero_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = scale;
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale);
 
     // ========== Semaphores ==========
-    auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
-    auto output_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
-    auto k_mcast_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
+    const uint32_t reducer_semaphore_id = 0;
+    const uint32_t output_semaphore_id = 1;
+    const uint32_t k_mcast_semaphore_id = 2;
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = reducer_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = output_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = k_mcast_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
 
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
@@ -596,11 +653,11 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         vDHt,
         Sk_chunk_t,
         num_active_cores,
-        is_q_sharded,
+        static_cast<uint32_t>(is_q_sharded),
         num_cores_per_batch,
         k_chunk_size,
         cur_pos_stick_size,
-        (uint32_t)is_paged_attention,
+        static_cast<uint32_t>(is_paged_attention),
         num_kv_heads,
         page_block_size_t,
         Bkv,
@@ -608,22 +665,24 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         num_cores_per_head,
         num_heads_per_core,
         num_output_cores,
-        is_causal,
-        use_attention_mask,
-        use_attention_sink,
+        static_cast<uint32_t>(is_causal),
+        static_cast<uint32_t>(use_attention_mask),
+        static_cast<uint32_t>(use_attention_sink),
         max_dynamic_chunk_size,
-        tilize_q,
+        static_cast<uint32_t>(tilize_q),
         reuse_k,
-        use_half_tile,
+        static_cast<uint32_t>(use_half_tile),
         q_chunk_size_bytes,
-        is_cur_pos_tensor_sharded,
-        is_page_table_sharded,
+        static_cast<uint32_t>(is_cur_pos_tensor_sharded),
+        static_cast<uint32_t>(is_page_table_sharded),
         full_tile.get_tile_size(q_df),
         sliding_window_size,
         original_block_size,
         k_mcast_semaphore_id,
-        (uint32_t)q_locally_available,
-        (uint32_t)use_col_major_group_indexing,  // use_k_mcast
+        static_cast<uint32_t>(q_locally_available),
+        static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
+        Bmask,
+        capacity_t,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -636,7 +695,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
-        reader_compile_time_args_common.push_back(0);
+        tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -648,12 +707,12 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         Sk_chunk_t,
         packed_identity_scalar,
         packed_zero_scalar,
-        scale_union.u,
+        scale_packed,
         num_cores_per_batch,
         num_active_cores,
         reducer_semaphore_id,
         output_semaphore_id,
-        is_output_sharded,
+        static_cast<uint32_t>(is_output_sharded),
         k_chunk_size,
         num_q_heads,
         num_kv_heads,
@@ -662,7 +721,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         num_reducer_cores,
         num_output_cores,
         output_tensor.element_size(),
-        is_causal,
+        static_cast<uint32_t>(is_causal),
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
         sliding_window_size,
@@ -693,14 +752,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         k_chunk_size,
         num_cores_per_head,
         num_heads_per_core,
-        is_causal,
-        use_attention_mask,
-        use_attention_sink,
+        static_cast<uint32_t>(is_causal),
+        static_cast<uint32_t>(use_attention_mask),
+        static_cast<uint32_t>(use_attention_sink),
         max_dynamic_chunk_size,
-        tilize_q,
+        static_cast<uint32_t>(tilize_q),
         q_heads_parallel_factor,
-        use_half_tile,
-        scale_union.u,
+        static_cast<uint32_t>(use_half_tile),
+        scale_packed,
         sliding_window_size,
         num_tree_reduction_rounds,
         original_block_size,
@@ -714,7 +773,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
-            uint32_t log2_val = std::log2(value);
+            uint32_t log2_val = static_cast<uint32_t>(std::log2(value));
             TT_FATAL(value == (1u << log2_val), "{} ({}) must be power of 2", name, value);
             compute_defines[name] = std::to_string(value);
             compute_defines[std::string("LOG2_") + name] = std::to_string(log2_val);
@@ -726,41 +785,51 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
 
+    KernelDescriptor::Defines compute_defines_vec;
+    compute_defines_vec.reserve(compute_defines.size());
+    for (auto& [k, v] : compute_defines) {
+        compute_defines_vec.emplace_back(k, v);
+    }
+
     // ========== Kernel Creation ==========
     const std::string kernel_path = "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/";
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        kernel_path + "compute/sdpa_flash_decode.cpp",
-        core_grid,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args_common,
-            .defines = compute_defines});
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kernel_path + "dataflow/reader_decode_all.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        kernel_path + "dataflow/reader_decode_all.cpp",
-        core_grid,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    auto writer_kernels_id = CreateKernel(
-        program,
-        kernel_path + "dataflow/writer_decode_all.cpp",
-        core_grid,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common));
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = std::move(compute_compile_time_args_common);
+    compute_desc.defines = std::move(compute_defines_vec);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
-    // ========== Buffer Addresses for Runtime Args ==========
-    const uint32_t q_addr = q_buffer->address();
-    const uint32_t k_addr = k_buffer->address();
-    const uint32_t v_addr = v_buffer->address();
-    const uint32_t out_addr = out_buffer->address();
-    const uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
-    const uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
-    const uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
-    const uint32_t attention_sink_addr = use_attention_sink ? attention_sink.value().buffer()->address() : 0;
+    // ========== Buffer Bindings for Runtime Args ==========
+    // Every buffer address is passed as a Buffer* so it is auto-registered as a BufferBinding and
+    // re-patched on the fast cache-hit path (apply_resolved_bindings) instead of being baked as a
+    // raw uint32 that goes stale.  Optional buffers pass a nullptr Buffer* when absent, which
+    // emplace_runtime_args() emits as 0u with no binding — keeping the arg slot stable without
+    // invalidating the fast path.  cur_pos_buffer / page_table_buffer are already the right
+    // nullptr-when-absent Buffer* pointers computed above.
+    Buffer* attn_mask_buffer = use_attention_mask ? attn_mask.value().buffer() : nullptr;
+    Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
 
     // ========== Runtime Arguments ==========
     for (uint32_t i = 0; i < num_active_cores; ++i) {
@@ -796,8 +865,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         uint32_t worker_id_for_output = (core_num_in_output == 0) ? UINT32_MAX : core_num_in_output - 1;
         bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
         bool do_output = (worker_id_for_output == UINT32_MAX);
-        uint32_t cur_pos =
-            (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
+        uint32_t cur_pos = (use_cur_pos_tensor || !is_causal)
+                               ? UINT32_MAX
+                               : cur_pos_ids.at(static_cast<uint32_t>(cur_batch / q_heads_parallel_factor));
 
         // Compute tree reduction parameters for this core
         TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
@@ -826,7 +896,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         // Calculate base index for this reduction group's cores in the physical coordinate arrays
         // reduction_group_core_xs/ys are populated in row-major order (by linear index i)
         // So we use 'i' directly to find the start of this core's reduction group
-        uint32_t reduction_group_base_idx;
+        uint32_t reduction_group_base_idx = 0;
         if (use_col_major_group_indexing) {
             // For column-major indexing: the group starts at (i / num_cores_per_head) * num_cores_per_head
             reduction_group_base_idx = (i / num_cores_per_head) * num_cores_per_head;
@@ -835,53 +905,65 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         }
         log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
         // reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
-            q_addr,
-            k_addr,
-            v_addr,
-            pos_addr,
-            page_table_addr,
-            attn_mask_addr,
-            attention_sink_addr,
-            page_table_stick_size,
-            do_reduce,
-            do_output,
-            cur_head,
-            cur_batch,
-            core_num_in_reduce,
-            core_num_in_output,
-            cur_pos,
-            do_k_mcast,
-            mcast_x,
-            mcast_y0,
-            mcast_y1,
-            num_dests,
-        };
-        reader_rt_args.insert(reader_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
-        reader_rt_args.insert(reader_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
+        // All buffer addresses (mandatory q/k/v and optional pos/page_table/attn_mask/sink) are
+        // passed as Buffer* so every one is re-patched on the fast cache-hit path.  An earlier
+        // revision bound only the mandatory buffers and left the optional addresses as raw uint32;
+        // that triggered the fast path (which skips create_descriptor()) while leaving the optional
+        // addresses stale — test_sdpa_decode_paged_attention exposed this.  Binding ALL of them
+        // keeps every address live.  The remaining scalar args (cur_pos, core/head assignment, tree
+        // params) are all functions of hashed attributes, so none can go stale on a hit: when
+        // cur_pos comes from cur_pos_tensor the scalar is a constant UINT32_MAX and the position is
+        // read on-device; when it comes from the cur_pos vector that vector is hashed, so a new
+        // position is a cache miss that rebuilds the descriptor.  An absent optional passes a
+        // nullptr Buffer* (emitted as 0u, no binding).
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(q_buffer);
+        reader_rt_args.push_back(k_buffer);
+        reader_rt_args.push_back(v_buffer);
+        reader_rt_args.push_back(cur_pos_buffer);
+        reader_rt_args.push_back(page_table_buffer);
+        reader_rt_args.push_back(attn_mask_buffer);
+        reader_rt_args.push_back(attention_sink_buffer);
+        reader_rt_args.push_back(page_table_stick_size);
+        reader_rt_args.push_back(static_cast<uint32_t>(do_reduce));
+        reader_rt_args.push_back(static_cast<uint32_t>(do_output));
+        reader_rt_args.push_back(cur_head);
+        reader_rt_args.push_back(cur_batch);
+        reader_rt_args.push_back(core_num_in_reduce);
+        reader_rt_args.push_back(core_num_in_output);
+        reader_rt_args.push_back(cur_pos);
+        reader_rt_args.push_back(static_cast<uint32_t>(do_k_mcast));
+        reader_rt_args.push_back(mcast_x);
+        reader_rt_args.push_back(mcast_y0);
+        reader_rt_args.push_back(mcast_y1);
+        reader_rt_args.push_back(num_dests);
+        reader_rt_args.append(output_core_physical_xs);
+        reader_rt_args.append(output_core_physical_ys);
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
-        std::vector<uint32_t> writer_rt_args = {
-            out_addr,
-            worker_id_for_reduce,
-            worker_id_for_output,
-            do_reduce,
-            do_output,
-            cur_head,
-            cur_batch,
-            core_num_in_reduce,
-            core_num_in_output,
-            cur_pos,
-            // Tree reduction parameters
-            tree_params.is_root ? 1u : 0u,
-            tree_params.parent_core_in_group,
-            tree_params.send_at_round,
-            tree_params.num_children,
-            tree_params.my_active_rounds,
-            reduction_group_base_idx,
-        };
+        // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast
+        // cache-hit path.  cur_pos and tree_params are functions of hashed attributes (see the
+        // reader note above), so they never go stale on a hit.
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.push_back(out_buffer);
+        writer_rt_args.push_back(worker_id_for_reduce);
+        writer_rt_args.push_back(worker_id_for_output);
+        writer_rt_args.push_back(static_cast<uint32_t>(do_reduce));
+        writer_rt_args.push_back(static_cast<uint32_t>(do_output));
+        writer_rt_args.push_back(cur_head);
+        writer_rt_args.push_back(cur_batch);
+        writer_rt_args.push_back(core_num_in_reduce);
+        writer_rt_args.push_back(core_num_in_output);
+        writer_rt_args.push_back(cur_pos);
+        // Tree reduction parameters
+        writer_rt_args.push_back(tree_params.is_root ? 1u : 0u);
+        writer_rt_args.push_back(tree_params.parent_core_in_group);
+        writer_rt_args.push_back(tree_params.send_at_round);
+        writer_rt_args.push_back(tree_params.num_children);
+        writer_rt_args.push_back(tree_params.my_active_rounds);
+        writer_rt_args.push_back(reduction_group_base_idx);
         // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
-        for (unsigned int children : tree_params.children_per_round) {
+        for (uint32_t children : tree_params.children_per_round) {
             writer_rt_args.push_back(children);
         }
         for (uint32_t c = 0; c < num_cores_per_head; ++c) {
@@ -891,34 +973,33 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         for (uint32_t c = 0; c < num_cores_per_head; ++c) {
             writer_rt_args.push_back(reduction_group_core_ys[reduction_group_base_idx + c]);
         }
-        writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_xs.begin(), reduce_core_physical_xs.end());
-        writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_ys.begin(), reduce_core_physical_ys.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
+        writer_rt_args.append(reduce_core_physical_xs);
+        writer_rt_args.append(reduce_core_physical_ys);
+        writer_rt_args.append(output_core_physical_xs);
+        writer_rt_args.append(output_core_physical_ys);
 
         // compute runtime args
-        std::vector<uint32_t> compute_rt_args = {
-            do_reduce,
-            do_output,
-            cur_head,
-            cur_batch,
-            core_num_in_reduce,
-            core_num_in_output,
-            cur_pos,
-            // Tree reduction parameters for compute
-            tree_params.is_root ? 1u : 0u,
-            tree_params.parent_core_in_group,
-            tree_params.send_at_round,
-            tree_params.num_children,
-            tree_params.my_active_rounds,
-        };
+        KernelDescriptor::RTArgList compute_rt_args;
+        compute_rt_args.push_back(static_cast<uint32_t>(do_reduce));
+        compute_rt_args.push_back(static_cast<uint32_t>(do_output));
+        compute_rt_args.push_back(cur_head);
+        compute_rt_args.push_back(cur_batch);
+        compute_rt_args.push_back(core_num_in_reduce);
+        compute_rt_args.push_back(core_num_in_output);
+        compute_rt_args.push_back(cur_pos);
+        // Tree reduction parameters for compute
+        compute_rt_args.push_back(tree_params.is_root ? 1u : 0u);
+        compute_rt_args.push_back(tree_params.parent_core_in_group);
+        compute_rt_args.push_back(tree_params.send_at_round);
+        compute_rt_args.push_back(tree_params.num_children);
+        compute_rt_args.push_back(tree_params.my_active_rounds);
         // Add children_per_round array for compute
-        for (unsigned int children : tree_params.children_per_round) {
+        for (uint32_t children : tree_params.children_per_round) {
             compute_rt_args.push_back(children);
         }
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
-        SetRuntimeArgs(program, compute_kernels_id, core, compute_rt_args);
+        reader_desc.emplace_runtime_args(core, reader_rt_args);
+        writer_desc.emplace_runtime_args(core, writer_rt_args);
+        compute_desc.emplace_runtime_args(core, compute_rt_args);
     }
     if (num_active_cores < num_cores_available) {
         log_debug(tt::LogOp, "idle cores {}", core_group_idle.size());
@@ -928,250 +1009,31 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
             // Reader runtime args
             // Base args (20): includes K-mcast args [do_k_mcast, mcast_x, mcast_y0, mcast_y1, num_dests]
-            std::vector<uint32_t> reader_rt_args(20, 0);
+            KernelDescriptor::CoreRuntimeArgs reader_rt_args(20, 0);
 
             // Writer runtime args - need to match the size with tree reduction params
             // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
             // (2*num_cores_per_head)
             // + reducer coords + output coords
-            std::vector<uint32_t> writer_rt_args(10 + 6 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
+            KernelDescriptor::CoreRuntimeArgs writer_rt_args(
+                10 + 6 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
 
             // Compute runtime args - 65 indicates idle core
             // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
-            std::vector<uint32_t> compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
+            KernelDescriptor::CoreRuntimeArgs compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
             compute_rt_args[0] = 65;  // Idle marker
 
-            SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
-            SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
-            SetRuntimeArgs(program, compute_kernels_id, core, compute_rt_args);
+            reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+            writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
+            compute_desc.runtime_args.emplace_back(core, std::move(compute_rt_args));
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.num_active_cores = num_active_cores,
-         .core_group = core_group,
-         .reader_kernels_id = reader_kernels_id,
-         .writer_kernels_id = writer_kernels_id,
-         .compute_kernels_id = compute_kernels_id,
-         .num_cores_per_batch = num_cores_per_batch,
-         .num_cores_per_head = num_cores_per_head,
-         .num_output_cores = num_output_cores,
-         .cb_q_in_id = cb_q_in_id,
-         .cb_cur_pos_id = cb_cur_pos_id,
-         .cb_page_table_id = cb_page_table_id,
-         .is_q_sharded = is_q_sharded,
-         .is_output_sharded = is_output_sharded,
-         .q_locally_available = q_locally_available,
-         .cb_out_final_id = cb_out_final_id,
-         .B = B,
-         .q_heads_parallel_factor = q_heads_parallel_factor,
-         .use_cur_pos_tensor = use_cur_pos_tensor,
-         .use_attention_mask = use_attention_mask,
-         .use_attention_sink = use_attention_sink,
-         .is_paged_attention = is_paged_attention,
-         .is_causal = is_causal,
-         .use_mla = use_mla,
-         .use_col_major_group_indexing = use_col_major_group_indexing,
-         .grid_size = grid_size,
-         .num_group_rows = num_group_rows,
-         .num_group_cols = num_group_cols}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void SdpaDecodeProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SdpaDecodeParams& operation_attributes,
-    const SdpaDecodeInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-
-    const auto& shared_variables = cached_program.shared_variables;
-    const auto& num_active_cores = shared_variables.num_active_cores;
-    const auto& core_group = shared_variables.core_group;
-    const auto& reader_kernels_id = shared_variables.reader_kernels_id;
-    const auto& writer_kernels_id = shared_variables.writer_kernels_id;
-    const auto& compute_kernels_id = shared_variables.compute_kernels_id;
-    const auto& num_cores_per_batch = shared_variables.num_cores_per_batch;
-    const auto& num_cores_per_head = shared_variables.num_cores_per_head;
-    const auto& cb_q_in_id = shared_variables.cb_q_in_id;
-    const auto& cb_cur_pos_id = shared_variables.cb_cur_pos_id;
-    const auto& cb_page_table_id = shared_variables.cb_page_table_id;
-    const auto& is_output_sharded = shared_variables.is_output_sharded;
-    const auto& q_locally_available = shared_variables.q_locally_available;
-    const auto& cb_out_final_id = shared_variables.cb_out_final_id;
-    const auto& q_heads_parallel_factor = shared_variables.q_heads_parallel_factor;
-    const auto& cur_pos_ids = operation_attributes.cur_pos;
-    const bool use_cur_pos_tensor = shared_variables.use_cur_pos_tensor;
-    const bool use_attention_mask = shared_variables.use_attention_mask;
-    const bool use_attention_sink = shared_variables.use_attention_sink;
-    const bool is_paged_attention = shared_variables.is_paged_attention;
-    const bool is_causal = shared_variables.is_causal;
-    const bool use_col_major_group_indexing = shared_variables.use_col_major_group_indexing;
-    const auto& grid_size = shared_variables.grid_size;
-    const uint32_t num_group_cols = shared_variables.num_group_cols;
-
-    auto* q_buffer = tensor_args.q.buffer();
-    auto* k_buffer = tensor_args.k.buffer();
-    auto* v_buffer = k_buffer;
-
-    if (tensor_args.v.has_value()) {
-        v_buffer = tensor_args.v.value().buffer();
-    }
-
-    auto* out_buffer = tensor_return_value.buffer();
-
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t out_addr = out_buffer->address();
-
-    const auto& cur_pos_tensor = tensor_args.cur_pos_tensor;
-    const auto& page_table_tensor = tensor_args.page_table_tensor;
-    uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
-
-    uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
-    uint32_t attn_mask_addr = use_attention_mask ? tensor_args.attn_mask.value().buffer()->address() : 0;
-    uint32_t attention_sink_addr = use_attention_sink ? tensor_args.attention_sink.value().buffer()->address() : 0;
-    auto* page_table_buffer = is_paged_attention ? page_table_tensor.value().buffer() : nullptr;
-    uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
-
-    IDevice* dev = tensor_args.q.device();
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-    auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
-
-    // Set rt args
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
-        CoreCoord core = core_group[i];
-        bool do_k_mcast = false;
-        uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
-        uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0, core_num_in_output = 0;
-
-        if (use_col_major_group_indexing) {
-            uint32_t num_groups_per_row = std::max(1u, (uint32_t)(grid_size.x / num_cores_per_head));
-            uint32_t group_idx = i / num_cores_per_head;          // row-major group index
-            uint32_t group_row = group_idx / num_groups_per_row;  // which row of groups (0 to grid_size.y-1)
-            uint32_t group_col = group_idx % num_groups_per_row;  // which column of groups
-            cur_batch = group_col * num_group_cols + group_row;   // column-major: batches go down columns first
-            cur_head = 0;                                         // single KV head when using this indexing
-            core_num_in_reduce = i % num_cores_per_head;          // position within the reduction group
-            core_num_in_output = core_num_in_reduce;              // same as reduce for single head
-            do_k_mcast = (core.y % q_heads_parallel_factor == 0);
-            num_dests = q_heads_parallel_factor - 1;
-            if (do_k_mcast && num_dests > 0) {
-                auto phys_start = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
-                auto phys_end = dev->worker_core_from_logical_core(CoreCoord{core.x, core.y + num_dests});
-                mcast_x = phys_start.x;
-                mcast_y0 = phys_start.y;
-                mcast_y1 = phys_end.y;
-            }
-        } else {
-            cur_head = (i % num_cores_per_batch) / num_cores_per_head;
-            cur_batch = i / num_cores_per_batch;
-            core_num_in_reduce = i % num_cores_per_head;
-            core_num_in_output = i % num_cores_per_batch;
-        }
-
-        uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? UINT32_MAX : core_num_in_reduce - 1;
-        uint32_t worker_id_for_output = (core_num_in_output == 0) ? UINT32_MAX : core_num_in_output - 1;
-        bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
-        bool do_output = (worker_id_for_output == UINT32_MAX);
-
-        uint32_t cur_pos =
-            (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
-        uint32_t reduction_group_base_idx;
-
-        TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
-        if (use_col_major_group_indexing) {
-            // For column-major indexing: the group starts at (i / num_cores_per_head) * num_cores_per_head
-            reduction_group_base_idx = (i / num_cores_per_head) * num_cores_per_head;
-        } else {
-            reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
-        }
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-        auto& compute_args = compute_args_by_core[core.x][core.y];
-
-        // reader runtime args
-        uint32_t arg_idx = 0;
-        reader_args[arg_idx++] = q_addr;
-        reader_args[arg_idx++] = k_addr;
-        reader_args[arg_idx++] = v_addr;
-        reader_args[arg_idx++] = pos_addr;
-        reader_args[arg_idx++] = page_table_addr;
-        reader_args[arg_idx++] = attn_mask_addr;
-        reader_args[arg_idx++] = attention_sink_addr;
-        reader_args[arg_idx++] = page_table_stick_size;
-        reader_args[arg_idx++] = do_reduce;
-        reader_args[arg_idx++] = do_output;
-        reader_args[arg_idx++] = cur_head;
-        reader_args[arg_idx++] = cur_batch;
-        reader_args[arg_idx++] = core_num_in_reduce;
-        reader_args[arg_idx++] = core_num_in_output;
-        reader_args[arg_idx++] = cur_pos;
-
-        reader_args[arg_idx++] = do_k_mcast;  // do_k_mcast
-        reader_args[arg_idx++] = mcast_x;     // mcast_x
-        reader_args[arg_idx++] = mcast_y0;    // mcast_y0
-        reader_args[arg_idx++] = mcast_y1;    // mcast_y1
-        reader_args[arg_idx++] = num_dests;   // num_dests
-
-        // writer runtime args
-        arg_idx = 0;
-        writer_args[arg_idx++] = out_addr;
-        writer_args[arg_idx++] = worker_id_for_reduce;
-        writer_args[arg_idx++] = worker_id_for_output;
-        writer_args[arg_idx++] = do_reduce;
-        writer_args[arg_idx++] = do_output;
-        writer_args[arg_idx++] = cur_head;
-        writer_args[arg_idx++] = cur_batch;
-        writer_args[arg_idx++] = core_num_in_reduce;
-        writer_args[arg_idx++] = core_num_in_output;
-        writer_args[arg_idx++] = cur_pos;
-        writer_args[arg_idx++] = tree_params.is_root ? 1u : 0u;
-        writer_args[arg_idx++] = tree_params.parent_core_in_group;
-        writer_args[arg_idx++] = tree_params.send_at_round;
-        writer_args[arg_idx++] = tree_params.num_children;
-        writer_args[arg_idx++] = tree_params.my_active_rounds;
-        writer_args[arg_idx++] = reduction_group_base_idx;
-        // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
-        for (unsigned int children : tree_params.children_per_round) {
-            writer_args[arg_idx++] = children;
-        }
-
-        // compute runtime args
-        arg_idx = 0;
-        compute_args[arg_idx++] = do_reduce;
-        compute_args[arg_idx++] = do_output;
-        compute_args[arg_idx++] = cur_head;
-        compute_args[arg_idx++] = cur_batch;
-        compute_args[arg_idx++] = core_num_in_reduce;
-        compute_args[arg_idx++] = core_num_in_output;
-        compute_args[arg_idx++] = cur_pos;
-        // Tree reduction parameters for compute
-        compute_args[arg_idx++] = tree_params.is_root ? 1u : 0u;
-        compute_args[arg_idx++] = tree_params.parent_core_in_group;
-        compute_args[arg_idx++] = tree_params.send_at_round;
-        compute_args[arg_idx++] = tree_params.num_children;
-        compute_args[arg_idx++] = tree_params.my_active_rounds;
-        // Add children_per_round array for compute
-        for (unsigned int children : tree_params.children_per_round) {
-            compute_args[arg_idx++] = children;
-        }
-    }
-    if (q_locally_available) {
-        UpdateDynamicCircularBufferAddress(program, cb_q_in_id, *q_buffer);
-    }
-    if (use_cur_pos_tensor && cur_pos_tensor.value().is_sharded()) {
-        UpdateDynamicCircularBufferAddress(program, cb_cur_pos_id, *cur_pos_tensor.value().buffer());
-    }
-    if (is_paged_attention && page_table_tensor.value().is_sharded()) {
-        UpdateDynamicCircularBufferAddress(program, cb_page_table_id, *page_table_tensor.value().buffer());
-    }
-    if (is_output_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_out_final_id, *out_buffer);
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

@@ -6,11 +6,12 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
 from fuser.fused_loop import FusedLoop
 from fuser.fused_operation import FusedOperation
 from fuser.fused_packer import Packer as BasePacker
 from fuser.fuser_config import GlobalConfig
+from fuser.pack_node import PackNode
+from helpers.llk_params import L1Accumulation, PackerReluType
 
 
 class Packer(BasePacker):
@@ -26,39 +27,42 @@ class Packer(BasePacker):
     def golden(
         self,
         tensor: torch.Tensor,
+        pack_node: PackNode,
         operation: FusedOperation,
         config: GlobalConfig,
     ) -> torch.Tensor:
+        if pack_node.pack_relu != PackerReluType.NoRelu:
+            tensor = self._relu_golden(tensor, pack_node, config)
+
+        if pack_node.pack_l1_accumulation == L1Accumulation.Yes:
+            tensor = self._l1_acc_golden(tensor, pack_node, operation, config)
+
         return tensor
 
     def init(
         self,
+        pack_node: PackNode,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
-        dest_acc = config.dest_acc.cpp_enum_value
-        bh_tilize = operation.bh_tilize.cpp_enum_value
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
-        dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
+        bh_pack_mode = operation.bh_tilize.pack_mode_value
+        face_r_dim = pack_node.output.tile_shape.face_r_dim
+        num_faces = pack_node.output.tile_shape.total_num_faces()
         return (
-            f"    _llk_pack_init_<false, false, {bh_tilize}>(\n"
-            f"        pack_dst_format{stage}, pack_dst_format{stage}, {face_r_dim}, TILE_C_DIM, {num_faces}, false, false\n"
+            f"    _llk_pack_init_<{bh_pack_mode}, false /* zero_output */, false /* skip_addrmod_config */>(\n"
+            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */\n"
             f"    );\n"
-            f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
         )
 
     def pack(
         self,
+        pack_node: PackNode,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS(buffer_Res{stage}[{block.tile_id_global}]));\n"
+        buffer = pack_node.output.cpp_name
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"

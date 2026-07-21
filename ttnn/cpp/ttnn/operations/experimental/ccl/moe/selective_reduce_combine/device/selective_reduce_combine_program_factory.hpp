@@ -4,11 +4,30 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include "selective_reduce_combine_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
+
+namespace detail {
+
+struct SelectiveReduceCombineWorkerLayout {
+    std::vector<uint32_t> data_parallel_sizes_bytes;
+    uint32_t num_data_parallel_cores = 0;
+    uint32_t num_worker_cores = 0;
+};
+
+SelectiveReduceCombineWorkerLayout compute_worker_layout(
+    const Tensor& input_tensor,
+    uint32_t hidden_size,
+    uint32_t num_token_parallel_cores,
+    uint32_t num_data_parallel_cores);
+
+}  // namespace detail
 
 struct SelectiveReduceCombineProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -64,7 +83,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const GlobalSemaphore& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
     const uint32_t compute_sync_semaphore_id,
-    const uint32_t compute_cores_per_combine_cores = 0);
+    const uint32_t compute_cores_per_combine_cores = 0,
+    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id = std::nullopt);
 
 // Runtime argument override function
 void selective_reduce_combine_helper_override_runtime_arguments(

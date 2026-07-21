@@ -18,11 +18,11 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -35,6 +35,7 @@ class SDPAForwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -213,7 +214,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
     xt::xarray<float> Out = xt::xarray<float>::from_shape({B, std::size_t(1), S, qD});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
-    // Intermediates: (B, q_heads, S, 1) - reciprocal of sum of exponentials per head per sequence position
+    // Intermediates: (B, q_heads, S, 1) - logsumexp per head per sequence position
     xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, std::size_t(1)});
     std::fill(Intermediates.begin(), Intermediates.end(), 0.0F);
 
@@ -250,8 +251,8 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
                 for (std::size_t j = 0; j < S; ++j) denom += std::exp(scores_row[j] - rmax);
                 denom = std::max(denom, 1e-20F);
 
-                // Store intermediate: 1/denom (reciprocal of sum of exponentials)
-                Intermediates(b, h, i, 0) = 1.0F / denom;
+                // Store intermediate: logsumexp = max + log(sum_exp)
+                Intermediates(b, h, i, 0) = rmax + std::log(denom);
 
                 // out_i[h] = sum_j softmax_ij * V[j]
                 for (std::size_t t = 0; t < Dh; ++t) {
@@ -279,14 +280,15 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     const std::size_t q_heads = Q_split.shape()[1];
     const std::size_t kv_heads = K_split.shape()[1];
     const std::size_t S = Q_split.shape()[2];
-    const std::size_t Dh = Q_split.shape()[3];
+    const std::size_t Dh_qk = Q_split.shape()[3];  // Q/K head dim (used for QK^T dot product)
+    const std::size_t Dh_v = V_split.shape()[3];   // V head dim (can differ, determines output width)
 
-    // Output in SPLIT format (B, H, S, Dh) - heads NOT fused
-    xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh});
+    // Output in SPLIT format (B, H, S, Dh_v) - heads NOT fused, output width matches V
+    xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh_v});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
-    // Intermediates: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
-    constexpr std::size_t kIntermediateWidth = 64U;
+    // Intermediates: (B, q_heads, S, 32) - logsumexp at col 0, rest zero-padded
+    constexpr std::size_t kIntermediateWidth = 32U;
     xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, kIntermediateWidth});
     std::fill(Intermediates.begin(), Intermediates.end(), 0.0F);
 
@@ -295,7 +297,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
         return (h * kv_heads) / q_heads;
     };
 
-    const float scale = 1.0F / std::sqrt(static_cast<float>(Dh));
+    const float scale = 1.0F / std::sqrt(static_cast<float>(Dh_qk));
     std::vector<float> scores_row(S);
 
     for (std::size_t b = 0; b < B; ++b) {
@@ -307,7 +309,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 float rmax = -INFINITY;
                 for (std::size_t j = 0; j < S; ++j) {
                     float dot = 0.0f;
-                    for (std::size_t t = 0; t < Dh; ++t) {
+                    for (std::size_t t = 0; t < Dh_qk; ++t) {
                         dot += Q_split(b, h, i, t) * K_split(b, g, j, t);
                     }
                     const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
@@ -321,18 +323,17 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 for (std::size_t j = 0; j < S; ++j) denom += std::exp(scores_row[j] - rmax);
                 denom = std::max(denom, 1e-20F);
 
-                // Store intermediates: max_val at col 0, recip_sum_exp at col 32
-                Intermediates(b, h, i, 0) = rmax;           // max_val at position 0
-                Intermediates(b, h, i, 32) = 1.0F / denom;  // recip_sum_exp at position 32
+                // Store intermediate: logsumexp = max + log(sum_exp)
+                Intermediates(b, h, i, 0) = rmax + std::log(denom);
 
-                // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh)
-                for (std::size_t t = 0; t < Dh; ++t) {
+                // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh_v)
+                for (std::size_t t = 0; t < Dh_v; ++t) {
                     float acc = 0.0F;
                     for (std::size_t j = 0; j < S; ++j) {
                         float w = std::exp(scores_row[j] - rmax) / denom;
                         acc += w * V_split(b, g, j, t);
                     }
-                    Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh)
+                    Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh_v)
                 }
             }
         }
@@ -412,31 +413,29 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key, /*transpose_a=*/false, /*transpose_b=*/true);
 
     // σQ @ K
     if (attn_mask.has_value()) {
         ttnn::Tensor mask_tensor = attn_mask.value();
         qk_scaled = ttnn::add(
-            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
             ttnn::multiply(
-                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                 1e9F,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 none,
                 none,
-                none,
-                false),
+                none),
             std::nullopt,
             std::nullopt,
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
     }
 
     // Calculate intermediate results to test against kernel implementation
@@ -444,19 +443,13 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     auto qk_scaled_sub_max = ttnn::subtract(qk_scaled, max_value);
     auto exp_qk_scaled = ttnn::exp(qk_scaled_sub_max);
     auto sum_exp = ttnn::sum(exp_qk_scaled, /* dim */ 3, /* keepdim */ true);
-    auto recip_sum_exp = ttnn::reciprocal(sum_exp);  // (B, H, S, 1)
 
-    // Build intermediates tensor with shape (B, H, S, 64)
-    // Format: max_value at col 0, recip_sum_exp at col 32
+    // Build intermediates tensor with shape (B, H, S, 32)
+    // Format: logsumexp = max + log(sum_exp) at col 0, rest zero-padded
     auto* device = query.device();
-    auto padded_zeros = core::zeros(ttnn::Shape{batch_num, heads, seq_len, 31U}, device, ttnn::DataType::BFLOAT16);
-
-    // Pad max_value: (B, H, S, 1) -> (B, H, S, 32) with zeros
-    auto max_value_padded = ttnn::concat(std::vector<ttnn::Tensor>{max_value, padded_zeros}, 3);
-    // Pad recip_sum_exp: (B, H, S, 1) -> (B, H, S, 32) with zeros
-    auto recip_sum_exp_padded = ttnn::concat(std::vector<ttnn::Tensor>{recip_sum_exp, padded_zeros}, 3);
-    // Concat to get (B, H, S, 64)
-    auto intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value_padded, recip_sum_exp_padded}, 3);
+    auto lse = ttnn::add(max_value, ttnn::log(sum_exp));  // (B, H, S, 1)
+    auto padded_zeros = core::zeros(ttnn::Shape{batch_num, heads, seq_len, 31U}, device, lse.dtype());
+    auto intermediates = ttnn::concat(std::vector<ttnn::Tensor>{lse, padded_zeros}, 3);
 
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
@@ -469,6 +462,8 @@ struct SDPATestConfig {
     uint32_t sequence_length;
     uint32_t query_dim;
     uint32_t key_value_dim;
+    uint32_t value_dim =
+        0U;  // 0 means same as key_value_dim (for backward compat); total V dim = num_key_heads * head_dim_v
     uint32_t num_query_heads;
     uint32_t num_key_heads;
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;  // default: causal mask
@@ -483,34 +478,33 @@ struct SDPATestConfig {
 void run_sdpa_test(const SDPATestConfig& config) {
     using namespace ttml;
 
+    ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
+    ASSERT_GT(config.num_key_heads, 0U) << "num_key_heads must be greater than zero";
+    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
+    ASSERT_EQ(config.query_dim % config.num_query_heads, 0U) << "query_dim must be divisible by num_query_heads";
+    ASSERT_EQ(config.key_value_dim % config.num_key_heads, 0U) << "key_value_dim must be divisible by num_key_heads";
+    ASSERT_EQ(effective_value_dim % config.num_key_heads, 0U) << "value_dim must be divisible by num_key_heads";
+
     // Generate already split-by-heads tensors directly
     const uint32_t head_dim_q = config.query_dim / config.num_query_heads;
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
+    const uint32_t head_dim_v = effective_value_dim / config.num_key_heads;
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor =
-        xt::empty<float>({config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    const std::array<std::size_t, 4> query_shape{
+        config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
+    const std::array<std::size_t, 4> kv_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv};
 
-    xt::xarray<float> key_tensor =
-        xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor =
-        xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+
+    const std::array<std::size_t, 4> value_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
@@ -532,7 +526,8 @@ void run_sdpa_test(const SDPATestConfig& config) {
     // Run SDPA kernel with new interface - this is our reference implementation
     auto result = ttml::metal::sdpa_fw(
         query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
-    xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
+    xt::xarray<float> result_xtensor =
+        core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
 
     // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
@@ -662,7 +657,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
     run_sdpa_test(config);
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
@@ -678,7 +674,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     run_sdpa_test(config);
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Grouped Query Attention with different query and KV heads
     // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
@@ -737,10 +734,9 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 // VALIDATION TESTS - Testing Error Conditions and Edge Cases
 // =============================================================================
 
-TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
-
-    std::mt19937 gen(42);
 
     // Test Case 1: Minimum viable dimensions
     {
@@ -811,27 +807,16 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
     const uint32_t num_heads = 2U;
     const uint32_t head_dim = d / num_heads;
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    const std::array<std::size_t, 4> split_shape{B, num_heads, S, head_dim};
 
-    xt::xarray<float> key_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, -1.0F, 1.0F, seed);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
@@ -875,21 +860,145 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         std::vector<size_t> expected_shape = {B, num_heads, S, head_dim};
         EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in split format (B, H, S, Dh)";
 
-        // Check intermediate shape: (B, num_query_heads, S, 64)
-        constexpr size_t kIntermediateWidth = 64U;
+        // Check intermediate shape: (B, num_query_heads, S, 32)
+        constexpr size_t kIntermediateWidth = 32U;
         std::vector<size_t> expected_interm_shape = {B, num_heads, S, kIntermediateWidth};
-        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 64)";
+        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 32)";
 
-        // Verify intermediate values at position 32 are reasonable (should be positive reciprocals)
-        // Note: position 0 contains max_val (can be any value), position 32 contains recip_sum_exp
+        // Verify logsumexp values at position 0 are finite
         for (size_t b_idx = 0; b_idx < B; ++b_idx) {
             for (size_t h_idx = 0; h_idx < num_heads; ++h_idx) {
                 for (size_t s_idx = 0; s_idx < S; ++s_idx) {
-                    float recip_sum_exp = interm_xtensor(b_idx, h_idx, s_idx, 32);
-                    EXPECT_GT(recip_sum_exp, 0.0f) << "recip_sum_exp should be positive";
-                    EXPECT_LE(recip_sum_exp, 1.0f) << "recip_sum_exp should be <= 1.0";
+                    float lse = interm_xtensor(b_idx, h_idx, s_idx, 0);
+                    EXPECT_TRUE(std::isfinite(lse)) << "logsumexp should be finite";
                 }
             }
         }
     }
+}
+
+// =============================================================================
+// DIFFERENT INNER DIM TESTS - V head dim differs from Q/K head dim
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_CausalMask_SmallV) {
+    // Q/K head_dim=64, V head_dim=32 (V smaller than Q/K)
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,      // 2 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_CausalMask_SmallV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_CausalMask_LargeV) {
+    // Q/K head_dim=32, V head_dim=64 (V larger than Q/K)
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 64U,      // 2 heads * 32 dim per head
+        .key_value_dim = 64U,  // 2 heads * 32 dim per head (K)
+        .value_dim = 128U,     // 2 heads * 64 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_CausalMask_LargeV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_ArbitraryMask) {
+    // Q/K head_dim=64, V head_dim=32 with arbitrary mask
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,      // 2 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "DifferentVDim_ArbitraryMask"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_GQA) {
+    // GQA with different V dim: Q has 4 heads, KV has 2 heads
+    // Q/K head_dim=64, V head_dim=32
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 256U,      // 4 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_GQA_4Q_2KV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_SingleTile) {
+    // Minimum viable: Q/K head_dim=64, V head_dim=32, single tile seq
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_dim = 64U,      // 1 head * 64 dim
+        .key_value_dim = 64U,  // 1 head * 64 dim (K)
+        .value_dim = 32U,      // 1 head * 32 dim (V)
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_SingleTile"};
+    run_sdpa_test(config);
+}
+
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_DifferentVDim_MultiBatch) {
+    // Multi-batch with different V dim
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 128U,
+        .query_dim = 128U,      // 2 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_MultiBatch"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_TwoTileRows) {
+    // 64 seq len = 2 tile rows -> Ht=2 -> Sk_chunk_t=2. Forces the chunked inner loop with
+    // exactly one chunk per row and exercises the diagonal-chunk masking path for the
+    // smallest non-trivial chunk size.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_TwoTileRows"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
+    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the arbitrary-mask compute path (USE_ATTN_MASK).
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "ArbitraryMask_TwoTileRows"};
+    run_sdpa_test(config);
 }

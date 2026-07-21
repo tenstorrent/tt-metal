@@ -15,6 +15,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
+from ...utils.tracing import traced_function
 
 
 # Make this a dataclass. Also consider using HF config directly.
@@ -104,10 +105,15 @@ class T5Encoder(Module):
         rename_substate(state, "encoder.final_layer_norm", "final_layer_norm")
         pop_substate(state, "shared")
 
-    def forward(self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def forward(
+        self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
+    ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
+        if zero_masking and attention_mask is not None:
+            output = output * ttnn.unsqueeze(attention_mask, -1)
         hidden_states.append(output)
         return hidden_states
 
@@ -193,11 +199,15 @@ class T5RMSNorm(RMSNorm):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return super().forward(x, compute_kernel_config=self.compute_kernel_config)
+        x_f32 = ttnn.typecast(x, ttnn.float32)
+        x_normed = super().forward(x_f32, compute_kernel_config=self.compute_kernel_config)
+        return ttnn.typecast(x_normed, ttnn.bfloat16)
 
     def reference(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        variance = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
-        x_normed = x * ttnn.rsqrt(variance + self.norm_eps)
+        x_f32 = ttnn.typecast(x, ttnn.float32)
+        variance = ttnn.mean(ttnn.pow(x_f32, 2), dim=-1, keepdim=True, compute_kernel_config=self.compute_kernel_config)
+        x_normed = x_f32 * ttnn.rsqrt(variance + self.norm_eps)
+        x_normed = ttnn.typecast(x_normed, ttnn.bfloat16)  # cast before weight mul to match reference implementation
         return self.weight.data * x_normed
 
 
@@ -251,7 +261,7 @@ class T5DenseGatedActDense(Module):
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
             bias=False,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
@@ -285,7 +295,11 @@ class T5DenseGatedActDense(Module):
 
         if self.parallel_config.tensor_parallel.factor > 1:
             hidden_states = self.ccl_manager.all_gather(
-                hidden_states, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                hidden_states,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
         hidden_states = ttnn.squeeze(hidden_states, 0)
         return hidden_states
@@ -338,6 +352,14 @@ class T5Attention(Module):
         self.embed_dim = config.embed_dim
         self.head_dim = config.embed_dim // self.num_heads
         self.use_relative_position_bias = use_relative_position_bias
+
+        self.hifi4_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         self.q_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -413,7 +435,9 @@ class T5Attention(Module):
         scores = ttnn.matmul(q, k)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
+        scores = ttnn.typecast(scores, ttnn.float32)
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.hifi4_compute_config)
+        attn_weights = ttnn.typecast(attn_weights, ttnn.bfloat16)
         attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
@@ -421,14 +445,22 @@ class T5Attention(Module):
         orig_shape = list(attn_output.shape)
         if self.parallel_config.tensor_parallel.factor > 1:
             attn_output = self.ccl_manager.all_gather(
-                attn_output, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                attn_output,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out = self.o_proj(attn_output)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = self.ccl_manager.all_gather(
-                dense_out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                dense_out,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out_shape = list(dense_out.shape)

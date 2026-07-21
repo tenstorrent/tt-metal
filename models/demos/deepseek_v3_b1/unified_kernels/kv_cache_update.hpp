@@ -5,6 +5,7 @@
 
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
+#include "dataflow_utils.hpp"
 #include "mcast.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
@@ -63,6 +64,7 @@ struct KVCacheUpdate {
         static constexpr uint32_t MAX_MLA_CORES_PER_HEAD = 8;
         uint32_t kv_cache_buffer_base_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t kv_cache_intermed_cb;
         uint32_t kv_cache_intermed_sync_cb;
         uint32_t kv_cache_output_cb;
@@ -89,6 +91,7 @@ struct KVCacheUpdate {
     struct ReaderArgs {
         uint32_t kv_cache_buffer_base_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t kv_cache_input_cb;
         uint32_t grid_start_y;
         uint32_t knope_core_index;
@@ -110,17 +113,20 @@ struct KVCacheUpdate {
     public:
         void operator()([[maybe_unused]] const RTArgs& args) { impl(args); }
 
-        void set_local_cur_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t local_cur_pos) {
+        void set_pos_and_slot(
+            [[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t local_cur_pos, [[maybe_unused]] uint32_t slot_id) {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             args.local_cur_pos = local_cur_pos;
+            args.slot_id = slot_id;
 #endif
         }
 
         void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 constexpr uint8_t WRITE_NOC = 0;
+                static_assert(
+                    noc_mode == DM_DYNAMIC_NOC || WRITE_NOC == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
                 uint32_t target_core_idx = (args.local_cur_pos / args.k_chunk_size) % args.num_cores_per_head;
                 uint64_t sem_noc_addr = get_noc_addr(
                     args.mla_sender_noc_x[target_core_idx],
@@ -142,39 +148,76 @@ struct KVCacheUpdate {
             // ============================================================
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsNopeSenderCore) {
+                constexpr uint32_t MCAST_NOC_INDEX = 0;
+                static_assert(
+                    noc_mode == DM_DYNAMIC_NOC || MCAST_NOC_INDEX == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
+                constexpr uint32_t SEMAPHORE_SIZE_BYTES = 4;
+                uint32_t data_addr = get_read_ptr(args.kv_rmsnorm_output_cb);
+
+                volatile tt_l1_ptr uint32_t* sender_sem_ptr =
+                    (volatile tt_l1_ptr uint32_t*)args.nope_mcast_sender_semaphore_addr;
+                noc_semaphore_set(sender_sem_ptr, VALID);
+
+                uint64_t mcast_noc_addr = get_noc_multicast_addr<0>(
+                    args.nope_mcast_dest_noc_start_x,
+                    args.nope_mcast_dest_noc_start_y,
+                    args.nope_mcast_dest_noc_end_x,
+                    args.nope_mcast_dest_noc_end_y,
+                    MCAST_NOC_INDEX);
+
+                unified_kernels::noc_async_write_multicast_preprogram_all_state</*posted=*/false>(
+                    data_addr,
+                    mcast_noc_addr | data_addr,
+                    args.nope_mcast_data_size_bytes,
+                    args.nope_mcast_num_dests,
+                    /*multicast_path_reserve=*/true,
+                    /*linked=*/false,
+                    /*noc=*/MCAST_NOC_INDEX,
+                    NOC_DISPATCH_MULTICAST_WRITE_VC);
+
+                if constexpr (!mcast_is_shared_write_cmd_buf) {
+                    unified_kernels::noc_async_write_multicast_preprogram_all_state<
+                        /*posted=*/false,
+                        /*increment_counters=*/false,
+                        write_reg_cmd_buf>(
+                        args.nope_mcast_sender_semaphore_addr,
+                        mcast_noc_addr | args.nope_mcast_receiver_semaphore_addr,
+                        SEMAPHORE_SIZE_BYTES,
+                        args.nope_mcast_num_dests,
+                        /*multicast_path_reserve=*/true,
+                        /*linked=*/false,
+                        /*noc=*/MCAST_NOC_INDEX,
+                        NOC_DISPATCH_MULTICAST_WRITE_VC);
+                }
+
                 cb_wait_front(args.kv_rmsnorm_output_cb, args.kv_rmsnorm_num_tiles);
 
                 {
                     DeviceZoneScopedN("MCAST_RMSNORM");
-                    uint32_t data_addr = get_read_ptr(args.kv_rmsnorm_output_cb);
+                    unified_kernels::noc_async_write_multicast_issue_txn</*posted=*/false>(
+                        args.nope_mcast_num_dests, /*noc=*/MCAST_NOC_INDEX);
 
-                    volatile tt_l1_ptr uint32_t* sender_sem_ptr =
-                        (volatile tt_l1_ptr uint32_t*)args.nope_mcast_sender_semaphore_addr;
-                    noc_semaphore_set(sender_sem_ptr, VALID);
+                    if constexpr (mcast_is_shared_write_cmd_buf) {
+                        unified_kernels::multicast_write_with_state<
+                            /*posted=*/false,
+                            /*set_addresses=*/true,
+                            /*set_size=*/true,
+                            /*wait_cmd_buf_ready=*/true,
+                            /*increment_counters=*/true,
+                            write_cmd_buf>(
+                            args.nope_mcast_sender_semaphore_addr,
+                            (uint32_t)(mcast_noc_addr | args.nope_mcast_receiver_semaphore_addr),
+                            SEMAPHORE_SIZE_BYTES,
+                            args.nope_mcast_num_dests,
+                            MCAST_NOC_INDEX);
+                    } else {
+                        unified_kernels::noc_async_write_multicast_issue_txn<
+                            /*posted=*/false,
+                            /*increment_counters=*/true,
+                            write_reg_cmd_buf>(args.nope_mcast_num_dests, /*noc=*/MCAST_NOC_INDEX);
+                    }
 
-                    uint64_t mcast_noc_addr = get_noc_multicast_addr<0>(
-                        args.nope_mcast_dest_noc_start_x,
-                        args.nope_mcast_dest_noc_start_y,
-                        args.nope_mcast_dest_noc_end_x,
-                        args.nope_mcast_dest_noc_end_y,
-                        0);
-                    noc_async_write_multicast(
-                        data_addr,
-                        mcast_noc_addr | data_addr,
-                        args.nope_mcast_data_size_bytes,
-                        args.nope_mcast_num_dests,
-                        false,
-                        0,
-                        NOC_DISPATCH_MULTICAST_WRITE_VC);
-                    noc_semaphore_set_multicast(
-                        args.nope_mcast_sender_semaphore_addr,
-                        mcast_noc_addr | args.nope_mcast_receiver_semaphore_addr,
-                        args.nope_mcast_num_dests,
-                        false,
-                        0,
-                        NOC_DISPATCH_MULTICAST_WRITE_VC);
-
-                    noc_async_write_barrier();
+                    noc_async_write_barrier(MCAST_NOC_INDEX);
                 }
             } else if constexpr (IsNopeCore) {
                 {
@@ -194,19 +237,20 @@ struct KVCacheUpdate {
             // ============================================================
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;
                 constexpr uint32_t CHUNK_SIZE = 1;
                 constexpr uint32_t NUM_CHUNKS = 1;
+                constexpr uint32_t pages_per_slot = get_named_compile_time_arg_val("kv_cache_pages_per_slot");
 
                 uint32_t cur_pos = args.local_cur_pos;
 
                 constexpr auto k_args = TensorAccessorArgs<0>();
-                auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr, PAGE_SIZE);
+                auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr);
 
-                uint32_t kv_cache_page_id_start = cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
+                uint32_t kv_cache_page_id_start =
+                    args.slot_id * pages_per_slot + cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
                 if constexpr (IsRopeCore) {
                     uint32_t grid_offset_pages = 1 * (get_absolute_logical_y() - args.grid_start_y);
                     kv_cache_page_id_start += grid_offset_pages;
@@ -252,6 +296,10 @@ struct KVCacheUpdate {
                 uint32_t write_addr_offset = offset_in_page * num_bytes_per_chunk;
 
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + write_addr_offset;
+                    unified_kernels::noc_async_write_preprogram_all_state<false>(
+                        src_addr, get_noc_addr(write_addr), num_bytes_per_chunk);
+
                     {
                         DeviceZoneScopedN("WAIT_UNTILIZE");
                         cb_reserve_back(kv_cache_intermed_sync_cb, CHUNK_SIZE);
@@ -260,8 +308,7 @@ struct KVCacheUpdate {
 
                     {
                         DeviceZoneScopedN("UPDATE_NEW_CACHE");
-                        uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + write_addr_offset;
-                        noc_async_write(src_addr, get_noc_addr(write_addr), num_bytes_per_chunk);
+                        unified_kernels::noc_async_write_issue_txn<false>();
                         noc_async_write_barrier();
                     }
 

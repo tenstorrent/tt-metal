@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t dst_addr           = get_arg_val<uint32_t>(0);
@@ -25,8 +25,8 @@ void kernel_main() {
 
     uint32_t dram_address_block_row_beginning = dst_addr;
 
-    experimental::CircularBuffer cb(cb_id_out0);
-    experimental::Noc noc;
+    CircularBuffer cb(cb_id_out0);
+    Noc noc;
 
     for (uint32_t sb_m = 0; sb_m < num_sub_blocks_m; sb_m++) {
         uint32_t dram_address_block_beginning = dram_address_block_row_beginning;
@@ -39,7 +39,7 @@ void kernel_main() {
 
                     noc.async_write(
                         cb,
-                        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+                        AllocatorBank<AllocatorBankType::DRAM>{},
                         ublock_size_bytes,
                         {},
                         {.bank_id = dst_bank_id, .addr = dram_address_c});

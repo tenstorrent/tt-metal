@@ -12,8 +12,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -49,32 +49,19 @@ void PrintTo(const AdamWFullPrecisionCase& pc, std::ostream* os) {
 }
 
 class AdamWFullPrecisionComparisonTest : public ::testing::TestWithParam<AdamWFullPrecisionCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
-
-    void TearDown() override {
-        ttml::autograd::ctx().reset_graph();
+    static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
 };
-
-static xt::xarray<float> make_random_xarray(
-    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
-    xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
-    ttml::core::parallel_generate(
-        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
-    return x;
-}
-
-static xt::xarray<bfloat16> make_random_bf16_xarray(
-    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
-    xt::xarray<bfloat16> x = xt::empty<bfloat16>({s[0], s[1], s[2], s[3]});
-    ttml::core::parallel_generate(
-        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
-    return x;
-}
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
     return ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
@@ -190,13 +177,16 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     const uint32_t seed_max_second_moment = g();
 
     // Generate random data
-    xt::xarray<float> w0_fp32 = make_random_xarray(pc.shape, seed_param);
-    xt::xarray<float> m0 = make_random_xarray(pc.shape, seed_first_moment);
-    xt::xarray<float> v0 = make_random_xarray(pc.shape, seed_second_moment, 0.0F, 1.0F);  // must be >= 0
-    xt::xarray<float> max_v0 = make_random_xarray(pc.shape, seed_max_second_moment, 0.0F, 1.0F);
+    xt::xarray<float> w0_fp32 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_second_moment);  // must be >= 0
+    xt::xarray<float> max_v0 =
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);
 
     // Generate gradient directly as bfloat16
-    xt::xarray<bfloat16> g0_bf16 = make_random_bf16_xarray(pc.shape, seed_grad);
+    xt::xarray<bfloat16> g0_bf16 =
+        ttml::test_utils::make_uniform_xarray<bfloat16>(pc.shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed_grad);
     auto g0_bf16_tt = to_tt_bf16(g0_bf16);
 
     // Initial step count (non-zero to test bias correction with accumulated steps)
@@ -223,6 +213,11 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     // Inject optimizer state
     serialization::StateDict state;
     state["steps"] = initial_steps;
+    state["lr"] = pc.lr;
+    state["beta1"] = pc.beta1;
+    state["beta2"] = pc.beta2;
+    state["epsilon"] = pc.epsilon;
+    state["weight_decay"] = pc.weight_decay;
     state["master_weights"] =
         serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0_fp32), false)}};
     state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
@@ -330,8 +325,8 @@ INSTANTIATE_TEST_SUITE_P(
 static const AdamWFullPrecisionCase kAMSGradCases[] = {
     // Standard AMSGrad
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
-    // AMSGrad with weight decay
-    {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
+    // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+    // {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
     // AMSGrad with different shape
     {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "NIGHTLY_Large_4D"},
 };

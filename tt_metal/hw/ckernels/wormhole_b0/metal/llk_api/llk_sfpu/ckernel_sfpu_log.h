@@ -1,176 +1,111 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
+
+/*
+ * The log(x) code is derived from code by Norbert Juffa.
+ *
+ * Copyright (c) 2015-2023, Norbert Juffa
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #pragma once
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
-    ///////////////////////////////////
-    // "normalize to calculation range"
-    ///////////////////////////////////
-    sfpi::vFloat x = sfpi::setexp(in, 127);  // set exp to exp bias (put in range of 1-2)
-
-    // Minimax approximation of log(x) over [1; 2] calculated using Sollya with the following command:
-    // > fpminimax(log(x), 5, [|single...|], [1+2^(-20); 2], relative);
-    sfpi::vFloat series_result = PolynomialEvaluator::eval(
-        x,
-        sfpi::vConstFloatPrgm1,
-        sfpi::vConstFloatPrgm2,
-        -2.800232410430908,
-        1.3681391477584839,
-        -0.3706687390804291,
-        0.04224011301994324);
-
-    ////////////////////////////
-    // Convert exponent to float
-    ////////////////////////////
-    sfpi::vInt exp = sfpi::exexp(in);
-
-    // Convert negative numbers: signed -> sign-magnitude
-    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
-    v_endif;
-
-    sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
-    sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
-
-    if constexpr (HAS_BASE_SCALING) {
-        result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
-    }
-
-    ////////////////////////////
-    // Base case when input is 0. ln(0) = -inf
-    ////////////////////////////
-    v_if(in == 0.0F) {  // Reload for register pressure
-        result = -std::numeric_limits<float>::infinity();
-    }
-    v_endif;
+sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
+    sfpi::vFloat three_quarters = 0.75f;
+    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
 
     if constexpr (!FAST_APPROX) {
-        sfpi::vInt exp = sfpi::exexp(in);
-        v_if(sfpi::reinterpret<sfpi::vInt>(in) == 0x7F800000) {
-            // If input is infinity, return infinity
-            result = std::numeric_limits<float>::infinity();
+        // normalise a (-0.0 and subnormals become +0.0)
+        a = a * 1.0f + 0.0f;
+    }
+
+    e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
+    sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
+    sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
+
+    // m in [0.75, 1.5). Compute log1p(m - 1) for m - 1 in [-0.25, 0.5).
+    m -= 1.0f;
+
+    v_if(a >= 0.0f) {
+        sfpi::vFloat r;
+        sfpi::vFloat s = m * m;
+        sfpi::vFloat e_float;
+        if constexpr (is_fp32_dest_acc_en) {
+            r = -0x1.92cp-5f;
+            r = r * m + 0x1.b84p-4f;
+            r = r * m + -0x1.0c4p-3f;
+            r = r * m + 0x1.274p-3f;
+            r = r * m + -0x1.55p-3f;
+            r = r * m + 0x1.998p-3f;
+            sfpi::vMag abs_e = sfpi::abs(e);
+            r = r * m + sfpi::vConstFloatPrgm1;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
+            r = r * m + sfpi::vConstFloatPrgm2;
+            sfpi::vFloat neg_half = -0.5f;
+            r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        } else {
+            sfpi::vMag abs_e = sfpi::abs(e);
+            sfpi::vFloat neg_quarter = -0.25f;
+            r = neg_quarter * m + sfpi::vConstFloatPrgm1;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
+            r = r * m + sfpi::vConstFloatPrgm2;
         }
-        v_elseif(exp == 128 || in < 0.f) {                     // +inf or negative input -> NaN
-            result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
-        }
-        v_endif;
-    }
 
-    if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-    }
+        // Handle special cases:
+        //
+        //   input 0.0  -> -inf
+        //   input +inf -> +inf
+        //   input NaN  -> NaN
+        //
+        // In the non-fast path, earlier normalisation maps -0.0 and subnormals
+        // to +0.0. addexp(a, -1) wraps exponent 0 to 255, so zero becomes
+        // +inf; exponent 255 values (Inf/NaN) are left unchanged.
+        a = sfpi::addexp(a, -1);
 
-    return result;
-}
-
-/*
- * This function implements ln(x) using polynomial approximation.
- * 1. Handle special cases (x <= 0, infinity, NaN)
- * 2. Extract exponent and mantissa: x = 2^n × m
- * 3. Reduce range: adjust m to be in [sqrt(2)/2, sqrt(2)]
- * 4. Compute ln(m) using polynomial approximation
- * 5. Return n×ln(2) + ln(m)
- */
-template <bool HAS_BASE_SCALING>
-sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log_base_scale_factor) {
-    sfpi::vFloat result;
-
-    // Check for special cases
-    sfpi::vInt exp = sfpi::exexp(val);  // Get debiased exponent
-
-    v_if(sfpi::reinterpret<sfpi::vInt>(val) == 0x7F800000) {
-        // If input is infinity, return infinity
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif(exp == 128 || val < 0.f) {                    // +inf or negative input -> NaN
-        result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
-    }
-    v_elseif(val == 0.0f) {
-        // Zero input -> -inf
-        result = -std::numeric_limits<float>::infinity();
-    }
-    v_else {
-        // Step 1: Extract exponent and mantissa
-        // Extract mantissa and construct m in [1, 2)
-        // Use setexp to normalize to [1, 2) range by setting exponent to 127 (bias)
-        sfpi::vFloat m = sfpi::setexp(val, 127);
-
-        // Step 2: Range reduction
-        // If m >= sqrt(2), divide by 2 and increment exponent
-        // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-        constexpr float SQRT2 = 1.4142135381698608f;  // sqrt(2)
-        v_if(m >= SQRT2) {
-            // m = m * 0.5f;  // Divide by 2
-            m = m * 0.5f;
-            exp = exp + 1;  // Increment exponent
-        }
-        v_endif;
-
-        // Step 3: Transform to z = (m - 1) / (m + 1)
-        // This maps m ∈ [0.707, 1.414] to z ∈ [-0.172, 0.172]
-        // ln(m) = 2 × (z + z³/3 + z⁵/5 + z⁷/7 + ...)
-        sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
-        sfpi::vFloat m_plus_1 = m + sfpi::vConst1;
-
-        // Compute z = (m - 1) / (m + 1) using reciprocal
-        // z = m_minus_1 * (1 / m_plus_1)
-        sfpi::vFloat m_plus_1_recip = _sfpu_reciprocal_<2>(m_plus_1);
-        sfpi::vFloat z = m_minus_1 * m_plus_1_recip;
-
-        // Compute z**2 for polynomial evaluation
-        sfpi::vFloat z2 = z * z;
-
-        // Step 4: Polynomial approximation using odd powers
-        // ln(m) = 2z(1 + (z**2)/3 + (z**4)/5 + (z**6)/7 + (z**8)/9 + (z**10)/11)
-        // Using Horner's method: p = 1 + z**2 * (c3 + z**2 * (c5 + z**2 * (c7 + z**2 * (c9 + z**2 * c11))))
-
-        // Polynomial coefficients for ln(m) where m in [sqrt(2)/2, sqrt(2)]
-        // ln(m) = 2z(1 + z²/3 + z⁴/5 + z⁶/7 + z⁸/9 + z¹⁰/11)
-        // where z = (m - 1) / (m + 1)
-        sfpi::vFloat p = PolynomialEvaluator::eval(
-            z2,
-            sfpi::vConst1,
-            0.3333333333333333f,
-            0.2f,
-            0.14285714285714285f,
-            0.1111111111111111f,
-            .09090909090909091f);
-
-        // Final computation: ln(m) = 2 * z * p
-        sfpi::vFloat ln_m = 2.0f * (z * p);
-
-        // We want to convert exponent to floating point using int32 -> float conversion.
-        // However, int32_to_float takes a sign-magnitude
-        // This is not an issue for positive numbers (same representation)
-        // For negative numbers, we need to explicitly convert to sign-magnitude format
-        v_if(exp < 0) {
-            // Compute absolute value: ~exp + 1 (two's complement negation)
-            sfpi::vInt exp_abs = ~exp + 1;
-            // Convert to sign-magnitude negative: setsgn(value, 1) sets MSB to 1
-            exp = sfpi::setsgn(exp_abs, 1);
-        }
-        v_endif;
-
-        // Convert to float - int32_to_float handles sign-magnitude format correctly
-        sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
-
-        // Step 5: Combine: ln(x) = exp×ln(2) + ln(m)
-        constexpr float LN2 = 0.69314718246459961f;  // log(2)
-        result = expf * LN2 + ln_m;                 // log(x) = log2(x) / log(2)
+        r = r * s + m;
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
+        result = e_float * sfpi::vConstFloatPrgm0 + r;
 
         if constexpr (HAS_BASE_SCALING) {
-            result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
+
+        // For zero, result is negative before this multiply, so result * +inf
+        // gives -inf. For +inf, result is positive, so result * +inf gives
+        // +inf. NaNs either skip the main block or propagate here.
+        v_if(sfpi::exexp(a, sfpi::ExponentMode::Biased) - 255 >= 0) { result *= a; }
+        v_endif;
     }
     v_endif;
 
@@ -186,12 +121,10 @@ template <
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result;
+        sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(
+            sfpi::dst_reg[0], log_base_scale_factor);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
-        } else {
-            result = calculate_log_f32_body<HAS_BASE_SCALING>(in, log_base_scale_factor);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -200,12 +133,22 @@ inline void calculate_log(uint log_base_scale_factor) {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
-    if constexpr (!is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm0 = 0.69314718246459961f;  // ln(2)
-        sfpi::vConstFloatPrgm1 = -2.0069785118103027;
-        sfpi::vConstFloatPrgm2 = 3.767500400543213;
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
+    const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
+    // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into
+    // the constant used for the final exponent contribution.
+    sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        // Stored separately because the tuned fp32 m^3 and m^4 coefficients are
+        // no longer the shared exact 1/3 and -1/4 values used in the bf16 path.
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
     } else {
-        _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        // Horner coefficients used by bf16 polynomial
+        sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
+        sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
     }
 }
 

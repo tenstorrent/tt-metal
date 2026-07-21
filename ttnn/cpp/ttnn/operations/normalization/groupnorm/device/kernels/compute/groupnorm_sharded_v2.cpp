@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -16,11 +13,10 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -104,7 +100,6 @@ void kernel_main() {
     uint32_t index_w_offset = 0;
     uint32_t index_b_offset = 0;
     uint32_t index_g_offset = 0;
-    uint32_t index_mask_offset = 0;
     // data offset
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
@@ -154,25 +149,25 @@ void kernel_main() {
     constexpr bool use_negative_mask = false;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex(cb_ex_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
-    experimental::CircularBuffer cb_inbeta(cb_inbeta_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_ones(cb_ones_id);
-    experimental::CircularBuffer cb_out(cb_out_id);
-    experimental::CircularBuffer cb_outbeta(cb_outbeta_id);
-    experimental::CircularBuffer cb_outgamma(cb_outgamma_id);
-    experimental::CircularBuffer cb_scaler(cb_scaler_id);
-    experimental::CircularBuffer cb_scaler_global(cb_scaler_global_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex(cb_ex_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_external(cb_ex_external_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
+    CircularBuffer cb_inbeta(cb_inbeta_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_ones(cb_ones_id);
+    CircularBuffer cb_out(cb_out_id);
+    CircularBuffer cb_outbeta(cb_outbeta_id);
+    CircularBuffer cb_outgamma(cb_outgamma_id);
+    CircularBuffer cb_scaler(cb_scaler_id);
+    CircularBuffer cb_scaler_global(cb_scaler_global_id);
+    CircularBuffer cb_x(cb_x_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -205,7 +200,6 @@ void kernel_main() {
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
-        index_mask_offset = 0;
         for (uint32_t g = 0; g < group; ++g) {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
@@ -219,6 +213,12 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                        // When the last group spans fewer than block_w tiles, the index can
+                        // exceed the CB tile count. Clamp it so the read stays in bounds;
+                        // the input mask guarantees the result from the clamped tile is zeroed.
+                        if (index >= per_core_MN) {
+                            index = per_core_MN - 1;
+                        }
                         uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
                         mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
@@ -248,7 +248,7 @@ void kernel_main() {
             cb_ones.wait_front(1);
 
             index_h_offset = 0;
-            // Accomulate into dest directly by using mul_tiles (tile * 1 is accomulated into dest at the moment)
+            // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
             for (uint32_t h = 0; h < block_h; ++h) {
                 for (uint32_t w = 0; w < block_w; ++w) {
@@ -262,38 +262,35 @@ void kernel_main() {
             pack_tile(dst0, cb_ex2pe_id);
             tile_regs_release();
             cb_ex2pe.push_back(1);
-            tile_regs_acquire();
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id);
-            cb_ex_partial.reserve_back(1);
-            cb_scaler.wait_front(1);
-            cb_ex2pe.wait_front(1);
+
             // reduce only one final tile
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, 0, scaler0, dst0);
-            cb_ex2pe.pop_front(1);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial_id);
-            tile_regs_release();
-            cb_ex_partial.push_back(1);
-            reduce_uninit<FP32_DEST_ACC>();
+            //
+            // Note that reader_mcast_sender_unary_sharded_gn_v2.cpp depends on the
+            // documented behavior of REDUCE_SCALAR's packer to set every
+            // non-result datum of cb_ex_partial to zero.
+            // If this `reduce<…, REDUCE_SCALAR>` pack into cb_ex_partial is
+            // ever replaced by something that does not have the same
+            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
+            // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
+            // reader's "single-tile-overwrite trick" must be adjusted accordingly
+            // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
+            // mcast reader). Same applies to the second REDUCE_SCALAR pack into
+            // cb_ex_partial later in this kernel (variance).
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
-                cb_ex_global.reserve_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
-                tile_regs_acquire();
-                cb_scaler_global.wait_front(1);
-                cb_ex_external.wait_front(1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
-                cb_ex_external.pop_front(1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global_id);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_ex_global.push_back(1);
                 cb_ex.push_back(1);
             }
             // x - E[x]
@@ -377,41 +374,27 @@ void kernel_main() {
             tile_regs_release();
             cb_ex2pe.push_back(1);
 
-            cb_ex_partial.reserve_back(1);
-            cb_scaler.wait_front(1);
-            cb_ex2pe.wait_front(1);
+            // If modifying this code, see the long comment at the first REDUCE_SCALAR
+            // pack into cb_ex_partial earlier in this kernel.
+            // The sharded reader's "single-tile-overwrite trick" depends on
+            // this pack also clearing every non-result datum of cb_ex_partial
+            // to exact zero (documented packer behavior for REDUCE_SCALAR).
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
 
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id);
-
-            tile_regs_acquire();
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, 0, scaler0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial_id);
-            tile_regs_release();
-            cb_ex_partial.push_back(1);
-
-            reduce_uninit<FP32_DEST_ACC>();
-
-            cb_ex2pe.pop_front(1);
             cb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
-                cb_ex_global.reserve_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
-                tile_regs_acquire();
-                cb_scaler_global.wait_front(1);
-                cb_ex_external.wait_front(1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
-                cb_ex_external.pop_front(1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global_id);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_ex_global.push_back(1);
                 cb_ex.push_back(1);
             }
 

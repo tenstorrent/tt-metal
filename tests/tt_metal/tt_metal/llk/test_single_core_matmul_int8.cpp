@@ -22,13 +22,14 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -66,11 +67,6 @@ void convert_to_sign_mag(std::vector<int8_t>& vec) {
             i = temp;
         }
     }
-}
-
-int get_output_coordinate(int x, int y) {
-    int offset = ((x < 16) ? 0 : 256) + ((y < 16) ? 0 : 512);
-    return offset + ((y % 16) * 16) + (x % 16);
 }
 
 bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -163,8 +159,9 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     for (int x = 0; x < 32; x++) {
         for (int y = 0; y < 32; y++) {
             for (int z = 0; z < 32; z++) {
-                golden_output_int32[get_output_coordinate(x, y)] +=
-                    (int32_t)input_0[get_output_coordinate(z, y)] * (int32_t)input_1[get_output_coordinate(x, z)];
+                golden_output_int32[byte_tile_face_major_index(x, y)] +=
+                    (int32_t)input_0[byte_tile_face_major_index(z, y)] *
+                    (int32_t)input_1[byte_tile_face_major_index(x, z)];
             }
         }
     }
@@ -231,7 +228,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
 
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
 

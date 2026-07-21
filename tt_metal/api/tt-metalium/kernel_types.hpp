@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <string_view>
 #include <unordered_map>
@@ -41,9 +42,10 @@ enum NOC_MODE : uint8_t {
     DM_DYNAMIC_NOC = 1,
 };
 
-// 341 = (4096/(3 * sizeof(uint32_t)), where
-// - 4096 - packet size in dispatch
-// - 3 - number of kernels per tensix
+// Conservative minimum number of runtime args (unique + common combined) guaranteed to be settable on
+// any core type. This is a stable floor for callers that want a portable limit; it is NOT the enforced
+// hard cap. The actual per-core ceiling is larger and computed by the runtime from the available L1
+// kernel-config space for the target core type (see Kernel::validate_runtime_args_size).
 constexpr uint32_t max_runtime_args = 341;
 
 using KernelHandle = std::uint32_t;
@@ -78,6 +80,8 @@ struct DataMovementConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
@@ -85,7 +89,8 @@ struct ReaderDataMovementConfig : public DataMovementConfig {
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
         std::unordered_map<std::string, uint32_t> named_compile_args = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::vector<std::filesystem::path> compiler_include_paths = {});
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
@@ -93,7 +98,8 @@ struct WriterDataMovementConfig : public DataMovementConfig {
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
         std::unordered_map<std::string, uint32_t> named_compile_args = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::vector<std::filesystem::path> compiler_include_paths = {});
 };
 
 struct ComputeConfig {
@@ -118,6 +124,8 @@ struct ComputeConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

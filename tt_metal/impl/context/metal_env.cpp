@@ -13,6 +13,7 @@
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
 #include "metal_context.hpp"
+#include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
@@ -93,6 +94,10 @@ MetalEnvImpl::~MetalEnvImpl() {
         std::lock_guard<std::mutex> lock(s_registry_mutex_);
         s_registry_.erase(this);
     }
+    // NOTE: the env-owned context (see ensure_context_registered) is intentionally torn down earlier, in
+    // MetalEnv::~MetalEnv(), before the MetalEnv::impl_ unique_ptr is reset. MetalContext::teardown()
+    // routes get_cluster()/rtoptions() back through *env_ (the outer MetalEnv), whose impl_ is already
+    // nullptr by the time ~MetalEnvImpl runs, so destroying it here would dereference that null impl_.
     check_use_count_zero();
     teardown_fabric_objects();
     cluster_.reset();
@@ -121,6 +126,43 @@ const Hal& MetalEnvImpl::get_hal() { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
+namespace {
+// Decide whether to register Blackhole DRAM programmable cores (the "DRAM-core" / tensor-prefetcher
+// path) in the HAL. Queryable afterwards via Hal::has_programmable_core_type(HalProgrammableCoreType::DRAM).
+//
+// Two independent constraints, both about the application owning the right DRAM RISC core:
+//   - Firmware must support it (arch + firmware-bundle floor) -- resolved by check_firmware_capabilities.
+//   - Topology: with DRAM harvesting the specific core the application must write to for GCB credits can
+//     differ per device, which breaks our programming model that the cores look identical on every
+//     device. A single device has no cross-device consistency to break, and an unharvested multi-device
+//     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
+bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster) {
+    FirmwareCapabilityRequest req;
+    req.dram_programmable_cores = true;
+    FirmwareCapabilityResult res;
+    check_firmware_capabilities(
+        cluster.arch(),
+        {.firmware_bundle = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version()},
+        req,
+        res);
+    if (!res.dram_programmable_cores) {
+        return false;
+    }
+
+    if (cluster.number_of_devices() == 1) {
+        return true;
+    }
+    // Multi-device: the GCB-credit core must be the same on every device, so reject if any device has
+    // a harvested DRAM channel (which would shift that core on that device).
+    for (const auto chip : cluster.all_chip_ids()) {
+        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
@@ -129,12 +171,23 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
     }
 
-    const bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(*this->rtoptions_));
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
+
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch()) {
+        if (this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
+            log_info(
+                tt::LogMetal,
+                "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
+            this->rtoptions_->set_dram_backed_cq(true);
+        }
+    }
+
+    // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
+    // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
+    const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -142,7 +195,7 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        this->rtoptions_->get_enable_blackhole_dram_programmable_cores());
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_));
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
@@ -191,6 +244,19 @@ bool MetalEnvImpl::set_fabric_config(
     tt_fabric::FabricUDMMode fabric_udm_mode,
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
+    // Reject transitions that would reinitialize the control plane while devices are still open.
+    // Callers must close the mesh device first. Going TO DISABLED is allowed
+    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
+        const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
+                                        !MetalContext::instance().device_manager()->get_all_active_devices().empty();
+        TT_FATAL(
+            !devices_still_open,
+            "SetFabricConfig({}) is not allowed while devices are still open: it would reinitialize the control "
+            "plane underneath running fabric kernels and dangle the ControlPlane& held by the fabric firmware "
+            "initializer. Close the mesh device before changing the fabric config to a non-DISABLED value.",
+            enchantum::to_string(fabric_config));
+    }
+
     force_reinit_ = true;
 
     // Export channel trimming capture data before fabric config changes.
@@ -259,14 +325,25 @@ bool MetalEnvImpl::set_fabric_config(
         this->initialize_control_plane_impl();
     }
 
+    // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        this->initialize_fabric_config();
+    }
+
     return true;
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
+    // defer clear_fabric_context to fabric firmware teardown if devices are still open
+    const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
+                                    !MetalContext::instance().device_manager()->get_all_active_devices().empty();
+
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    this->get_control_plane().clear_fabric_context();
+    if (!devices_still_open) {
+        this->get_control_plane().clear_fabric_context();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_config() {
@@ -302,6 +379,20 @@ bool MetalEnvImpl::consume_force_reinit() {
 }
 
 // ─── Control plane ────────────────────────────────────────────────────────────
+
+int MetalEnvImpl::ensure_context_registered(MetalEnv& env) {
+    if (!registered_context_id_.has_value()) {
+        registered_context_id_ = MetalContext::create_instance(env).get();
+    }
+    return *registered_context_id_;
+}
+
+void MetalEnvImpl::teardown_registered_context() {
+    if (registered_context_id_.has_value()) {
+        MetalContext::destroy_instance(/*check_device_count=*/false, ContextId{*registered_context_id_});
+        registered_context_id_.reset();
+    }
+}
 
 tt::tt_fabric::ControlPlane& MetalEnvImpl::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -518,7 +609,13 @@ void MetalEnvImpl::teardown_fabric_objects() {
 
 MetalEnv::MetalEnv(MetalEnvDescriptor descriptor) : impl_(std::make_unique<MetalEnvImpl>(std::move(descriptor))) {}
 
-MetalEnv::~MetalEnv() { this->impl_.reset(); }
+MetalEnv::~MetalEnv() {
+    // Destroy the env-owned MetalContext (if any) while impl_ is still valid: MetalContext::teardown()
+    // reaches back through *env_ -> MetalEnv::impl_, which unique_ptr::reset() nulls before running
+    // ~MetalEnvImpl. See ensure_context_registered / teardown_registered_context.
+    impl_->teardown_registered_context();
+    this->impl_.reset();
+}
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
@@ -541,19 +638,30 @@ float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
 float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
-tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() { return impl_->get_control_plane(); }
-distributed::SystemMesh& MetalEnv::get_system_mesh() { return impl_->get_system_mesh(); }
+tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() {
+    impl_->ensure_context_registered(*this);
+    return impl_->get_control_plane();
+}
+distributed::SystemMesh& MetalEnv::get_system_mesh() {
+    impl_->ensure_context_registered(*this);
+    return impl_->get_system_mesh();
+}
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
-    ContextId context_id = MetalContext::create_instance(*this);
+    // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
+    // (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
+    // close, preserving the legacy create_mesh_device-only behavior.
+    const bool env_owns_context = impl_->has_registered_context();
+    ContextId context_id =
+        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
@@ -563,7 +671,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    if (!env_owns_context) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    }
     return mesh_device;
 }
 
@@ -573,9 +683,11 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    ContextId context_id = MetalContext::create_instance(*this);
+    const bool env_owns_context = impl_->has_registered_context();
+    ContextId context_id =
+        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
@@ -585,7 +697,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    if (!env_owns_context) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    }
     return mesh_device;
 }
 
@@ -595,9 +709,11 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    ContextId context_id = MetalContext::create_instance(*this);
+    const bool env_owns_context = impl_->has_registered_context();
+    ContextId context_id =
+        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
         device_ids,
@@ -607,7 +723,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!result.empty()) {
+    if (!env_owns_context && !result.empty()) {
         const auto& parent = result.begin()->second->get_parent_mesh();
         if (parent) {
             parent->impl().set_destroy_metal_context_instance_on_close(true);
@@ -616,7 +732,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     return result;
 }
 
-SubDevice MetalEnv::create_sub_device(tt::stl::Span<const CoreRangeSet> cores) {
+SubDevice MetalEnv::create_sub_device(ttsl::Span<const CoreRangeSet> cores) {
     // Use SubDevice constructor marked as internal
     return SubDevice(SubDeviceImpl(&MetalEnvAccessor(*this).impl(), cores));
 }

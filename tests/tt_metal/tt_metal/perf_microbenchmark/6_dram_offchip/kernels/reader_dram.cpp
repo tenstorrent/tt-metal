@@ -16,14 +16,14 @@ void kernel_main() {
     constexpr bool is_dram = true;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id);
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, input_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(s_args, input_addr);
 
     uint32_t block_size = num_cb_tiles;
     cb_reserve_back(cb_id, num_cb_tiles);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint32_t cb_addr = get_write_ptr(cb_id);
         for (uint32_t i = 0; i < block_size; ++i) {
-            noc_async_read_tile(input_start_tile_id, s, cb_addr);
+            noc_async_read_page(input_start_tile_id, s, cb_addr);
             cb_addr += single_tile_size_bytes;
             input_start_tile_id++;
         }

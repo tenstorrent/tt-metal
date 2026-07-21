@@ -24,10 +24,13 @@ import pytest
 import torch
 
 import ttnn
+from models.common.sampling import SamplingParams
+from models.demos.multimodal.gemma3.tt.gemma_e2e_model import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
-from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -62,13 +65,20 @@ def create_multimodal_model(
     optimizations=None,
     num_layers=None,
     paged_attention_config=None,
+    dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(
-        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, max_seq_len=max_seq_len
+        mesh_device,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        optimizations=optimizations,
+        dummy_weights=dummy_weights,
+        enable_program_trace=enable_program_trace,
     )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
@@ -106,6 +116,8 @@ def prepare_generator_args(
     use_paged_kv_cache=False,
     optimizations=None,
     num_layers=None,
+    dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -123,11 +135,23 @@ def prepare_generator_args(
             checkpoint=state_dict,
             optimizations=optimizations,
             num_layers=num_layers,
+            dummy_weights=dummy_weights,
+            enable_program_trace=enable_program_trace,
         )
         model_args.append(model_args_i)
         model.append(model_i)
 
     return model_args, model
+
+
+def _gemma3_vision_demo_device_params():
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    return {
+        "fabric_config": True,
+        TRACE_MODEL_KEY_PARAM: "gemma-3-27b-vision",
+        "num_command_queues": 2,
+        "l1_small_size": 24576,
+    }
 
 
 @pytest.mark.parametrize(
@@ -182,7 +206,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 21448704, "num_command_queues": 2, "l1_small_size": 24576}],
+    [_gemma3_vision_demo_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -207,6 +231,7 @@ def test_multimodal_demo_text(
     optimizations,
     max_gen_len,
     num_layers,
+    request,
     temperature: float = 0,
     top_p: float = 0.9,
     model_parallel_size: Optional[int] = None,
@@ -222,6 +247,8 @@ def test_multimodal_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
+    dummy_weights = request.config.getoption("--dummy_weights") or False
+
     model_args, model = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
@@ -230,6 +257,8 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         num_layers=num_layers,
+        dummy_weights=dummy_weights,
+        enable_program_trace=enable_trace,
     )
 
     from transformers import AutoProcessor
@@ -238,15 +267,24 @@ def test_multimodal_demo_text(
         model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
     )
 
-    generator = Generator(model, model_args, mesh_device)
+    generator = GemmaMultimodalGenerator(model, model_args, mesh_device)
 
-    # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
+    can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    greedy_only = temperature <= 0
+    if can_sample_on_device:
+        if temperature <= 0:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+        else:
+            device_sampling_params = SamplingParams(temperature=temperature, top_k=32, top_p=top_p)
+    else:
+        device_sampling_params = None
+
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
         kv_cache=None,
         enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        greedy_only=greedy_only,
     )
     logger.info("Warmup complete")
 
@@ -302,7 +340,7 @@ def test_multimodal_demo_text(
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
 
-    sampler = get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
+    sampler = None if can_sample_on_device else get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
@@ -345,17 +383,24 @@ def test_multimodal_demo_text(
 
             prefill_start = time.perf_counter()
             with profiler("inference_prefill", iteration=batch_idx):
-                batch_logits, *_ = generator.prefill_forward(
+                # prefill_forward returns (tokens, log_probs) when sampling on device, logits otherwise.
+                prefill_out = generator.prefill_forward(
                     vision_images,
                     vision_mask,
                     tokens,
                     None,  # xattn_caches not used for Gemma3
                     total_lens,
                     prefill_lens,
+                    sampling_params=device_sampling_params,
                 )
 
             prefill_end = time.perf_counter()
-            next_tokens, next_texts = sampler(batch_logits)
+            if device_sampling_params is not None:
+                prefill_toks, _prefill_lp = prefill_out
+                next_tokens = prefill_toks.long().squeeze(-1).reshape(-1)[:max_batch_size]
+                next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
+            else:
+                next_tokens, next_texts = sampler(prefill_out)
             for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
                 tokens[i, prefill_lens[i]] = next_token
             print(f"Next tokens: {next_tokens}")
@@ -368,13 +413,21 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits, _ = generator.decode_forward(
-                        next_token_tensor,
-                        position_id,
-                        enable_trace=enable_trace,
-                    )
-
-                    next_tokens, next_texts = sampler(logits)
+                    if device_sampling_params is not None:
+                        tok, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                            sampling_params=device_sampling_params,
+                        )
+                        next_tokens = tok.long().reshape(-1)[:max_batch_size]
+                    else:
+                        logits, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                        )
+                        next_tokens, next_texts = sampler(logits)
                     # Update next token
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                     decode_end = time.perf_counter()
@@ -385,6 +438,8 @@ def test_multimodal_demo_text(
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
+
+            next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
 
             # Log full text output for each user in batch
             # For HF models, get vision tokens from the processor if they exist
@@ -445,49 +500,58 @@ def test_multimodal_demo_text(
     if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
-        target_prefill_tok_s = {
-            "N300_Llama-3.2-11B": 23,
-            "T3K_Llama-3.2-11B": 20,
-            "T3K_Llama-3.2-90B": 3,
-            "N150_gemma-3-4b": 285,
-            "N300_gemma-3-4b": 390,
-            "T3K_gemma-3-27b": 265,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s_u = {
-            "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 35,
-            "T3K_Llama-3.2-90B": 6,
-            "N150_gemma-3-4b": 24,
-            "N300_gemma-3-4b": 28,
-            "T3K_gemma-3-27b": 13,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * max_batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
-
-        # Save benchmark data for CI
-        N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
-        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=f"{base_model_name}-Vision",
-            ml_model_type="vlm",
-            num_layers=model_args[0].n_layers,
+        perf_key = f"{tt_device_name}_{base_model_name}"
+        resolved_targets = resolve_perf_targets(
+            model_name=base_model_name,
+            sku=tt_device_name,
             batch_size=max_batch_size,
-            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=max(prefill_lens).item(),
-            output_sequence_length=max_gen_len,
+            seq_len=max_seq_len,
         )
 
-        skip_perf_verification = [
-            "gemma-3-4b",  # Gemma-3 functional only - perf tests are not reliable yet
-            "gemma-3-27b",  # Gemma-3 functional only - perf tests are not reliable yet
-        ]
-        if base_model_name not in skip_perf_verification:
-            verify_perf(measurements, targets, high_tol_percentage=1.15)
+        if not resolved_targets:
+            logger.warning(
+                f"No centralized CI vision perf targets for {perf_key}; skipping benchmark save and verify_perf."
+            )
+        else:
+            targets = {}
+            if resolved_targets.get("prefill_t/s") is not None:
+                targets["prefill_t/s"] = float(resolved_targets["prefill_t/s"])
+            if resolved_targets.get("decode_t/s/u") is not None:
+                targets["decode_t/s/u"] = float(resolved_targets["decode_t/s/u"])
+            if resolved_targets.get("decode_t/s") is not None:
+                targets["decode_t/s"] = float(resolved_targets["decode_t/s"])
+            elif "decode_t/s/u" in targets:
+                targets["decode_t/s"] = targets["decode_t/s/u"] * max_batch_size
+
+            # Save benchmark data for CI
+            N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
+            benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="demo_perf",
+                ml_model_name=f"{base_model_name}-Vision",
+                ml_model_type="vlm",
+                num_layers=model_args[0].n_layers,
+                batch_size=max_batch_size,
+                config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
+                input_sequence_length=max(prefill_lens).item(),
+                output_sequence_length=max_gen_len,
+            )
+
+            skip_perf_verification = [
+                "gemma-3-4b",  # Gemma-3 functional only - perf tests are not reliable yet
+                "gemma-3-27b",  # Gemma-3 functional only - perf tests are not reliable yet
+            ]
+            if base_model_name not in skip_perf_verification:
+                expected_measurements = {
+                    key: True for key in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if key in targets
+                }
+                if expected_measurements:
+                    verify_perf(
+                        measurements,
+                        expected_measurements=expected_measurements,
+                        model_name=base_model_name,
+                        sku=tt_device_name,
+                        batch_size=max_batch_size,
+                        seq_len=max_seq_len,
+                    )

@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -78,13 +81,13 @@ void kernel_main() {
     constexpr auto index3_args = TensorAccessorArgs<index2_args.next_compile_time_args_offset()>();
     constexpr auto index4_args = TensorAccessorArgs<index3_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(in_args, src_addr, 1024 * element_size);
+    const auto s0 = TensorAccessor(in_args, src_addr);
 
-    const auto index0 = TensorAccessor(index0_args, index0_addr, INDEX_TILE_SIZE);
-    const auto index1 = TensorAccessor(index1_args, index1_addr, INDEX_TILE_SIZE);
-    const auto index2 = TensorAccessor(index2_args, index2_addr, INDEX_TILE_SIZE);
-    const auto index3 = TensorAccessor(index3_args, index3_addr, INDEX_TILE_SIZE);
-    const auto index4 = TensorAccessor(index4_args, index4_addr, INDEX_TILE_SIZE);
+    const auto index0 = TensorAccessor(index0_args, index0_addr);
+    const auto index1 = TensorAccessor(index1_args, index1_addr);
+    const auto index2 = TensorAccessor(index2_args, index2_addr);
+    const auto index3 = TensorAccessor(index3_args, index3_addr);
+    const auto index4 = TensorAccessor(index4_args, index4_addr);
 
     uint32_t index_is_defined[5] = {
         index0_is_defined,
@@ -129,10 +132,16 @@ void kernel_main() {
 #define NOC_MINIMUM_READ_SIZE (32)
 #define INDEX_SIZE (4)
 
+    Noc noc;
+    DataflowBuffer dfb_in0_obj(cb_in0);
+    DataflowBuffer dfb_in1_obj(cb_in1);
+    DataflowBuffer dfb_in2_obj(cb_in2);
+    DataflowBuffer dfb_in3_obj(cb_in3);
+    DataflowBuffer dfb_in4_obj(cb_in4);
+
     uint32_t end_id = start_id + num_sticks;
 
     for (uint32_t i = start_id; i < end_id; ++i) {
-        // compute src noc id
         uint32_t output_stick_idx = i;
         uint32_t input_stick_idx = 0;
         uint32_t index_index = 0;
@@ -142,11 +151,7 @@ void kernel_main() {
             uint32_t input_stick_idx_stride = input_stick_idx_strides[dim];
 
             if (index_is_defined[dim]) {
-                tt::CBIndex idx_cb = index_cbs[dim];
-
-                cb_reserve_back(idx_cb, 1);
-                uint32_t index_l1_addr = get_write_ptr(idx_cb);
-                uint64_t index_noc_addr;
+                uint32_t index_l1_addr = 0;
 
                 if (is_first_index) {
                     index_index = output_stick_idx % index_size;
@@ -155,19 +160,30 @@ void kernel_main() {
 #ifdef TILIZE_INDEX
                 uint32_t index_noc_id = index_index / TILE_HEIGHT;
                 if (dim == 0) {
-                    index_noc_addr = get_noc_addr(index_noc_id, index0);
+                    dfb_in1_obj.reserve_back(1);
+                    index_l1_addr = dfb_in1_obj.get_write_ptr();
+                    noc.async_read(
+                        index0, dfb_in1_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 if (dim == 1) {
-                    index_noc_addr = get_noc_addr(index_noc_id, index1);
+                    dfb_in2_obj.reserve_back(1);
+                    index_l1_addr = dfb_in2_obj.get_write_ptr();
+                    noc.async_read(
+                        index1, dfb_in2_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 if (dim == 2) {
-                    index_noc_addr = get_noc_addr(index_noc_id, index2);
+                    dfb_in3_obj.reserve_back(1);
+                    index_l1_addr = dfb_in3_obj.get_write_ptr();
+                    noc.async_read(
+                        index2, dfb_in3_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
                 if (dim == 3) {
-                    index_noc_addr = get_noc_addr(index_noc_id, index3);
+                    dfb_in4_obj.reserve_back(1);
+                    index_l1_addr = dfb_in4_obj.get_write_ptr();
+                    noc.async_read(
+                        index3, dfb_in4_obj, INDEX_TILE_SIZE, {.page_id = index_noc_id}, {.offset_bytes = 0});
                 }
-                noc_async_read(index_noc_addr, index_l1_addr, INDEX_TILE_SIZE);
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
                 volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 uint32_t index_dim_offset;
@@ -184,19 +200,46 @@ void kernel_main() {
                 uint32_t noc_offset =
                     ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
                 if (dim == 0) {
-                    index_noc_addr = get_noc_addr(0, index0, noc_offset);
+                    dfb_in1_obj.reserve_back(1);
+                    index_l1_addr = dfb_in1_obj.get_write_ptr();
+                    noc.async_read(
+                        index0,
+                        dfb_in1_obj,
+                        NOC_MINIMUM_READ_SIZE,
+                        {.page_id = 0, .offset_bytes = noc_offset},
+                        {.offset_bytes = 0});
                 }
                 if (dim == 1) {
-                    index_noc_addr = get_noc_addr(0, index1, noc_offset);
+                    dfb_in2_obj.reserve_back(1);
+                    index_l1_addr = dfb_in2_obj.get_write_ptr();
+                    noc.async_read(
+                        index1,
+                        dfb_in2_obj,
+                        NOC_MINIMUM_READ_SIZE,
+                        {.page_id = 0, .offset_bytes = noc_offset},
+                        {.offset_bytes = 0});
                 }
                 if (dim == 2) {
-                    index_noc_addr = get_noc_addr(0, index2, noc_offset);
+                    dfb_in3_obj.reserve_back(1);
+                    index_l1_addr = dfb_in3_obj.get_write_ptr();
+                    noc.async_read(
+                        index2,
+                        dfb_in3_obj,
+                        NOC_MINIMUM_READ_SIZE,
+                        {.page_id = 0, .offset_bytes = noc_offset},
+                        {.offset_bytes = 0});
                 }
                 if (dim == 3) {
-                    index_noc_addr = get_noc_addr(0, index3, noc_offset);
+                    dfb_in4_obj.reserve_back(1);
+                    index_l1_addr = dfb_in4_obj.get_write_ptr();
+                    noc.async_read(
+                        index3,
+                        dfb_in4_obj,
+                        NOC_MINIMUM_READ_SIZE,
+                        {.page_id = 0, .offset_bytes = noc_offset},
+                        {.offset_bytes = 0});
                 }
-                noc_async_read(index_noc_addr, index_l1_addr, NOC_MINIMUM_READ_SIZE);
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
                 volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
 
@@ -230,9 +273,7 @@ void kernel_main() {
             }
         }
 
-        // input_stick_idx = 5;
-        cb_reserve_back(cb_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+        dfb_in0_obj.reserve_back(1);
 
         Idx5d stick_index_5d = get_stick_indices(
             input_stick_idx,
@@ -248,10 +289,9 @@ void kernel_main() {
 
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
-        uint64_t src_noc_addr = get_noc_addr(noc_id, s0, noc_offset);
-
-        noc_async_read(src_noc_addr, l1_write_addr, stick_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_in0, 1);
+        noc.async_read(
+            s0, dfb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in0_obj.push_back(1);
     }
 }

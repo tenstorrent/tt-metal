@@ -3,9 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     const std::uint32_t input_buffer_src_addr = get_arg_val<uint32_t>(0);
     const std::uint32_t weight_buffer_src_addr = get_arg_val<uint32_t>(1);
     const std::uint32_t batch_offset = get_arg_val<uint32_t>(2);
@@ -24,15 +30,22 @@ void kernel_main() {
     constexpr uint32_t rows_per_block = get_compile_time_arg_val(5);  // Input elems per block
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
 
-    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr uint32_t chunk_size = get_compile_time_arg_val(7);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t last_chunk_size = get_compile_time_arg_val(9);
+
+    constexpr auto input_args = TensorAccessorArgs<10>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
-    prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
+    prepare_local_cache(noc, cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
-    cb_reserve_back(cb_id_in1, 1);
-    uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+
+    cb_in1.reserve_back(1);
+    uint32_t input_l1_addr = cb_in1.get_write_ptr();
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
     uint32_t curr_row = batch_offset;  // Number of pages/rows we have read from input so far
@@ -43,18 +56,26 @@ void kernel_main() {
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + offset;
-            noc_async_read(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
-            noc_async_read_barrier();
+            noc.async_read(
+                input,
+                CoreLocalMem<uint32_t>(input_l1_addr),
+                input_block_size_bytes,
+                {.page_id = curr_row, .offset_bytes = offset},
+                {});
+            noc.async_read_barrier();
             read_indices = false;
         }
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         input_token_t token = input_l1_ptr[index];
-        uint64_t src_noc_addr = get_token_noc_addr(token, weights);
-        noc_async_read<weight_stick_size>(src_noc_addr, l1_write_addr, weight_stick_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+
+        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+            cb_in0.reserve_back(1);
+            uint32_t l1_write_addr = cb_in0.get_write_ptr();
+            uint32_t current_chunk_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
+            uint32_t chunk_offset = chunk * chunk_size;
+            read_token_async(noc, token, weights, l1_write_addr, current_chunk_size, chunk_offset);
+            noc.async_read_barrier();
+            cb_in0.push_back(1);
+        }
 
         index++;
         uint32_t total_bytes_into_page = offset + index * input_elem_size_bytes;
@@ -70,4 +91,7 @@ void kernel_main() {
             read_indices = true;
         }
     }
+    // cb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
+    // reservation so the CB is left balanced.
+    cb_in1.push_back(1);
 }

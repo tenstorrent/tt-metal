@@ -24,45 +24,53 @@ void kernel_main() {
                        cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    // Welford-fp32 alias of cb_in (non-fused) -- shares L1 memory with cb_in0 but has its own
+    // semaphore. The compute kernel waits on cb_x_welford for the welford section because that
+    // buffer index is configured with unpack_to_dest_mode=UnpackToDestFp32. When the alias is
+    // inactive, cb_x_welford == cb_in (non-fused) or cb_x (fused); the gate below avoids double-counting.
+    constexpr uint32_t cb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_x_welford(cb_id_x_welford);
 #ifdef FUSE_PRE_ADD
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in1(cb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+    CircularBuffer cb_gamma(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    experimental::CircularBuffer cb_beta(cb_id_beta);
+    CircularBuffer cb_beta(cb_id_beta);
 #endif
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
+    const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
@@ -75,6 +83,16 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
                 noc, cb_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
+#else
+            // Non-fused welford-fp32 alias: cb_x_welford shares cb_in0's memory but has its own
+            // semaphore. After the data lands in cb_in0 (and therefore in shared memory), push
+            // cb_x_welford by the same amount so compute can wait_front on the alias separately
+            // for welford reads. Skipped when no alias is active (cb_x_welford == cb_in0; the
+            // duplicate push would double-count cb_in0's semaphore).
+            if constexpr (welford_fp32_alias) {
+                cb_x_welford.reserve_back(block.full_block_size());
+                cb_x_welford.push_back(block.full_block_size());
+            }
 #endif
         }  // wt loop
 
@@ -86,6 +104,21 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
                 noc, cb_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
+#else
+            // Keep cb_x_welford's fifo pointers in lockstep with cb_in0's across passes.
+            // cb_x_welford and cb_in0 share the same L1 allocation via multi-buffer-index aliasing;
+            // each has its own (fifo_rd_ptr, fifo_wr_ptr, semaphore) state. cb_in0 is pushed in
+            // both passes (Wt+Wt tiles per NCHt) and popped in both (welford + eltwise). If
+            // cb_x_welford were pushed only in pass 1 and popped only in the welford section, its
+            // pointers would drift relative to cb_in0's by Wt tiles per NCHt iteration. Once the
+            // CB wraps (cb_in0 holds only Wt_next_block_up = 28 tiles for fp32 vs Wt up to 130+),
+            // the welford section of the NEXT NCHt would read stale L1 data from cb_x_welford's
+            // out-of-date rd_ptr. We don't actually need the alias's data here (the eltwise pass
+            // reads cb_in0 directly), but we push the semaphore so compute can pop it in lockstep.
+            if constexpr (welford_fp32_alias) {
+                cb_x_welford.reserve_back(block.full_block_size());
+                cb_x_welford.push_back(block.full_block_size());
+            }
 #endif
 #ifdef FUSE_GAMMA
             {

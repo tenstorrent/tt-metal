@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from shutil import copyfile
+
 
 from tracy import *
+from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
 def main():
@@ -34,6 +37,14 @@ def main():
     )
     parser.add_option(
         "-t", "--port", action="store", help="Internal port used by the script", type="string", dest="port"
+    )
+    parser.add_option(
+        "--web-app-port",
+        action="store",
+        type="int",
+        dest="web_app_port",
+        default=None,
+        help="HTTP port for the Tracy WASM web UI after capture (default: 8080, or TRACY_WASM_HTTP_PORT if set). WebSocket uses this port + 1.",
     )
     parser.add_option(
         "--no-op-info-cache",
@@ -75,6 +86,13 @@ def main():
         dest="do_sum",
         action="store_true",
         help="Enable sum profiling",
+        default=False,
+    )
+    parser.add_option(
+        "--enable-accumulate-profiling",
+        dest="do_accumulate",
+        action="store_true",
+        help="Accumulate multiple kernel invocations in the L1 profiler buffer and only push to DRAM when full (worker cores only)",
         default=False,
     )
     parser.add_option(
@@ -159,6 +177,9 @@ def main():
         callback=split_comma_list,
         dest="perf_counter_groups",
     )
+    parser.add_option(
+        "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -168,6 +189,13 @@ def main():
 
     (options, args) = parser.parse_args()
     sys.argv[:] = args
+
+    # Accumulate mode stores no per-op IDs, so an ops report is meaningless: disallow -r with --enable-accumulate-profiling.
+    if options.report and options.do_accumulate:
+        parser.error(
+            "-r (ops report) cannot be used with --enable-accumulate-profiling: "
+            "accumulate mode does not store per-op IDs, so no ops report can be generated"
+        )
 
     outputFolderEnvStr = "TT_METAL_PROFILER_DIR"
     outputFolder = PROFILER_ARTIFACTS_DIR
@@ -215,6 +243,9 @@ def main():
     if options.do_sum:
         os.environ["TT_METAL_PROFILER_SUM"] = "1"
 
+    if options.do_accumulate:
+        os.environ["TT_METAL_PROFILER_ACCUMULATE"] = "1"
+
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
@@ -237,38 +268,65 @@ def main():
         )
 
     if options.perf_counter_groups:
-        # Map counter group names to bit positions (from perf_counters.hpp)
+        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
         counter_group_bits = {
-            "fpu": 0,  # PROFILE_PERF_COUNTERS_FPU    (1 << 0)
-            "pack": 1,  # PROFILE_PERF_COUNTERS_PACK   (1 << 1)
-            "unpack": 2,  # PROFILE_PERF_COUNTERS_UNPACK (1 << 2)
-            "l1_0": 3,  # PROFILE_PERF_COUNTERS_L1_0   (1 << 3)
-            "l1_1": 4,  # PROFILE_PERF_COUNTERS_L1_1   (1 << 4)
-            "instrn": 5,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
+            "fpu": 0,
+            "pack": 1,
+            "unpack": 2,
+            "l1_0": 3,
+            "l1_1": 4,
+            "instrn": 5,
+            "l1_2": 6,
+            "l1_3": 7,
+            "l1_4": 8,
         }
 
         bitfield = 0
         for group in options.perf_counter_groups:
             group_lower = group.lower()
             if group_lower == "all":
-                # Enable all counter groups (excluding L1 banks since they conflict;
-                # user must explicitly pick l1_0 or l1_1)
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5)  # fpu|pack|unpack|instrn
+                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
                 break
             elif group_lower in counter_group_bits:
                 bitfield |= 1 << counter_group_bits[group_lower]
             else:
                 logger.warning(
-                    f"Unknown counter group '{group}'. " f"Valid groups: fpu, pack, unpack, l1_0, l1_1, instrn, all"
+                    f"Unknown counter group '{group}'. "
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
-        # Validate L1 bank mutual exclusion
-        if (bitfield & (1 << 3)) and (bitfield & (1 << 4)):
-            raise ValueError(
-                "L1 bank 0 (l1_0) and L1 bank 1 (l1_1) cannot be enabled simultaneously. "
-                "They share the same hardware registers (selected via MUX_CTRL bit 4). "
-                "Please choose one: l1_0 or l1_1."
+        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
+
+        # Reject BH-only groups on non-BH architectures.
+        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
+        requested_groups = {group.lower() for group in options.perf_counter_groups}
+        requested_bh_only = sorted(requested_groups & bh_only_groups)
+        if requested_bh_only:
+            declared_arch = next(
+                (
+                    os.environ.get(env_var)
+                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
+                    if os.environ.get(env_var)
+                ),
+                None,
             )
+            if declared_arch is None:
+                try:
+                    import ttnn
+
+                    device = ttnn.open_device(device_id=0)
+                    declared_arch = str(device.arch()).split(".")[-1]
+                    ttnn.close_device(device)
+                except Exception:
+                    logger.debug("Failed to detect device arch via ttnn")
+            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
+            if not is_blackhole:
+                arch_desc = declared_arch if declared_arch is not None else "undeclared"
+                raise ValueError(
+                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
+                    f"but device arch is {arch_desc}."
+                )
 
         if bitfield > 0:
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
@@ -301,18 +359,11 @@ def main():
         os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
 
     if len(args) > 0:
-        doReport = False
-        if options.report:
-            if not port:
-                logger.error("No available port found")
-                sys.exit(1)
-            logger.info(f"Using port {port}")
-            os.environ["TTNN_OP_PROFILER"] = "1"
-            os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
-            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
-
-        if not doReport:
+        if options.noCapture:
             code = None
+            if options.report:
+                os.environ["TTNN_OP_PROFILER"] = "1"
+                os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
             if options.module:
                 import runpy
 
@@ -355,10 +406,16 @@ def main():
                 sys.stdout = None
                 sys.exit(exc.errno)
         else:
-            originalArgs.remove("-r")
-            osCmd = " ".join(originalArgs[1:])
+            if not port:
+                logger.error("No available port found")
+                sys.exit(1)
+            logger.info(f"Using port {port}")
+            captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
-            testCommand = f"python3 -m tracy {osCmd}"
+            originalArgs = ["--no-capture-tool"] + originalArgs[1:]
+            osCmd = " ".join(originalArgs)
+
+            testCommand = f"{sys.executable} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
             if options.device:
@@ -388,14 +445,53 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(
-                    outputFolder,
-                    binaryFolder,
-                    options.name_append,
-                    options.child_functions,
-                    options.collect_noc_traces,
-                    options.device_analysis_types,
-                )
+                # Copy the generated .tracy file to the server's traces folder with a unique name
+                import datetime
+
+                tracy_src = PROFILER_LOGS_DIR / TRACY_FILE_NAME
+                traces_dir = PROFILER_WASM_TRACES_DIR
+                # Use timestamp, optional name_append, and a short form of the tested command for uniqueness
+                timestamp = datetime.datetime.now().strftime("_%Y_%m_%d_%H_%M_%S")
+                name_part = f"_{options.name_append}" if options.name_append else ""
+                # Short form of the command being tested (first arg, basename, no extension)
+                cmd_short = ""
+                if len(args) > 0:
+                    if os.path.basename(args[0]) == "pytest" and len(args) > 1:
+                        # Use the next argument after pytest for the name
+                        cmd_base = os.path.basename(args[-1])
+                    else:
+                        cmd_base = os.path.basename(args[0])
+                    cmd_short = os.path.splitext(cmd_base)[0]
+                    # Sanitize for filename
+                    cmd_short = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cmd_short)
+                    cmd_short = f"{cmd_short}"
+                tracy_dst = traces_dir / f"{cmd_short}{name_part}{timestamp}.tracy"
+                logger.info(f"Copying {tracy_src} to {tracy_dst}")
+                try:
+                    copyfile(tracy_src, tracy_dst)
+                    logger.info(f"Copied {tracy_src} to {tracy_dst}")
+                except Exception as e:
+                    logger.warning(f"Could not copy {tracy_src} to {tracy_dst}: {e}")
+                # Point embed.tracy (always a relative symlink into traces/) at the new capture so
+                # the GUI loads it by default. Symlink-only: the live-reload watcher follows it and
+                # DELETE relies on it to detect/advance the active trace. On the rare FS without
+                # symlink support this warns and skips; the trace is still reachable via ?trace=.
+                try:
+                    point_embed_at_trace(tracy_dst.name)
+                    logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
+                except Exception as e:
+                    logger.warning(f"Could not update embed.tracy: {e}")
+                launch_server_subprocess(port=options.web_app_port)
+                # Start the WASM server as a daemon with defaults
+                if options.report:
+                    generate_report(
+                        outputFolder,
+                        binaryFolder,
+                        options.name_append,
+                        options.child_functions,
+                        options.collect_noc_traces,
+                        options.device_analysis_types,
+                    )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()

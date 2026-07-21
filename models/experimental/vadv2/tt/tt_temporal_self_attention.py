@@ -4,7 +4,8 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, build_folded_sampling_offsets
+from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
 class TtTemporalSelfAttention:
@@ -52,6 +53,15 @@ class TtTemporalSelfAttention:
         self.num_points = num_points
         self.num_bev_queue = num_bev_queue
 
+        # Cached (H, W) per level for multi_scale_deformable_attn — avoids
+        # the host-sync `.item()` cost on warm calls.
+        self._hw_cache = None
+
+        # sampling_offsets Linear weight/bias pre-scaled by 1/offset_normalizer,
+        # folding the per-call offset_normalizer DIV away. Built once (static).
+        self._so_w = None
+        self._so_b = None
+
     def __call__(
         self,
         query,
@@ -88,7 +98,7 @@ class TtTemporalSelfAttention:
         query = ttnn.concat([value[:bs], query], dim=-1)
 
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias)
+        value = linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias)
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
@@ -97,15 +107,17 @@ class TtTemporalSelfAttention:
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
-        sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
+        if self._so_w is None:
+            self._so_w, self._so_b = build_folded_sampling_offsets(params.sampling_offsets, spatial_shapes, self.device)
+        sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
         )
         sampling_offsets = ttnn.reallocate(sampling_offsets)
 
-        attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
-        ttnn.deallocate(params.attention_weights.weight)
-        ttnn.deallocate(params.attention_weights.bias)
+        attention_weights = linear_flatten_batch(
+            query, params.attention_weights.weight, bias=params.attention_weights.bias
+        )
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
@@ -130,60 +142,47 @@ class TtTemporalSelfAttention:
         )
 
         if reference_points.shape[-1] == 2:
-            offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
             bs_r, num_query, num_levels, _ = reference_points.shape
             reference_points_shape = reference_points.shape
             reference_points = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
-            offset_normalizer_xy = ttnn.reshape(
-                offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
-            )
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
-            offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
-
-            sampling_offsets_shape = sampling_offsets.shape
-            sampling_offsets = ttnn.reshape(
-                sampling_offsets, (sampling_offsets.shape[0], -1, sampling_offsets.shape[4], sampling_offsets.shape[5])
-            )  # [2, 10000*8*1, 4, 2]
-            offset_normalizer_xy = ttnn.reshape(
-                offset_normalizer_xy,
-                (
-                    offset_normalizer_xy.shape[0],
-                    offset_normalizer_xy.shape[1],
-                    offset_normalizer_xy.shape[2],
-                    offset_normalizer_xy.shape[-1],
-                ),
-            )
-            sampling_locations = ttnn.div(sampling_offsets, offset_normalizer_xy)
-            sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets_shape)
-            sampling_locations = reference_points + sampling_locations
-            ttnn.deallocate(offset_normalizer_xy)
-            ttnn.deallocate(offset_normalizer)
+            # sampling_offsets is already divided by offset_normalizer (folded into
+            # the sampling_offsets Linear weight), so add reference directly.
+            sampling_locations = reference_points + sampling_offsets
             reference_points = ttnn.reshape(reference_points, reference_points_shape)
         elif reference_points.shape[-1] == 4:
-            reference_points_reshape = ttnn.reshape(
-                reference_points,
-                [reference_points.shape[0], reference_points.shape[1], 1, reference_points.shape[2], 1, 2],
-            )
-            sampling_locations = (
-                reference_points_reshape + sampling_offsets / self.num_points * reference_points_reshape * 0.5
+            # 4-D (box-refine) reference path. Its formula
+            # (reference + sampling_offsets / num_points * reference * 0.5) consumes
+            # sampling_offsets WITHOUT the offset_normalizer division — but offsets
+            # are now pre-scaled by 1/[W,H] folded into the sampling_offsets Linear
+            # weights, so this path would silently miscompute. It is unused in VADv2
+            # (callers pass 2-D reference_points); guard loudly for future enablement.
+            raise NotImplementedError(
+                "4-D reference_points is incompatible with the folded offset_normalizer "
+                "(see build_folded_sampling_offsets); this path needs unscaled sampling_offsets."
             )
         else:
             raise ValueError(
                 f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]} instead."
             )
-        output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
+        if self._hw_cache is None:
+            self._hw_cache = [
+                (int(spatial_shapes[lvl, 0].item()), int(spatial_shapes[lvl, 1].item()))
+                for lvl in range(self.num_levels)
+            ]
+        output = multi_scale_deformable_attn(
+            value, spatial_shapes, sampling_locations, attention_weights, self.device, hw_py=self._hw_cache
+        )
         ttnn.deallocate(attention_weights)
         ttnn.deallocate(sampling_locations)
         ttnn.deallocate(sampling_offsets)
         ttnn.deallocate(value)
         output = ttnn.permute(output, (1, 2, 0))
-        output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
+        output = ttnn.reshape(output, (num_query, embed_dims, bs * self.num_bev_queue))
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-        output = ttnn.mean(output, dim=-1)
+        output = ttnn.mean(output, dim=-1, keepdim=True)
         output = ttnn.permute(output, (2, 0, 1))
-        output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
-        ttnn.deallocate(params.output_proj.weight)
-        ttnn.deallocate(params.output_proj.bias)
+        output = linear_flatten_batch(output, params.output_proj.weight, bias=params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

@@ -34,6 +34,7 @@ Table of Contents
       - [Saving the commit to origin and create a pull request](#saving-the-commit-to-origin-and-create-a-pull-request)
       - [Rebasing your branch](#rebasing-your-branch)
       - [Merging to main](#merging-to-main)
+    - [PR categories](#pr-categories)
     - [Code reviews](#code-reviews)
     - [New feature and design specifications](#new-feature-and-design-specifications)
     - [Release flows](#release-flows)
@@ -328,9 +329,9 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
   - Watcher will flag illegal NoC transactions that may seem to run ok without watcher, this is expected (e.g., 0 length transactions are not considered safe but appear safe in practice).
   - If watcher detects an error, an appropriate message will be displayed, the problematic core will be stalled, and the program will exit. For more information on watcher debug features, see the [Watcher documentation](docs/source/tt-metalium/tools/watcher.rst).
   - Once the design has been "proven", disable watcher for performance testing.
-- To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/kernel_print.rst):
+- To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/device_print.rst):
   - Define the environment variable to specify which cores to print from, `export TT_METAL_DPRINT_CORES=(0,0)-(4,4)` to print from a 5x5 grid of cores.
-  - In the kernel, `#include "api/debug/device_print.h"`, and to print a variable `x`, `DEVICE_PRINT("x = {}\n", x);`
+  - In the kernel, `#include "api/debug/dprint.h"`, and to print a variable `x`, `DPRINT("x = {}\n", x);`
   - For more information on kernel printing, see the [Device Debug Print documentation](docs/source/tt-metalium/tools/device_print.rst).
 
 ### Debugging device hangs
@@ -797,6 +798,23 @@ option to merge without squashing. You should use `Squash and merge` unless you
 have a good reason not to.
 
 After that, the UI will usually delete your branch.
+
+### PR categories
+
+All PRs must be bucketed into exactly one of the following categories. Include
+the category name in your PR title (e.g. `[Feature] Add new op`). Reviewers
+should reject PRs that span multiple categories — use `git rebase -i` to split
+them first.
+
+| Category | When to use |
+|---|---|
+| **Feature** | Implements new functionality. Tests encouraged. |
+| **Performance** | No new functionality, no bug fixes — only performance improves. Tests encouraged. |
+| **Bug fix** | Fixes an issue with existing functionality. New regression tests strongly encouraged. |
+| **Cleanup** | Refactor, rename, restructure, or cosmetic change. No functional change. Tests OK to add. |
+| **Test Only** | Adds or modifies tests with no production code change. |
+
+Exceptions are rare and must be justified. When in doubt, split the PR.
 
 ### Code reviews
 

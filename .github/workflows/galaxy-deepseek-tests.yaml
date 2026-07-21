@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: false
         type: choice
         options:
@@ -13,6 +13,7 @@ on:
           - module
           - long-seq-module
           - final-op-unit
+          - tg-moe
         default: 'all'
       platform:
         required: false
@@ -39,7 +40,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       recreate_weights_cache:
-        description: 'Recreate weights cache in a new directory'
+        description: "Recreate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -47,10 +48,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache."
         required: false
         type: string
-        default: ''
+        default: ""
       enable-tracy:
         required: false
         type: boolean
@@ -61,9 +62,14 @@ on:
     - cron: "30 3 * * *" # Separate daily run for final-op-unit with Tracy enabled
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -94,7 +100,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: wormhole_b0
         MESH_DEVICE: T3K
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -107,7 +113,8 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -122,10 +129,15 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -m t3k_compat --timeout 120 --durations=0
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
 
   # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
     with:
@@ -159,7 +171,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: wormhole_b0
         MESH_DEVICE: TG
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -172,7 +184,8 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -187,3 +200,8 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -m t3k_compat --timeout 120 --durations=0
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"

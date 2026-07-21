@@ -33,6 +33,8 @@
 #define CMDBUF_0 0
 #define CMDBUF_1 1
 
+namespace overlay {
+
 /* Default transaction ID for both command buffers */
 constexpr uint32_t CMDBUF_DEF_TRID = 0;
 /* Static(starting) transaction ID for command buffer 0 */
@@ -233,6 +235,29 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         misc.f.wrapping_en = wrapping_en;                                                                              \
                                                                                                                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
+    }                                                                                                                  \
+                                                                                                                       \
+    /*                                                                                                                 \
+     * @def set_axi_opt_1_cmdbuf_0                                                                                     \
+     * @def set_axi_opt_1_cmdbuf_1                                                                                     \
+     *                                                                                                                 \
+     * @brief Programs the AXI_OPT_1 cmdbuf register. All fields not exposed as parameters                             \
+     *        are written at their TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT values.                                       \
+     *                                                                                                                 \
+     * @param src_protocol AXI source protocol selector                                                                \
+     * @param decouple_aw  Decouple AXI AW from W channel                                                              \
+     *                                                                                                                 \
+     * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
+     */                                                                                                                \
+    inline __attribute__((always_inline)) void set_axi_opt_1_##buf_name(                                               \
+        uint8_t src_protocol,                                                                                          \
+        uint8_t decouple_aw) {                                                                                         \
+        TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u axi_opt_1;                                                                     \
+        axi_opt_1.val = TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT;                                                         \
+        axi_opt_1.f.src_protocol = src_protocol;                                                                       \
+        axi_opt_1.f.decouple_aw = decouple_aw;                                                                         \
+                                                                                                                       \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET, axi_opt_1.val);               \
     }                                                                                                                  \
                                                                                                                        \
     /*                                                                                                                 \
@@ -1876,3 +1901,5 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_reg_cmdbuf
     return SCMDBUF_TR_ACK_TRID(transaction_id) == 0;
 }
 inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_reg_cmdbuf() { return SCMDBUF_TR_ACK() == 0; }
+
+}  // namespace overlay

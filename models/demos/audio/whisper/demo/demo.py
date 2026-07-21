@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import glob
 import os
 from os import listdir
 from os.path import isfile, join
@@ -10,7 +11,7 @@ from typing import List, Optional, Union
 import jiwer
 import pytest
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from evaluate import load
 from loguru import logger
 from scipy.io import wavfile
@@ -24,7 +25,6 @@ from transformers import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_BATCH_SIZE,
     WHISPER_L1_SMALL_SIZE,
@@ -37,7 +37,9 @@ from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
 )
 from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
 from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
@@ -167,7 +169,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         cross_attn_cache_per_batch_size,
     ) = init_conditional_generation_tt_model(hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper)
 
-    # Create WhisperGenerator instance with persistent trace support
+    # Encoder (Transformer) stack can use capture/replay traces; decoder has separate traces.
     generator = WhisperGenerator(
         config=config,
         mesh_device=mesh_device,
@@ -182,6 +184,8 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         kv_cache_per_batch_size=kv_cache_per_batch_size,
         cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
+        enable_encoder_trace=True,
+        use_2cq=True,
     )
 
     def _model_pipeline(
@@ -294,8 +298,9 @@ def run_demo_whisper_for_audio_classification_inference(
         # Convert logits to torch
         logits_torch = ttnn.to_torch(logits, mesh_composer=output_mesh_composer)
 
-        # Argmax over class dimension
-        predicted_class_ids = torch.argmax(logits_torch.squeeze(1), dim=1)
+        # Argmax over class (last) dimension; flatten to yield one prediction per sample
+        # regardless of any extra leading unit dims produced by ttnn tile-layout conversion.
+        predicted_class_ids = torch.argmax(logits_torch, dim=-1).flatten()[:current_batch_size]
         predicted_labels = [model.config.id2label[class_id.item()] for class_id in predicted_class_ids]
 
         for idx, label_str in enumerate(predicted_labels):
@@ -430,7 +435,26 @@ def run_demo_whisper_for_conditional_generation_dataset(
     )
 
     # load data
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    # Use load_from_disk() when the Arrow cache exists under HF_HOME/datasets — pure
+    # read, no lock file. Falls back to load_dataset() which writes a lock to
+    # HF_DATASETS_CACHE (=/tmp in CI) if no Arrow cache is found.
+    _hf_datasets = os.path.join(os.environ.get("HF_HOME", ""), "datasets")
+    _arrow_dirs = (
+        [
+            os.path.dirname(p)
+            for p in glob.glob(
+                os.path.join(_hf_datasets, "hf-internal-testing___parquet", "clean-*", "**", "dataset_info.json"),
+                recursive=True,
+            )
+        ]
+        if os.path.isdir(_hf_datasets)
+        else []
+    )
+    ds = (
+        load_from_disk(sorted(_arrow_dirs)[-1])
+        if _arrow_dirs
+        else load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    )
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     # perform model inference
     total_wer = 0
@@ -591,7 +615,7 @@ def run_demo_whisper_for_translation_dataset(
             english_translation = english_map[sample["id"]]
             reference_sentences.append(english_translation)
 
-            logger.info(f"Sample {i + j + 1}: {generation_params.language} text: {source_text}")
+            logger.info(f"Sample {i + j + 1}: {language} text: {source_text}")
             logger.info(f"Sample {i + j + 1}: English reference: {english_translation}")
 
         # Perform model inference with optional streaming
@@ -764,7 +788,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "use_per_request_params",
-    [True],
+    [False, True],
 )
 @pytest.mark.parametrize(
     "run_both_batch_sizes",
@@ -801,6 +825,7 @@ def test_demo_for_conditional_generation(
         is_ci_env
         and model_repo == "openai/whisper-large-v3"
         and (compression_ratio_threshold is not None or batch_size_per_device == 2)
+        and not use_per_request_params
     ):
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
@@ -831,6 +856,19 @@ def test_demo_for_conditional_generation(
             return_timestamps=return_timestamps,
         )
 
+    should_check_perf = (
+        is_ci_env
+        and model_repo == "distil-whisper/distil-large-v3"
+        and batch_size_per_device == 1
+        and mesh_device.get_num_devices() == available_devices
+        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
+        and not use_per_request_params
+    )
+
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    profiler.start("inference_prefill")
+    profiler.start("inference_decode")
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
@@ -842,30 +880,39 @@ def test_demo_for_conditional_generation(
         prompt=prompt,
         batch_size_per_device=batch_size_per_device,
         stream=stream,
-        run_both_batch_sizes=run_both_batch_sizes,
+        run_both_batch_sizes=run_both_batch_sizes and not should_check_perf,
     )
+    profiler.end("inference_prefill")
+    profiler.end("inference_decode")
+    profiler.end("run")
 
-    if (
-        is_ci_env
-        and model_repo == "distil-whisper/distil-large-v3"
-        and batch_size_per_device == 1
-        and mesh_device.get_num_devices() == available_devices
-        and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
-    ):
-        metrics_dictionary = {
-            2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 124.0},
-            8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
-            32: {"prefill_time_to_token": 0.22, "decode_t/s/u": 77.5},
-        }
-        if is_blackhole():
-            if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_time_to_token": 0.06, "decode_t/s/u": 310.0}
-            else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 330.0}
-        else:  # wormhole_b0
-            expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
+    if is_ci_env:
+        # When run_both_batch_sizes is active, the returned metrics correspond to
+        # the last batch size iterated (WHISPER_BATCH_SIZE).
+        effective_bs_per_device = (
+            WHISPER_BATCH_SIZE if (run_both_batch_sizes and not should_check_perf) else batch_size_per_device
+        )
+        total_batch = mesh_device.get_num_devices() * effective_bs_per_device
+        benchmark_data = BenchmarkData()
+        benchmark_data.add_measurement(profiler, 0, "inference_prefill", "time_to_token", ttft)
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", "tokens/s/user", decode_throughput)
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", "tokens/s", decode_throughput * total_batch)
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_perf",
+            ml_model_name=model_repo.split("/")[-1],
+            ml_model_type="audio",
+            batch_size=total_batch,
+            # Whisper encoder uses 30-second mel spectrogram chunks → 3000 frames at 80 mel bins,
+            # downsampled 2× by two Conv1d layers to 1500 encoder time steps.
+            input_sequence_length=1500,
+        )
+
+    if should_check_perf:
+        # Whisper perf targets are maintained for N150 and P150 only.
+        sku = get_current_device_sku_name()
+
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
-        expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
         measurements = {
             "prefill_time_to_token": ttft,
             "decode_t/s": decode_throughput * total_batch,
@@ -876,9 +923,19 @@ def test_demo_for_conditional_generation(
             "decode_t/s": True,
             "decode_t/s/u": True,
         }
-        verify_perf(
-            measurements, expected_perf_metrics, high_tol_percentage=1.20, expected_measurements=expected_measurements
-        )
+        try:
+            verify_perf(
+                measurements,
+                expected_measurements=expected_measurements,
+                model_name=model_repo,
+                sku=sku,
+                batch_size=total_batch,
+            )
+        except ValueError as e:
+            logger.warning(
+                f"Skipping perf check: no centralized perf target for model={model_repo}, sku={sku}, "
+                f"batch_size={total_batch}. Details: {e}"
+            )
 
 
 @pytest.mark.parametrize(

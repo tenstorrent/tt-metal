@@ -192,10 +192,31 @@ def test_unary_square_int32(input_shapes, low_a, high_a, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-def test_abs_int32(device):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randint(low=-1000, high=100, size=(1, 1, 320, 384), dtype=torch.int32)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 3, 320, 384])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a",
+    [
+        (-1000, 100),
+        (-2147483647, 0),  # max negative to zero
+        (0, 2147483647),  # zero to max positive
+        (-2147483647, 2147483647),  # full representable range
+    ],
+)
+def test_abs_int32(input_shapes, low_a, high_a, device):
+    # Note: abs(-2147483648) is not representable in int32, so the range stops at -2147483647.
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    torch_input_tensor_a = torch.linspace(low_a, high_a, num_elements, dtype=torch.int32)
+    torch_input_tensor_a[::5] = 0  # ensure the zero / sign-clear path is exercised
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(input_shapes)
+    # Guard the documented INT_MIN avoidance: abs(-2147483648) overflows int32 and would
+    # silently corrupt both golden and device results (a green-but-meaningless test).
+    assert torch_input_tensor_a.min().item() != -2147483648, "INT_MIN leaked into abs test input"
 
     golden_function = ttnn.get_golden_function(ttnn.abs)
     torch_output_tensor = golden_function(torch_input_tensor_a)
@@ -212,3 +233,103 @@ def test_abs_int32(device):
     output_tensor = ttnn.to_torch(result)
 
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, -0xFF, 2147483647, -2147483648])
+def test_bitwise_scalar_int32(device, ttnn_function, scalar):
+    x_torch = torch.tensor([[1, 2, 255, -4096, 2147483647, -2147483648, -2147483647, 0]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, scalar)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+
+    assert torch.equal(z_torch, tt_out)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, -0xABCD, 2147483647, -2147483648])
+def test_bitwise_scalar_int32_full_range(device, ttnn_function, scalar):
+    x_torch = torch.linspace(-2147483648, 2147483647, 1024, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, scalar)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+
+    assert torch.equal(z_torch, tt_out)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_left_shift,
+        ttnn.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
+def test_bitwise_shift_scalar_int32(device, ttnn_function, shift):
+    x_torch = torch.tensor([[1, 2, 255, -4096, 2147483647, -2147483648, -2147483647, 0]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, shift)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, shift)
+
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_left_shift,
+        ttnn.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
+def test_bitwise_shift_scalar_int32_full_range(device, ttnn_function, shift):
+    x_torch = torch.linspace(-2147483648, 2147483647, 1024, dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, shift)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, shift)
+
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
+def test_logical_left_shift_scalar_int32(device, shift):
+    x_torch = torch.tensor([[1, 2, 255, -4096, 2147483647, -2147483648, -2147483647, 0]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.logical_left_shift)
+    z_torch = golden_fn(x_torch, shift)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn.logical_left_shift(x_tt, shift)
+
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+    assert torch.equal(tt_out, z_torch)

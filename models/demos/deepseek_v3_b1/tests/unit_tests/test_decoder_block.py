@@ -10,36 +10,84 @@ Tests decoder fused operation with full pipeline:
 - Qrope output: [64, 1, 64] after RoPE
 """
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
-from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
+from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
+from models.demos.deepseek_v3_b1.demo.weight_provider import resolve_sram_expert_ids
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
     DENSE_SHARED_N,
     ROUTED_EXPERT_LAYER_IDX,
-    RoutedExpert,
-    SharedExpert,
     extract_routed_expert_output,
 )
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
-from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 from models.demos.deepseek_v3_b1.weights.prepare import (
-    create_gate_indices_tensor,
     get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+    SramExpertCoreGrids,
+    _load_routing_frequencies,
+    build_sram_hot_expert_config,
+)
+
+MTP_LAYER_IDX = 61
+
+# Safety ceiling on SRAM hot experts per layer.  The real cap is the
+# per-core L1 budget measured from the attention footprint inside
+# ``prepare_moe_layer_weights`` (see ``worker_l1_size`` wiring below), this
+# value just bounds how many ranked candidates we hand to the greedy trim
+# so we don't waste CPU time running the assigner on hundreds of experts
+# that will never fit.  Sized for the shared-expert-style layout (64 gate /
+# 64 up / 112 down cores with block-sharded gate/up and K_dev=256 down)
+# where ~26 bfp4 / ~13 bfp8 experts realistically fit per core.
+_SRAM_HOT_EXPERTS_CEILING = 64
+
+
+def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
+    """Build the ``(sram_hot_experts, sram_core_grids)`` pair.
+
+    Core grids come from :meth:`SramExpertCoreGrids.shared_expert_mirror` (same
+    CRS as shared-expert gate/up/down in ``overlap_configs``).
+
+    Returns up to ``_SRAM_HOT_EXPERTS_CEILING`` candidates ranked by routing
+    frequency for ``layer_idx``.  The actual address-based trim runs inside
+    ``prepare_moe_layer_weights`` against the measured per-core attention
+    footprint (see ``worker_l1_size`` plumbing below) -- no host-side
+    budgeting is applied here.
+    """
+    sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
+    freqs = _load_routing_frequencies()
+    full_config = build_sram_hot_expert_config([layer_idx], freqs)
+    sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
+    logger.info(
+        "SRAM hot experts: layer {} -> {} ranked candidates (pre-device trim)",
+        layer_idx,
+        len(sram_hot_experts.get(layer_idx, [])),
+    )
+    return sram_hot_experts, sram_core_grids
+
+
+def _optional_bspm_dir():
+    """Return model-specific BSPM directory when BSPM_DIR/BSPM_RESULTS_DIR is configured."""
+    raw = os.getenv("BSPM_DIR") or os.getenv("BSPM_RESULTS_DIR")
+    if not raw or not raw.strip():
+        return None
+    return Path(raw.strip()) / "deepseek-r1-0528"
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -65,807 +113,351 @@ def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None
 
 
 # ============================================================================
-# Unified decoder block tensor setup
+# Test helpers: expert rigging + golden reference tensors
 # ============================================================================
-def create_decoder_block_tensors(
+
+
+class _MutableStateDictOverlay:
+    """Read-through wrapper that lets rig_experts write the rigged bias on top of
+    a read-only LazyStateDict. Overrides take precedence; everything else reads
+    from the base mapping."""
+
+    def __init__(self, base):
+        self._base = base
+        self._overrides: dict = {}
+
+    def __getitem__(self, key):
+        if key in self._overrides:
+            return self._overrides[key]
+        return self._base[key]
+
+    def __setitem__(self, key, value):
+        self._overrides[key] = value
+
+    def __contains__(self, key):
+        return key in self._overrides or key in self._base
+
+    def __iter__(self):
+        seen = set(self._overrides)
+        yield from self._overrides
+        for k in self._base:
+            if k not in seen:
+                yield k
+
+    def __len__(self):
+        return len(self._base) + sum(1 for k in self._overrides if k not in self._base)
+
+
+def rig_experts(state_dict, layer_idx, rigged_group_count):
+    """Rig expert routing bias in state_dict for deterministic test routing.
+
+    Generates RMS-normalized input for stability with rigged routing,
+    modifies state_dict bias entries, and returns the rigged configuration.
+
+    When state_dict is read-only (LazyStateDict), it is wrapped in a mutable
+    overlay so the bias write succeeds. The wrapped object is returned as the
+    last tuple element so callers can swap their handle.
+
+    Returns (rigged_group_ids, rigged_expert_ids, torch_input, state_dict).
+    """
+    if not hasattr(state_dict, "__setitem__"):
+        state_dict = _MutableStateDictOverlay(state_dict)
+    K = 7168
+    shape = (1, K)
+    torch_input_f32 = torch.randn(shape, dtype=torch.float32)
+    torch_input_f32 = torch_input_f32 / torch.sqrt(torch_input_f32.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
+    torch_input = torch_input_f32.to(torch.bfloat16)
+
+    g = torch.Generator()
+    g.manual_seed(2026)
+    if not (1 <= rigged_group_count <= 8):
+        raise ValueError(f"rigged_group_count must be in [1, 8], got {rigged_group_count}")
+    num_selected_groups = min(4, rigged_group_count)
+    rigged_group_ids = torch.randperm(rigged_group_count, generator=g)[:num_selected_groups].tolist()
+
+    total_rigged_experts = 8
+    experts_per_group = [1] * num_selected_groups
+    remaining = total_rigged_experts - num_selected_groups
+    for _ in range(remaining):
+        chosen_group = int(torch.randint(0, num_selected_groups, (1,), generator=g).item())
+        experts_per_group[chosen_group] += 1
+
+    rigged_expert_ids = {
+        grp: torch.randperm(32, generator=g)[:num_experts].tolist()
+        for grp, num_experts in zip(rigged_group_ids, experts_per_group, strict=True)
+    }
+
+    rigged_bias = torch.full((8, 32), -10.0, dtype=torch.bfloat16)
+    for grp in rigged_group_ids:
+        for exp in rigged_expert_ids[grp]:
+            rigged_bias[grp, exp] = 10.0
+    state_dict[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"] = rigged_bias.reshape(-1).contiguous()
+    logger.info(
+        f"Rigged experts enabled: groups={rigged_group_ids}, "
+        f"experts={[(grp, rigged_expert_ids[grp]) for grp in rigged_group_ids]}"
+    )
+
+    return rigged_group_ids, rigged_expert_ids, torch_input, state_dict
+
+
+def create_decoder_golden_tensors(
+    d,
     submesh,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
-    position_id,
     state_dict,
     layer_idx,
-    max_seq_len,
     reduce_root_coord=ttnn.MeshCoordinate(1, 1),
     *,
+    metadata: DeepseekMetadata | None = None,
+    max_seq_len: int = 128 * 1024,
+    num_slots: int = 1,
     is_moe: bool = True,
     num_routed_experts: int = 0,
-    preloaded_weights=None,
-    rigged_group_count: int | None = None,
-    validate_debug_tensors: bool = False,
+    rigged_group_ids=None,
+    rigged_expert_ids=None,
 ):
-    """Create all tensors required by DecoderBlock.op().
+    """Build golden PyTorch reference tensors for decoder validation.
 
-    Three modes of operation:
-    - **preloaded_weights mode** (production): pass a DeepSeekV3MoELayerWeights from
-      load_moe_layer. Skips weight processing and golden tensors.
-    - **state_dict + is_moe=True** (MoE tests): calls
-      prepare_moe_layer_weights, builds MoE golden tensors.
-    - **state_dict + is_moe=False** (dense tests): calls
-      prepare_dense_layer_weights, builds dense golden tensors.
-
-    Returns a dict with all attention + FFN + shared expert + reduce tensors.
+    Reads intermediate CPU tensors and the on-device KV cache from d
+    (the output of create_decoder_block_tensors).
     """
-    if preloaded_weights is None and state_dict is None:
-        raise ValueError("Either state_dict or preloaded_weights must be provided")
-    torch.manual_seed(0)
-    num_devices = mesh_rows * mesh_cols
-    device_grid_size = submesh.compute_with_storage_grid_size()
-    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    if metadata is None:
+        metadata = DeepseekMetadata()
 
-    # TODO: Shouldn't hardcode this here
-    class _RopeConfig:
-        qk_rope_head_dim = 64
-        rope_theta = 10000.0
-        rope_scaling = {
-            "factor": 40,
-            "original_max_position_embeddings": 4096,
-            "beta_fast": 32,
-            "beta_slow": 1,
-            "mscale": 1.0,
-            "mscale_all_dim": 1.0,
-        }
-
-    _RopeConfig.max_seq_len = max_seq_len
-
-    # ── Constants for runtime tensors ──
     QNOPE_HEAD_DIM = 128
-    QROPE_HEAD_DIM = _RopeConfig.qk_rope_head_dim
-    QNOPE_OUT_DIM = 512
-    KNOPE_DIM = 512
-    KROPE_DIM = 64
-
-    M = 1
     K = 7168
-    output_size = 7168
-    shape = (1, K)
-    q_head_dim = QNOPE_HEAD_DIM + QROPE_HEAD_DIM
-    mscale = yarn_get_mscale(
-        _RopeConfig.rope_scaling["factor"],
-        _RopeConfig.rope_scaling["mscale_all_dim"],
-    )
-    scale = q_head_dim**-0.5 * mscale * mscale
-    kvpe_dim = KNOPE_DIM + KROPE_DIM
+    (
+        golden_torch_matmul_weights,
+        golden_torch_matmul2_weights,
+        golden_torch_dkv_matmul_weights,
+        golden_kv_b1,
+        golden_kv_b2,
+        golden_torch_o_proj_weights,
+        golden_torch_gamma,
+        golden_torch_rmsnorm2_gamma,
+        golden_torch_dkv_rmsnorm_gamma,
+        ffn_norm,
+    ) = get_layer_raw_tensors(state_dict, layer_idx)
 
-    QNOPE_GRID_COLS = 8
-    QROPE_GRID_COLS = 4
-    matmul2_grid_y = 8
-    qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y
+    total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
+    kv_lora_rank = golden_kv_b1.shape[1]
+    golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
-    NUM_SDPA_WORKERS = 8
-    SDPA_L_HEIGHT = 8
-    SDPA_L_WIDTH = 512 * NUM_SDPA_WORKERS
-    SDPA_MS_WIDTH = 32 * NUM_SDPA_WORKERS
+    golden_total_qnope_heads = total_kv_heads
+    golden_total_qrope_heads = total_kv_heads
+    golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
 
-    mcast_core_x = device_grid_size.x - 1
-    mcast_core_y = 9
-    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
-    tile = ttnn.Tile([1, 32])
+    def _sd_key(suffix):
+        return f"model.layers.{layer_idx}.{suffix}"
 
-    kv_cache_branch_start_offset = (0, 8)
-    kv_cache_branch_rope_crs = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(8 + kv_cache_branch_start_offset[0], kv_cache_branch_start_offset[1]),
-                ttnn.CoreCoord(8 + kv_cache_branch_start_offset[0], 1 + kv_cache_branch_start_offset[1]),
-            )
-        }
-    )
-
-    # ── SDPA KV cache buffer ──
-    kv_cache_num_cores_x = device_grid_size.x
-    kv_cache_num_cores_y = device_grid_size.y
-    kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
-    kv_cache_shard_height = 256
-    kv_cache_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(kv_cache_num_cores_x - 1, kv_cache_num_cores_y - 1))}
-        ),
-        (kv_cache_shard_height, kvpe_dim),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sdpa_kv_cache_buffer = ttnn.from_torch(
-        torch.randn((kv_cache_shard_height * kv_cache_num_cores, kvpe_dim), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
-        ),
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ── SDPA output intermediate buffer ──
-    sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_num_slots = 5  # MoE needs 36864 bytes/shard; 5 slots × 17 tiles × 512 = 43520
-    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8
-    sdpa_out_interm_shard_width = 17 * 32
-    sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
-    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
-        ),
-        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sdpa_out_interm_buffer = ttnn.from_torch(
-        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_out_interm_shard_spec
-        ),
-        mesh_mapper=mesh_mapper,
-        tile=ttnn.Tile([8, 32]),
-    )
-
-    if rigged_group_count is not None:
-        # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
-        # (all-ones can produce brittle saturation in downstream low-precision paths)
-        torch_input_f32 = torch.randn(shape, dtype=torch.float32)
-        torch_input_f32 = torch_input_f32 / torch.sqrt(torch_input_f32.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
-        torch_input = torch_input_f32.to(torch.bfloat16)
-    else:
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
-
-    rigged_group_ids = None
-    rigged_expert_ids = None
-    if rigged_group_count is not None and is_moe and preloaded_weights is None:
-        # Pseudo-random rigging within uploaded groups:
-        # - pick up to 4 groups among [0 .. rigged_group_count-1]
-        # - pick exactly 8 total experts, split pseudo-randomly across selected groups
-        g = torch.Generator()
-        g.manual_seed(2026)
-        if not (1 <= rigged_group_count <= 8):
-            raise ValueError(f"rigged_group_count must be in [1, 8], got {rigged_group_count}")
-        num_selected_groups = min(4, rigged_group_count)
-        rigged_group_ids = torch.randperm(rigged_group_count, generator=g)[:num_selected_groups].tolist()
-
-        total_rigged_experts = 8
-        # Start with one expert per selected group, then randomly distribute the remainder.
-        experts_per_group = [1] * num_selected_groups
-        remaining = total_rigged_experts - num_selected_groups
-        for _ in range(remaining):
-            chosen_group = int(torch.randint(0, num_selected_groups, (1,), generator=g).item())
-            experts_per_group[chosen_group] += 1
-
-        rigged_expert_ids = {
-            grp: torch.randperm(32, generator=g)[:num_experts].tolist()
-            for grp, num_experts in zip(rigged_group_ids, experts_per_group, strict=True)
-        }
-
-        rigged_bias = torch.full((8, 32), -10.0, dtype=torch.bfloat16)
-        for grp in rigged_group_ids:
-            for exp in rigged_expert_ids[grp]:
-                rigged_bias[grp, exp] = 10.0
-        state_dict[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"] = rigged_bias.reshape(-1).contiguous()
-        logger.info(
-            f"Rigged experts enabled: groups={rigged_group_ids}, "
-            f"experts={[(grp, rigged_expert_ids[grp]) for grp in rigged_group_ids]}"
-        )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # All weights via prepare_* functions or preloaded
-    # ══════════════════════════════════════════════════════════════════════════
-    if preloaded_weights is not None:
-        layer = preloaded_weights
-    else:
-        if is_moe:
-            layer = prepare_moe_layer_weights(
-                submesh,
-                state_dict,
-                layer_idx,
-                num_routed_experts=num_routed_experts,
-                move_to_device=True,
-            )
-        else:
-            layer = prepare_dense_layer_weights(submesh, state_dict, layer_idx, move_to_device=True)
-
-    # ── FFN final output config (DRAM streaming matmul output grid) ──
-    gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(submesh, gate_proj_noc)
-    gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
-    num_gate_proj_cores = len(gate_proj_worker_cores)
-    final_output_width_per_core = RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE
-    final_output_total_width = final_output_width_per_core * num_gate_proj_cores
-    num_banks = submesh.dram_grid_size().x
-    tile_w = RoutedExpert.TILE_W
-    down_proj_N_padded = ((K + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-    per_core_down_proj_N = down_proj_N_padded // num_banks
-
-    final_output_shard_spec = ttnn.ShardSpec(
-        gate_proj_core_ranges,
-        (1, final_output_width_per_core),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    final_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
-    )
-
-    # ── MoE-only: gate indices and output buffers ──
     if is_moe:
-        input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
-        input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
-
-        ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
-
-        tile_1x16 = ttnn.Tile((1, 16))
-        gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
-        gate_output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
+        golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
+        golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
+        golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
+        golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
+        golden_moe_bias = (
+            state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
         )
-        gate_output_scores_tensor = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
-        gate_output_indices_tensor = ttnn.from_torch(
-            torch.zeros((1, 16), dtype=torch.uint16),
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=gate_output_mem_config,
-            tile=tile_1x16,
-            mesh_mapper=mesh_mapper,
-        )
-        moe_ref_gate_output_scores = None
-        moe_ref_gate_output_indices = None
-        if validate_debug_tensors:
-            moe_ref_gate_output_scores = ttnn.from_torch(
-                torch.zeros((1, 16), dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=gate_output_mem_config,
-                tile=tile_1x16,
-                mesh_mapper=mesh_mapper,
-            )
-            moe_ref_gate_output_indices = ttnn.from_torch(
-                torch.zeros((1, 16), dtype=torch.uint16),
-                dtype=ttnn.uint16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=gate_output_mem_config,
-                tile=tile_1x16,
-                mesh_mapper=mesh_mapper,
-            )
+        golden_moe_gate_proj_dict = {}
+        golden_moe_up_proj_dict = {}
+        golden_moe_down_proj_dict = {}
+        for e in range(num_routed_experts):
+            w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
+            golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+            w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
+            golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+            w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
+            golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+    else:
+        gate_full = state_dict[_sd_key("mlp.gate_proj.weight")].T.contiguous()
+        up_full = state_dict[_sd_key("mlp.up_proj.weight")].T.contiguous()
+        down_full = state_dict[_sd_key("mlp.down_proj.weight")].T.contiguous()
+        golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous()
+        golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous()
+        golden_moe_shared_down = down_full[:DENSE_SHARED_N, :].contiguous()
+        golden_moe_routing_weights = None
+        golden_moe_bias = None
+        golden_moe_gate_proj_dict = {}
+        golden_moe_up_proj_dict = {}
+        golden_moe_down_proj_dict = {}
+        for e in range(8):
+            start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
+            end = start + RoutedExpert.GATE_PROJ_N
+            golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1)
+            golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
+            golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Attention input/intermediate/output mesh tensors
-    # ══════════════════════════════════════════════════════════════════════════
-    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    num_devices = mesh_rows * mesh_cols
+    per_device_max_seq_len = max_seq_len // mesh_rows
+    kvpe_dim = d["torch_kv_cache"].shape[-1]
+    kv_cache_bfp8_before_op = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
 
-    device_tensors = []
-    for row in range(mesh_rows):
-        for col in range(mesh_cols):
-            if row == sender_row and col == sender_col:
-                device_tensors.append(torch_input)
-            else:
-                device_tensors.append(torch.zeros_like(torch_input))
-
-    input_tensor_mesh = ttnn.from_torch(
-        torch.cat(device_tensors, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
-    )
-
-    # ── RoPE TTNN tensors ──
-    qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    position_ids = torch.tensor([position_id])
-
-    cos_sin_4d, sin_sin_4d = get_cos_sin_matrix(_RopeConfig)
-    torch_cos = cos_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
-    torch_sin = sin_sin_4d.squeeze(0).squeeze(0)  # [max_seq_len, dim]
-    torch_trans_mat = get_rot_transformation_mat()
-
-    ttnn_qrope_cos = ttnn.from_torch(
-        torch_cos.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_qrope_sin = ttnn.from_torch(
-        torch_sin.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_krope_cos = ttnn.from_torch(
-        torch_cos.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_krope_sin = ttnn.from_torch(
-        torch_sin.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ── Trans mat ──
-    qrope_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
-    )
-    trans_mat_crs = kv_cache_branch_rope_crs.merge(ttnn.CoreRangeSet({qrope_grid}))
-    trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
-    trans_shard_spec = ttnn.ShardSpec(trans_mat_crs, (ttnn.TILE_SIZE, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
-    trans_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
-    trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
-    ttnn_trans_mat = ttnn.from_torch(
-        trans_mat_replicated,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=trans_mem,
-        tile=trans_tile,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ── Position IDs ──
-    pos_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-    )
-    pos_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ── KV Cache (ND sharded DRAM) ──
-    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
-    grid = program_config.grid
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
-        grid=grid.optimal_dram_grid(),
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
-    num_sp = mesh_rows
-    dcs = program_config.device_chunk_size
-    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
-    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
-    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
-    kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
-    ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=kv_cache_2d_mesh_mapper,
-    )
-    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-
-    # ── KV cache clone for standalone AttentionBlock.op sanity check ──
-    ttnn_kv_cache_attn_ref = None
-    if validate_debug_tensors:
-        ttnn_kv_cache_attn_ref = ttnn.from_torch(
-            torch_kv_cache_shuffled,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=kv_mem,
-            mesh_mapper=kv_cache_2d_mesh_mapper,
-        )
-
-    # ── SDPA output tensor ──
-    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
-    sdpa_input_output_grid_crs = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
-    )
-    HEADS_PER_ROW = 8
-    SDPA_INPUT_NUM_CORES = len(s1_cores)
-    sdpa_tile = ttnn.Tile([8, 32])
-    sdpa_input_output_shard_spec = ttnn.ShardSpec(
-        sdpa_input_output_grid_crs, (HEADS_PER_ROW, QNOPE_OUT_DIM), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    sdpa_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
-    )
-    ttnn_sdpa_output = None
-    if validate_debug_tensors:
-        ttnn_sdpa_output = ttnn.from_torch(
-            torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=sdpa_mem,
-            mesh_mapper=mesh_mapper,
-            tile=sdpa_tile,
-        )
-
-    # ── Post-SDPA tensors ──
-    a_tile = ttnn.Tile([M, 32])
-    shard_mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    gather_core = ttnn.CoreCoord(12, 9)
-    gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
-
-    # ── Attention block output / MoE residual input (overlapped with sdpa_kv_cache_buffer) ──
-    # These are temporally disjoint: the kv cache on core (12,9) is done after SDPA,
-    # so the attention output and MoE residual input can reuse that L1 region.
-    a_tile_size = a_tile.get_tile_size(ttnn.bfloat16)  # 1×32 tile → 64 bytes
-    num_output_tiles = output_size // 32  # 7168 / 32 = 224 tiles
-    output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-    mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
-    attn_output = ttnn.from_torch(
-        mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=shard_mesh_mapper,
-    )
-    attn_ref_output = None
-    if validate_debug_tensors:
-        attn_ref_output = ttnn.from_torch(
-            mesh_output_torch,
-            device=submesh,
-            layout=ttnn.TILE_LAYOUT,
-            tile=a_tile,
-            dtype=ttnn.bfloat16,
-            memory_config=output_mem_config,
-            mesh_mapper=shard_mesh_mapper,
-        )
-
-    # ── SDPA worker/forwarder tensors ──
-    sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
-    sdpa_worker_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
-    )
-    sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS
-    sdpa_ms_per_worker = SDPA_MS_WIDTH // NUM_SDPA_WORKERS
-
-    sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker
-    sdpa_recv_shard_shape = (2 * SDPA_L_HEIGHT, sdpa_recv_per_worker)
-    sdpa_recv_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sdpa_worker_grid, sdpa_recv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    sdpa_recv_full_width = sdpa_recv_per_worker * NUM_SDPA_WORKERS
-    mesh_recv = torch.cat(
-        [torch.zeros((2 * SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
-    )
-    ttnn_sdpa_intermediate_recv = ttnn.from_torch(
-        mesh_recv,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_recv_mem,
-        tile=sdpa_tile,
-        mesh_mapper=shard_mesh_mapper,
-    )
-
-    sdpa_forwarder_cores = [ttnn.CoreCoord(9, 8), ttnn.CoreCoord(10, 8)]
-    sdpa_forwarder_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sdpa_forwarder_cores])
-    sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
-        batch_size=SDPA_L_HEIGHT,
-        l_width=sdpa_l_per_worker,
-        num_cores=NUM_SDPA_WORKERS,
-    )
-    sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
-    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
-    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
-    sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // 2
-    sdpa_forwarder_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sdpa_forwarder_grid, (1, sdpa_fwd_per_forwarder), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    mesh_fwd_scratch = torch.cat([torch.zeros((1, sdpa_fwd_total_elements), dtype=torch.bfloat16)] * num_devices, dim=0)
-    ttnn_sdpa_forwarder_scratch = ttnn.from_torch(
-        mesh_fwd_scratch,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=sdpa_forwarder_mem,
-        mesh_mapper=shard_mesh_mapper,
-    )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Reduce-to-one tensors
-    # ══════════════════════════════════════════════════════════════════════════
-    reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
-    reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
-    tile_1x32 = ttnn.Tile([1, 32])
-
-    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
-    orig_shard_spec = final_output_mem_config.shard_spec
-    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
-    intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            orig_shard_spec.grid,
-            intermediate_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    intermediate_tensors = ttnn.from_torch(
-        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=intermediate_mem_config,
-        tile=tile_1x32,
-        mesh_mapper=reduce_mesh_mapper,
-    )
-
-    shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
-    aggregator_core = shard_cores_list[0]
-    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
-    reduce_output_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(reduce_output_shard_grid, (1, final_output_total_width), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    reduce_output_tensor = ttnn.from_torch(
-        torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=reduce_output_mem,
-        tile=tile_1x32,
-        mesh_mapper=reduce_mesh_mapper,
-    )
-
-    # ── Standalone MoE ref reduce tensors (MoE only) ──
-    if is_moe:
-        moe_ref_reduce_intermediate = None
-        moe_ref_reduce_output = None
-        if validate_debug_tensors:
-            moe_ref_reduce_intermediate = ttnn.from_torch(
-                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=intermediate_mem_config,
-                tile=tile_1x32,
-                mesh_mapper=reduce_mesh_mapper,
-            )
-            moe_ref_reduce_output = ttnn.from_torch(
-                torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=reduce_output_mem,
-                tile=tile_1x32,
-                mesh_mapper=reduce_mesh_mapper,
-            )
-
-    sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
-    mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Golden model PyTorch tensors (only when state_dict is available)
-    # ══════════════════════════════════════════════════════════════════════════
-    golden = {}
-    if state_dict is not None:
-
-        def _sd_key(suffix):
-            return f"model.layers.{layer_idx}.{suffix}"
-
-        (
-            golden_torch_matmul_weights,
-            golden_torch_matmul2_weights,
-            golden_torch_dkv_matmul_weights,
-            golden_kv_b1,
-            golden_kv_b2,
-            golden_torch_o_proj_weights,
-            golden_torch_gamma,
-            golden_torch_rmsnorm2_gamma,
-            golden_torch_dkv_rmsnorm_gamma,
-            ffn_norm,
-        ) = get_layer_raw_tensors(state_dict, layer_idx)
-
-        total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
-        kv_lora_rank = golden_kv_b1.shape[1]
-        golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
-
-        golden_total_qnope_heads = total_kv_heads
-        golden_total_qrope_heads = total_kv_heads
-
-        # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
-        golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
-        if is_moe:
-            golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
-            golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
-            golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
-            golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
-            golden_moe_bias = (
-                state_dict[_sd_key("mlp.gate.e_score_correction_bias")]
-                .reshape(1, 8, 32)
-                .contiguous()
-                .to(torch.bfloat16)
-            )
-            golden_moe_gate_proj_dict = {}
-            golden_moe_up_proj_dict = {}
-            golden_moe_down_proj_dict = {}
-            for e in range(num_routed_experts):
-                w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
-                golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
-                w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
-                golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
-                w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
-                golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
-        else:
-            gate_full = state_dict[_sd_key("mlp.gate_proj.weight")].T.contiguous()
-            up_full = state_dict[_sd_key("mlp.up_proj.weight")].T.contiguous()
-            down_full = state_dict[_sd_key("mlp.down_proj.weight")].T.contiguous()
-            golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous()
-            golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous()
-            golden_moe_shared_down = down_full[:DENSE_SHARED_N, :].contiguous()
-            golden_moe_routing_weights = None
-            golden_moe_bias = None
-            golden_moe_gate_proj_dict = {}
-            golden_moe_up_proj_dict = {}
-            golden_moe_down_proj_dict = {}
-            for e in range(8):
-                start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
-                end = start + RoutedExpert.GATE_PROJ_N
-                golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1)
-                golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
-                golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
-
-        golden = {
-            "golden_torch_input": torch_input,
-            "golden_torch_gamma": golden_torch_gamma,
-            "golden_torch_matmul_weights": golden_torch_matmul_weights,
-            "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
-            "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
-            "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
-            "golden_torch_sin": torch_sin,
-            "golden_torch_cos": torch_cos,
-            "golden_position_ids": position_ids,
-            "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
-            "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
-            "golden_torch_kv_cache": torch_kv_cache,
-            "golden_scale": scale,
-            "golden_torch_kv_b2_proj_weights": golden_kv_b2,
-            "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
-            "golden_total_qnope_heads": golden_total_qnope_heads,
-            "golden_total_qrope_heads": golden_total_qrope_heads,
-            "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
-            "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
-            "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
-            "golden_moe_shared_gate": golden_moe_shared_gate,
-            "golden_moe_shared_up": golden_moe_shared_up,
-            "golden_moe_shared_down": golden_moe_shared_down,
-            "golden_moe_routing_weights": golden_moe_routing_weights,
-            "golden_moe_bias": golden_moe_bias,
-            "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
-            "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
-            "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
-            "rigged_group_ids": rigged_group_ids,
-            "rigged_expert_ids": rigged_expert_ids,
-        }
-
-    # ── Routed weight tensors differ between MoE (list) and dense (single tensor) ──
-    routed_gate = layer.routed_gate_proj[0] if is_moe else layer.routed_gate_proj
-    routed_up = layer.routed_up_proj[0] if is_moe else layer.routed_up_proj
-    routed_down = layer.routed_down_proj[0] if is_moe else layer.routed_down_proj
-
-    result = {
-        # Attention weights (from prepare_*_layer_weights)
-        "gamma_overlapped": layer.attn_norm,
-        "matmul_weights_overlapped": layer.q_a_proj,
-        "rmsnorm2_gamma_overlapped": layer.q_norm,
-        "matmul2_weights_overlapped": layer.q_b_proj,
-        "matmul3_weights_overlapped": layer.kv_b1_proj,
-        "dkv_matmul_weights_overlapped": layer.kv_a_proj,
-        "dkv_rmsnorm_gamma_overlapped": layer.kv_norm,
-        "kv_b2_overlapped": layer.kv_b2_proj,
-        "o_proj_overlapped": layer.o_proj,
-        "ffn_norm_overlapped": layer.ffn_norm,
-        # Attention activation/buffer tensors
-        "input_tensor_mesh": input_tensor_mesh,
-        "ttnn_qrope_sin": ttnn_qrope_sin,
-        "ttnn_qrope_cos": ttnn_qrope_cos,
-        "ttnn_trans_mat": ttnn_trans_mat,
-        "ttnn_krope_cos": ttnn_krope_cos,
-        "ttnn_krope_sin": ttnn_krope_sin,
-        "ttnn_kv_cache": ttnn_kv_cache,
-        "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
-        "ttnn_position_ids": ttnn_position_ids,
-        "scale": scale,
-        "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
-        "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
-        "ttnn_sdpa_output": ttnn_sdpa_output,
-        "sender_coord": sender_coord,
-        "ttnn_sdpa_input_l": None,
-        "ttnn_sdpa_input_ms": None,
-        "ttnn_sdpa_output_l": None,
-        "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
-        "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
-        "device_chunk_size": program_config.device_chunk_size,
-        "ttnn_attention_block_output": attn_output,
-        "ttnn_attn_ref_output": attn_ref_output,
-        # FFN tensors (attn_output IS the FFN residual input — overlapped with kv cache)
-        "ttnn_residual_mcast_src": attn_output,
-        "gate_proj_weights": routed_gate,
-        "up_proj_weights": routed_up,
-        "down_proj_weights": routed_down,
-        "final_output_mem_config": final_output_mem_config,
-        "final_output_total_width": final_output_total_width,
-        # Shared expert weights
-        "shared_gate_weights_overlapped": layer.shared_gate_proj,
-        "shared_up_weights_overlapped": layer.shared_up_proj,
-        "shared_down_weights_tensor": layer.shared_down_proj,
-        "shared_k_parallel": SharedExpert.K_PARALLEL,
-        "shared_n_parallel": SharedExpert.N_PARALLEL,
-        # Reduce-to-one
-        "reduce_intermediate_tensors": intermediate_tensors,
-        "reduce_output_tensor": reduce_output_tensor,
-        "reduce_root_coord": reduce_root_coord,
-        "num_gate_proj_cores": num_gate_proj_cores,
-        "per_core_down_proj_N": per_core_down_proj_N,
-        "mcast_grid": mcast_grid,
-        **golden,
+    return {
+        "golden_torch_input": d["torch_input"],
+        "golden_torch_gamma": golden_torch_gamma,
+        "golden_torch_matmul_weights": golden_torch_matmul_weights,
+        "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
+        "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
+        "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
+        "golden_torch_sin": d["torch_sin"],
+        "golden_torch_cos": d["torch_cos"],
+        "golden_metadata": metadata,
+        "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
+        "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
+        "golden_torch_kv_cache": d["torch_kv_cache"],
+        "golden_scale": d["scale"],
+        "golden_torch_kv_b2_proj_weights": golden_kv_b2,
+        "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
+        "golden_total_qnope_heads": golden_total_qnope_heads,
+        "golden_total_qrope_heads": golden_total_qrope_heads,
+        "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
+        "num_slots": num_slots,
+        "per_device_max_seq_len": per_device_max_seq_len,
+        "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
+        "golden_moe_shared_gate": golden_moe_shared_gate,
+        "golden_moe_shared_up": golden_moe_shared_up,
+        "golden_moe_shared_down": golden_moe_shared_down,
+        "golden_moe_routing_weights": golden_moe_routing_weights,
+        "golden_moe_bias": golden_moe_bias,
+        "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
+        "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
+        "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
+        "rigged_group_ids": rigged_group_ids,
+        "rigged_expert_ids": rigged_expert_ids,
     }
-    # MoE-only keys
-    if is_moe:
-        result.update(
-            {
-                "gate_mm_overlapped": layer.gate_mm,
-                "ttnn_gate_bias": layer.gate_bias,
-                "ttnn_gate_indices": ttnn_gate_indices,
-                "gate_output_scores_tensor": gate_output_scores_tensor,
-                "gate_output_indices_tensor": gate_output_indices_tensor,
-                "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
-                "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
-                "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
-                "moe_ref_reduce_output": moe_ref_reduce_output,
-            }
+
+
+_KNOWN_DECODER_MOE_FAILURE_SKIPS = {
+    (511, True, True): "DecoderBlock MoE PCC check failed: 0.9445571127296262. Issue: #43106",
+    (1023, True, True): "DecoderBlock MoE PCC check failed: 0.9550089693007023. Issue: #43106",
+    (511, False, True): "DecoderBlock MoE PCC check failed: 0.9445571127296262. Issue: #43114",
+    (1023, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (2047, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (4096, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (6644, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (9916, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (11664, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (0, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (127, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (511, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (1023, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (2047, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (4096, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (6644, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (9916, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (11664, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+}
+
+
+_KNOWN_DECODER_RIGGED_GROUPS8_FAILURE_SKIPS = {
+    (0, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (127, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (511, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (1023, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+}
+
+
+def skip_known_decoder_moe_failure(
+    position_id,
+    expert_upload_mode,
+    enable_routing,
+    use_hardcoded_expert_index,
+    num_routed_experts,
+    validate_standalone_mla,
+    validate_standalone_moe,
+    decoder_layer_idx=None,
+    use_real_weights=None,
+):
+    """Skip exact known decoder MoE failures."""
+    if (
+        position_id in {0, 127, 2047, 4096, 6644, 9916, 11664}
+        and validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            f"DecoderBlock full-routing unrigged standalone MLA+MoE case at position_id={position_id} "
+            "timed out after 600s. Issue: #42714"
         )
-    return result
+
+    if (
+        position_id in {0, 127}
+        and not validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            "DecoderBlock full-routing unrigged standalone MoE + decoder MLA case timed out after 600s. Issue: #42714"
+        )
+
+    skip_reason = _KNOWN_DECODER_MOE_FAILURE_SKIPS.get((position_id, validate_standalone_mla, validate_standalone_moe))
+    if (
+        skip_reason
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+    ):
+        pytest.skip(skip_reason)
+
+    rigged_skip_reason = _KNOWN_DECODER_RIGGED_GROUPS8_FAILURE_SKIPS.get(
+        (position_id, validate_standalone_mla, validate_standalone_moe)
+    )
+    if (
+        rigged_skip_reason
+        and expert_upload_mode == "rigged_groups8"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+    ):
+        pytest.skip(rigged_skip_reason)
 
 
 @pytest.mark.parametrize(
@@ -910,7 +502,7 @@ def create_decoder_block_tensors(
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [
-        pytest.param("unrigged_all_experts", marks=pytest.mark.skip_post_commit),
+        "unrigged_all_experts",
         pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
@@ -919,6 +511,46 @@ def create_decoder_block_tensors(
         pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
         "rigged_groups8",
+    ],
+)
+# SRAM placement scenario. "default" runs in CI and resolves SRAM IDs through the
+# same code path as the production demo: prepare_moe_layer_weights builds sram_slots
+# from sram_hot_experts (routing-frequency ranking), and the final sram_expert_ids
+# is derived from sram_slots.slot_experts post-L1-fit. All explicit scenarios are
+# opt-in (skip_post_commit).
+@pytest.mark.parametrize(
+    "sram_scenario",
+    [
+        pytest.param("default", marks=pytest.mark.skip_post_commit),
+        pytest.param("no_sram", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_not_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_both_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_partial", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t4_all_picked", marks=pytest.mark.skip_post_commit),
+        # Full t8_* sweep: N winners + (8-N) non-winners. Together they trace the
+        # SRAM-offload perf curve from pure DRAM (none_picked) to pure SRAM (all_picked).
+        pytest.param("t8_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_two_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_three_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_four_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_five_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_six_picked", marks=pytest.mark.skip_post_commit),
+        "t8_seven_picked",
+        pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
+    ],
+)
+# enable_sram_bspm: opt-in BSPM mixed precision for SRAM experts. Independent
+# of DRAM BSPM (which is always on when BSPM_DIR is set). When True, the test
+# uses the deferred SRAM build pattern so SDPA buffer lands at uniform L1
+# addresses before SRAM CTs allocate below it.
+@pytest.mark.parametrize(
+    "enable_sram_bspm",
+    [
+        pytest.param(False, id="sram_bspm_off"),
+        pytest.param(True, id="sram_bspm_on", marks=pytest.mark.skip_post_commit),
     ],
 )
 @pytest.mark.parametrize(
@@ -933,6 +565,14 @@ def create_decoder_block_tensors(
     ],
 )
 @pytest.mark.parametrize(
+    "decoder_layer_idx",
+    [
+        ROUTED_EXPERT_LAYER_IDX,
+        pytest.param(MTP_LAYER_IDX, id="mtp_layer_61"),
+    ],
+)
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
+@pytest.mark.parametrize(
     "validate_standalone_mla",
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
     ids=["validate_standalone_mla", "just_decoder_mla"],
@@ -942,7 +582,9 @@ def create_decoder_block_tensors(
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
     ids=["validate_standalone_moe", "just_decoder_moe"],
 )
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder(
     bh_2d_mesh_device,
     device_params,
@@ -959,19 +601,49 @@ def test_decoder(
     noc_mode,
     num_internal_iterations,
     expert_upload_mode,
+    sram_scenario,
+    enable_sram_bspm,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
+    decoder_layer_idx,
+    use_real_weights,
     validate_standalone_mla,
     validate_standalone_moe,
+    slot_id,
+    num_slots,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
+    skip_known_decoder_moe_failure(
+        position_id,
+        expert_upload_mode,
+        enable_routing,
+        use_hardcoded_expert_index,
+        num_routed_experts,
+        validate_standalone_mla,
+        validate_standalone_moe,
+        decoder_layer_idx,
+        use_real_weights,
+    )
+
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     logger.info(f"Number of devices: {num_devices}")
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
+
+    if use_real_weights and expert_upload_mode != "unrigged_all_experts":
+        # Rigged routing rewrites e_score_correction_bias to force specific TopK
+        # winners. The golden reference uses the same modified state_dict, so the
+        # math stays consistent, but the real model's actual routing distribution
+        # is no longer being exercised — PCC may dip vs. unrigged real runs.
+        logger.warning(
+            "Real weights + {} rewrites gate bias to force TopK; PCC may be lower than unrigged",
+            expert_upload_mode,
+        )
+    if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
+        pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -988,11 +660,177 @@ def test_decoder(
 
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        layer_idx=decoder_layer_idx,
         is_moe=True,
         seed=RoutedExpert.SEED,
         num_routed_experts=effective_num_routed_experts,
+        random_weights=not use_real_weights,
     )
+
+    rigged_group_ids = None
+    rigged_expert_ids = None
+    torch_input = None
+    if rigged_group_count is not None:
+        rigged_group_ids, rigged_expert_ids, torch_input, state_dict = rig_experts(
+            state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
+        )
+
+    # SRAM hot experts are auto-enabled for the full 256-expert case.  Rigged
+    # modes upload a strict subset of experts into the state dict, so the
+    # frequency-based ranker would reference expert indices that aren't
+    # present -- skip SRAM for them.
+    sram_hot_experts = None
+    sram_core_grids = None
+    if effective_num_routed_experts == 256:
+        sram_hot_experts, sram_core_grids = _build_sram_hot_expert_kwargs(state_dict, submesh, ROUTED_EXPERT_LAYER_IDX)
+
+    # SRAM placement scenarios — feeds the SRAM kernel pipeline via sram_expert_ids.
+    #   "default":  no override; sram_hot_experts (built above when 256-experts) is
+    #               used by prepare_moe_layer_weights to build sram_slots, and the
+    #               final sram_expert_ids is derived from sram_slots.slot_experts
+    #               *after* prepare returns (post-L1-fit truncation).
+    #   "no_sram":  explicitly disable SRAM (clear sram_hot_experts so sram_slots
+    #               isn't built, and override=[] so kernel pipeline allocates nothing).
+    #   explicit (t1_picked, t8_*, ...):  override list wins; sram_hot_experts may
+    #               still build sram_slots but the kernel pipeline + indices use
+    #               the override.
+    #
+    # Rigged: scenarios split TopK winners vs non-winners so *_picked fires at runtime
+    #         and *_not_picked stays idle (exercises the is_sram_expert filter).
+    # Unrigged: no winners known ahead of time; just take first N IDs (0..N-1).
+    #         *_picked / *_not_picked collapse since we can't distinguish.
+    if sram_scenario == "default":
+        sram_override = None
+    elif sram_scenario == "no_sram":
+        sram_override = []
+        # Disable sram_slots build so SRAM truly doesn't fire.
+        sram_hot_experts = None
+        sram_core_grids = None
+    elif rigged_expert_ids is not None:
+        winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
+        non_winners = [eid for eid in range(256) if eid not in winners]
+        # For t8_*_picked, N = number of winners placed in SRAM (rest are non-winners).
+        # Sweep covers the full SRAM-offload curve from 0 (none_picked) to 8 (all_picked).
+        T8_PICKED_COUNT = {
+            "t8_none_picked": 0,
+            "t8_one_picked": 1,
+            "t8_two_picked": 2,
+            "t8_three_picked": 3,
+            "t8_four_picked": 4,
+            "t8_five_picked": 5,
+            "t8_six_picked": 6,
+            "t8_seven_picked": 7,
+            "t8_all_picked": 8,
+        }
+        if sram_scenario in T8_PICKED_COUNT:
+            n = T8_PICKED_COUNT[sram_scenario]
+            sram_override = winners[:n] + non_winners[: 8 - n]
+        else:
+            sram_override = {
+                "t1_picked": [winners[0]],
+                "t1_not_picked": [non_winners[0]],
+                "t2_both_picked": winners[:2],
+                "t2_partial": [winners[0], non_winners[0]],
+                "t2_none_picked": non_winners[:2],
+                "t4_all_picked": winners[:4],
+            }[sram_scenario]
+    else:
+        scenario_count = {
+            "t1_picked": 1,
+            "t1_not_picked": 1,
+            "t2_both_picked": 2,
+            "t2_partial": 2,
+            "t2_none_picked": 2,
+            "t4_all_picked": 4,
+            "t8_none_picked": 8,
+            "t8_one_picked": 8,
+            "t8_two_picked": 8,
+            "t8_three_picked": 8,
+            "t8_four_picked": 8,
+            "t8_five_picked": 8,
+            "t8_six_picked": 8,
+            "t8_seven_picked": 8,
+            "t8_all_picked": 8,
+        }[sram_scenario]
+        sram_override = list(range(scenario_count))
+    sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override, is_moe=True)
+    logger.info(
+        f"SRAM scenario {sram_scenario!r}: initial sram_expert_ids={sram_expert_ids} "
+        f"(may be replaced by sram_slots.slot_experts post-prepare for 'default' scenario)"
+    )
+
+    # Log BSPM precision distribution for SRAM-placed experts. Helps explain PCC:
+    # if all tiles are bfp8, the BSPM would be near bf16 quality; if many bfp0/bfp2,
+    # BSPM compression is aggressive and forcing them through uniform-bfp4 SRAM
+    # may actually be more precise.
+    bspm_dir_env = _optional_bspm_dir()
+    if sram_expert_ids and bspm_dir_env is not None:
+        from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+
+        _bspm_path = bspm_dir_env / f"layer_{ROUTED_EXPERT_LAYER_IDX}" / "precision_eval" / "precision_map_B_3.5.bspm"
+        if _bspm_path.exists():
+            _bspm = load_bspm_for_layer(str(_bspm_path))
+            _fmt_names = ["bfp8", "bfp4", "bfp2", "bfp0"]
+            _proj_names = ["gate", "up", "down"]
+            for eid in sram_expert_ids:
+                if eid >= _bspm["n_experts"]:
+                    continue
+                for p_idx, p_name in enumerate(_proj_names):
+                    codes = _bspm["codes"][eid, p_idx]
+                    total = int(codes.size)
+                    pct = {
+                        _fmt_names[i]: f"{100 * int((codes == i).sum()) / total:.1f}%"
+                        for i in range(4)
+                        if int((codes == i).sum()) > 0
+                    }
+                    logger.info(f"BSPM expert {eid:3d} {p_name:4s}: {pct}")
+        else:
+            logger.warning(f"BSPM file not found, skipping distribution log: {_bspm_path}")
+
+    logger.info("Preparing layer weights on device...")
+    # ``sram_hot_experts`` is ``SramHotExpertConfig``: ``layer_idx -> ranked expert indices``.
+    # This test only builds candidates for ``ROUTED_EXPERT_LAYER_IDX`` (see
+    # ``_build_sram_hot_expert_kwargs``), so the dict has a single key; multi-layer
+    # callers use the same shape with more entries.
+    #
+    # Deferred SRAM alloc under enable_sram_bspm: when BSPM-SRAM is on, SRAM CT
+    # sizes diverge per device → if allocated before create_decoder_block_tensors,
+    # SDPA buffer (allocated after) lands at per-device-different L1 addresses,
+    # breaking MLA's uniform-address assumption. Build DRAM weights first, then
+    # SDPA via create_decoder_block_tensors, then SRAM CTs (which land below the
+    # uniform SDPA address). Under uniform-BFP4 the direct path is fine (SRAM
+    # sizes are uniform per device). The parametrized flag requires BSPM_DIR
+    # to be set (otherwise there's no BSPM source to use).
+    if enable_sram_bspm and _optional_bspm_dir() is None:
+        pytest.skip("enable_sram_bspm=True requires BSPM_DIR env var to be set")
+    # Unified path: prepare_moe_layer_weights handles both explicit-list and
+    # auto-fit SRAM scenarios via prepare_compressed_sram_slots.
+    _prep_sram_ids = sram_expert_ids
+    _prep_enable_sram_bspm = enable_sram_bspm
+    layer_weights = prepare_moe_layer_weights(
+        submesh,
+        state_dict,
+        ROUTED_EXPERT_LAYER_IDX,
+        num_routed_experts=effective_num_routed_experts,
+        move_to_device=True,
+        sram_hot_experts=sram_hot_experts,
+        sram_core_grids=sram_core_grids,
+        worker_l1_size=device_params.get("worker_l1_size"),
+        compressed_tp8=True,
+        bspm_dir=_optional_bspm_dir(),
+        enable_sram_bspm=_prep_enable_sram_bspm,
+        sram_expert_ids=_prep_sram_ids,
+    )
+
+    # When no explicit override (the "default" scenario) and sram_slots got built,
+    # the kernel-pipeline weights are for sram_slots.slot_experts (L1-fit-truncated
+    # from sram_hot_experts). Use that same list for create_gate_indices_tensor's
+    # bit-15 encoding so indices and weights agree.
+    if not sram_expert_ids and layer_weights.sram_slots is not None:
+        sram_expert_ids = list(layer_weights.sram_slots.slot_experts)
+        logger.info(
+            f"SRAM scenario {sram_scenario!r}: final sram_expert_ids from sram_slots.slot_experts = {sram_expert_ids}"
+        )
 
     logger.info("Creating decoder block tensors...")
     d = create_decoder_block_tensors(
@@ -1002,14 +840,35 @@ def test_decoder(
         sender_row,
         sender_col,
         position_id,
-        state_dict,
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
         max_seq_len=max_seq_len,
+        weights=layer_weights,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        num_slots=num_slots,
+        is_moe=True,
+        validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
+        torch_input=torch_input,
+        sram_expert_ids=sram_expert_ids,
+    )
+
+    logger.info("Creating golden reference tensors...")
+    golden = create_decoder_golden_tensors(
+        d,
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        state_dict,
+        ROUTED_EXPERT_LAYER_IDX,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        max_seq_len=max_seq_len,
+        num_slots=num_slots,
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
-        rigged_group_count=rigged_group_count,
-        validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
+        rigged_group_ids=rigged_group_ids,
+        rigged_expert_ids=rigged_expert_ids,
     )
+    d.update(golden)
 
     num_cores = device_grid_size.x * device_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
@@ -1051,7 +910,6 @@ def test_decoder(
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache_attn_ref"],
-            d["ttnn_position_ids"],
             d["scale"],
             d["ttnn_sdpa_output"],
             d["sdpa_kv_cache_buffer"],
@@ -1104,7 +962,6 @@ def test_decoder(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_position_ids"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -1131,6 +988,9 @@ def test_decoder(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -1159,12 +1019,18 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        enable_sram_bspm=enable_sram_bspm,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
-    kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_output_torch_flat = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, d["num_slots"], 1, d["per_device_max_seq_len"], -1
+    )
 
     ttnn_attention_output = ttnn.to_torch(
         attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
@@ -1272,7 +1138,7 @@ def test_decoder(
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
         d["golden_torch_cos"],
-        d["golden_position_ids"],
+        d["golden_metadata"],
         d["golden_torch_dkv_matmul_weights"],
         d["golden_torch_dkv_rmsnorm_gamma"],
         d["golden_torch_kv_cache"],
@@ -1329,13 +1195,13 @@ def test_decoder(
             continue
 
         assert torch.equal(
-            d["golden_kv_cache_bfp8_before_op"][device_idx, ..., :local_seq_len, :],
-            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+            d["golden_kv_cache_bfp8_before_op"][device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
         ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
         logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
         if sp_group == owning_sp_device:
-            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
             expected_nope = golden_new_kv[..., :KNOPE_DIM]
             expected_rope = golden_new_kv[..., KNOPE_DIM:]
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]
@@ -1348,6 +1214,17 @@ def test_decoder(
             rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        # Other slots must be completely unchanged
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                d["golden_kv_cache_bfp8_before_op"][device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     if moe_scores is not None:
         logger.info(f"Golden MoE scores: {moe_scores}")
@@ -1432,7 +1309,15 @@ def test_decoder(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
+# Dense-MLP SRAM placement. DRAM list stays full (8 chunks) for sizing/CB probes;
+# placement selects which chunks the kernel processes via the SRAM matmul instead
+# of the DRAM matmul (the latter iterates 8 slots and skips SRAM-flagged ones).
+#   all-dram → 0 chunks via SRAM (baseline)
+#   all-sram → 8 chunks via SRAM (n_dram_active=0 → DRAM chain skipped at runtime)
+@pytest.mark.parametrize("dense_placement", ["all-dram", "all-sram"])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder_mlp(
     bh_2d_mesh_device,
     device_params,
@@ -1448,6 +1333,9 @@ def test_decoder_mlp(
     position_id,
     noc_mode,
     num_internal_iterations,
+    slot_id,
+    num_slots,
+    dense_placement,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
@@ -1467,6 +1355,25 @@ def test_decoder_mlp(
         seed=RoutedExpert.SEED,
     )
 
+    # Dense placement → which dense-MLP chunks go to SRAM. DRAM list stays full
+    # regardless; kernel skip via num_dram_experts_pre_selected = 8 - len(sram).
+    if dense_placement == "all-dram":
+        dense_sram_expert_ids = []
+    elif dense_placement == "all-sram":
+        dense_sram_expert_ids = list(range(8))  # all 8 chunks via SRAM
+    else:
+        raise ValueError(f"unknown dense_placement: {dense_placement}")
+    logger.info(f"Dense placement {dense_placement!r}: sram_expert_ids={dense_sram_expert_ids}")
+
+    logger.info("Preparing dense layer weights on device...")
+    layer_weights = prepare_dense_layer_weights(
+        submesh,
+        state_dict,
+        DENSE_LAYER_IDX,
+        move_to_device=True,
+        sram_expert_ids=dense_sram_expert_ids,
+    )
+
     logger.info("Creating dense decoder block tensors...")
     d = create_decoder_block_tensors(
         submesh,
@@ -1475,11 +1382,29 @@ def test_decoder_mlp(
         sender_row,
         sender_col,
         position_id,
-        state_dict,
-        layer_idx=DENSE_LAYER_IDX,
         max_seq_len=max_seq_len,
+        weights=layer_weights,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        num_slots=num_slots,
         is_moe=False,
     )
+
+    logger.info("Creating golden reference tensors...")
+    golden = create_decoder_golden_tensors(
+        d,
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        state_dict,
+        DENSE_LAYER_IDX,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        max_seq_len=max_seq_len,
+        num_slots=num_slots,
+        is_moe=False,
+    )
+    d.update(golden)
 
     num_cores = device_grid_size.x * device_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
@@ -1512,7 +1437,6 @@ def test_decoder_mlp(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_position_ids"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -1538,6 +1462,9 @@ def test_decoder_mlp(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -1597,7 +1524,7 @@ def test_decoder_mlp(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
-    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+    _full_q, golden_new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
         d["golden_torch_gamma"],
         d["golden_torch_matmul_weights"],
@@ -1606,7 +1533,7 @@ def test_decoder_mlp(
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
         d["golden_torch_cos"],
-        d["golden_position_ids"],
+        d["golden_metadata"],
         d["golden_torch_dkv_matmul_weights"],
         d["golden_torch_dkv_rmsnorm_gamma"],
         d["golden_torch_kv_cache"],
@@ -1631,6 +1558,68 @@ def test_decoder_mlp(
         moe_rmsnorm_epsilon=epsilon,
         moe_enable_routing=False,
     )
+
+    # ========================================================================
+    # Validate KV cache outputs (per SP device)
+    # ========================================================================
+    device_chunk_size = d["device_chunk_size"]
+    num_sp = mesh_rows
+    owning_sp_device = (position_id // device_chunk_size) % num_sp
+
+    kv_cache_output_torch_flat = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, num_slots, 1, d["per_device_max_seq_len"], -1
+    )
+
+    def get_local_seq_len(sp_idx):
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        return num_full_blocks * device_chunk_size + dev_contrib
+
+    for device_idx in range(num_devices):
+        sp_group = device_idx // mesh_cols
+        local_seq_len = get_local_seq_len(sp_group)
+
+        if local_seq_len == 0 and sp_group != owning_sp_device:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
+            continue
+
+        assert torch.equal(
+            d["golden_kv_cache_bfp8_before_op"][device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
+
+        if sp_group == owning_sp_device:
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                d["golden_kv_cache_bfp8_before_op"][device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     # ========================================================================
     # Validate MLP output vs DecoderBlock golden

@@ -5,6 +5,11 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -39,10 +44,17 @@ void kernel_main() {
     uint32_t P = kernel_size_h * kernel_size_w;
     uint32_t l = LH * LW;
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
 
+    Noc noc;
+    DataflowBuffer input_dfb(input_cb_id);
+    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer scratch_dfb(scratch_cb_id);
+
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {
-        cb_reserve_back(output_cb_id, onetile);
+        output_dfb.reserve_back(onetile);
         for (uint32_t elem_id = 0; elem_id < W; elem_id++) {
             uint32_t gid = row_id * W + elem_id;
             uint32_t nch = gid / W;
@@ -75,31 +87,42 @@ void kernel_main() {
                     // kernel_size_w, LH * LW}
                     uint32_t input_row_id = n * C * P + (c * P + ph * kernel_size_w + pw);
                     // Read entire row into input_cb
-                    cb_reserve_back(input_cb_id, onetile);
-                    uint32_t l1_write_addr = get_write_ptr(input_cb_id);
-                    uint64_t src_noc_addr = get_noc_addr(input_row_id, s0);
+                    input_dfb.reserve_back(onetile);
+                    uint32_t l1_write_addr = input_dfb.get_write_ptr();
 
                     if (aligned) {
                         // Direct read when aligned (L1 sources or non-BH DRAM with aligned size)
-                        noc_async_read(src_noc_addr, l1_write_addr, input_cb_page_size);
-                        noc_async_read_barrier();
+                        noc.async_read(
+                            s0, input_dfb, input_cb_page_size, {.page_id = input_row_id}, {.offset_bytes = 0});
+                        noc.async_read_barrier();
                     } else {
                         // Two-step read via scratch buffer for DRAM alignment
                         // Read DRAM-aligned size to scratch buffer first
-                        uint32_t scratch_l1_write_addr = get_write_ptr(scratch_cb_id);
-                        uint64_t scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr);
-                        noc_async_read(src_noc_addr, scratch_l1_write_addr, dram_aligned_input_cb_page_size);
-                        noc_async_read_barrier();
-                        // Then copy actual size from scratch to final destination
-                        noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, input_cb_page_size);
-                        noc_async_read_barrier();
+                        noc.async_read(
+                            s0,
+                            scratch_dfb,
+                            dram_aligned_input_cb_page_size,
+                            {.page_id = input_row_id},
+                            {.offset_bytes = 0});
+                        noc.async_read_barrier();
+                        // Then copy actual size from scratch to final destination via local NoC
+                        UnicastEndpoint scratch_src{};
+                        noc.async_read(
+                            scratch_src,
+                            input_dfb,
+                            input_cb_page_size,
+                            {.noc_x = static_cast<uint32_t>(my_x[noc.get_noc_id()]),
+                             .noc_y = static_cast<uint32_t>(my_y[noc.get_noc_id()]),
+                             .addr = scratch_dfb.get_write_ptr()},
+                            {.offset_bytes = 0});
+                        noc.async_read_barrier();
                     }
 
-                    cb_push_back(input_cb_id, onetile);
+                    input_dfb.push_back(onetile);
 
-                    cb_wait_front(input_cb_id, onetile);
+                    input_dfb.wait_front(onetile);
 #ifdef DTYPE_BFLOAT16
-                    uint16_t* input_cb_ptr_uint16 = reinterpret_cast<uint16_t*>(get_read_ptr(input_cb_id));
+                    CoreLocalMem<uint16_t> input_cb_ptr_uint16(input_dfb.get_read_ptr());
                     uint16_t bfloat16_value = input_cb_ptr_uint16[lh * LW + lw];
                     uint32_t float_value_as_int = static_cast<uint32_t>(bfloat16_value) << 16;
                     auto tmp = reinterpret_cast<float*>(&float_value_as_int);
@@ -107,22 +130,22 @@ void kernel_main() {
                     sum += value_as_float;
 #endif
 #ifdef DTYPE_FLOAT32
-                    auto input_cb_ptr_float = reinterpret_cast<float*>(get_read_ptr(input_cb_id));
+                    CoreLocalMem<float> input_cb_ptr_float(input_dfb.get_read_ptr());
                     sum += input_cb_ptr_float[lh * LW + lw];
 #endif
-                    cb_pop_front(input_cb_id, onetile);
+                    input_dfb.pop_front(onetile);
                 }
             }
 #ifdef DTYPE_BFLOAT16
-            uint16_t* output_cb_write_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(output_cb_id));
+            CoreLocalMem<uint16_t> output_cb_write_ptr(output_dfb.get_write_ptr());
             auto sum_ptr = reinterpret_cast<uint16_t*>(&sum) + 1;
             output_cb_write_ptr[w] = *sum_ptr;
 #endif
 #ifdef DTYPE_FLOAT32
-            float* output_cb_write_ptr = reinterpret_cast<float*>(get_write_ptr(output_cb_id));
+            CoreLocalMem<float> output_cb_write_ptr(output_dfb.get_write_ptr());
             output_cb_write_ptr[w] = sum;
 #endif
         }
-        cb_push_back(output_cb_id, onetile);
+        output_dfb.push_back(onetile);
     }
 }

@@ -89,7 +89,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
     const DeviceAddr device_local_size = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
             [](const ShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
@@ -203,10 +203,10 @@ void MeshBuffer::initialize_device_buffers() {
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
     // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-    if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr &&
-                                                std::holds_alternative<OwnedBufferState>(state_) &&
-                                                device_local_config_.buffer_type == BufferType::L1 &&
-                                                MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+    if (auto mesh_device = mesh_device_.lock();
+        mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
+        device_local_config_.buffer_type == BufferType::L1 &&
+        MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
@@ -267,14 +267,20 @@ void MeshBuffer::deallocate() {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
-        if (MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
+            // Skip per-device unmirror if the device has been closed (default_allocator_ reset
+            // by Device::close()). This can happen at process teardown when the mesh device is
+            // closed before stray tensors are destroyed by the garbage collector. Mirrors the
+            // device_->is_initialized() guard in Buffer::deallocate_impl().
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
                 for (const auto& [coord, device_buffer] : buffers_) {
                     if (mesh_device->impl().is_local(coord)) {
                         auto* device = mesh_device->impl().get_device(coord);
-                        device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                        if (device->is_initialized()) {
+                            device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                        }
                     }
                 }
             }
@@ -328,7 +334,7 @@ Buffer* MeshBuffer::get_backing_buffer() const {
 
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const ReplicatedBufferConfig& config) { return config.size; },
             [&](const ShardedBufferConfig& config) { return config.global_size; }},
         config_);

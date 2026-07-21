@@ -3,9 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -29,7 +35,6 @@ struct DramConfig {
     CoreCoord core_coord = {0, 0};
     uint32_t dram_channel = 0;
     uint32_t virtual_channel = 0;
-    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
@@ -40,9 +45,6 @@ struct DramConfig {
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramConfig& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
     // SETUP
-
-    // Program
-    Program program = CreateProgram();
 
     const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
@@ -60,76 +62,117 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     // Redundant but as an extra measure add a check to ensure both addresses are within DRAM bounds
     // Checks also needed for L1 maybe
 
-    // Initialize semaphore ID
     CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
-    const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
 
-    // Compile-time arguments for kernels
-    vector<uint32_t> reader_compile_args = {
-        (uint32_t)test_config.test_id,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.pages_per_transaction,
-        (uint32_t)test_config.bytes_per_page,
-        (uint32_t)input_dram_address,
-        (uint32_t)test_config.dram_channel,
-        (uint32_t)l1_address,
-        (uint32_t)sem_id};
+    const std::string reader_kernel_path =
+        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary_2_0.cpp";
+    const std::string writer_kernel_path =
+        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary_2_0.cpp";
 
-    vector<uint32_t> writer_compile_args = {
-        (uint32_t)test_config.test_id,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.pages_per_transaction,
-        (uint32_t)test_config.bytes_per_page,
-        (uint32_t)output_dram_address,
-        (uint32_t)test_config.dram_channel,
-        (uint32_t)l1_address,
-        (uint32_t)sem_id,
-        (uint32_t)test_config.virtual_channel};
+    using namespace tt::tt_metal::experimental;
 
-    // Kernels
-    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/";
-    std::string reader_kernel_filename = "reader_unary";
-    std::string writer_kernel_filename = "writer_unary";
-    if (test_config.use_2_0_api) {
-        reader_kernel_filename += "_2_0";
-        writer_kernel_filename += "_2_0";
-    }
-    std::string reader_kernel_path = kernels_dir + reader_kernel_filename + ".cpp";
-    std::string writer_kernel_path = kernels_dir + writer_kernel_filename + ".cpp";
+    SemaphoreSpec rw_sync_sem{
+        .unique_id = SemaphoreSpecName{"dram_unary_rw_sync"},
+        .target_nodes = core_range_set,
+    };
 
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        experimental::quasar::CreateKernel(
-            program,
-            reader_kernel_path,
-            test_config.core_coord,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
+    KernelSpec::CompileTimeArgs reader_cta = {
+        {"test_id", (uint32_t)test_config.test_id},
+        {"bytes_per_page", (uint32_t)test_config.bytes_per_page},
+        {"dram_addr", (uint32_t)input_dram_address},
+        {"dram_channel", (uint32_t)test_config.dram_channel},
+        {"l1_addr", (uint32_t)l1_address},
+    };
 
-        experimental::quasar::CreateKernel(
-            program,
-            writer_kernel_path,
-            test_config.core_coord,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
+    KernelSpec::CompileTimeArgs writer_cta = {
+        {"test_id", (uint32_t)test_config.test_id},
+        {"bytes_per_page", (uint32_t)test_config.bytes_per_page},
+        {"dram_channel", (uint32_t)test_config.dram_channel},
+        {"l1_addr", (uint32_t)l1_address},
+        {"vc", (uint32_t)test_config.virtual_channel},
+    };
+
+    DataMovementHardwareConfig reader_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = DataMovementGen2Config{};
     } else {
-        CreateKernel(
-            program,
-            reader_kernel_path,
-            test_config.core_coord,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = reader_compile_args});
-
-        CreateKernel(
-            program,
-            writer_kernel_path,
-            test_config.core_coord,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = writer_compile_args});
+        reader_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+        };
     }
+    KernelSpec reader_spec{
+        .unique_id = KernelSpecName{"reader"},
+        .source = reader_kernel_path,
+        .num_threads = 1,
+        .semaphore_bindings = {KernelSpec::SemaphoreBinding{
+            .semaphore_spec_name = rw_sync_sem.unique_id, .accessor_name = "dram_sync"}},
+        .compile_time_args = reader_cta,
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_of_transactions", "pages_per_transaction"},
+            },
+        .hw_config = reader_hw_config,
+    };
+
+    DataMovementHardwareConfig writer_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = DataMovementGen2Config{};
+    } else {
+        writer_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        };
+    }
+    KernelSpec writer_spec{
+        .unique_id = KernelSpecName{"writer"},
+        .source = writer_kernel_path,
+        .num_threads = 1,
+        .semaphore_bindings = {KernelSpec::SemaphoreBinding{
+            .semaphore_spec_name = rw_sync_sem.unique_id, .accessor_name = "dram_sync"}},
+        .compile_time_args = writer_cta,
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_of_transactions", "pages_per_transaction", "dram_addr"},
+            },
+        .hw_config = writer_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "dram_unary_test",
+        .kernels = {reader_spec, writer_spec},
+        .semaphores = {rw_sync_sem},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = {reader_spec.unique_id, writer_spec.unique_id},
+            .target_nodes = core_range_set,
+        }},
+    };
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs run_params;
+    ProgramRunArgs::KernelRunArgs reader_run{.kernel = reader_spec.unique_id};
+    AddRuntimeArgsForNode(
+        reader_run.runtime_arg_values,
+        test_config.core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction},
+        });
+    run_params.kernel_run_args.push_back(reader_run);
+
+    ProgramRunArgs::KernelRunArgs writer_run{.kernel = writer_spec.unique_id};
+    AddRuntimeArgsForNode(
+        writer_run.runtime_arg_values,
+        test_config.core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction},
+            {"dram_addr", (uint32_t)output_dram_address},
+        });
+    run_params.kernel_run_args.push_back(writer_run);
+    SetProgramRunArgs(program, run_params);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -194,6 +237,10 @@ void directed_ideal_test(
     // Parameters
     uint32_t num_of_transactions = 256;
     uint32_t pages_per_transaction = max_transmittable_pages;
+    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+        num_of_transactions = 4;
+        pages_per_transaction = 4;
+    }
 
     // Test config
     unit_tests::dm::dram::DramConfig test_config = {
@@ -204,7 +251,8 @@ void directed_ideal_test(
         .l1_data_format = DataFormat::Float16_b,
         .core_coord = core_coord,
         .dram_channel = dram_channel,
-        .virtual_channel = virtual_channel};
+        .virtual_channel = virtual_channel,
+    };
 
     // Run
     EXPECT_TRUE(run_dm(mesh_device, test_config));
@@ -214,8 +262,7 @@ void packet_sizes_test(
     const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
-    uint32_t dram_channel = 0,
-    bool use_2_0_api = false) {
+    uint32_t dram_channel = 0) {
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
 
@@ -240,7 +287,7 @@ void packet_sizes_test(
                 .core_coord = core_coord,
                 .dram_channel = dram_channel,
                 .virtual_channel = 0,
-                .use_2_0_api = use_2_0_api};
+            };
 
             // Run
             EXPECT_TRUE(run_dm(mesh_device, test_config));
@@ -302,21 +349,103 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+        auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+            unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::dram::DramConfig test_config = {
+            .test_id = 3,
+            .num_of_transactions = 4,
+            .pages_per_transaction = 4,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .core_coord = {0, 0},
+            .dram_channel = 0};
+        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        return;
+    }
     // Test ID (Arbitrary)
     uint32_t test_id = 3;
-
-    unit_tests::dm::dram::directed_ideal_test(get_mesh_device(), test_id);
+    unit_tests::dm::dram::directed_ideal_test(mesh_device, test_id);
 }
 
 /* ========== Test case for varying transaction numbers and sizes with 2.0 API; Test id = 40 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes2_0) {
-    unit_tests::dm::dram::packet_sizes_test(
-        get_mesh_device(),
-        40,      // Test case ID
-        {0, 0},  // Core coordinates (default)
-        0,       // DRAM channel (default)
-        true     // Use 2.0 API
-    );
+    auto mesh_device = get_mesh_device();
+    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+        // Quasar emulator: full sweep is too slow (same as legacy
+        // TensixDataMovementDRAMPacketSizes timed out). Run a single small config to
+        // exercise the Metal 2.0 host path + DRAM read/write+ semaphore handshake.
+        auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+            unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::dram::DramConfig test_config = {
+            .test_id = 40,
+            .num_of_transactions = 4,
+            .pages_per_transaction = 4,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .core_coord = {0, 0},
+            .dram_channel = 0,
+            .virtual_channel = 0,
+        };
+        EXPECT_TRUE(unit_tests::dm::dram::run_dm(mesh_device, test_config));
+        return;
+    }
+    unit_tests::dm::dram::packet_sizes_test(mesh_device, 40, {0, 0}, 0);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal2_0) {
+    auto mesh_device = get_mesh_device();
+    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+        auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+            unit_tests::dm::compute_physical_constraints(mesh_device);
+        unit_tests::dm::dram::DramConfig test_config = {
+            .test_id = 41,
+            .num_of_transactions = 4,
+            .pages_per_transaction = 4,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+            .core_coord = {0, 0},
+            .dram_channel = 0,
+            .virtual_channel = 0,
+        };
+        EXPECT_TRUE(unit_tests::dm::dram::run_dm(mesh_device, test_config));
+        return;
+    }
+    unit_tests::dm::dram::directed_ideal_test(mesh_device, 41, {0, 0}, 0, 0);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    if (device->arch() == ARCH::QUASAR) {
+        unit_tests::dm::dram::directed_ideal_test(mesh_device, 42, {0, 0}, 0, 0);
+        return;
+    }
+
+    auto grid_size = device->compute_with_storage_grid_size();
+    for (unsigned int x = 0; x < grid_size.x; x++) {
+        for (unsigned int y = 0; y < grid_size.y; y++) {
+            unit_tests::dm::dram::directed_ideal_test(mesh_device, 42, {x, y}, 0, 0);
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    if (device->arch() == ARCH::QUASAR) {
+        unit_tests::dm::dram::directed_ideal_test(mesh_device, 43, {0, 0}, 0, 0);
+        return;
+    }
+
+    for (unsigned int dram_channel = 0; dram_channel < device->num_dram_channels(); dram_channel++) {
+        for (unsigned int vc = 0; vc < 4; vc++) {
+            unit_tests::dm::dram::directed_ideal_test(mesh_device, 43, {0, 0}, dram_channel, vc);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

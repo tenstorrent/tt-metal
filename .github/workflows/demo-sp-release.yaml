@@ -33,7 +33,7 @@ on:
         default: true
         description: "Set to false to allow write access to MLPerf mount"
       test-group:
-        description: "Select which test group to run (SP1 tests can be run between 3 and 7 AM UTC)"
+        description: "Select which test group to run"
         required: false
         default: "all"
         type: choice
@@ -41,12 +41,15 @@ on:
           - all
           - deepseek_prefill
           - deepseek_decode
+          - deepseek_unit_tests
           - wan22
-          - sp1_deepseek
+          - single_galaxy_deepseek
+          - sc4_deepseek
+          # - sc16_deepseek
 
   schedule:
-    # Run daily at 3 AM UTC
-    - cron: "0 3 * * *"
+    # Run daily at 5 AM UTC
+    - cron: "0 5 * * *"
 
 permissions:
   contents: write
@@ -55,20 +58,26 @@ permissions:
   id-token: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+      tracy: true  # required for device-perf tests (e.g. galaxy DeepSeek Prefill PERF)
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -76,14 +85,14 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
+      enabled-skus: bh_galaxy,bh_loudbox
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Prefill] "
 
   deepseek-decode-tests:
     name: "DeepSeek Decode Tests (B1 Decoder Block)"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -91,14 +100,29 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_p150b_civ2_viommu,bh_p300
+      enabled-skus: bh_p300,bh_galaxy
       model: deepseek_decode
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Decode] "
 
+  deepseek-unit-tests:
+    name: "DeepSeek B1 Unit Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_unit_tests' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-release-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: bh_galaxy
+      model: deepseek_unit_tests
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      job-prefix: "[DeepSeek Unit Tests] "
+
   wan22-tests:
     name: "Wan 2.2 Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -111,14 +135,40 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  deepseek-sp1-tests:
-    name: "SP1 DeepSeek Tests"
+  # todo)) disabled until we get more machines with SC16 SKUs
+  # deepseek-sc16-tests:
+  #   name: "SC16 DeepSeek Tests"
+  #   needs: [build-artifact]
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc16_deepseek' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     sp-config: sc16
+
+  deepseek-sc4-tests:
+    name: "SC4 DeepSeek Tests"
     needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp1
+      sp-config: sc4-blitz
+
+  # todo)) proven to work by itself but mess up SC4 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+  # deepseek-single-galaxy-tests:w
+  #   name: "Single Galaxy DeepSeek Tests"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     sp-config: sc1

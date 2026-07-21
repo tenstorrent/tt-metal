@@ -16,16 +16,11 @@
 #include "api/compute/common.h"
 #endif
 
+#include "experimental/kernel_args.h"
+
 #if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+// Quasar uses 64-bit atomics; Gen1 (BH) uses 32-bit — arch-intrinsic atomic width.
 typedef uint64_t atomic_type;
-// TODO: Remove this once cache invalidation functionality for Quasar is added
-inline __attribute__((always_inline)) void flush_l2_cache_line(atomic_type* addr) {
-    asm volatile("fence" ::: "memory");
-    volatile atomic_type* flush_reg = (volatile atomic_type*)L2_FLUSH_ADDR;
-    *flush_reg = (atomic_type)addr;
-    asm volatile("fence" ::: "memory");
-}
 #else
 typedef uint32_t atomic_type;
 #endif
@@ -46,16 +41,17 @@ void test_atomic_load_store(atomic_type* shared_value_ptr, atomic_type* result_p
 #ifdef ARCH_QUASAR
     uint64_t thread_idx = 0;
     asm volatile("csrr %0, mhartid" : "=r"(thread_idx));
-    // On Quasar, DM0 runs writer() and DM1-7 run reader()
-    // Each DM writes to its own result location for host to verify
-    if (thread_idx == 0) {
+    // Metal 2.0 reserves DM0/DM1; user threads start at DM2.
+    constexpr uint64_t first_dm_id = 2;
+    // The lowest-numbered user DM thread is the writer; the rest are readers.
+    if (thread_idx == first_dm_id) {
         writer(shared_value_ptr);
     } else {
         // Each reader DM writes to a unique result slot so host verification is per thread
-        atomic_type* per_thread_result_ptr = result_ptr + (thread_idx - 1);
+        atomic_type* per_thread_result_ptr = result_ptr + (thread_idx - first_dm_id - 1);
         reader(shared_value_ptr, per_thread_result_ptr);
         // Flush the cache so host readback sees the updated L1
-        flush_l2_cache_line(per_thread_result_ptr);
+        flush_l2_cache_line(reinterpret_cast<uintptr_t>(per_thread_result_ptr));
     }
 #else
     // ON BH, BRISC runs writer(), NCRISC runs reader()
@@ -89,8 +85,9 @@ void test_compare_and_swap_atomic(atomic_type* l1_counter_ptr, const uint32_t in
 
 void kernel_main() {
     // Base L1 address shared by all DMs: used as a counter (add/CAS) or value + result slots (load/store)
-    atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(get_arg_val<uint32_t>(0));
-    const uint32_t increment_times = get_arg_val<uint32_t>(1);
+    atomic_type* l1_counter_ptr =
+        reinterpret_cast<atomic_type*>(static_cast<uintptr_t>(get_arg(args::l1_counter_addr)));
+    const uint32_t increment_times = get_arg(args::increment_times);
 
 #if TEST_ATOMIC_LOAD_STORE
     atomic_type* shared_value_ptr = l1_counter_ptr;
@@ -104,6 +101,6 @@ void kernel_main() {
 
 #if defined(ARCH_QUASAR) && (defined(TEST_ATOMIC_ADD_FETCH) || defined(TEST_ATOMIC_CAS))
     // Flush the cache so host readback sees the updated L1
-    flush_l2_cache_line(l1_counter_ptr);
+    flush_l2_cache_line(reinterpret_cast<uintptr_t>(l1_counter_ptr));
 #endif
 }

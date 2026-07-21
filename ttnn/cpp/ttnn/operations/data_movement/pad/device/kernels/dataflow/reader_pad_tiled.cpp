@@ -6,9 +6,12 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
 
@@ -23,7 +26,9 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(dst_args, input_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, input_addr);
+    Noc noc;
+    DataflowBuffer dfb_input(input_dfb_id);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;
@@ -46,12 +51,10 @@ void kernel_main() {
         }
 
         if (within_input_region) {
-            cb_reserve_back(input_cb_id, 1);
-            uint32_t l1_write_addr = get_write_ptr(input_cb_id);
-            uint64_t src_noc_addr = s0.get_noc_addr(input_page_offset);
-            noc_async_read(src_noc_addr, l1_write_addr, page_size);
-            noc_async_read_barrier();
-            cb_push_back(input_cb_id, 1);
+            dfb_input.reserve_back(1);
+            noc.async_read(s0, dfb_input, page_size, {.page_id = input_page_offset}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_input.push_back(1);
             input_page_offset++;
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
         }

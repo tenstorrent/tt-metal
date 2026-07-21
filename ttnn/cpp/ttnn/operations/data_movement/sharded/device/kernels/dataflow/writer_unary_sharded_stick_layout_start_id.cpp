@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // run-time args
@@ -16,30 +18,23 @@ void kernel_main() {
     const uint32_t output_width_in_pages = get_arg_val<uint32_t>(5);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(1),   // Memory layout
-        get_compile_time_arg_val(2),   // The number of sharding cores
-        get_compile_time_arg_val(3),   // The page size we offset each write to
-        get_compile_time_arg_val(4),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(5),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(6),   // pages_per_shard_x
-        get_compile_time_arg_val(7)>;  // pages_per_shard_y
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(6));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+    Noc noc;
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     uint32_t stick_id = start_id;
-    cb_wait_front(cb_id_out0, block_height);
-    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+    dfb_out.wait_front(block_height);
+    uint32_t cb_read_offset = 0;
     for (uint32_t h = 0; h < block_height; ++h) {
-        uint64_t dst_noc_addr = get_noc_addr(stick_id, s);
-        noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
+        noc.async_write(
+            dfb_out, s, block_width_bytes, {.offset_bytes = cb_read_offset}, {.page_id = stick_id, .offset_bytes = 0});
         stick_id += output_width_in_pages;
-        l1_read_addr += padded_block_width_bytes;
+        cb_read_offset += padded_block_width_bytes;
     }
-    noc_async_write_barrier();
-    cb_pop_front(cb_id_out0, block_height);
+    noc.async_write_barrier();
+    dfb_out.pop_front(block_height);
 }

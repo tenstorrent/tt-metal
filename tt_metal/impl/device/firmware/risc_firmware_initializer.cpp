@@ -5,8 +5,11 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <chrono>
 #include <future>
 #include <set>
+#include <thread>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -33,10 +36,47 @@
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_align.hpp"
+#include <umd/device/types/blackhole_eth.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+// Mock devices reuse the on-disk firmware sources of a real arch's package.
+// We only ship sources for Wormhole and Blackhole today; Quasar mock has
+// no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
+// build_firmware() against a Quasar mock blows up in cc1plus with
+// "No such file or directory". Real silicon devices always have sources
+// available and bypass this check.
+bool mock_firmware_sources_available_for(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE: return true;
+        default: return false;
+    }
+}
+
+int firmware_wait_timeout_ms() {
+    // Default timeout for real silicon.
+    constexpr int kDefaultTimeoutMs = 10'000;
+    // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
+    constexpr int kFunctionalSimTimeoutMs = 30'000;
+
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    if (rtoptions.get_simulator_enabled()) {
+        // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
+        // llrt treats timeout_ms==0 on sim as infinite wait.
+        if (rtoptions.get_simulator_path().extension() != ".so") {
+            return 0;
+        }
+        return kFunctionalSimTimeoutMs;
+    }
+    return kDefaultTimeoutMs;
+}
+
+}  // namespace
 
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
@@ -112,7 +152,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     for (auto refs : table_refs) {
         futures.emplace_back(detail::async([this, refs]() {
             tt::ChipId device_id = refs.device_id;
-            // Clear L1/DRAM if requested - skip for mock devices
+            // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
                 if (rtoptions_.get_clear_l1()) {
                     clear_l1_state(device_id);
@@ -132,13 +172,27 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             generate_worker_logical_to_virtual_map(
                 device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
 
-            // Skip firmware building for mock devices
-            if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
-                // Create build env for this device, and build FW if it's not built already.
-                // build_firmware ensures that the FW is built only once for a given build key
-                // (which captures the fw_compile_hash).
-                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-                BuildEnvManager::get_instance().build_firmware(device_id);
+            // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
+            // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
+            const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+            BuildEnvManager::get_instance(ctx_id).add_build_env(device_id, num_hw_cqs_, ctx_id);
+            // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
+            // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
+            // depend on -- without them, JIT-compiling kernels on a mock device fails with
+            // "non constant or forward reference address expression". So we run it for mock as
+            // well as real devices, with two exceptions:
+            //   1. Mock devices whose arch has no firmware sources packaged (currently Quasar).
+            //      cc1plus would fatal on missing source files; mock kernel JIT on Quasar is not
+            //      yet supported and would require a separate sources fix.
+            //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
+            //      riscv firmware ELFs are never linked or consumed.
+            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
+                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
+                                        !mock_firmware_sources_available_for(cluster_.arch()));
+            if (!skip_fw_build) {
+                BuildEnvManager::get_instance(ctx_id).build_firmware(device_id);
+            }
+            if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
@@ -158,11 +212,24 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
-    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!cluster_.is_mock_or_emulated()) {
         terminate_active_ethernet_cores_on_all_chips();
 
         for (tt::ChipId device_id : device_ids) {
             ClearNocData(descriptor_->env_impl(), device_id);
+            // Wait for base FW to finish its eth_init() on all idle ETH cores before
+            // asserting reset (otherwise we could kill it mid-init)
+            for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
+                CoreCoord virtual_core =
+                    cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+                if (!wait_for_eth_fw_ready(device_id, virtual_core)) {
+                    TT_THROW(
+                        "Device {}: eth base firmware not ready on core ({},{}), cannot proceed with reset",
+                        device_id,
+                        virtual_core.x,
+                        virtual_core.y);
+                }
+            }
             reset_cores(device_id);
             initialize_and_launch_firmware(device_id);
         }
@@ -195,7 +262,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
     teardown_simulator_ethernet_cores();
 
-    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!cluster_.is_mock_or_emulated()) {
         for (tt::ChipId device_id : all_devices) {
             assert_cores(device_id);
             cluster_.l1_barrier(device_id);
@@ -242,8 +309,7 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
         const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             cluster_.write_core(
                 dram_zero_vec.data(),
                 dram_l1_size,
@@ -337,8 +403,7 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
     }
@@ -363,7 +428,7 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
             CoreCoord virtual_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, CoreType::ETH);
             uint32_t rd_ptr = 0;
-            cluster_.read_core(&rd_ptr, sizeof(rd_ptr), tt_cxy_pair(chip_id, virtual_core), rd_ptr_addr);
+            cluster_.read_reg(&rd_ptr, tt_cxy_pair(chip_id, virtual_core), rd_ptr_addr);
             rd_ptr &= (dev_msgs::launch_msg_buffer_num_entries - 1);
             DeviceAddr launch_slot_addr = launch_base_addr + (rd_ptr * launch_msg_size);
             cluster_.read_core(
@@ -402,7 +467,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 10000;
+        const int timeout_ms = firmware_wait_timeout_ms();
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -489,8 +554,8 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
 
     dram_bank_to_noc_xy.clear();
     dram_bank_to_noc_xy.reserve(hal_.get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_.get_target_device_type() != tt::TargetDevice::Mock &&
-                                   cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled =
+        !cluster_.is_mock_or_emulated() && cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_.get_num_nocs(); noc++) {
@@ -552,6 +617,13 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
     }
+
+    // Pad to a multiple of 4 bytes so these vectors can be multicast via noc_multicast_write without a
+    // sub-word tail. UMD's WC memcpy_to_device handles a misaligned tail with a device read-modify-write,
+    // which on a multicast window issues a broadcast read — undefined per the NoC spec. The firmware reader
+    // indexes by logical col/row only, so the trailing zero bytes are never read.
+    worker_logical_col_to_virtual_col.resize(tt::round_up(tensix_grid_size.x, 4), 0);
+    worker_logical_row_to_virtual_row.resize(tt::round_up(tensix_grid_size.y, 4), 0);
 }
 
 void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
@@ -559,8 +631,34 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
-    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
+    // Firmware uses bank_noc_xy_t (uint32_t for Quasar configs with odd bank counts, uint16_t otherwise)
+    // to ensure table sizes are always 4-byte aligned for l1_to_local_mem_copy. Match that here.
+    const uint32_t dram_noc_xy_size = dram_bank_to_noc_xy_[device_id].size();
+    const uint32_t l1_noc_xy_size = l1_bank_to_noc_xy_[device_id].size();
+    const uint32_t num_nocs = hal_.get_num_nocs();
+    const bool use_u32_entries = (cluster_.arch() == tt::ARCH::QUASAR) &&
+                                 ((dram_noc_xy_size / num_nocs) % 2 != 0 || (l1_noc_xy_size / num_nocs) % 2 != 0);
+
+    std::vector<uint32_t> dram_noc_xy_padded, l1_noc_xy_padded;
+    void* dram_noc_data;
+    void* l1_noc_data;
+    uint32_t dram_to_noc_sz_in_bytes;
+    uint32_t l1_to_noc_sz_in_bytes;
+
+    if (use_u32_entries) {
+        dram_noc_xy_padded.assign(dram_bank_to_noc_xy_[device_id].begin(), dram_bank_to_noc_xy_[device_id].end());
+        l1_noc_xy_padded.assign(l1_bank_to_noc_xy_[device_id].begin(), l1_bank_to_noc_xy_[device_id].end());
+        dram_noc_data = dram_noc_xy_padded.data();
+        l1_noc_data = l1_noc_xy_padded.data();
+        dram_to_noc_sz_in_bytes = dram_noc_xy_size * sizeof(uint32_t);
+        l1_to_noc_sz_in_bytes = l1_noc_xy_size * sizeof(uint32_t);
+    } else {
+        dram_noc_data = dram_bank_to_noc_xy_[device_id].data();
+        l1_noc_data = l1_bank_to_noc_xy_[device_id].data();
+        dram_to_noc_sz_in_bytes = dram_noc_xy_size * sizeof(uint16_t);
+        l1_to_noc_sz_in_bytes = l1_noc_xy_size * sizeof(uint16_t);
+    }
+
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
 
@@ -575,21 +673,11 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         auto start_core = virtual_core;
         cluster_.noc_multicast_write(
-            dram_bank_to_noc_xy_[device_id].data(),
-            dram_to_noc_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            mem_bank_to_noc_addr);
+            dram_noc_data, dram_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
         cluster_.noc_multicast_write(
-            l1_bank_to_noc_xy_[device_id].data(),
-            l1_to_noc_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            l1_noc_addr);
+            l1_noc_data, l1_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_.noc_multicast_write(
@@ -610,17 +698,10 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             l1_offset_addr);
     } else {
         cluster_.write_core(
-            dram_bank_to_noc_xy_[device_id].data(),
-            dram_to_noc_sz_in_bytes,
-            tt_cxy_pair(device_id, virtual_core),
-            mem_bank_to_noc_addr);
+            dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
-        cluster_.write_core(
-            l1_bank_to_noc_xy_[device_id].data(),
-            l1_to_noc_sz_in_bytes,
-            tt_cxy_pair(device_id, virtual_core),
-            l1_noc_addr);
+        cluster_.write_core(l1_noc_data, l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_.write_core(
@@ -688,8 +769,9 @@ bool RiscFirmwareInitializer::erisc_app_still_running(tt::ChipId device_id, Core
         "Invalid core {} for context switch check",
         virtual_core.str());
     std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-    auto data = cluster_.read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
-    return (data[0] != 0);
+    uint32_t launch_flag = 0;
+    cluster_.read_reg(&launch_flag, tt_cxy_pair(device_id, virtual_core), launch_erisc_addr);
+    return (launch_flag != 0);
 }
 
 void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth) {
@@ -709,6 +791,80 @@ void RiscFirmwareInitializer::erisc_send_exit_signal(tt::ChipId device_id, CoreC
     if (!is_idle_eth) {
         std::vector<uint32_t> clear_flag_data = {0};
         cluster_.write_core_immediate(device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+    }
+}
+
+// TODO: this can be removed once base FW removes interrupts entirely.
+void RiscFirmwareInitializer::disable_eth_interrupts(tt::ChipId device_id, const CoreCoord& virtual_core) {
+    // We only switch back to base FW on active eth cores; on idle eth nothing can re-enable
+    // these interrupts after we zero them. Guard against misuse on active eth.
+    const auto logical_core = cluster_.get_logical_ethernet_core_from_virtual(device_id, virtual_core);
+    TT_ASSERT(
+        !this->get_control_plane_().get_active_ethernet_cores(device_id).contains(logical_core),
+        "disable_eth_interrupts must only be called on idle eth cores (device {}, virtual core {})",
+        device_id,
+        virtual_core.str());
+
+    const uint32_t zero = 0;
+    const auto base = hal_.get_eth_interrupt_mode_base_reg();
+    const auto num_vecs = hal_.get_eth_interrupt_num_vecs();
+    for (uint32_t i = 0; i < num_vecs; i++) {
+        cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), base + (4 * i));
+    }
+}
+
+// TODO: this can be removed once the base-FW readiness check is lowered into UMD.
+bool RiscFirmwareInitializer::wait_for_eth_fw_ready(
+    tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms) {
+    // skip for Non-BH archs and simulation (which has no base FW running)
+    if (cluster_.arch() != ARCH::BLACKHOLE || rtoptions_.get_simulator_enabled()) {
+        return true;
+    }
+    constexpr auto k_sleep_time = std::chrono::microseconds{100};
+    // Note: get_eth_fw_mailbox_val is hardcoded to the ACTIVE_ETH HAL slot, but we call this
+    // for idle eth cores too. Works because active and idle eth share the same underlying
+    // memory map.
+    const uint32_t postcode_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::POSTCODE);
+
+    const auto start_time = std::chrono::steady_clock::now();
+
+    while (true) {
+        uint32_t postcode = 0;
+        cluster_.read_reg(&postcode, tt_cxy_pair(device_id, virtual_core), postcode_addr);
+
+        if (postcode == tt::umd::blackhole::POSTCODE_ETH_INIT_PASS ||
+            postcode == tt::umd::blackhole::POSTCODE_ETH_INIT_FAIL ||
+            postcode == tt::umd::blackhole::POSTCODE_ETH_INIT_SKIP) {
+            log_debug(
+                tt::LogMetal,
+                "Device {}: eth base FW ready on core ({},{}) postcode={:#010x} (waited {}ms)",
+                device_id,
+                virtual_core.x,
+                virtual_core.y,
+                postcode,
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time)
+                    .count());
+            return true;
+        }
+
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time)
+                .count();
+
+        if (elapsed > timeout_ms) {
+            log_warning(
+                tt::LogMetal,
+                "Device {}: Timed out ({}ms) waiting for eth base firmware ready on core ({},{}). "
+                "Last postcode: {:#010x}",
+                device_id,
+                timeout_ms,
+                virtual_core.x,
+                virtual_core.y,
+                postcode);
+            return false;
+        }
+
+        std::this_thread::sleep_for(k_sleep_time);
     }
 }
 
@@ -872,6 +1028,8 @@ void RiscFirmwareInitializer::initialize_firmware(
     std::optional<CoreCoord> end_core) {
     ZoneScoped;
 
+    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
@@ -913,9 +1071,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                 launch_addr);
             cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
             uint32_t zero = 0;
-            cluster_.write_core(
-                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
+            cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
         } else {
             cluster_.noc_multicast_write(
                 init_launch_msg_data.data(),
@@ -932,15 +1089,32 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.noc_multicast_write(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
         }
+
+        // Initialize fw_shared_globals_ready_addr Quasar DM0 to WAIT
+        if (cluster_.arch() == ARCH::QUASAR) {
+            auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+            const DeviceAddr mailbox_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+            const DeviceAddr fw_shared_globals_ready_addr =
+                mailbox_addr +
+                factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
+            const uint8_t zero = 0;
+            if (core_type != HalProgrammableCoreType::TENSIX) {
+                cluster_.write_core(
+                    &zero, sizeof(zero), tt_cxy_pair(device_id, virtual_core), fw_shared_globals_ready_addr);
+            } else {
+                cluster_.noc_multicast_write(
+                    &zero, sizeof(zero), device_id, start_core, end_core.value(), fw_shared_globals_ready_addr);
+            }
+        }
     };
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [_, num_build_states] = BuildEnvManager::get_instance().get_build_index_and_state_count(
+                auto [_, num_build_states] = BuildEnvManager::get_instance(ctx_id).get_build_index_and_state_count(
                     core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
-                    auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                    auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                         device_id, core_type_idx, processor_class, riscv_id);
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
@@ -1010,7 +1184,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
-                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1034,9 +1208,13 @@ void RiscFirmwareInitializer::initialize_firmware(
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
-                cluster_.write_core(
+                if (is_idle_eth) {
+                    // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when
+                    // we switch to runtime FW. Must happen before we write PC and deassert.
+                    disable_eth_interrupts(device_id, virtual_core);
+                }
+                cluster_.write_reg(
                     &jit_build_config.fw_launch_addr_value,
-                    sizeof(uint32_t),
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
             } else {
@@ -1058,7 +1236,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
-                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1086,9 +1264,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 
             // Write reset PC (register address, no L1 NOC offset needed)
-            cluster_.write_core(
+            cluster_.write_reg(
                 &jit_build_config.fw_launch_addr_value,
-                sizeof(uint32_t),
                 tt_cxy_pair(device_id, virtual_core),
                 jit_build_config.fw_launch_addr);
             break;
@@ -1207,10 +1384,10 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
         const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
-            dram_core_info.view().absolute_logical_x() = dram_noc.x;
-            dram_core_info.view().absolute_logical_y() = dram_noc.y;
+
+        for (const auto& virtual_dram_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+            dram_core_info.view().absolute_logical_x() = virtual_dram_core.x;
+            dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
             uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             cluster_.write_core(
                 dram_core_info.data(),
@@ -1236,7 +1413,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
         tt::umd::RiscType reset_val;
         if (cluster_.arch() == ARCH::QUASAR) {
-            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+            reset_val = tt::umd::RiscType::ALL;
         } else {
             reset_val = tt::umd::RiscType::BRISC;
             if (multi_risc_active_eth_cores.contains(worker_core)) {
@@ -1250,7 +1427,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = 10000;
+    const int timeout_ms = firmware_wait_timeout_ms();
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {

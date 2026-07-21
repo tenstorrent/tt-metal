@@ -283,7 +283,9 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
+    expected_duration_ns = (
+        993500  # Updated 2026-07-09: ~3% faster (~0.9935ms) after CircularBuffer->DataflowBuffer kernel port
+    )
 
     # Log the performance result
     print(
@@ -320,7 +322,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3142259  # Measured: 3.14ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3082972  # Measured: 3.08ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(

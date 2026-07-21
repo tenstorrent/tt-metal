@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.common.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
@@ -26,6 +25,7 @@ def run_test_paged_fused_update_cache_decode(
     row_major=False,
     is_cur_pos_sharded=False,
     is_page_table_sharded=False,
+    use_attr_idxs=False,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -155,7 +155,9 @@ def run_test_paged_fused_update_cache_decode(
 
     # Update indices
     cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
-    if num_heads == 1:
+    # The -1 "skip this user" sentinel is an index-tensor feature; the attribute (update_idxs list)
+    # path takes uint32 positions, so don't inject it there.
+    if num_heads == 1 and not use_attr_idxs:
         cache_idxs[num_users // 2] = -1
     cache_idxs_memory_config = None
     if is_cur_pos_sharded:
@@ -174,10 +176,17 @@ def run_test_paged_fused_update_cache_decode(
     else:
         cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
 
-    # Perform fused update cache operation
-    cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
-        cachett1, xt1, cachett2, xt2, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
-    )
+    # Perform fused update cache operation. use_attr_idxs drives the NON-index-tensor path
+    # (update_idxs list -> operation_attributes.update_idxs), where cache_start_id / tile_update_offset_B
+    # are baked into runtime args and must be re-patched on cache hits via get_dynamic_runtime_args.
+    if use_attr_idxs:
+        cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
+            cachett1, xt1, cachett2, xt2, update_idxs=cache_idxs, page_table=page_table_tt
+        )
+    else:
+        cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
+            cachett1, xt1, cachett2, xt2, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
+        )
 
     # Verification for cache1 and cache2
     for cache_idx, cache, cachett, x in [(1, cache1, cachett1, x1), (2, cache2, cachett2, x2)]:
@@ -347,4 +356,55 @@ def test_paged_fused_update_cache_decode_program_caching(
             pcc,
         )
 
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.timeout(1200)
+# Non-paged only: the paged fused-update path validates that update positions arrive via an index
+# TENSOR (which is Buffer-bound and re-patched anyway), so the frozen-attr bug only applies here.
+@pytest.mark.parametrize("paged_update", [False])
+@pytest.mark.parametrize("block_size", [128], ids=["block128"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [8])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_paged_fused_update_cache_decode_attr_idxs_program_caching(
+    paged_update, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device, pcc
+):
+    """Regression for the DynamicRuntimeArg fix on the NON-index-tensor (update_idxs list) path. The two
+    cached calls below differ only in their positions, which are excluded from the program hash — so they
+    must share ONE cache entry, and the second call must write at its OWN positions (cache_start_id /
+    tile_update_offset_B re-patched on the cache hit, not frozen at the first call's values)."""
+    # Cache miss, then a HIT at different positions, same shapes.
+    run_test_paged_fused_update_cache_decode(
+        paged_update,
+        127,
+        block_size,
+        head_dim,
+        max_seq_len,
+        num_users,
+        num_heads,
+        input_dtype,
+        cache_dtype,
+        device,
+        pcc,
+        use_attr_idxs=True,
+    )
+    run_test_paged_fused_update_cache_decode(
+        paged_update,
+        1057,
+        block_size,
+        head_dim,
+        max_seq_len,
+        num_users,
+        num_heads,
+        input_dtype,
+        cache_dtype,
+        device,
+        pcc,
+        use_attr_idxs=True,
+    )
     assert device.num_program_cache_entries() == 1

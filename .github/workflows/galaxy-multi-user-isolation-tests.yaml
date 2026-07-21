@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
-        description: 'Run Galaxy multi-host job (not actually used in logic yet)'
+        description: "Run Galaxy multi-host job (not actually used in logic yet)"
         required: false
         default: true
         type: boolean
@@ -36,15 +36,20 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+    - cron: "0 0 * * *" # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -81,7 +86,7 @@ jobs:
             chips_per_container: 8
             container_prefix: tray
             mesh_descriptor: t3k_mesh_graph_descriptor.textproto
-            test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
+            test_path: tests/nightly/t3000/ccl/test_all_gather.py
             # Exclude fabric_ring tests for tray: t3k tray topology and mesh descriptor are mismatched, causing these cases to fail in CI.
             test_args: "-k 'not fabric_ring'"
           # Blackhole configuration
@@ -113,7 +118,7 @@ jobs:
             # ("Device N init: failed to initialize FW") due to a BH-specific firmware layer issue,
             # not a tt-metal issue. Since this CI only needs one representative test to verify
             # inter-container isolation, we narrow down to a single test combination to avoid the problem.
-            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and 2_links and not DRAM'"
+            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}
@@ -121,7 +126,8 @@ jobs:
     name: "${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{ matrix.chips_per_container }})"
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -137,9 +143,9 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
       - name: Install Wheel
         run: |
           python3 -m pip install --force-reinstall ttnn-*.whl

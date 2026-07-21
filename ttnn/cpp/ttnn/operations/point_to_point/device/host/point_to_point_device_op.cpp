@@ -5,7 +5,6 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -99,16 +98,15 @@ Fabric1DRoute fabric_1d_routing(
 }
 }  // namespace detail
 
-using cached_workload_t = device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>;
-
 void PointToPointOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
     auto* mesh_device = input_tensor.device();
 
-    TT_FATAL(
-        operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
+    // Same-device (send_coord == receive_coord) is allowed: it degenerates to a local
+    // on-device copy of the shard into the output tensor — no fabric hop — handled by
+    // the same-device branch in SendReceive::create_workload_descriptor.
 
     TT_FATAL(
         mesh_device->get_view().contains(operation_attributes.send_coord),
@@ -143,12 +141,22 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
 };
 
 PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // !Maybe todo. Support output with different config/layout than input
 
     const auto& input_tensor = tensor_args.input_tensor;
 
     const auto final_output_spec = input_tensor.tensor_spec();
+
+    // Same-device transfer is a local copy with no fabric packetization, so the
+    // intermediate tensor is unused. Return a minimal 1-tile placeholder for it (rather
+    // than a full input-sized, mesh-wide allocation) and skip compute_aligned_packet_dims —
+    // its fabric query (get_tt_fabric_channel_buffer_size_bytes) requires an initialized
+    // fabric context, which a purely local transfer must not depend on.
+    if (operation_attributes.send_coord == operation_attributes.receive_coord) {
+        const TensorSpec placeholder_intermediate_spec(Shape{1, 1}, final_output_spec.tensor_layout());
+        return {placeholder_intermediate_spec, final_output_spec};
+    }
 
     const uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor);
 
@@ -184,17 +192,37 @@ PointToPointOp::tensor_return_value_t PointToPointOp::create_output_tensors(
     return {intermediate_output_tensor, final_output_tensor};
 }
 
-PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive::create_mesh_workload(
+tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // Same-device transfer (send_coord == receive_coord) is a purely local on-device
+    // copy: no fabric hop, so no cross-device GlobalSemaphore and no mesh-wide
+    // Synchronize are needed. Emit a single copy program on that coordinate and return,
+    // leaving the cross-device path below untouched.
+    if (operation_attributes.send_coord == operation_attributes.receive_coord) {
+        const MeshCoordinate& coord = operation_attributes.send_coord;
+        const auto& coords = tensor_coords.coords();
+        TT_FATAL(
+            std::find(coords.begin(), coords.end(), coord) != coords.end(),
+            "Tensor not present on coordinate: {}",
+            coord);
 
-    std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
+        tt::tt_metal::WorkloadDescriptor workload_descriptor;
+        workload_descriptor.programs.push_back(
+            {tt::tt_metal::distributed::MeshCoordinateRange(coord),
+             local_copy_program_factory(tensor_args, tensor_return_value)});
+        return workload_descriptor;
+    }
 
     auto* mesh_device = tensor_args.input_tensor.device();
+
+    // Allocate the shared GlobalSemaphore used by both endpoint programs and
+    // run the cross-device Synchronize barrier ONCE per workload (cache miss).
+    // The semaphore's device-side allocation must outlive every program that
+    // references its absolute address — park it in WorkloadDescriptor.semaphores
+    // so the framework keeps it alive for the cached workload's lifetime.
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
@@ -202,89 +230,33 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "Synchronize devices in p2p op done");
 
+    const auto& send_coord = operation_attributes.send_coord;
+    const auto& receive_coord = operation_attributes.receive_coord;
+
     const auto& coords = tensor_coords.coords();
-    for (const auto& c : use_coords) {
+    for (const auto& c : {send_coord, receive_coord}) {
         auto it = std::find(coords.begin(), coords.end(), c);
         TT_FATAL(it != coords.end(), "Tensor not present on coordinate: {}", c);
     }
 
-    for (const auto& coord : use_coords) {
-        auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value, semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_workload.program));
-        shared_variables.emplace(coord, std::move(cached_workload.shared_variables));
-    }
-    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    workload_descriptor.semaphores.push_back(semaphore);
+
+    // Only the sender and receiver coords participate.  The original
+    // create_mesh_workload likewise added programs only for these two coords;
+    // we keep that behaviour by emitting per-coord PerCoordProgram entries.
+    tt::tt_metal::ProgramDescriptor send_desc = send_program_factory(
+        tensor_args, operation_attributes, send_coord, receive_coord, tensor_return_value, semaphore);
+    workload_descriptor.programs.push_back(
+        {tt::tt_metal::distributed::MeshCoordinateRange(send_coord), std::move(send_desc)});
+
+    tt::tt_metal::ProgramDescriptor receive_desc =
+        receive_program_factory(operation_attributes, tensor_return_value, semaphore);
+    workload_descriptor.programs.push_back(
+        {tt::tt_metal::distributed::MeshCoordinateRange(receive_coord), std::move(receive_desc)});
+
+    return workload_descriptor;
 }
-
-cached_workload_t PointToPointOp::SendReceive::create_at(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const tt::tt_metal::GlobalSemaphore& semaphore) {
-    const auto& send_coordinate = operation_attributes.send_coord;
-    const auto& receive_coordinate = operation_attributes.receive_coord;
-
-    if (mesh_coordinate == send_coordinate) {
-        return send_program_factory(
-            tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value, semaphore);
-    }
-    if (mesh_coordinate == receive_coordinate) {
-        return receive_program_factory(operation_attributes, tensor_return_value, semaphore);
-    }
-
-    TT_THROW("Invalid coordinate in p2p");
-    return {Program{}, shared_variables_t{.semaphore = semaphore}};
-}
-
-void PointToPointOp::SendReceive::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto send_coord = operation_attributes.send_coord;
-    const auto receive_coord = operation_attributes.receive_coord;
-
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& coord = range.start_coord();
-        TT_FATAL(
-            coord == range.end_coord(),
-            "Expected single coordinate per program but got range of {} to {}",
-            coord,
-            range.end_coord());
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        if (coord == send_coord) {
-            const auto& send_unary_reader_kernel_id = shared_variables.send_unary_reader_kernel_id;
-            const auto& send_unary_writer_kernel_id = shared_variables.send_unary_writer_kernel_id;
-
-            // change this when we use more cores for multi-link
-            const auto& core = shared_variables.sender_cores.at(0);
-
-            auto& reader_runtime_args = GetRuntimeArgs(program, send_unary_reader_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(0).buffer()->address();
-            writer_runtime_args.at(8) = shared_variables.semaphore.address();
-        }
-
-        if (coord == receive_coord) {
-            const auto& receive_unary_reader_kernel_id = shared_variables.receive_unary_reader_kernel_id;
-            const auto& receive_unary_writer_kernel_id = shared_variables.receive_unary_writer_kernel_id;
-
-            // change this when we use more cores for multi-link
-            const auto& core = shared_variables.receiver_cores.at(0);
-
-            auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
-            reader_runtime_args.at(3) = tensor_return_value.at(0).buffer()->address();
-            reader_runtime_args.at(7) = shared_variables.semaphore.address();
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(1).buffer()->address();
-        }
-    }
-};
 
 }  // namespace ttnn::operations::point_to_point
 

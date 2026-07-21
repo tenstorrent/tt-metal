@@ -11,8 +11,6 @@
 #include <llrt/tt_cluster.hpp>
 #include <memory>
 #include <optional>
-#include <random>
-#include <span>
 #include <string>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -20,16 +18,14 @@
 #include <tt-metalium/device.hpp>
 #include <vector>
 
+#include "benchmark_utils.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/random.hpp"
 #include "impl/context/metal_context.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 struct CoreGridConfig {
@@ -58,11 +54,6 @@ struct BenchmarkResult {
     double tflops = 0.0;
     double utilization_pct = 0.0;
     bool skipped = false;
-};
-
-struct TestConfig {
-    int num_warmup_iterations = 2;
-    int num_measurement_iterations = 25;
 };
 
 // CoreGrid configurations to compare
@@ -111,7 +102,7 @@ const std::vector<MatmulTestShape> tt_train_shapes = {
     {{4096, 2304}, {4096, 768}, true, false, "bwd_4096x2304_x_4096x768_Ta"},
 };
 
-const TestConfig test_config = {
+constexpr ttml::benchmark_utils::BenchmarkIterationConfig test_config = {
     .num_warmup_iterations = 2,
     .num_measurement_iterations = 10,
 };
@@ -127,11 +118,11 @@ std::tuple<uint64_t, uint64_t, uint64_t> get_mkn_from_shapes(
     const auto& a_shape = input_a.logical_shape();
     const auto& b_shape = input_b.logical_shape();
 
-    uint64_t M = transpose_a ? a_shape[-1] : a_shape[-2];
-    uint64_t K = transpose_a ? a_shape[-2] : a_shape[-1];
-    uint64_t N = transpose_b ? b_shape[-2] : b_shape[-1];
+    const uint64_t M = transpose_a ? a_shape[-1] : a_shape[-2];
+    const uint64_t K = transpose_a ? a_shape[-2] : a_shape[-1];
+    const uint64_t N = transpose_b ? b_shape[-2] : b_shape[-1];
 
-    uint64_t batch = ttnn::get_batch_size(a_shape);
+    const uint64_t batch = ttnn::get_batch_size(a_shape);
 
     return {batch * M, K, N};
 }
@@ -147,7 +138,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
     const int num_measurement_iterations = test_config.num_measurement_iterations;
 
     auto* dev_ptr = device.get();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     if (!grid_config.is_supported(compute_grid_size)) {
         return BenchmarkResult{.grid_name = grid_config.name, .skipped = true};
@@ -182,7 +173,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
     {
         ZoneScopedN("TTTrain Matmul iterations");
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-            auto start_time = std::chrono::high_resolution_clock::now();
+            const auto start_time = std::chrono::high_resolution_clock::now();
             output_tensor = ttnn::matmul(
                 input_tensor_a,
                 input_tensor_b,
@@ -196,7 +187,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
                 /*core_grid=*/grid_config.core_grid,
                 /*output_tile=*/std::nullopt);
             tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
-            auto end_time = std::chrono::high_resolution_clock::now();
+            const auto end_time = std::chrono::high_resolution_clock::now();
             total_time += end_time - start_time;
             output_tensor.deallocate();
         }
@@ -205,21 +196,21 @@ BenchmarkResult RunSingleMatmulBenchmark(
     const double inference_time_avg_s = total_time.count() / num_measurement_iterations;
 
     // Calculate TFLOPS
-    auto [M, K, N] =
+    const auto [M, K, N] =
         get_mkn_from_shapes(input_tensor_a, input_tensor_b, matmul_shape.transpose_a, matmul_shape.transpose_b);
-    double tflops = 2.0 * M * K * N / 1e12 / inference_time_avg_s;
+    const double tflops = 2.0 * M * K * N / 1e12 / inference_time_avg_s;
 
     // Calculate utilization against full grid
-    constexpr int HiFi4_cycles_per_tile = 64;
-    int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
+    constexpr int kHiFi4CyclesPerTile = 64;
+    const int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
 
     const double num_tile_ops = static_cast<double>(M) * K * N / (32.0 * 32.0 * 32.0);
-    double ideal_cycle_full_grid = num_tile_ops * HiFi4_cycles_per_tile / num_cores_full_grid;
+    const double ideal_cycle_full_grid = num_tile_ops * kHiFi4CyclesPerTile / num_cores_full_grid;
 
     const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
-    double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
+    const double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
 
-    double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
+    const double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
 
     return BenchmarkResult{
         .grid_name = grid_config.name,
@@ -271,27 +262,19 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
 
         // Create inputs once per shape so each grid config sees identical tensors
         const auto dtype = ttnn::DataType::BFLOAT16;
-        const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(matmul_shape.name));
+        const uint32_t seed = ttml::benchmark_utils::seed_from_name(matmul_shape.name);
 
-        ttnn::Shape a_shape(matmul_shape.a_shape);
-        ttnn::Shape b_shape(matmul_shape.b_shape);
+        const ttnn::Shape a_shape(matmul_shape.a_shape);
+        const ttnn::Shape b_shape(matmul_shape.b_shape);
 
-        std::vector<float> data_a(a_shape.volume());
-        ttml::core::parallel_generate(
-            std::span{data_a.data(), data_a.size()},
-            []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
-            seed);
+        const auto data_a = ttml::test_utils::make_uniform_vector<float>(a_shape.volume(), -1.0F, 1.0F, seed);
         ttnn::Tensor input_tensor_a = ttnn::Tensor::from_vector(
             data_a,
             ttnn::TensorSpec(
                 a_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
             device.get());
 
-        std::vector<float> data_b(b_shape.volume());
-        ttml::core::parallel_generate(
-            std::span{data_b.data(), data_b.size()},
-            []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
-            seed + 1);
+        const auto data_b = ttml::test_utils::make_uniform_vector<float>(b_shape.volume(), -1.0F, 1.0F, seed + 1);
         ttnn::Tensor input_tensor_b = ttnn::Tensor::from_vector(
             data_b,
             ttnn::TensorSpec(
@@ -300,7 +283,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
 
         // Run benchmark for each grid configuration
         for (const auto& grid_config : core_grid_configs) {
-            auto result =
+            const auto result =
                 RunSingleMatmulBenchmark(matmul_shape, grid_config, device, input_tensor_a, input_tensor_b, device_id);
             results.push_back(result);
         }
@@ -309,7 +292,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
         PrintComparisonTable(matmul_shape.name, results);
 
         // Report the best time to benchmark framework
-        auto fastest = std::min_element(results.begin(), results.end(), [](const auto& a, const auto& b) {
+        const auto fastest = std::min_element(results.begin(), results.end(), [](const auto& a, const auto& b) {
             if (a.skipped != b.skipped) {
                 return !a.skipped;  // non-skipped beats skipped
             }

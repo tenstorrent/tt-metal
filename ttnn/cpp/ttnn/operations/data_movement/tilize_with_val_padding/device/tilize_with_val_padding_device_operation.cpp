@@ -32,6 +32,9 @@ bool can_use_sharded_optimized_factory(
             return false;
         }
     }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
+    }
     return !operation_attributes.sub_core_grids.has_value();
 }
 
@@ -88,8 +91,17 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
-            input_tensor.dtype() == DataType::UINT16,
-        "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
+            input_tensor.dtype() == DataType::UINT16 or input_tensor.dtype() == DataType::FP8_E4M3,
+        "Can only tilize bfloat16/float32 or int32/uint32/uint16 or fp8_e4m3 tensors");
+    // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
+    // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
+    if (input_tensor.dtype() == DataType::FP8_E4M3) {
+        // Valid TILE float output = a float dtype other than FP8_E4M3 (which is itself ROW_MAJOR-only).
+        const DataType out_dt = operation_attributes.output_dtype;
+        TT_FATAL(
+            is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3,
+            "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+    }
 
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
@@ -167,7 +179,11 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);  // If the input is using the legacy sharded optimized program
+                          // factory, the output has the same shard spec as the input.
         return TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(

@@ -8,14 +8,30 @@ GELU Backward ULP Precision Tests
 This test validates the accuracy of ttnn.experimental.gelu_bw (GELU derivative) across
 the BFloat16 range using the same methodology as test_gelu_floor_value_bug.py.
 
-MATHEMATICAL FORMULA:
-GELU'(x) = grad * (cdf + x * pdf)
-where:
-  cdf = 0.5 * (1 + erf(x / sqrt(2)))  -- CDF of standard normal distribution
-  pdf = exp(-x^2 / 2) / sqrt(2*pi)    -- PDF of standard normal distribution
+Two derivative formulas are covered:
+
+1. Exact erf-based GELU derivative (approximate="none"):
+   GELU'(x) = grad * (cdf + x * pdf)
+   where:
+     cdf = 0.5 * (1 + erf(x / sqrt(2)))  -- CDF of standard normal distribution
+     pdf = exp(-x^2 / 2) / sqrt(2*pi)    -- PDF of standard normal distribution
+   Tests: TestGeluBwDerivativeAtZero, TestGeluBwPositiveValues, TestGeluBwNegativeValues,
+          TestGeluBwNearZero, TestGeluBwLocalMinimum, TestGeluBwWithGradientScaling,
+          test_gelu_bw_ulp_summary
+
+2. Tanh-approximated GELU derivative (approximate="tanh"):
+   GELU_tanh(x) = 0.5 * x * (1 + tanh(beta * (x + kappa * x^3)))
+   GELU_tanh'(x) = 0.5 * (1 + tanh(z)) + 0.5 * x * (1 - tanh(z)^2) * beta * (1 + 3*kappa*x^2)
+   where:
+     z = beta * (x + kappa * x^3)
+     beta = sqrt(2/pi), kappa = 0.044715
+   Tests: TestGeluBwTanhDerivativeAtZero, TestGeluBwTanhPositiveValues,
+          TestGeluBwTanhNearZero, TestGeluBwTanhWithGradientScaling, TestGeluBwTanhShapes
 
 Hardware Model: Tenstorrent SFPU uses DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero)
 Per tech_reports/Handling_Special_Value/special_values.md: "denormals | all | 0x0"
+
+Reference: https://github.com/tenstorrent/tt-metal/issues/38973
 
 Run: pytest tests/ttnn/unit_tests/operations/eltwise/test_gelu_bw_ulp.py -v -s
 """
@@ -25,7 +41,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from mpmath import mp, erf as mp_erf, erfc as mp_erfc, exp as mp_exp, sqrt as mp_sqrt
+from mpmath import mp, erf as mp_erf, erfc as mp_erfc, exp as mp_exp, sqrt as mp_sqrt, tanh as mp_tanh
 
 
 def float_to_bf16_bits(f: float) -> int:
@@ -144,6 +160,48 @@ def gelu_bw_expected_bf16_daz(grad: float, x: float) -> float:
     x_bits = bf16_daz_normalize(float_to_bf16_bits(x))
     x_daz = bf16_bits_to_float(x_bits)
     result = grad_daz * gelu_derivative_exact(x_daz)
+    result_bits = bf16_daz_normalize(float_to_bf16_bits(result))
+    return bf16_bits_to_float(result_bits)
+
+
+def gelu_derivative_tanh_exact(x: float) -> float:
+    """
+    Exact tanh-approximated GELU derivative using mpmath 256-bit precision.
+
+    GELU_tanh(x) = 0.5 * x * (1 + tanh(beta * (x + kappa * x^3)))
+    GELU_tanh'(x) = 0.5 * (1 + tanh(z)) + 0.5 * x * (1 - tanh(z)^2) * beta * (1 + 3*kappa*x^2)
+    where z = beta * (x + kappa * x^3), beta = sqrt(2/pi), kappa = 0.044715
+    """
+    mp.prec = 256
+    x_mp = mp.mpf(x)
+    beta = mp_sqrt(mp.mpf(2) / mp.pi)
+    kappa = mp.mpf("0.044715")
+
+    z = beta * (x_mp + kappa * x_mp**3)
+    tanh_z = mp_tanh(z)
+
+    cdf_term = mp.mpf("0.5") * (1 + tanh_z)
+    pdf_term = mp.mpf("0.5") * x_mp * (1 - tanh_z**2) * beta * (1 + 3 * kappa * x_mp**2)
+
+    return float(cdf_term + pdf_term)
+
+
+def gelu_derivative_tanh_expected_bf16_daz(x: float) -> float:
+    """Compute expected BF16 tanh-GELU derivative with DAZ+FTZ applied."""
+    x_bits = bf16_daz_normalize(float_to_bf16_bits(x))
+    x_daz = bf16_bits_to_float(x_bits)
+    result = gelu_derivative_tanh_exact(x_daz)
+    result_bits = bf16_daz_normalize(float_to_bf16_bits(result))
+    return bf16_bits_to_float(result_bits)
+
+
+def gelu_bw_tanh_expected_bf16_daz(grad: float, x: float) -> float:
+    """Compute expected BF16 tanh-GELU backward with DAZ+FTZ applied."""
+    grad_bits = bf16_daz_normalize(float_to_bf16_bits(grad))
+    grad_daz = bf16_bits_to_float(grad_bits)
+    x_bits = bf16_daz_normalize(float_to_bf16_bits(x))
+    x_daz = bf16_bits_to_float(x_bits)
+    result = grad_daz * gelu_derivative_tanh_exact(x_daz)
     result_bits = bf16_daz_normalize(float_to_bf16_bits(result))
     return bf16_bits_to_float(result_bits)
 
@@ -406,3 +464,147 @@ def test_gelu_bw_ulp_summary(device):
     assert max_ulp <= 2, (
         f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
+
+
+# =============================================================================
+# Tanh-approximated GELU backward tests (approximate="tanh")
+# Reference: https://github.com/tenstorrent/tt-metal/issues/38973
+# =============================================================================
+
+
+class TestGeluBwTanhDerivativeAtZero:
+    """GELU_tanh'(0) = 0.5"""
+
+    def test_derivative_at_zero(self, device):
+        torch_input = torch.tensor([[0.0]], dtype=torch.bfloat16)
+        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
+        actual = ttnn.to_torch(result).item()
+
+        expected = gelu_derivative_tanh_expected_bf16_daz(0.0)
+        ulp_error = ulp_distance_bf16_daz(actual, expected)
+
+        logger.info(f"x=0: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        assert ulp_error <= 2, f"Expected ULP <= 2, got {ulp_error}"
+
+
+class TestGeluBwTanhPositiveValues:
+    """For large positive x, GELU_tanh'(x) approaches 1."""
+
+    @pytest.mark.parametrize(
+        "input_value,max_expected_ulp",
+        [
+            (0.5, 2),
+            (1.0, 2),
+            (2.0, 2),
+            (3.0, 2),
+            (5.0, 2),
+            (10.0, 2),
+        ],
+    )
+    def test_positive_values(self, device, input_value, max_expected_ulp):
+        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
+        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
+        actual = ttnn.to_torch(result).item()
+
+        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
+        ulp_error = ulp_distance_bf16_daz(actual, expected)
+
+        logger.debug(f"x={input_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
+
+
+class TestGeluBwTanhNearZero:
+    """Near zero, GELU_tanh'(x) ≈ 0.5."""
+
+    @pytest.mark.parametrize(
+        "input_value",
+        [1e-4, 0.01, 0.1, -0.1, -0.01, -1e-4],
+    )
+    def test_near_zero(self, device, input_value):
+        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
+        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
+        actual = ttnn.to_torch(result).item()
+
+        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
+        ulp_error = ulp_distance_bf16_daz(actual, expected)
+
+        logger.debug(f"x={input_value:.2e}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        assert ulp_error <= 2, f"Expected ULP <= 2, got {ulp_error}"
+
+
+class TestGeluBwTanhWithGradientScaling:
+    """Tests with grad != 1.0 to catch swapped tensors or missing multiplication."""
+
+    @pytest.mark.parametrize(
+        "input_value,grad_value,max_expected_ulp",
+        [
+            (1.0, 2.0, 2),
+            (-1.0, 0.5, 2),
+            (0.0, 1.0, 2),
+            (2.0, -1.0, 2),
+            (0.5, 3.0, 2),
+        ],
+    )
+    def test_with_gradient(self, device, input_value, grad_value, max_expected_ulp):
+        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
+        torch_grad = torch.tensor([[grad_value]], dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
+        actual = ttnn.to_torch(result).item()
+
+        expected = gelu_bw_tanh_expected_bf16_daz(grad_value, input_value)
+        ulp_error = ulp_distance_bf16_daz(actual, expected)
+
+        logger.debug(
+            f"x={input_value}, grad={grad_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}"
+        )
+        assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
+
+
+class TestGeluBwTanhShapes:
+    """Different tensor shapes to validate multi-tile operation.
+    Regression test for https://github.com/tenstorrent/tt-metal/issues/38973"""
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            [1, 1, 32, 32],
+            [1, 1, 64, 64],
+            [1, 1, 128, 128],
+            [1, 2, 32, 64],
+        ],
+    )
+    def test_various_shapes(self, device, shape):
+        input_val = 1.0
+        torch_input = torch.full(shape, input_val, dtype=torch.bfloat16)
+        torch_grad = torch.full(shape, 1.0, dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
+        actual = ttnn.to_torch(result).flatten()[0].item()
+
+        expected = gelu_derivative_tanh_expected_bf16_daz(input_val)
+        ulp_error = ulp_distance_bf16_daz(actual, expected)
+
+        logger.info(f"shape={shape}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        assert ulp_error <= 2, f"Shape {shape}: expected ULP <= 2, got {ulp_error}"

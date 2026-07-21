@@ -68,60 +68,127 @@ FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
 
 // Atomic semaphore decrement (for global semaphore reset across iterations)
 FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
-    __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELAXED);
+    __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELEASE);
+}
+
+// Atomic semaphore increment
+FORCE_INLINE void semaphore_inc(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
+    __atomic_fetch_add(sem_addr, val, __ATOMIC_RELEASE);
 }
 
 #endif
+
+// Atomic L1 semaphore primitives by address — callable from any RISC
+// (BR / NC / TR0 / TR1 / TR2). ACQUIRE/RELEASE ordering: producers use INC
+// (RELEASE) so prior writes are visible before the signal; consumers use LOAD
+// (ACQUIRE) so subsequent reads can't be hoisted before the load; DEC uses
+// RELEASE since the dec often signals downstream consumers (gather_sync_sem,
+// partial_sem, fmt_sync::consumer_release).
+FORCE_INLINE uint32_t sem_atomic_load(uint32_t sem_addr) {
+    return __atomic_load_n(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), __ATOMIC_ACQUIRE);
+}
+FORCE_INLINE void sem_atomic_inc(uint32_t sem_addr, uint32_t v = 1) {
+    __atomic_fetch_add(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELEASE);
+}
+FORCE_INLINE void sem_atomic_dec(uint32_t sem_addr, uint32_t v = 1) {
+    __atomic_fetch_sub(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELEASE);
+}
 
 // ============================================================================
 // Cross-RISC synchronization
 // ============================================================================
 
-// Two-phase cross-RISC synchronization barrier using atomic L1 semaphores.
+// Two-phase cross-RISC synchronization barrier packed into a single uint32_t.
 // Used by reconfig_cb_interfaces to ensure NC resets stream regs only after
-// all other RISCs (BR/TR0/TR2) have completed prior work.
+// all other RISCs have completed prior work.
 //
-// Phase 1 (enter): BR/TR0/TR2 signal done → NC waits for all 3, then proceeds.
-// Phase 2 (exit):  NC signals done → BR/TR0/TR2 wait, then all proceed together.
+// Template parameter SyncMathRisc controls whether the math TRISC participates:
+//   true  → 4 participants (BR/TR0/TR1/TR2), math TRISC enters/exits the barrier
+//   false → 3 participants (BR/TR0/TR2), math TRISC is a no-op
 //
-// Safe for repeated use: the full MoE body executes between exit and the next
-// enter, so sem[0] is always 0 when the next iteration's enter begins.
-// sem[0] reset is non-atomic but safe because others are blocked on sem[1].
+// Semaphore word layout:
+//   bits [15:0]  = enter count (participants → NC)
+//   bits [31:16] = exit  count (NC → participants)
+//
+// Phase 1 (enter): participants each add 1 to low half → NC waits for low >= N,
+//                  then resets low half. Safe because participants are blocked in
+//                  exit spinning on the high half.
+// Phase 2 (exit):  NC adds N to high half → participants each spin until high != 0,
+//                  then subtract 1. The last one drains high to 0 for next iteration.
 
-// Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
+template <bool sync_math_risc = true, bool sync_tensix = true>
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
-#if defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-    tensix_sync();
+#if defined(UCK_CHLKC_MATH)
+    if constexpr (sync_math_risc)
 #endif
-    __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
+    {
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_TRISC)
+        if constexpr (sync_tensix) {
+            tensix_sync();
+        }
+#endif
+        __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELEASE);
 #elif defined(COMPILE_FOR_NCRISC)
-    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 3) {
-    }
-    sem_addr[0] = 0;
+        constexpr uint32_t sync_value = sync_math_risc ? 4 : 3;
+        while ((__atomic_load_n(&sem_addr[0], __ATOMIC_ACQUIRE) & 0xFFFF) < sync_value) {
+        }
+        __atomic_fetch_sub(&sem_addr[0], sync_value, __ATOMIC_RELEASE);
 #endif
+    }
 }
 
-// Phase 2: NC signals done → BR/TR0/TR2 wait then proceed
+template <bool sync_math_risc = true>
 FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
-#if defined(COMPILE_FOR_NCRISC)
-    __atomic_fetch_add(&sem_addr[1], 3, __ATOMIC_RELAXED);
-#elif defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-    while (__atomic_load_n(&sem_addr[1], __ATOMIC_RELAXED) == 0) {
-    }
-    __atomic_fetch_sub(&sem_addr[1], 1, __ATOMIC_RELAXED);
+#if defined(UCK_CHLKC_MATH)
+    if constexpr (sync_math_risc)
 #endif
+    {
+#if defined(COMPILE_FOR_NCRISC)
+        constexpr uint32_t sync_value = sync_math_risc ? 4 : 3;
+        __atomic_fetch_add(&sem_addr[0], sync_value << 16, __ATOMIC_RELEASE);
+#elif defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+        while ((__atomic_load_n(&sem_addr[0], __ATOMIC_ACQUIRE) >> 16) == 0) {
+        }
+        __atomic_fetch_sub(&sem_addr[0], 1 << 16, __ATOMIC_RELEASE);
+#endif
+    }
 }
 
 // ============================================================================
-// CB read-pointer utilities (TRISC only)
+// CB read and write pointer override utilities (TRISC only)
 // ============================================================================
 
 #if defined(COMPILE_FOR_TRISC)
 
+// Read a CB's current read pointer as a byte address.
+FORCE_INLINE uint32_t get_cb_rd_ptr(uint32_t cb_id) {
+    return get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift;
+}
+
+// Read a CB's static buffer base L1 address in bytes. Stable across per-expert
+// push/pop and loop iterations. LocalCBInterface stores fifo_limit and
+// fifo_size; init sets fifo_limit = fifo_addr + fifo_size (see
+// tt_metal/hw/inc/internal/circular_buffer_init.h), so base = fifo_limit - fifo_size.
+FORCE_INLINE uint32_t get_cb_buf_addr(uint32_t cb_id) {
+    auto& cb = get_local_cb_interface(cb_id);
+    return (cb.fifo_limit - cb.fifo_size) << cb_addr_shift;
+}
+
+// Read a CB's page size in bytes.
+FORCE_INLINE uint32_t get_cb_page_size(uint32_t cb_id) {
+    return get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
+}
+
 // Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
 FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
     get_local_cb_interface(cb_id).fifo_rd_ptr = byte_address >> cb_addr_shift;
+}
+
+// Override a CB's write pointer to a byte address (converted to cb_addr_shift units).
+FORCE_INLINE void override_cb_wr_ptr(uint32_t cb_id, uint32_t byte_address) {
+    get_local_cb_interface(cb_id).fifo_wr_ptr = byte_address >> cb_addr_shift;
+    get_local_cb_interface(cb_id).fifo_wr_tile_ptr = 0;
 }
 
 #endif  // COMPILE_FOR_TRISC
@@ -205,12 +272,12 @@ FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
 #endif
 
     volatile uint32_t tt_l1_ptr* reconfig_sem = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]);
-    sync_riscs_enter(reconfig_sem);
+    sync_riscs_enter<false>(reconfig_sem);
 
     reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[256], 0);
     reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[257], 32);
 
-    sync_riscs_exit(reconfig_sem);
+    sync_riscs_exit<false>(reconfig_sem);
 #else
     return;
 #endif

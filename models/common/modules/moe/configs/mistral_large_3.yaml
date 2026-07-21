@@ -1,0 +1,28 @@
+# mistral_large_3
+mesh_shape: [16, 4]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 7168
+select_experts_k: 4
+num_routed_experts: 128
+num_shared_experts: 1
+has_bias: false
+
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# Mistral Large 3 router = linear → top-4 (by raw logit) → softmax over the selected, NO bias, no scale.
+# TTMoEGate's score_func=softmax is exactly that (rank by logit, then exp-over-selected; ≡ softmax-front +
+# renorm, Z cancels), scale 1.0. 128 experts → padded to the op's 256-face. (Like gpt_oss but bias-free.)
+n_group: 1
+score_func: softmax
+routed_scaling_factor: 1.0
+
+compute:
+  intermediate_size: 4096
+  activation_type: SILU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential
+  shared_expert_ids_to_devices: fully_replicated

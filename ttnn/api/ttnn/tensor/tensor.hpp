@@ -45,20 +45,11 @@ public:
     //                                  Hi Level APIs
     // ======================================================================================
     [[nodiscard]] explicit Tensor() = default;
-    [[nodiscard]] Tensor(const Tensor& other);
+    [[nodiscard]] Tensor(const Tensor& other) = default;
     [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(const Tensor& other);
+    Tensor& operator=(const Tensor& other) = default;
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
-
-    // Transitional constructor: use Tensor(HostTensor) instead.
-    //
-    // Accepts a pre-transition HostStorage (constructed without TensorSpec and
-    // TensorTopology) and assigns them during Tensor construction.
-    // Overrides any existing spec/topology in the HostStorage.
-    //
-    // TODO(#40348): Remove this.
-    [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     [[nodiscard]] explicit Tensor(DeviceStorage storage);
 
@@ -254,7 +245,7 @@ public:
     const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
-    // Throws if the tensor is not allocated on a device.
+    // Returns nullptr if the tensor is not allocated on a device (on host/ deallocated).
     distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
@@ -273,42 +264,8 @@ public:
     static std::uint64_t next_tensor_id();
 
 private:
-    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
-    // If not set, the tensor can either be on host or allocated on a single device.
-    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
     void deallocate_impl(bool force);
 };
-
-// The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
-    distributed::MeshCommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const void* src,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
-    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
-    Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
-
-[[deprecated("Use tt::tt_metal::(copy_to_device  or  copy_to_host)")]] void memcpy(
-    Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

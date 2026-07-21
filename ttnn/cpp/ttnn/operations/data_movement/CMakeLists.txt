@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_data_movement ${LIB_TYPE})
 add_library(TTNN::Ops::DataMovement ALIAS ttnn_op_data_movement)
 
-tt_reuse_precompile_headers(ttnn_op_data_movement TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_data_movement TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
@@ -13,36 +15,41 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    bcast/device/kernels/*
-    clone/device/kernels/*
-    concat/device/kernels/*
-    common/kernels/*
-    fill_pad/device/kernels/*
-    fill_rm/device/kernels/*
-    fold/device/kernels/*
-    gather/device/kernels/*
-    copy/device/kernels/*
-    indexed_fill/device/kernels/*
-    moe_expert_token_remap/device/kernels/*
-    moe_routing_remap/device/kernels/*
-    non_zero_indices/device/kernels/*
-    move/device/kernels/*
-    pad/device/kernels/*
-    permute/device/kernels/*
-    reshape_on_device/device/kernels/*
-    repeat/device/kernels/repeat_*_rm.cpp
-    reshape_view/device/device/*
-    scatter/device/kernels/*
-    sharded/device/kernels/*
-    sharded/reshard/device/kernels/*
-    sort/device/kernels/*
-    split/device/kernels/*
-    slice/device/kernels/*
-    tilize/device/kernels/*
-    tilize_with_val_padding/device/kernels/*
-    transpose/device/kernels/*
-    untilize/device/kernels/*
-    untilize_with_unpadding/device/kernels/*
+    bcast/device/kernels/*.cpp
+    clone/device/kernels/*.cpp
+    concat/device/kernels/*.cpp
+    common/kernels/*.hpp
+    fill_pad/device/kernels/*.cpp
+    fill_pad/device/kernels/*.hpp
+    fill_rm/device/kernels/*.cpp
+    fold/device/kernels/*.cpp
+    gather/device/kernels/*.cpp
+    gather/device/kernels/*.hpp
+    copy/device/kernels/*.cpp
+    indexed_fill/device/kernels/*.cpp
+    moe_expert_token_remap/device/kernels/*.cpp
+    moe_routing_remap/device/kernels/*.cpp
+    non_zero_indices/device/kernels/*.cpp
+    move/device/kernels/*.cpp
+    pad/device/kernels/*.cpp
+    pad/device/kernels/*.hpp
+    permute/device/kernels/*.cpp
+    reshape_on_device/device/kernels/*.cpp
+    repeat/device/kernels/*.cpp
+    roll/device/kernels/*.cpp
+    reshape_view/device/device/*.cpp
+    scatter/device/kernels/*.hpp
+    sharded/device/kernels/*.cpp
+    sharded/reshard/device/kernels/*.cpp
+    sort/device/kernels/*.cpp
+    sort/device/kernels/*.hpp
+    split/device/kernels/*.cpp
+    slice/device/kernels/*.cpp
+    tilize/device/kernels/*.cpp
+    tilize_with_val_padding/device/kernels/*.cpp
+    transpose/device/kernels/*.cpp
+    untilize/device/kernels/*.cpp
+    untilize_with_unpadding/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_data_movement
@@ -50,38 +57,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            bcast/bcast.hpp
-            bcast/bcast_types.hpp
-            concat/concat.hpp
-            copy/copy.hpp
-            copy/device/copy_device_operation.hpp
-            copy/device/copy_same_memory_config_program_factory.hpp
-            copy/device/copy_default_row_major_program_factory.hpp
-            copy/device/copy_default_tilized_program_factory.hpp
-            copy/device/copy_device_operation_types.hpp
-            fill_pad/fill_pad.hpp
-            fill_pad/device/fill_pad_device_operation.hpp
-            fill_rm/fill_rm.hpp
-            fill_rm/device/fill_rm_device_operation.hpp
-            move/device/move_device_operation.hpp
-            pad/pad.hpp
-            permute/permute.hpp
-            repeat/repeat.hpp
-            reshape_view/reshape.hpp
-            reshape_view/reshape_common.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-            sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
-            sharded/reshard/reshard.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
-            slice/slice.hpp
-            tilize_with_val_padding/tilize_with_val_padding.hpp
-            tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
-            transpose/transpose.hpp
-            untilize/untilize.hpp
-            untilize_with_unpadding/untilize_with_unpadding.hpp
+        FILES ${TTNN_OP_DATA_MOVEMENT_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -126,6 +102,7 @@ target_sources(
             concat/device/concat_program_factory.hpp
             concat/device/concat_s2i_program_factory.hpp
             concat/device/concat_s2s_multi_program_factory.hpp
+            concat/device/concat_block_sharded_program_factory.hpp
             concat/device/concat_s2s_rm_program_factory.hpp
             concat/device/concat_s2s_tiled_program_factory.hpp
             # copy/
@@ -152,7 +129,6 @@ target_sources(
             gather/gather_nanobind.hpp
             gather/device/gather_device_operation.hpp
             gather/device/gather_device_operation_types.hpp
-            gather/device/gather_program_factory.hpp
             gather/tosa/gather_tosa.hpp
             gather/tosa/gather_tosa_nanobind.hpp
             # indexed_fill/
@@ -161,6 +137,7 @@ target_sources(
             indexed_fill/device/indexed_fill_device_operation.hpp
             indexed_fill/device/indexed_fill_device_operation_types.hpp
             indexed_fill/device/indexed_fill_program_factory.hpp
+            indexed_fill/device/indexed_fill_utils.hpp
             # moe_expert_token_remap/
             moe_expert_token_remap/moe_expert_token_remap.hpp
             moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp
@@ -223,6 +200,9 @@ target_sources(
             # roll/
             roll/roll.hpp
             roll/roll_nanobind.hpp
+            roll/device/roll_device_operation.hpp
+            roll/device/roll_device_operation_types.hpp
+            roll/device/roll_program_factory.hpp
             # scatter/
             scatter/scatter.hpp
             scatter/scatter_nanobind.hpp
@@ -295,7 +275,6 @@ target_sources(
             tilize/device/tilize_multi_core_block_program_factory.hpp
             tilize/device/tilize_multi_core_default_program_factory.hpp
             tilize/device/tilize_multi_core_sharded_program_factory.hpp
-            tilize/device/tilize_multi_core_width_sharded_program_factory.hpp
             tilize/device/tilize_single_core_program_factory.hpp
             # tilize_with_val_padding/
             tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp
@@ -317,6 +296,7 @@ target_sources(
             transpose/device/transpose_hc_tiled_program_factory.hpp
             transpose/device/transpose_wh_program_factory.hpp
             transpose/device/transpose_wh_sharded_program_factory.hpp
+            transpose/device/transpose_utils.hpp
             transpose/device/transpose_wh_sharded_rm_program_factory.hpp
             # unsqueeze/
             unsqueeze/unsqueeze.hpp
@@ -348,176 +328,7 @@ target_sources(
             view/view.hpp
             view/view_nanobind.hpp
     PRIVATE
-        bcast/bcast.cpp
-        bcast/bcast_types.cpp
-        bcast/device/bcast_device_operation.cpp
-        bcast/device/bcast_multi_core_h_program_factory.cpp
-        bcast/device/bcast_sharded_h_program_factory.cpp
-        bcast/device/bcast_sharded_h_optimised_program_factory.cpp
-        bcast/device/bcast_multi_core_w_program_factory.cpp
-        bcast/device/bcast_multi_core_hw_program_factory.cpp
-        chunk/chunk.cpp
-        clone/clone.cpp
-        clone/device/clone_device_operation.cpp
-        clone/device/clone_program_factory.cpp
-        common/common.cpp
-        concat/concat.cpp
-        concat/device/concat_device_operation.cpp
-        concat/device/concat_program_factory.cpp
-        concat/device/concat_s2s_tiled_program_factory.cpp
-        concat/device/concat_s2s_rm_program_factory.cpp
-        concat/device/concat_s2s_multi_program_factory.cpp
-        concat/device/concat_s2i_program_factory.cpp
-        copy/copy.cpp
-        copy/device/copy_device_operation.cpp
-        copy/device/copy_same_memory_config_program_factory.cpp
-        copy/device/copy_default_row_major_program_factory.cpp
-        copy/device/copy_default_tilized_program_factory.cpp
-        expand/expand.cpp
-        fill_pad/device/fill_pad_device_operation.cpp
-        fill_pad/device/fill_pad_program_factory.cpp
-        fill_pad/fill_pad.cpp
-        fill_rm/device/fill_rm_device_operation.cpp
-        fill_rm/device/fill_rm_program_factory.cpp
-        fill_rm/fill_rm.cpp
-        fold/device/fold_device_op.cpp
-        fold/device/fold_multi_core_dram_program_factory.cpp
-        fold/device/fold_multi_core_program_factory.cpp
-        fold/fold.cpp
-        indexed_fill/device/indexed_fill_device_operation.cpp
-        indexed_fill/device/indexed_fill_program_factory.cpp
-        indexed_fill/indexed_fill.cpp
-        moe_expert_token_remap/moe_expert_token_remap.cpp
-        moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
-        moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
-        moe_routing_remap/moe_routing_remap.cpp
-        moe_routing_remap/device/moe_routing_remap_device_operation.cpp
-        moe_routing_remap/device/moe_routing_remap_program_factory.cpp
-        move/device/move_device_operation.cpp
-        move/device/move_program_factory.cpp
-        move/device/move_overlap_program_factory.cpp
-        move/device/move_sharded_program_factory.cpp
-        move/move.cpp
-        narrow/narrow.cpp
-        non_zero_indices/device/non_zero_indices_device_operation.cpp
-        non_zero_indices/device/non_zero_indices_program_factory.cpp
-        non_zero_indices/non_zero_indices.cpp
-        pad/device/pad_device_operation.cpp
-        pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
-        pad/device/pad_rm_reader_writer_multi_core_default_program_factory.cpp
-        pad/device/pad_rm_reader_writer_program_factory.cpp
-        pad/device/pad_rm_sharded_height_only_program_factory.cpp
-        pad/device/pad_rm_sharded_width_only_program_factory.cpp
-        pad/device/pad_tile_multicore_program_factory.cpp
-        pad/device/pad_tile_program_factory.cpp
-        pad/pad.cpp
-        permute/device/permute_device_operation.cpp
-        permute/device/permute_rm_program_factory.cpp
-        permute/device/permute_tiled_program_factory.cpp
-        permute/permute.cpp
-        repeat/device/repeat_program_factory_last_dim.cpp
-        repeat/device/repeat_program_factory_higher_dim.cpp
-        repeat/device/repeat_device_operation.cpp
-        repeat/repeat.cpp
-        repeat_interleave/repeat_interleave.cpp
-        reshape_on_device/device/reshape_op.cpp
-        reshape_on_device/device/reshape_tile_program_factory.cpp
-        reshape_on_device/device/reshape_rm_program_factory.cpp
-        reshape_on_device/reshape.cpp
-        reshape_view/device/reshape_rm_program_factory.cpp
-        reshape_view/device/reshape_tiled_program_factory.cpp
-        reshape_view/device/reshape_device_operation.cpp
-        reshape_view/reshape.cpp
-        roll/roll.cpp
-        scatter/scatter.cpp
-        scatter/tosa_scatter.cpp
-        scatter/device/scatter_device_operation.cpp
-        scatter/device/scatter_reduce_bfloat16_program_factory.cpp
-        scatter/device/scatter_program_factory.cpp
-        sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
-        sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
-        sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
-        sharded/reshard/device/reshard_device_operation.cpp
-        sharded/reshard/device/reshard_program_factory_same_width.cpp
-        sharded/reshard/device/reshard_program_factory_same_height.cpp
-        sharded/reshard/device/reshard_program_factory_generic.cpp
-        sharded/reshard/device/nd_reshard_program_factory_copy_pages.cpp
-        sharded/reshard/device/nd_reshard_program_factory_copy_local.cpp
-        sharded/reshard/reshard.cpp
-        sharded/sharded_common.cpp
-        sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.cpp
-        sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
-        sharded/sharded_to_interleaved/sharded_to_interleaved.cpp
-        sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.cpp
-        sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp
-        sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
-        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.cpp
-        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.cpp
-        sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
-        slice/device/slice_device_operation.cpp
-        slice/device/slice_program_factory_rm.cpp
-        slice/device/slice_program_factory_rm_sharded.cpp
-        slice/device/slice_program_factory_rm_stride.cpp
-        slice/device/slice_program_factory_tile.cpp
-        slice/device/slice_program_factory_tile_tensor_args.cpp
-        slice/slice.cpp
-        split/device/split_device_operation.cpp
-        split/device/split_program_factory.cpp
-        split/split.cpp
-        squeeze/squeeze.cpp
-        stack/stack.cpp
-        tilize/device/tilize_device_operation.cpp
-        tilize/device/tilize_multi_core_default_program_factory.cpp
-        tilize/device/tilize_multi_core_block_program_factory.cpp
-        tilize/device/tilize_single_core_program_factory.cpp
-        tilize/device/tilize_multi_core_sharded_program_factory.cpp
-        tilize/device/tilize_multi_core_width_sharded_program_factory.cpp
-        tilize/tilize.cpp
-        tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
-        tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
-        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
-        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
-        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
-        tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
-        tilize_with_val_padding/tilize_with_val_padding.cpp
-        transpose/device/transpose_device_operation.cpp
-        transpose/device/transpose_cn_program_factory.cpp
-        transpose/device/transpose_hc_rm_program_factory.cpp
-        transpose/device/transpose_hc_sharded_program_factory.cpp
-        transpose/device/transpose_hc_tiled_interleaved_program_factory.cpp
-        transpose/device/transpose_hc_tiled_program_factory.cpp
-        transpose/device/transpose_wh_program_factory.cpp
-        transpose/device/transpose_wh_sharded_program_factory.cpp
-        transpose/device/transpose_wh_sharded_rm_program_factory.cpp
-        transpose/transpose.cpp
-        unsqueeze/unsqueeze.cpp
-        untilize/device/untilize_device_operation.cpp
-        untilize/device/untilize_device_operation_types.cpp
-        untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.cpp
-        untilize/device/factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.cpp
-        untilize/device/factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.cpp
-        untilize/device/factories/untilize_multi_core_sub_core_grids_program_factory.cpp
-        untilize/device/factories/untilize_single_core_program_factory.cpp
-        untilize/device/factories/untilize_multi_core_block_program_factory.cpp
-        untilize/device/factories/untilize_multi_core_program_factory.cpp
-        untilize/device/factories/untilize_multi_core_nd_shard_input_program_factory.cpp
-        untilize/untilize.cpp
-        untilize_with_unpadding/device/untilize_with_unpadding_device_operation.cpp
-        untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
-        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory.cpp
-        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory.cpp
-        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.cpp
-        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.cpp
-        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.cpp
-        untilize_with_unpadding/untilize_with_unpadding.cpp
-        view/view.cpp
-        sort/sort.cpp
-        sort/device/sort_device_operation.cpp
-        sort/device/sort_program_factory.cpp
-        gather/gather.cpp
-        gather/device/gather_device_operation.cpp
-        gather/device/gather_program_factory.cpp
-        gather/tosa/gather_tosa.cpp
+        ${TTNN_OP_DATA_MOVEMENT_SRCS}
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
@@ -536,3 +347,19 @@ install(
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS})
+endif()

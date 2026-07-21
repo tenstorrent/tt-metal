@@ -21,6 +21,7 @@
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/sdpa_reduce_worker.hpp"
 #include "../../../unified_kernels/sdpa_reduce_forwarder.hpp"
+#include "../../../metadata/metadata.hpp"
 
 void kernel_main() {
     constexpr bool is_worker = get_named_compile_time_arg_val("is_worker") == 1;
@@ -55,13 +56,19 @@ void kernel_main() {
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
         if constexpr (ReaderCTArgs::position_enabled) {
-            reader_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+            volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+            reader_args.global_pos = metadata_ptr->position_id;
             reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         }
         Worker::Op<ReaderCTArgs> op;
-        op(reader_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_READER");
+            op(reader_args);
+        }
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -79,7 +86,10 @@ void kernel_main() {
             .rta_offset = per_core_rta_arg_idx,
         };
         Fwd::Op<FwdCTArgs> op;
-        op(fwd_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
+            op(fwd_args);
+        }
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -136,7 +146,10 @@ void kernel_main() {
         };
         per_core_rta_arg_idx += WriterCTArgs::scatter_num_rows * 2;  // x, y value per dest
         Worker::Op<WriterCTArgs> op;
-        op(writer_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_WRITER");
+            op(writer_args);
+        }
     } else {
         using Fwd = deepseek_b1_ops::SdpaReduceForwarder;
 
@@ -154,7 +167,10 @@ void kernel_main() {
             .rta_offset = per_core_rta_arg_idx,
         };
         Fwd::Op<FwdCTArgs> op;
-        op(fwd_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_FORWARDER");
+            op(fwd_args);
+        }
     }
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -175,6 +191,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("scale_fp32"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("num_l_chunks"),
+            get_named_compile_time_arg_val("compute_block_size"),
             get_named_compile_time_arg_val("position_enabled"),
             get_named_compile_time_arg_val("per_device_chunk_size"),
             get_named_compile_time_arg_val("final_reduction")>;
@@ -184,8 +201,11 @@ void kernel_main() {
 
         Worker::ComputeArgs compute_args;
         if constexpr (ComputeCTArgs::position_enabled) {
+            uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+            volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+            compute_args.global_pos = metadata_ptr->position_id;
             uint32_t per_core_rta_arg_idx = 0;
-            compute_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -194,7 +214,10 @@ void kernel_main() {
             compute_args.swap_r2_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         }
         Worker::Op<ComputeCTArgs> op;
-        op(compute_args);
+        {
+            DeviceZoneScopedN("SDPA_REDUCE_COMPUTE");
+            op(compute_args);
+        }
     }
     // else: forwarder TRISC is no-op
 #endif

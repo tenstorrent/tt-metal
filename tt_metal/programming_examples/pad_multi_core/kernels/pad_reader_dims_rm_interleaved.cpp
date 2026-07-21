@@ -59,7 +59,7 @@ void kernel_main() {
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
-    const auto s = TensorAccessor(src_args, src_addr, stick_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // Prepare pad pattern
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
@@ -77,18 +77,25 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
-            uint64_t read_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t read_noc_addr = s.get_noc_addr(i_stick);
             // Seed pad value in first word to guarantee padding when writer writes only stick_size_bytes
             *((volatile tt_l1_ptr uint32_t*)l1_write_addr) = packed_pad_value;
             if (read_stick) {
                 if constexpr (front_padding) {
                     noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
                     noc_async_read_barrier();
-                    memmove((void*)(l1_write_addr + stick_size_padded_front), (void*)(get_read_ptr(cb_pad_align)), (size_t)(stick_size_bytes));
+                    memmove(
+                        (void*)(l1_write_addr + stick_size_padded_front),
+                        (void*)(get_read_ptr(cb_pad_align)),
+                        (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
                     noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
                     noc_async_read_barrier();
                     noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+                    // Drain this loop-back read out of cb_pad_align before the next stick's read-in
+                    // overwrites that shared scratch, else the read-in can land while this read is still
+                    // sourcing from it (WAR on cb_pad_align).
+                    noc_async_read_barrier();
                 } else {
                     noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
                 }

@@ -9,14 +9,14 @@
 
 namespace ttml::metal::ops::sdpa_bw::device::q {
 
-struct operation_attributes_t {
+struct SDPABackwardQParams {
     AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
 };
 
-struct tensor_args_t {
+struct SDPABackwardQInputs {
     const ttnn::Tensor& grad_output;               // Gradient w.r.t. output
-    const ttnn::Tensor& attn_output;               // sdap forward output (needed for gradients)
+    const ttnn::Tensor& attn_output;               // sdpa forward output (needed for gradients)
     const ttnn::Tensor& query;                     // Input Q (needed for gradients)
     const ttnn::Tensor& key;                       // Input K (needed for gradients)
     const ttnn::Tensor& value;                     // Input V (needed for gradients)
@@ -25,10 +25,15 @@ struct tensor_args_t {
 
     // Preallocated gradient tensor (optional)
     std::optional<ttnn::Tensor> preallocated_grad_query;
+    // Preallocated u_scaler tensor for sharing with KV kernel (optional)
+    std::optional<ttnn::Tensor> preallocated_u_scaler;
 };
 
-using tensor_return_value_t = ttnn::Tensor;  // [grad_Q]
+using operation_attributes_t = SDPABackwardQParams;
+using tensor_args_t = SDPABackwardQInputs;
 
-using spec_return_value_t = ttnn::TensorSpec;
+using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_Q, u_scaler]
+
+using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>;
 
 }  // namespace ttml::metal::ops::sdpa_bw::device::q

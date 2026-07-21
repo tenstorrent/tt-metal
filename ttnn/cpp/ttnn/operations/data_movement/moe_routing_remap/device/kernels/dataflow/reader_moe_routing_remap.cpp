@@ -2,13 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "api/numeric/bfloat16.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t routing_weights_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t local_weights_idxs_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t routing_weights_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t local_weights_idxs_dfb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_cluster_experts = get_compile_time_arg_val(2);
     constexpr uint32_t num_non_zero_per_device = get_compile_time_arg_val(3);
     constexpr uint32_t weight_datum_size_bytes = get_compile_time_arg_val(4);
@@ -22,21 +25,28 @@ void kernel_main() {
     const auto routing_weights_base_address = get_arg_val<uint32_t>(0);
     const auto device_weights_count_offset = get_arg_val<uint32_t>(1);
 
-    const auto routing_weights_addrgen =
-        TensorAccessor(routing_weights_args, routing_weights_base_address, routing_weights_page_size_bytes);
+    const auto routing_weights_addrgen = TensorAccessor(routing_weights_args, routing_weights_base_address);
 
-    cb_reserve_back(routing_weights_cb_id, 1);
-    const uint32_t routing_weights_l1_addr = get_read_ptr(routing_weights_cb_id);
-    const uint64_t routing_weights_noc_addr = get_noc_addr(0, routing_weights_addrgen);
-    noc_async_read(routing_weights_noc_addr, routing_weights_l1_addr, routing_weights_page_size_bytes);
+    Noc noc;
+    DataflowBuffer routing_weights_dfb(routing_weights_dfb_id);
+    DataflowBuffer local_weights_idxs_dfb(local_weights_idxs_dfb_id);
 
-    cb_reserve_back(local_weights_idxs_cb_id, 1);
-    const uint32_t local_weights_idxs_l1_addr = get_write_ptr(local_weights_idxs_cb_id);
+    routing_weights_dfb.reserve_back(1);
+    const uint32_t routing_weights_l1_addr = routing_weights_dfb.get_write_ptr();
+    noc.async_read(
+        routing_weights_addrgen,
+        routing_weights_dfb,
+        routing_weights_page_size_bytes,
+        {.page_id = 0, .offset_bytes = 0},
+        {.offset_bytes = 0});
+
+    local_weights_idxs_dfb.reserve_back(1);
+    const uint32_t local_weights_idxs_l1_addr = local_weights_idxs_dfb.get_write_ptr();
 
     auto routing_weights_ptr = reinterpret_cast<volatile tt_l1_ptr weight_addr_t*>(routing_weights_l1_addr);
     auto local_weight_idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_weights_idxs_l1_addr);
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
     for (uint32_t i = 0, weight_offset_count = 0, device_weights_count = 0; i < num_cluster_experts; ++i) {
         const auto& val = routing_weights_ptr[i];
         if (val != 0) {
@@ -50,6 +60,6 @@ void kernel_main() {
             break;
         }
     }
-    cb_push_back(routing_weights_cb_id, 1);
-    cb_push_back(local_weights_idxs_cb_id, 1);
+    routing_weights_dfb.push_back(1);
+    local_weights_idxs_dfb.push_back(1);
 }

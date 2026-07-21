@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -55,31 +55,31 @@ void kernel_main() {
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_pred(predicate_cb);
-    experimental::CircularBuffer cb_true(true_cb);
-    experimental::CircularBuffer cb_false(false_cb);
+    Noc noc;
+    CircularBuffer cb_pred(predicate_cb);
+    CircularBuffer cb_true(true_cb);
+    CircularBuffer cb_false(false_cb);
 
 #if SRC_SHARDED_A
     cb_pred.reserve_back(src_num_tiles);
     cb_pred.push_back(src_num_tiles);
 #else
-    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 #endif
 #if SRC_SHARDED_B
     cb_true.reserve_back(src_num_tiles_b);
     cb_true.push_back(src_num_tiles_b);
 #else
-    const uint32_t src1_tile_bytes = get_tile_size(true_cb);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    const uint32_t src1_tile_bytes = cb_true.get_tile_size();
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 #endif
 #if SRC_SHARDED_C
     cb_false.reserve_back(src_num_tiles_c);
     cb_false.push_back(src_num_tiles_c);
 #else
-    const uint32_t src2_tile_bytes = get_tile_size(false_cb);
-    const auto s2 = TensorAccessor(src2_args, src2_addr, src2_tile_bytes);
+    const uint32_t src2_tile_bytes = cb_false.get_tile_size();
+    const auto s2 = TensorAccessor(src2_args, src2_addr);
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -152,9 +152,9 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if SRC_SCALAR_A
-                        FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT(cb_pred.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_pred.get_write_ptr());
 #endif
                         cb_pred.push_back(onetile);
 #endif
@@ -171,9 +171,9 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if SRC_SCALAR_B
-                        FILL_TILE_WITH_FIRST_ELEMENT_B(true_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT_B(cb_true.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_true.get_write_ptr());
 #endif
                         cb_true.push_back(onetile);
 #endif
@@ -190,9 +190,9 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if SRC_SCALAR_C
-                        FILL_TILE_WITH_FIRST_ELEMENT_C(false_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT_C(cb_false.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN_C(false_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN_C(cb_false.get_write_ptr());
 #endif
                         cb_false.push_back(onetile);
 #endif
@@ -207,7 +207,7 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_ROW_BCAST_A
-                            FILL_TILE_WITH_FIRST_ROW(predicate_cb);
+                            FILL_TILE_WITH_FIRST_ROW(cb_pred.get_write_ptr());
 #endif
                             cb_pred.push_back(onetile);
 #endif
@@ -220,7 +220,7 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_ROW_BCAST_B
-                            FILL_TILE_WITH_FIRST_ROW_B(true_cb);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_true.get_write_ptr());
 #endif
                             cb_true.push_back(onetile);
 #endif
@@ -233,7 +233,7 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_ROW_BCAST_C
-                            FILL_TILE_WITH_FIRST_ROW_C(false_cb);
+                            FILL_TILE_WITH_FIRST_ROW_C(cb_false.get_write_ptr());
 #endif
                             cb_false.push_back(onetile);
 #endif

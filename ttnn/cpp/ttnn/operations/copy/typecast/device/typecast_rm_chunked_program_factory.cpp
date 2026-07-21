@@ -17,10 +17,12 @@ using namespace tt::constants;
 
 namespace {
 struct ChunkSizeConfig {
-    uint32_t input_full_chunk_size_bytes;
-    uint32_t output_full_chunk_size_bytes;
-    uint32_t input_partial_chunk_size_bytes;
-    uint32_t output_partial_chunk_size_bytes;
+    uint32_t input_full_chunk_size_bytes;          // actual bytes read from DRAM per full chunk
+    uint32_t output_full_chunk_size_bytes;         // actual bytes written to DRAM per full chunk
+    uint32_t input_partial_chunk_size_bytes;       // actual bytes read from DRAM for partial chunk
+    uint32_t output_partial_chunk_size_bytes;      // actual bytes written to DRAM for partial chunk
+    uint32_t padded_input_full_chunk_size_bytes;   // CB page size (rounded up to 32-element boundary)
+    uint32_t padded_output_full_chunk_size_bytes;  // CB page size (rounded up to 32-element boundary)
     uint32_t full_chunks_per_row;
     uint32_t partial_chunks_per_row;
 };
@@ -30,9 +32,14 @@ ChunkSizeConfig calculate_chunk_config(
     constexpr uint32_t max_elements_per_chunk = 1024;
     const uint32_t elements_per_full_chunk = std::min(max_elements_per_chunk, row_width_elements);
 
-    // Calculate chunk sizes in bytes (logical size, not including padding)
+    // Actual chunk sizes in bytes (for DRAM reads/writes)
     const uint32_t input_full_chunk_size_bytes = elements_per_full_chunk * input_element_size;
     const uint32_t output_full_chunk_size_bytes = elements_per_full_chunk * output_element_size;
+
+    // CB page sizes: round up to next multiple of 32 elements for the unpacker.
+    const uint32_t padded_full_elements = tt::align(elements_per_full_chunk, 32u);
+    const uint32_t padded_input_full_chunk_size_bytes = padded_full_elements * input_element_size;
+    const uint32_t padded_output_full_chunk_size_bytes = padded_full_elements * output_element_size;
 
     // Calculate how many chunks per row
     const uint32_t full_chunks_per_row = row_width_elements / elements_per_full_chunk;
@@ -46,6 +53,8 @@ ChunkSizeConfig calculate_chunk_config(
         .output_full_chunk_size_bytes = output_full_chunk_size_bytes,
         .input_partial_chunk_size_bytes = input_partial_chunk_size_bytes,
         .output_partial_chunk_size_bytes = output_partial_chunk_size_bytes,
+        .padded_input_full_chunk_size_bytes = padded_input_full_chunk_size_bytes,
+        .padded_output_full_chunk_size_bytes = padded_output_full_chunk_size_bytes,
         .full_chunks_per_row = full_chunks_per_row,
         .partial_chunks_per_row = partial_chunks_per_row,
     };
@@ -53,7 +62,7 @@ ChunkSizeConfig calculate_chunk_config(
 
 }  // anonymous namespace
 
-TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_descriptor(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -64,7 +73,7 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "This factory is only for ROW_MAJOR layout");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_element_size = tt::datum_size(cb_data_format_input);
@@ -89,6 +98,8 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
     const uint32_t output_full_chunk_size_bytes = chunk_config.output_full_chunk_size_bytes;
     const uint32_t input_partial_chunk_size_bytes = chunk_config.input_partial_chunk_size_bytes;
     const uint32_t output_partial_chunk_size_bytes = chunk_config.output_partial_chunk_size_bytes;
+    const uint32_t padded_input_full_chunk_size_bytes = chunk_config.padded_input_full_chunk_size_bytes;
+    const uint32_t padded_output_full_chunk_size_bytes = chunk_config.padded_output_full_chunk_size_bytes;
     const uint32_t full_chunks_per_row = chunk_config.full_chunks_per_row;
     const uint32_t partial_chunks_per_row = chunk_config.partial_chunks_per_row;
 
@@ -97,56 +108,76 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
     // Split work by rows (each core handles complete rows with both full and partial chunks)
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, true);
+    (void)num_cores;
 
-    constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
 
-    tt::tt_metal::CircularBufferConfig cb_input_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_pages * input_full_chunk_size_bytes, {{input_cb_index, cb_data_format_input}})
-            .set_page_size(input_cb_index, input_full_chunk_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
+    // Additionally align CB page sizes to the source/destination buffer alignment so that the
+    // double-buffered CB pages share the same residue (mod buffer alignment) as their DRAM pages.
+    // This is required by the NOC: DRAM->L1 reads enforce (src_addr & alignment-1) ==
+    // (dst_addr & alignment-1).  On Blackhole the DRAM alignment is 64B; without this an
+    // 8-bit input with a 32-element padded chunk yields a 32B page, leaving the second
+    // double-buffered page mis-aligned and causing ttsim NOC alignment crashes
+    // (see test_typecast_row_major_vs_tile_layout[UINT8_TO_BFLOAT16-8x2x64x32]).
+    const uint32_t input_cb_page_size_bytes = tt::align(padded_input_full_chunk_size_bytes, src_buffer->alignment());
+    const uint32_t output_cb_page_size_bytes = tt::align(padded_output_full_chunk_size_bytes, dst_buffer->alignment());
 
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_pages * output_full_chunk_size_bytes, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, output_full_chunk_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = num_input_pages * input_cb_page_size_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = input_cb_index,
+            .data_format = cb_data_format_input,
+            .page_size = input_cb_page_size_bytes,
+        }}},
+    });
 
-    // Create compile-time args for unified kernels (handle both full and partial chunks)
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = num_output_pages * output_cb_page_size_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = cb_data_format_output,
+            .page_size = output_cb_page_size_bytes,
+        }}},
+    });
+
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,                  // cb_id_in
-        input_full_chunk_size_bytes,     // full_chunk_size_bytes
-        full_chunks_per_row,             // full_chunks_per_row
-        input_partial_chunk_size_bytes,  // partial_chunk_size_bytes
-        partial_chunks_per_row,          // partial_chunks_per_row (0 or 1)
-        src_buffer->page_size()          // row_page_size_bytes
+        input_cb_index,                  // 0: cb_id_in
+        full_chunks_per_row,             // 1: full_chunks_per_row
+        partial_chunks_per_row,          // 2: partial_chunks_per_row (0 or 1)
+        input_full_chunk_size_bytes,     // 3: full_chunk_size_bytes (DRAM read size)
+        input_partial_chunk_size_bytes,  // 4: partial_chunk_size_bytes (DRAM read size)
     };
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        output_cb_index,                  // cb_id_out
-        output_full_chunk_size_bytes,     // full_chunk_size_bytes
-        full_chunks_per_row,              // full_chunks_per_row
-        output_partial_chunk_size_bytes,  // partial_chunk_size_bytes
-        partial_chunks_per_row,           // partial_chunks_per_row (0 or 1)
-        dst_buffer->page_size()           // row_page_size_bytes
+        output_cb_index,                  // 0: cb_id_out
+        full_chunks_per_row,              // 1: full_chunks_per_row
+        partial_chunks_per_row,           // 2: partial_chunks_per_row (0 or 1)
+        output_full_chunk_size_bytes,     // 3: full_chunk_size_bytes (DRAM write size)
+        output_partial_chunk_size_bytes,  // 4: partial_chunk_size_bytes (DRAM write size)
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    tt::tt_metal::KernelHandle typecast_reader_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_typecast_rm_chunked.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    tt::tt_metal::KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_typecast_rm_chunked.cpp";
+    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle typecast_writer_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/writer_typecast_rm_chunked.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    tt::tt_metal::KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/writer_typecast_rm_chunked.cpp";
+    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Create compute kernels - compute per_core_block_cnt as total chunks (full + partial) per core
     const uint32_t chunks_per_row_total = full_chunks_per_row + partial_chunks_per_row;
@@ -182,34 +213,40 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
 
     const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
+    std::optional<tt::tt_metal::KernelDescriptor> compute_desc_group_1;
     if (!core_group_1.ranges().empty()) {
-        tt::tt_metal::CreateKernel(
-            program,
-            path,
-            core_group_1,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .bfp8_pack_precise = args.bfp8_pack_precise,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_1,
-                .defines = unary_defines});
+        compute_desc_group_1.emplace();
+        compute_desc_group_1->kernel_source = path;
+        compute_desc_group_1->source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_group_1->core_ranges = core_group_1;
+        compute_desc_group_1->compile_time_args = compute_kernel_args_group_1;
+        for (const auto& [name, value] : unary_defines) {
+            compute_desc_group_1->defines.emplace_back(name, value);
+        }
+        compute_desc_group_1->config = tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .bfp8_pack_precise = args.bfp8_pack_precise,
+            .math_approx_mode = math_approx_mode};
     }
 
+    std::optional<tt::tt_metal::KernelDescriptor> compute_desc_group_2;
     if (!core_group_2.ranges().empty()) {
-        tt::tt_metal::CreateKernel(
-            program,
-            path,
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .bfp8_pack_precise = args.bfp8_pack_precise,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = unary_defines});
+        compute_desc_group_2.emplace();
+        compute_desc_group_2->kernel_source = path;
+        compute_desc_group_2->source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_group_2->core_ranges = core_group_2;
+        compute_desc_group_2->compile_time_args = compute_kernel_args_group_2;
+        for (const auto& [name, value] : unary_defines) {
+            compute_desc_group_2->defines.emplace_back(name, value);
+        }
+        compute_desc_group_2->config = tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .bfp8_pack_precise = args.bfp8_pack_precise,
+            .math_approx_mode = math_approx_mode};
     }
 
     // Assign runtime args to cores (distributing rows)
@@ -221,72 +258,22 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
         uint32_t num_rows_for_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t start_row_id = row_idx;
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, typecast_reader_kernel, core, {src_buffer->address(), num_rows_for_core, start_row_id});
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, typecast_writer_kernel, core, {dst_buffer->address(), num_rows_for_core, start_row_id});
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_rows_for_core, start_row_id});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_for_core, start_row_id});
 
         row_idx += num_rows_for_core;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {typecast_reader_kernel,
-         typecast_writer_kernel,
-         num_cores,
-         full_chunks_per_row,
-         input_full_chunk_size_bytes,
-         output_full_chunk_size_bytes}};
-}
-
-void TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TypecastParams& /*operation_attributes*/,
-    const TypecastInputs& tensor_args,
-    Tensor& output) {
-    const tt::tt_metal::KernelHandle typecast_reader_kernel_id =
-        cached_program.shared_variables.typecast_reader_kernel_id;
-    const tt::tt_metal::KernelHandle typecast_writer_kernel_id =
-        cached_program.shared_variables.typecast_writer_kernel_id;
-    const uint32_t num_cores = cached_program.shared_variables.num_cores;
-
-    auto& program = cached_program.program;
-
-    const Tensor& input = tensor_args.input;
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    // Recalculate row distribution (in case tensor changed)
-    const uint32_t num_rows = src_buffer->num_pages();
-    const uint32_t num_rows_per_core = (num_rows + num_cores - 1) / num_cores;
-
-    // Reconstruct all_cores CoreRangeSet to use corerange_to_cores for consistency
-    const CoreCoord compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
-    const CoreRangeSet all_cores =
-        tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
-    auto cores_vec = corerange_to_cores(all_cores, std::nullopt, true);
-
-    uint32_t num_rows_written = 0;
-    for (const CoreCoord& core : cores_vec) {
-        uint32_t rows_for_this_core = std::min(num_rows_per_core, num_rows - num_rows_written);
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, typecast_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = rows_for_this_core;
-            runtime_args[2] = num_rows_written;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, typecast_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            runtime_args[1] = rows_for_this_core;
-            runtime_args[2] = num_rows_written;
-        }
-
-        num_rows_written += rows_for_this_core;
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    if (compute_desc_group_1.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_group_1));
     }
+    if (compute_desc_group_2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_group_2));
+    }
+
+    return desc;
 }
 
 }  // namespace ttnn::prim

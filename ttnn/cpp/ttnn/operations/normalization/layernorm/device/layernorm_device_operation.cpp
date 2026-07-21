@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
@@ -55,9 +56,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
         TT_FATAL(
-            a.padded_shape() == b.value().padded_shape(),
-            "Input and residual shapes must match, got input: {} vs residual: {}",
+            a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
+            "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
+            "logical={} padded={}",
+            a.logical_shape(),
             a.padded_shape(),
+            b.value().logical_shape(),
             b.value().padded_shape());
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "Input and residual tensors must be on same device");
@@ -66,9 +70,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
-                "{} != {}",
+                a.padded_shape()[-1] == gamma.value().padded_shape()[-1] &&
+                    gamma.value().logical_shape()[-1] >= a.logical_shape()[-1],
+                "Input and gamma padded widths must match and gamma logical width must be >= input logical width "
+                "(otherwise valid input columns would be multiplied by gamma padding). Got input: logical[-1]={} "
+                "padded[-1]={} vs gamma: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                gamma.value().logical_shape()[-1],
                 gamma.value().padded_shape()[-1]);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -110,9 +119,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.padded_shape()[-1] == beta.value().padded_shape()[-1],
-                "Input and beta inner dimensions must match, got input: {} vs beta: {}",
+                a.padded_shape()[-1] == beta.value().padded_shape()[-1] &&
+                    beta.value().logical_shape()[-1] >= a.logical_shape()[-1],
+                "Input and beta padded widths must match and beta logical width must be >= input logical width "
+                "(otherwise valid input columns would be offset by beta padding). Got input: logical[-1]={} "
+                "padded[-1]={} vs beta: logical[-1]={} padded[-1]={}",
+                a.logical_shape()[-1],
                 a.padded_shape()[-1],
+                beta.value().logical_shape()[-1],
                 beta.value().padded_shape()[-1]);
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -160,6 +174,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
         }
         const auto shard_spec = a.shard_spec().value();
+        // The width-block count is derived from this grid and used as a divisor when reducing over the
+        // logical width, so the grid must own at least one core.
+        TT_FATAL(shard_spec.grid.num_cores() >= 1, "Sharded layernorm requires a non-empty shard grid");
         const auto bbox = shard_spec.grid.bounding_box();
         uint32_t bbox_num_cores =
             (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
@@ -171,6 +188,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox_num_cores,
             bbox.end_coord.x - bbox.start_coord.x + 1,
             bbox.end_coord.y - bbox.start_coord.y + 1);
+
+        const auto& sharded_pc = std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+        // block_w is the per-core width in tiles and is used as a modulo divisor when indexing the
+        // per-tile column mask, so it must be at least one tile.
+        TT_FATAL(sharded_pc.block_w >= 1, "Sharded layernorm requires block_w >= 1 (per-core width in tiles)");
+        ttnn::operations::normalization::detail::validate_sharded_input(a, sharded_pc.compute_with_storage_grid_size);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -300,10 +323,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w,
                             tt::div_up(Kt, num_cores_c));
                         TT_FATAL(
-                            Mt / num_cores_r == program_config.block_h,
-                            "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
+                            tt::div_up(Mt, num_cores_r) == program_config.block_h,
+                            "block_h ({}) must equal ceil(Mt / num_cores_r) ({}); Mt={}, num_cores_r={}",
                             program_config.block_h,
-                            Mt / num_cores_r);
+                            tt::div_up(Mt, num_cores_r),
+                            Mt,
+                            num_cores_r);
                     } else {
                         TT_FATAL(
                             tt::div_up(Kt, num_cores_r) == program_config.block_w,
@@ -311,10 +336,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w,
                             tt::div_up(Kt, num_cores_r));
                         TT_FATAL(
-                            Mt / num_cores_c == program_config.block_h,
-                            "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
+                            tt::div_up(Mt, num_cores_c) == program_config.block_h,
+                            "block_h ({}) must equal ceil(Mt / num_cores_c) ({}); Mt={}, num_cores_c={}",
                             program_config.block_h,
-                            Mt / num_cores_c);
+                            tt::div_up(Mt, num_cores_c),
+                            Mt,
+                            num_cores_c);
                     }
                 }
                 if (b.has_value()) {
@@ -383,7 +410,10 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                     CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
-                    auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        operation_attributes.output_mem_config.memory_layout(),
+                        operation_attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
@@ -401,7 +431,8 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
 
                 auto mem_config = operation_attributes.output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+                    mem_config = tt::tt_metal::MemoryConfig(
+                        mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
                 return ttnn::TensorSpec(

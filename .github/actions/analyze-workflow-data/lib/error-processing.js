@@ -184,22 +184,27 @@ function resolveOwnersForSnippet(snippet, workflowName) {
         snippet.original_owners = normalized;
         // Add infra if not already present
         snippet.owner = hasInfra ? normalized : [...normalized, DEFAULT_INFRA_OWNER];
+        snippet.is_default_owner = false; // infra added due to missing test, but original owners existed
       } else {
         snippet.owner = [DEFAULT_INFRA_OWNER];
+        snippet.is_default_owner = true; // no original owners — infra is the default fallback
       }
       snippet.owner_source = hadOriginalOwners ? 'infra_due_to_missing_test' : 'infra_due_to_missing_test_no_original';
     } else if (!hadOriginalOwners) {
       // No mapping owners found: default to infra only
       snippet.owner = [DEFAULT_INFRA_OWNER];
       snippet.owner_source = 'infra_due_to_no_owner';
+      snippet.is_default_owner = true; // infra is the default fallback — no explicit owner found
     } else {
       // Normal case: keep resolved owners
       snippet.owner = normalized;
       snippet.owner_source = 'resolved_mapping';
+      snippet.is_default_owner = false; // owner explicitly defined in owners.json/reorg
     }
   } catch (_) {
     snippet.owner = [DEFAULT_INFRA_OWNER];
     snippet.owner_source = 'infra_due_to_error';
+    snippet.is_default_owner = true; // error path — infra is the default fallback
   }
 }
 

@@ -88,6 +88,19 @@ class Transformer(LightweightModule):
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
+        # Device tensors used to build dynamic slice params for prefill RoPE slicing.
+        # Keeps chunk_start_idx-driven slicing inside the traced graph.
+        self._tt_seq_len_buffer = ttnn.from_torch(
+            torch.tensor([1, 1, self.args.max_seq_len, self.args.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tt_slice_start_zeros_4 = ttnn.from_torch(
+            torch.tensor([0, 0, 0, 0], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         self.layers = [
             TransformerBlock(
                 args=args,
@@ -161,7 +174,9 @@ class Transformer(LightweightModule):
         logits = self._apply_norm_and_lm_head(logits)
         return logits
 
-    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+    def extract_last_tokens_batched_prefill(
+        self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
+    ):
         """Extract each user's last-token hidden state from batched prefill output.
 
         Reads hidden states to host, extracts the relevant row for each user,
@@ -176,7 +191,8 @@ class Transformer(LightweightModule):
             prefill_seq_len: padded sequence length per user
 
         Returns:
-            user_tokens: [1, 1, padded_batch, dim_per_device] per device, column-sharded, TILE_LAYOUT
+            user_tokens: [1, 1, target_batch or padded_batch, dim_per_device] per device,
+            column-sharded, TILE_LAYOUT
         """
         active_indices = [lt for lt in last_token_idx_list if lt > 0]
         all_same = len(set(active_indices)) <= 1
@@ -205,6 +221,20 @@ class Transformer(LightweightModule):
                 lt_idx = last_token_idx_list[slot]
                 rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
             combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        target_batch = padded_batch if target_batch is None else target_batch
+        if target_batch < padded_batch:
+            raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
+        if target_batch > padded_batch:
+            padded_combined = torch.zeros(
+                1,
+                1,
+                target_batch,
+                combined.shape[-1],
+                dtype=combined.dtype,
+            )
+            padded_combined[:, :, :padded_batch, :] = combined
+            combined = padded_combined
 
         user_tokens = ttnn.from_torch(
             combined,
@@ -255,7 +285,14 @@ class Transformer(LightweightModule):
         return hidden_states
 
     def prepare_prefill_inputs_trace(
-        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
+        self,
+        tokens,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        batch_size=1,
+        user_id=0,
+        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -265,16 +302,23 @@ class Transformer(LightweightModule):
             tokens,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             trace_enabled=True,
             batch_size=batch_size,
             user_id=user_id,
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(
+        self,
+        tokens,
+        tt_page_table,
+        tt_chunk_page_table,
+        tt_chunk_start_idx,
+    ):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table
+        return tt_tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def prepare_inputs_prefill(
         self,
@@ -282,6 +326,7 @@ class Transformer(LightweightModule):
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
+        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
@@ -392,12 +437,24 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
+        if chunk_start_idx is not None and int(chunk_start_idx) > 0:
+            chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
+            tt_chunk_start_idx = ttnn.from_torch(
+                chunk_start_idx_tensor,
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_start_idx = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_chunk_start_idx,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -563,11 +620,19 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_layer=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if page_tables_per_layer is None:
+            # vLLM hybrid bridges (HybridAttentionForCausalLM subclasses) stash
+            # the per-layer list on the model handle for the duration of a
+            # forward call rather than threading the kwarg through Generator's
+            # many ttnn_prefill_forward call sites. Pick it up here when set.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         return self.forward(
             x,
             current_pos=None,
@@ -581,11 +646,130 @@ class Transformer(LightweightModule):
             get_last_token=get_last_token,
             kv_cache=kv_cache,
             batch_size=batch_size,
+            page_tables_per_layer=page_tables_per_layer,
         )
+
+    def _page_table_mesh_mapper(self, B):
+        """Mesh mapper for per-layer page tables, matching the layout that
+        :meth:`prepare_decode_inputs_host` uses for the legacy single
+        ``page_table`` kwarg: shard the batch dim across mesh axis 1 on
+        Galaxy when ``B>1``, replicate otherwise. The hybrid bridge
+        chunks the global page table per-DP before calling into a
+        submesh, so ``B`` here is the per-DP batch — same value the
+        legacy path sees on entry to ``prepare_decode_inputs_host``.
+        """
+        return ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+            mesh_shape=self.args.cluster_shape,
+        )
+
+    def _page_tables_to_ttnn(self, page_tables_per_layer):
+        """Resolve a per-layer list of ``torch.Tensor`` page tables to a
+        list of *persistent* ttnn device tensors (allocate-only).
+
+        Tracing bakes each input tensor's device address into the captured
+        graph; replaying the trace reads from those exact addresses
+        regardless of any new ttnn objects created on the Python side.
+        Allocating fresh device tensors on every call would therefore
+        make traced inference read stale memory at the original
+        addresses, so we lazily allocate one persistent device tensor per
+        layer on first use and *only* update contents from outside the
+        traced ``ttnn_*_forward`` calls (writes are forbidden during trace
+        capture). The hybrid bridge calls
+        :meth:`update_persistent_per_layer_page_tables` *before* invoking
+        ``Generator``'s decode/prefill which executes traces — that's
+        where content updates happen.
+
+        First call (warmup compile) populates the persistent buffers from
+        the input torch tensors; subsequent calls return the existing
+        buffers unchanged. ``None`` entries propagate; already-ttnn
+        entries pass through.
+        """
+        if page_tables_per_layer is None:
+            return None
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        n = len(page_tables_per_layer)
+        if persistent is None or len(persistent) != n:
+            persistent = []
+            for pt in page_tables_per_layer:
+                if pt is None:
+                    persistent.append(None)
+                    continue
+                if isinstance(pt, ttnn.Tensor):
+                    persistent.append(pt)
+                    continue
+                persistent.append(
+                    ttnn.from_torch(
+                        pt,
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
+                    )
+                )
+            self._persistent_per_layer_page_tables = persistent
+        return persistent
+
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+        """Update content of persistent per-layer page_table device
+        tensors in place. Called by the hybrid bridge *before* invoking
+        ``Generator``'s decode/prefill so traced replay observes the new
+        block IDs at the captured addresses. Must be called outside trace
+        capture (writes forbidden inside).
+
+        No-op if persistent tensors haven't been allocated yet (first
+        call goes through :meth:`_page_tables_to_ttnn`'s allocation).
+        """
+        if page_tables_per_layer is None:
+            return
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        if persistent is None or len(persistent) != len(page_tables_per_layer):
+            return
+        for i, pt in enumerate(page_tables_per_layer):
+            if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
+                continue
+            host_pt = ttnn.from_torch(
+                pt,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._page_table_mesh_mapper(pt.shape[0]),
+            )
+            ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
+
+    def _slice_prefill_rot_mats(self, rot_mats, chunk_start_idx):
+        """Slices full prefill RoPE mats on device to [chunk_start_idx, max_seq_len)."""
+        if rot_mats is None or chunk_start_idx is None or not isinstance(chunk_start_idx, ttnn.Tensor):
+            return rot_mats
+
+        full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
+        if full_rot_cos.shape[2] != self.args.max_seq_len:
+            # Already sliced in input prep path; leave as-is.
+            return rot_mats
+
+        z = self._tt_slice_start_zeros_4
+        tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
+
+        rot_cos_slice = ttnn.slice(
+            input_tensor=full_rot_cos,
+            starts=tt_slice_starts,
+            ends=self._tt_seq_len_buffer,
+            slice_dim=2,
+            num_devices=self.args.num_devices,
+        )
+        rot_sin_slice = ttnn.slice(
+            input_tensor=full_rot_sin,
+            starts=tt_slice_starts,
+            ends=self._tt_seq_len_buffer,
+            slice_dim=2,
+            num_devices=self.args.num_devices,
+        )
+        return (rot_cos_slice, rot_sin_slice)
 
     def ttnn_decode_forward(
         self,
@@ -594,8 +778,8 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
+        page_tables_per_layer=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -606,6 +790,12 @@ class Transformer(LightweightModule):
 
         x_embed = self._transform_decode_inputs_device(x)
 
+        if page_tables_per_layer is None:
+            # See ttnn_prefill_forward: hybrid bridges stash the per-layer list
+            # on the model when active, since Generator doesn't thread the kwarg.
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -614,19 +804,16 @@ class Transformer(LightweightModule):
             mode=Mode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return tt_logits
-            tt_toks, tt_log_probs = self.sampling.sample(
-                tt_logits,
-                tt_out_tok=x,
-                enable_trace=False,
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "ttnn_decode_forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
             )
-
-            return tt_toks, tt_log_probs
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            return tt_logits
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -676,11 +863,25 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_layer=None,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
+
+        if mode == Mode.PREFILL:
+            # For traced prefill, keep RoPE slicing in-graph and driven by the
+            # on-device chunk_start_idx input.
+            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx)
+            if rot_mats_local is not None:
+                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx)
+
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
 
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -697,6 +898,14 @@ class Transformer(LightweightModule):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
+            # vLLM hybrid kv-cache-groups: each attention layer gets its own
+            # paged pool (sliding-window vs full-attention have different
+            # block counts). When ``page_tables_per_layer`` is None we fall
+            # back to broadcasting the single ``page_table`` to every layer
+            # — byte-equivalent to the pre-hybrid path used by every legacy
+            # caller (demos, unit tests, non-hybrid vLLM bridges).
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+
             x = layer(
                 x,
                 current_pos,
@@ -704,7 +913,7 @@ class Transformer(LightweightModule):
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
+                page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,

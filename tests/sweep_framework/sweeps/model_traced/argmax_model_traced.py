@@ -13,10 +13,12 @@ from functools import partial
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -47,30 +49,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -95,6 +78,11 @@ def run(
     if dim is None:
         dim = -1
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    # The traced configs carry use_multicore=True, but the current ttnn.argmax
+    # API dropped that kwarg (multicore is automatic now; it exposes keepdim /
+    # sub_core_grids instead). Passing it raises "incompatible function
+    # arguments", so strip it — the default behavior is already multicore.
+    op_kwargs.pop("use_multicore", None)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -138,8 +126,14 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.argmax(input_tensor_a, dim=dim, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Reconcile golden vs mesh-stitched actual (handles ndim/shape differences,
+    # e.g. golden [1,1,1] vs per-device actual [1,1,1,1]).
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
 
     # Check with PCC (for argmax, exact match is expected)
     pcc = check_with_pcc(torch_output_tensor.to(torch.float32), output_tensor.to(torch.float32), 0.999)

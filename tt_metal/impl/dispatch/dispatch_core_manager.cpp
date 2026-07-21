@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <list>
+#include <optional>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -14,8 +15,10 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -189,7 +192,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type() {
+CoreType dispatch_core_manager::get_dispatch_core_type() const {
     return get_core_type_from_config(this->dispatch_core_config_);
 }
 
@@ -212,6 +215,15 @@ std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(Chi
     return tt::get_logical_dispatch_cores(this->env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
 }
 
+std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler_core(ChipId device_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    auto it = reserved_realtime_profiler_core_by_device_.find(device_id);
+    if (it == reserved_realtime_profiler_core_by_device_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 // private methods
 
 dispatch_core_manager::dispatch_core_manager(
@@ -225,6 +237,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
+    this->reserved_realtime_profiler_core_by_device_.clear();
     this->dispatch_core_config_ = dispatch_core_config;
     for (ChipId device_id : env.get_cluster().all_chip_ids()) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
@@ -243,7 +256,42 @@ void dispatch_core_manager::reset_dispatch_core_manager(
                 add_dispatch_core_to_device_locked(device_id, idle_eth_core);
             }
         }
+
+        // Reserve a tensix for the real-time profiler from the back of the dispatch pool
+        // (dispatch consumes from the front). Skipped when:
+        //   - chip is not MMIO-capable (RT profiler is gated to MMIO chips upstream);
+        //   - dispatch core type is ETH (pool holds ethernet cores, not tensixes);
+        //   - fabric tensix datamover (MUX or UDM) is enabled (it claims dispatch-pool slots
+        //     at fabric-init time and shrinking the pool further can starve fabric_mux_core);
+        //   - chip is Quasar (FD kernels are placed on the same core, a significant architectural
+        //     change from WH/BH, so the RT profiler isn't currently supported on Quasar).
+        const bool is_mmio = env.get_cluster().get_associated_mmio_device(device_id) == device_id;
+        const bool fabric_tensix_datamover_enabled =
+            env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
+        const bool is_quasar = env.get_cluster().arch() == tt::ARCH::QUASAR;
+        if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
+            !fabric_tensix_datamover_enabled && !is_quasar && !logical_dispatch_cores.empty()) {
+            CoreCoord rt_core = logical_dispatch_cores.back();
+            logical_dispatch_cores.pop_back();
+            this->reserved_realtime_profiler_core_by_device_.emplace(
+                device_id, tt_cxy_pair(device_id, rt_core.x, rt_core.y));
+        }
+
+        // Remove service-owned cores so FD never allocates them.
+        auto claimed = MetalContext::instance().get_service_core_manager().claimed_cores(device_id);
+        if (!claimed.empty()) {
+            logical_dispatch_cores.remove_if([&claimed](const CoreCoord& c) { return claimed.contains(c); });
+        }
     }
+}
+
+std::vector<CoreCoord> dispatch_core_manager::get_available_dispatch_cores(ChipId device_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    auto it = this->available_dispatch_cores_by_device.find(device_id);
+    if (it == this->available_dispatch_cores_by_device.end()) {
+        return {};
+    }
+    return std::vector<CoreCoord>(it->second.begin(), it->second.end());
 }
 
 CoreCoord dispatch_core_manager::get_next_available_dispatch_core(ChipId device_id) {

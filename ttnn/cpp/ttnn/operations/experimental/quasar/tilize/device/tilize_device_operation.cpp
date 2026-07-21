@@ -1,0 +1,257 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tilize_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
+#include "tilize_multi_core_block_program_factory.hpp"
+#include "tilize_single_core_program_factory.hpp"
+#include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_multi_core_width_sharded_program_factory.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+using namespace tt::tt_metal;
+
+namespace ttnn::prim::qsr {
+
+namespace {
+bool can_use_sharded_optimized_factories(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        return false;
+    }
+
+    auto memory_layout = input_tensor.memory_config().memory_layout();
+    if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
+    }
+
+    if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            return false;
+        }
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
+            return false;
+        }
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] != tt::constants::TILE_HEIGHT) {
+            return false;
+        }
+        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+            return false;
+        }
+    }
+
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+
+    if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
+        return false;
+    }
+
+    if (input_tensor.shard_spec().value().orientation != ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+    if (operation_attributes.sub_core_grids.has_value()) {
+        return false;  // Sharded tilize does not support sub core grid specification
+    }
+
+    // The sharded factories place kernels on every core in the shard grid.
+    // If the grid extends beyond the compute grid (e.g. includes dispatch cores),
+    // kernel placement will fail.  Fall back to the default factory which
+    // distributes work across the compute grid and accesses shards via NoC.
+    auto* device = input_tensor.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRangeSet compute_grid(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    const auto& shard_grid = input_tensor.shard_spec().value().grid;
+    if (!compute_grid.contains(shard_grid)) {
+        log_debug(
+            tt::LogOp,
+            "ttnn::tilize: Shard grid {} extends beyond compute grid {}x{}, falling back to default factory",
+            shard_grid.str(),
+            grid_size.x,
+            grid_size.y);
+        return false;
+    }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
+    }
+    return true;
+}
+}  // namespace
+
+void TilizeDeviceOperation::validate_on_program_cache_miss(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor_a = tensor_args.input_tensor;
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+
+    TT_FATAL(
+        input_tensor_a.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+        "Input tensor width must be divisible by TILE_WIDTH");
+    TT_FATAL(
+        input_tensor_a.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+        "Input tensor height must be divisible by TILE_HEIGHT");
+
+    auto width = input_tensor_a.padded_shape()[-1];
+    uint32_t stick_s = width;
+    TT_FATAL(
+        input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
+            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
+            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
+        "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+    TT_FATAL(
+        input_tensor_a.dtype() != DataType::FP8_E4M3 || (operation_attributes.output_dtype == DataType::BFLOAT8_B),
+        "FP8_E4M3 input requires output_dtype=BFLOAT8_B for tilize; the default output dtype would produce an "
+        "invalid TILE output specification");
+
+    uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
+
+    TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");
+
+    if (input_tensor_a.memory_config().is_sharded()) {
+        TT_FATAL(operation_attributes.use_multicore == true, "Multicore must be enabled for sharded input");
+
+        const uint32_t shard_width =
+            (input_tensor_a.shard_spec().has_value() ? input_tensor_a.shard_spec().value().shape[1]
+                                                     : input_tensor_a.nd_shard_spec().value().shard_shape[-1]);
+        const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
+        const uint32_t alignment_requirement = hal::get_l1_alignment();
+        TT_FATAL(
+            page_size_bytes == input_tensor_a.buffer()->aligned_page_size(),
+            "Input row-major shard width {} bytes gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
+            "buffer alignment "
+            "requirement",
+            shard_width,
+            page_size_bytes,
+            alignment_requirement);  // The shard width must be an aligned size, or we will face alignment issues
+                                     // when the reader tries to write to the CB.
+    }
+}
+
+TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+        log_warning(
+            tt::LogOp,
+            "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
+            "factory is being used");
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
+                                                         // factory, the output has the same shard spec as the input.
+        return {TensorSpec(
+            input_tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                operation_attributes.output_dtype,
+                PageConfig(Layout::TILE),
+                mem_config,
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape()))};
+    }
+
+    auto output_layout = TensorLayout(
+        operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
+    return {TensorSpec(
+        input_tensor.logical_shape(),
+        TensorLayout(
+            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
+}
+
+TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor_a = tensor_args.input_tensor;
+
+    bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
+                           (operation_attributes.sub_core_grids.has_value() &&
+                            (operation_attributes.sub_core_grids.value().num_cores() < 2));
+    if (use_single_core) {
+        return ttnn::prim::qsr::TilizeSingleCoreProgramFactory{};
+    }
+
+    if (input_tensor_a.memory_config().is_sharded()) {
+        if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+            if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                return ttnn::prim::qsr::TilizeMultiCoreWidthShardedProgramFactory{};
+            }
+            return ttnn::prim::qsr::TilizeMultiCoreShardedProgramFactory{};
+        }
+        return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
+    }
+    if (!operation_attributes.enough_space_height) {
+        return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
+    }
+    auto sub_core_grids = operation_attributes.sub_core_grids;
+
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
+
+    auto* device = input_tensor_a.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
+        }
+    }
+    return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
+}
+
+TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
+    const TilizeDeviceOperation::operation_attributes_t& args,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
+}
+
+ttnn::Tensor tilize(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<DataType>& output_dtype,
+    bool use_multicore,
+    bool enough_space_width,
+    bool enough_space_height,
+    bool use_low_perf,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::device_operation::launch<TilizeDeviceOperation>(
+        TilizeParams{
+            .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
+            .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            .use_multicore = use_multicore,
+            .enough_space_width = enough_space_width,
+            .enough_space_height = enough_space_height,
+            .use_low_perf = use_low_perf,
+            .sub_core_grids = sub_core_grids,
+        },
+        TilizeInputs{input_tensor, std::nullopt});
+}
+}  // namespace ttnn::prim::qsr

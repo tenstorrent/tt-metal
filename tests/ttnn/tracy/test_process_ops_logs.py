@@ -76,6 +76,91 @@ def test_append_device_data_populates_multicast_noc_util(monkeypatch, tmp_path):
     assert ops[1]["NPE CONG IMPACT (%)"] == 12.35
 
 
+def test_generate_reports_writes_sub_device_id_column(tmp_path):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    device_log = log_folder / "profile_log_device.csv"
+    device_log.write_text(
+        "\n".join(
+            [
+                "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64",
+                "PCIe slot,core_x,core_y,RISC processor type,timer_id,time[cycles since reset],data,run host ID,trace id,trace id counter,zone name,type,source line,source file,meta data",
+                '0,0,0,BRISC,1,100,0,42,,,BRISC-FW,ZONE_START,1,k.cpp,{"sub_device_id":1;"sub_device_manager_id":7}',
+            ]
+        )
+    )
+
+    ops = {
+        42: {
+            "global_call_count": 42,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "input_tensors": [],
+            "output_tensors": [],
+        }
+    }
+
+    sub_device_lookup = process_ops_logs.build_sub_device_id_lookup_from_device_csv(device_log)
+    host_ops_by_device = {0: [ops[42].copy()]}
+    process_ops_logs.attach_sub_device_ids_to_ops(host_ops_by_device, sub_device_lookup)
+    ops[42]["sub_device_id"] = host_ops_by_device[0][0]["sub_device_id"]
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    report_csv = Path(report_folder) / "ops_perf_results.csv"
+    assert report_csv.is_file()
+
+    with report_csv.open("r", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        row = next(reader)
+        assert "SUB DEVICE ID" in reader.fieldnames
+        assert row["SUB DEVICE ID"] == "1"
+        assert "SUB DEVICE MANAGER ID" not in reader.fieldnames
+
+
+def test_get_op_sub_device_lookup_key_prefers_device_perf_row():
+    op = {
+        "global_call_count": 1,
+        "device_id": 0,
+        "metal_trace_id": None,
+        "_device_perf_row": {
+            "GLOBAL CALL COUNT": 2048,
+            "DEVICE ID": 0,
+            "METAL TRACE ID": "",
+            "METAL TRACE REPLAY SESSION ID": "",
+        },
+    }
+    assert process_ops_logs.get_op_sub_device_lookup_key(op, 0) == (0, 2048, -1, -1)
+
+
+def test_build_sub_device_id_lookup_ignores_manager_id_only_rows(tmp_path):
+    device_log = tmp_path / "profile_log_device.csv"
+    device_log.write_text(
+        "\n".join(
+            [
+                "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64",
+                "PCIe slot,core_x,core_y,RISC processor type,timer_id,time[cycles since reset],data,run host ID,trace id,trace id counter,zone name,type,source line,source file,meta data",
+                '0,0,0,BRISC,1,100,0,42,0,1,BRISC-FW,ZONE_START,1,k.cpp,{"sub_device_id":0;"sub_device_manager_id":7}',
+            ]
+        )
+    )
+
+    lookup = process_ops_logs.build_sub_device_id_lookup_from_device_csv(device_log)
+    assert lookup[(0, 42, 0, 1)] == 0
+
+
 def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
@@ -115,160 +200,3 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
-
-
-def _make_device_op_time(run_host_id, timestamp=100, analysis=None):
-    """Build a minimal device op timing entry used by _enrich_ops_from_device_logs."""
-    return {
-        "timeseries": [
-            (
-                {"run_host_id": run_host_id, "zone_name": "FW"},
-                timestamp,
-                {},
-                "BRISC",
-                (0, 0),
-            )
-        ],
-        "analysis": analysis or {},
-    }
-
-
-def _make_dispatch_op(run_host_id, analysis=None):
-    """Build a minimal dispatch op entry."""
-    return {
-        "timeseries": [
-            (
-                {"meta_data": str({"workers_runtime_id": run_host_id})},
-                50,
-                {},
-                "BRISC",
-                (0, 0),
-            )
-        ],
-        "analysis": analysis or {"dispatch_dur": {"series": [], "stats": {}}},
-    }
-
-
-def _stub_device_data(device_id, device_ops, dispatch_ops):
-    """Return a fake import_log_run_stats result for a single device."""
-    return {
-        "deviceInfo": {"freq": 1200, "max_compute_cores": 64},
-        "devices": {
-            device_id: {
-                "cores": {
-                    "DEVICE": {
-                        "riscs": {
-                            "TENSIX": {
-                                "ops": device_ops,
-                                "dispatch_ops": dispatch_ops,
-                            }
-                        }
-                    }
-                }
-            }
-        },
-    }
-
-
-def test_enrich_device_logs_skips_unmatched_device_ops_in_trace_replay(monkeypatch, tmp_path):
-    """Dispatch profiling with trace replay may produce device ops whose
-    run_host_id has no matching host op (e.g. internal trace replay dispatch
-    entries).  Before the fix this raised an AssertionError; after the fix these
-    ops are silently skipped and the report is generated successfully."""
-
-    device_id = 0
-    matched_id = 1
-    unmatched_id = 999
-
-    host_ops_by_device = {
-        device_id: [
-            {"global_call_count": matched_id, "metal_trace_id": 42},
-        ]
-    }
-
-    device_ops = [
-        _make_device_op_time(matched_id, timestamp=100),
-        _make_device_op_time(unmatched_id, timestamp=200),
-    ]
-    dispatch_ops = [
-        _make_dispatch_op(matched_id),
-    ]
-
-    trace_replays = {device_id: {42: [1000]}}
-
-    fake_data = _stub_device_data(device_id, device_ops, dispatch_ops)
-    monkeypatch.setattr(process_ops_logs, "import_log_run_stats", lambda _setup: fake_data)
-
-    (tmp_path / "profile_log_device.csv").touch()
-
-    result = process_ops_logs._enrich_ops_from_device_logs(host_ops_by_device, tmp_path, [], trace_replays)
-
-    assert len(result[device_id]) == 1
-    assert result[device_id][0]["global_call_count"] == matched_id
-
-
-def test_enrich_device_logs_ignores_leftover_dispatch_ops_in_trace_replay(monkeypatch, tmp_path):
-    """When profiling dispatch with trace replay, some dispatch ops may not
-    match any device op (trace replay dispatch entries).  Before the fix this
-    hit 'Unrecognized dispatch OPs' assertion; now it is logged and ignored."""
-
-    device_id = 0
-    op_id = 1
-    orphan_dispatch_id = 888
-
-    host_ops_by_device = {
-        device_id: [
-            {"global_call_count": op_id, "metal_trace_id": 7},
-        ]
-    }
-
-    device_ops = [
-        _make_device_op_time(op_id, timestamp=100),
-    ]
-    dispatch_ops = [
-        _make_dispatch_op(op_id),
-        _make_dispatch_op(orphan_dispatch_id),
-    ]
-
-    trace_replays = {device_id: {7: [2000]}}
-
-    fake_data = _stub_device_data(device_id, device_ops, dispatch_ops)
-    monkeypatch.setattr(process_ops_logs, "import_log_run_stats", lambda _setup: fake_data)
-
-    (tmp_path / "profile_log_device.csv").touch()
-
-    result = process_ops_logs._enrich_ops_from_device_logs(host_ops_by_device, tmp_path, [], trace_replays)
-
-    assert len(result[device_id]) == 1
-    assert result[device_id][0]["global_call_count"] == op_id
-
-
-def test_enrich_device_logs_still_asserts_on_unrecognized_dispatch_without_trace(monkeypatch, tmp_path):
-    """Without trace replays, leftover dispatch ops should still assert to
-    catch real mismatches (the original behaviour is preserved)."""
-
-    device_id = 0
-    op_id = 1
-    orphan_dispatch_id = 888
-
-    host_ops_by_device = {
-        device_id: [
-            {"global_call_count": op_id},
-        ]
-    }
-
-    device_ops = [
-        _make_device_op_time(op_id, timestamp=100),
-    ]
-    dispatch_ops = [
-        _make_dispatch_op(op_id),
-        _make_dispatch_op(orphan_dispatch_id),
-    ]
-
-    fake_data = _stub_device_data(device_id, device_ops, dispatch_ops)
-    monkeypatch.setattr(process_ops_logs, "import_log_run_stats", lambda _setup: fake_data)
-
-    (tmp_path / "profile_log_device.csv").touch()
-
-    with pytest.raises(AssertionError, match="Unrecognized dispatch OPs"):
-        process_ops_logs._enrich_ops_from_device_logs(host_ops_by_device, tmp_path, [], None)

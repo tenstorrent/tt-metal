@@ -8,32 +8,13 @@
 #include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
-struct TransposeHCRMSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t num_cores_total{};
-    uint32_t num_cores_y{};
-    uint32_t num_sticks_per_core_group_1{};
-    uint32_t num_sticks_per_core_group_2{};
-};
-
 struct TransposeHCRMProgramFactory {
-    using shared_variables_t = TransposeHCRMSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const TransposeParams& operation_attributes,
-        const TransposeInputs& tensor_args,
-        Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim

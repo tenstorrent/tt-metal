@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -43,14 +43,14 @@ void kernel_main() {
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_pred(predicate_cb);
-    experimental::CircularBuffer cb_tensor(tensor_cb);
+    Noc noc;
+    CircularBuffer cb_pred(predicate_cb);
+    CircularBuffer cb_tensor(tensor_cb);
 
-    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
-    const uint32_t src1_tile_bytes = get_tile_size(tensor_cb);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
+    const uint32_t src1_tile_bytes = cb_tensor.get_tile_size();
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
@@ -105,9 +105,9 @@ void kernel_main() {
 #endif
                         noc.async_read_barrier();
 #if SRC_SCALAR_A
-                        FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT(cb_pred.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_pred.get_write_ptr());
 #endif
                         cb_pred.push_back(onetile);
 #endif
@@ -123,9 +123,9 @@ void kernel_main() {
 #endif
                         noc.async_read_barrier();
 #if SRC_SCALAR_CB1
-                        FILL_TILE_WITH_FIRST_ELEMENT_B(tensor_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT_B(cb_tensor.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN_B(tensor_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_tensor.get_write_ptr());
 #endif
                         cb_tensor.push_back(onetile);
 #endif
@@ -138,7 +138,7 @@ void kernel_main() {
                                 s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
 #if SRC_ROW_BCAST_A
-                            FILL_TILE_WITH_FIRST_ROW(predicate_cb);
+                            FILL_TILE_WITH_FIRST_ROW(cb_pred.get_write_ptr());
 #endif
                             cb_pred.push_back(onetile);
 #endif
@@ -153,7 +153,7 @@ void kernel_main() {
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
 #if SRC_ROW_BCAST_CB1
-                            FILL_TILE_WITH_FIRST_ROW_B(tensor_cb);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_tensor.get_write_ptr());
 #endif
                             cb_tensor.push_back(onetile);
 #endif

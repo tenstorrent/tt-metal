@@ -23,25 +23,30 @@ DOCS_CHANGED=false
 MODEL_CHARTS_CHANGED=false
 MODELS_CHANGED=false
 BUILD_WORKFLOWS_CHANGED=false
-LLK_ENGINE_CHANGED=false
+LLK_WORMHOLE_CHANGED=false
+LLK_BLACKHOLE_CHANGED=false
+LLK_COMMON_CHANGED=false
+LLK_SFPI_CHANGED=false
 LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
+LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
+WORKFLOWS_CHANGED=false
 
 
 while IFS= read -r FILE; do
     case "$FILE" in
-        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
-        tt_metal/sfpi-info.sh)
-            # Read in by a cmake file
+        tt_metal/sfpi-info.sh|tt_metal/sfpi-version)
+            # Read in by a cmake file; also pins the SFPI compiler used to build LLK
+            # device kernels, so any change must re-run LLK tests on all archs.
             CMAKE_CHANGED=true
-            ;;
-        tt_metal/sfpi-version)
-            # Read in by a cmake file
-            CMAKE_CHANGED=true
+            LLK_SFPI_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
@@ -55,24 +60,47 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/.github/**|tt_metal/tt-llk/tests/requirements.txt)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/tt-llk/common/**)
-            LLK_ENGINE_CHANGED=true
+        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/hw/ckernels/wormhole_b0/**)
+            LLK_WORMHOLE_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_quasar/**)
+        tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/hw/ckernels/blackhole/**)
+            LLK_BLACKHOLE_CHANGED=true
+            ;;
+        tt_metal/tt-llk/common/**)
+            LLK_COMMON_CHANGED=true
+            ;;
+        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**)
             LLK_QUASAR_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
+            ;;
+        # Shared Python test harness (helpers/ and conftest.py) — imported by ALL arch-specific
+        # test suites including quasar. A break here causes quasar collection to fail even if no
+        # quasar-specific file changed, so treat it as a quasar change.
+        tt_metal/tt-llk/tests/python_tests/helpers/**|tt_metal/tt-llk/tests/python_tests/conftest.py)
+            LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh)
+        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        # LLK unit-test sources (built into the unit_tests_llk gtest binary). Mirror the
+        # llk-tests-changed pattern but for the in-tree gtest unit tests rather than the
+        # LLK engine submodule's pytest suite. Must come before the generic
+        # tests/tt_metal/**/*.{h,hpp,c,cpp,py} catch-all so the narrower flag is set; we
+        # also raise the broader TTMETALIUM_TESTS_CHANGED here so existing test gates
+        # (e.g. runtime-smoke-tests) keep firing for these changes.
+        tests/tt_metal/tt_metal/llk/**)
+            LLK_UNIT_TESTS_CHANGED=true
+            TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
         ttnn/**/*.@(h|hpp|c|cpp|py))
@@ -114,9 +142,16 @@ while IFS= read -r FILE; do
             MODELS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml|.github/workflows/ttsim.yaml|.github/workflows/fabric-cpu-only-tests-impl.yaml)
+        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml)
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
+            ;;
+        # Any other workflow change runs the standard PR gate. More specific workflow
+        # patterns above (e.g. llk-*.yaml, build-artifact.yaml) match first and keep
+        # their targeted behavior; this catch-all ensures a workflow-only PR never
+        # silently skips CI. Fanned out to the full gate below (same as submodule).
+        .github/workflows/*.yaml|.github/workflows/*.yml)
+            WORKFLOWS_CHANGED=true
             ;;
     esac
 done <<< "$CHANGED_FILES"
@@ -129,8 +164,10 @@ for submodule_path in $SUBMODULE_PATHS; do
         break
     fi
 done
-if [[ "$SUBMODULE_CHANGED" = true ]]; then
-    # Treat any submodule change as a change to everything; not going to manage dependency trees for this
+if [[ "$SUBMODULE_CHANGED" = true || "$WORKFLOWS_CHANGED" = true ]]; then
+    # Treat any submodule or workflow change as a change to everything; not going to manage dependency trees for this.
+    # For workflows this guarantees a workflow-only PR runs the full standard gate (build + smoke + examples + code-analysis)
+    # rather than silently skipping, matching every other PR.
     TTMETALIUM_CHANGED=true
     TTNN_CHANGED=true
     TTMETALIUM_TESTS_CHANGED=true
@@ -145,7 +182,7 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
 fi
 
 # LLK engine changes imply Metalium may be affected (LLK is compiled into device kernels)
-if [[ "$LLK_ENGINE_CHANGED" = true ]]; then
+if [[ "$LLK_WORMHOLE_CHANGED" = true || "$LLK_BLACKHOLE_CHANGED" = true || "$LLK_COMMON_CHANGED" = true || "$LLK_SFPI_CHANGED" = true ]]; then
     TTMETALIUM_CHANGED=true
     ANY_CODE_CHANGED=true
 fi
@@ -173,9 +210,13 @@ declare -A changes=(
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED
     [build-workflows-changed]=$BUILD_WORKFLOWS_CHANGED
-    [llk-engine-changed]=$LLK_ENGINE_CHANGED
+    [llk-wormhole-changed]=$LLK_WORMHOLE_CHANGED
+    [llk-blackhole-changed]=$LLK_BLACKHOLE_CHANGED
+    [llk-common-changed]=$LLK_COMMON_CHANGED
+    [llk-sfpi-changed]=$LLK_SFPI_CHANGED
     [llk-quasar-changed]=$LLK_QUASAR_CHANGED
     [llk-tests-changed]=$LLK_TESTS_CHANGED
+    [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
 )

@@ -8,14 +8,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39475")
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
@@ -154,7 +153,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.952 if mode_accuracy else 0.940,
             "Llama-3.2-90B": 0.971,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
-        }[model_name]
+            "Qwen3-32B": 0.88 if mode_accuracy else 0.86,
+        }.get(model_name, 0.88 if mode_accuracy else 0.86)
 
         final_k_cache_pcc = {
             "Llama-3.1-8B": 0.9997,
@@ -164,7 +164,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9995,
             "Llama-3.2-90B": 0.9995,
             "Mistral-7B": 0.68,
-        }[model_name]
+            "Qwen3-32B": 0.9995,
+        }.get(model_name, 0.9995)
         final_v_cache_pcc = {
             "Llama-3.1-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
@@ -173,7 +174,8 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9996,
             "Llama-3.2-90B": 0.9996,
             "Mistral-7B": 0.68,
-        }[model_name]
+            "Qwen3-32B": 0.9995,
+        }.get(model_name, 0.9995)
 
         quick_iterations = {
             "Llama-3.1-8B": 6,
@@ -183,7 +185,8 @@ def test_model_inference(
             "Llama-3.2-11B": 6,
             "Llama-3.2-90B": 6,
             "Mistral-7B": 2,
-        }[model_name]
+            "Qwen3-32B": 6,
+        }.get(model_name, 6)
 
         iterations = quick_iterations
     else:

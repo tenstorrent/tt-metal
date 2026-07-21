@@ -18,6 +18,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_fabric {
 
@@ -155,6 +156,60 @@ std::optional<ChannelTrimmingOverrides> resolve_channel_trimming_for_router(
     return result;
 }
 
+struct RouterChannelCounts {
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender = {};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver = {};
+};
+
+RouterChannelCounts compute_router_channel_counts(
+    const FabricContext& fabric_context,
+    const ControlPlane& control_plane,
+    const FabricNodeId& fabric_node_id,
+    RoutingDirection direction,
+    bool is_dispatch_link) {
+    const auto topology = fabric_context.get_fabric_topology();
+    const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const bool downstream_is_tensix_builder = !is_dispatch_link && fabric_tensix_config == FabricTensixConfig::MUX;
+    const bool has_z_router = fabric_context.has_z_router_on_device(control_plane, fabric_node_id);
+    const auto variant = (direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
+    auto channel_mapping =
+        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
+
+    RouterChannelCounts counts;
+    const uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
+    for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+        counts.sender[vc] = channel_mapping.get_num_sender_channels_for_vc(vc);
+        counts.receiver[vc] = 1;  // A router services at most one receiver channel per VC.
+    }
+    return counts;
+}
+
+std::optional<Vc0TrimFastPathInfo> resolve_vc0_trim_fast_path_info(
+    const FabricBuilderContext& builder_context,
+    ChipId chip_id,
+    chan_id_t eth_chan,
+    const RouterChannelCounts& channel_counts) {
+    const auto& capture_overrides = builder_context.get_channel_trimming_overrides();
+    if (!has_real_channel_trimming_capture_entry(capture_overrides, chip_id, eth_chan)) {
+        return std::nullopt;
+    }
+
+    auto resolved_overrides = resolve_channel_trimming_for_router(
+        capture_overrides,
+        builder_context.get_channel_trimming_global_overrides(),
+        chip_id,
+        eth_chan,
+        channel_counts.sender,
+        channel_counts.receiver);
+    if (!resolved_overrides.has_value()) {
+        return std::nullopt;
+    }
+
+    return try_derive_vc0_trim_fast_path_info(
+        *resolved_overrides, channel_counts.sender[0], builder_context.get_channel_trimming_global_overrides());
+}
+
 }  // namespace
 
 ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
@@ -224,8 +279,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     } else {
         // Enable VC1 for all routers when intermesh VC is configured
         bool enable_vc1 = intermesh_config.requires_vc1;
-        connection_mapping =
-            RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z_router, enable_vc1);
+        // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
+        // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
+        bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
+        connection_mapping = RouterConnectionMapping::for_mesh_router(
+            topology, location.direction, has_z_router, enable_vc1, enable_mesh_pass_through);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -280,13 +338,60 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     }
 
     // Resolve channel trimming for this router: capture lookup + global override application
+    const auto& capture_overrides = builder_context.get_channel_trimming_overrides();
+    const bool local_router_has_real_capture_entry =
+        has_real_channel_trimming_capture_entry(capture_overrides, device->id(), location.eth_chan);
     auto channel_trimming_overrides_for_router = resolve_channel_trimming_for_router(
-        builder_context.get_channel_trimming_overrides(),
+        capture_overrides,
         builder_context.get_channel_trimming_global_overrides(),
         device->id(),
         location.eth_chan,
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc);
+
+    auto local_vc0_fast_path_info =
+        local_router_has_real_capture_entry && channel_trimming_overrides_for_router.has_value()
+            ? try_derive_vc0_trim_fast_path_info(
+                  *channel_trimming_overrides_for_router,
+                  actual_sender_channels_per_vc[0],
+                  builder_context.get_channel_trimming_global_overrides())
+            : std::nullopt;
+
+    // If this router trims down to a terminal-only VC0 shape, inspect the exact
+    // peer router on this physical link and only enable speedy RX when that peer
+    // independently trims down to the matching worker-only source shape.
+    auto maybe_finalize_vc0_fast_path_pair = [&]() {
+        if (!fabric_context.is_2D_routing_enabled() || fabric_tensix_extension_udm_mode || location.is_dispatch_link ||
+            local_node.mesh_id != location.remote_node.mesh_id || !local_vc0_fast_path_info.has_value() ||
+            !(local_vc0_fast_path_info->worker_only_nonforwarding ||
+              local_vc0_fast_path_info->terminal_only_nonforwarding)) {
+            return;
+        }
+
+        const auto [connected_peer_node, connected_peer_chan] =
+            control_plane.get_connected_mesh_chip_chan_ids(local_node, location.eth_chan);
+        if (connected_peer_node != location.remote_node) {
+            return;
+        }
+
+        auto peer_direction = control_plane.get_forwarding_direction(connected_peer_node, local_node);
+        if (!peer_direction.has_value()) {
+            return;
+        }
+
+        const auto peer_channel_counts = compute_router_channel_counts(
+            fabric_context, control_plane, connected_peer_node, *peer_direction, location.is_dispatch_link);
+        const auto peer_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(connected_peer_node);
+        auto peer_vc0_fast_path_info = resolve_vc0_trim_fast_path_info(
+            builder_context, peer_physical_chip_id, connected_peer_chan, peer_channel_counts);
+        if (!peer_vc0_fast_path_info.has_value()) {
+            return;
+        }
+
+        local_vc0_fast_path_info->enable_terminal_speedy_rx =
+            local_vc0_fast_path_info->terminal_only_nonforwarding && peer_vc0_fast_path_info->worker_only_nonforwarding;
+    };
+    maybe_finalize_vc0_fast_path_pair();
 
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
@@ -302,7 +407,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         downstream_is_tensix_builder,
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
-        channel_trimming_overrides_for_router));
+        channel_trimming_overrides_for_router,
+        local_vc0_fast_path_info));
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {

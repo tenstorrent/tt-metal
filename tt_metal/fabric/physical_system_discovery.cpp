@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE (please keep): PhysicalSystemDiscovery runs outside of tt-metal as well — it is used by
+// applications that manage their own devices. Do NOT instantiate MetalContext here (e.g.
+// `MetalContext::instance()`): that spins up a MetalContext behind the caller's back and breaks
+// telemetry / explicit device ownership. If runtime options or context are needed, pass them in
+// explicitly as function arguments. For a small piece of config, read the environment variable
+// directly with std::getenv (see get_local_discovery_hostname() below for the mock cluster descriptor).
+
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -11,10 +18,13 @@
 
 #include <unistd.h>
 #include <climits>
+#include <cstdlib>
 #include <fstream>
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <filesystem>
+#include <vector>
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
@@ -23,10 +33,41 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/port_lookup.hpp"
 
 namespace tt::tt_metal {
 
 namespace {
+
+// Single conversion point for scaleout's duplicated PortType. No default case so
+// enum drift is caught at compile time.
+PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
+    switch (pt) {
+        case tt::scaleout_tools::PortType::TRACE: return PortType::TRACE;
+        case tt::scaleout_tools::PortType::QSFP_DD: return PortType::QSFP_DD;
+        case tt::scaleout_tools::PortType::WARP100: return PortType::WARP100;
+        case tt::scaleout_tools::PortType::WARP400: return PortType::WARP400;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_1: return PortType::LINKING_BOARD_1;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_2: return PortType::LINKING_BOARD_2;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_3: return PortType::LINKING_BOARD_3;
+        case tt::scaleout_tools::PortType::UNKNOWN: return PortType::UNKNOWN;
+    }
+    return PortType::UNKNOWN;
+}
+
+// OS hostname for live clusters; mock cluster descriptor filename (basename) per rank in mock mode.
+std::string get_local_discovery_hostname() {
+    // Read the mock cluster descriptor path straight from the environment rather than through
+    // MetalContext (see file-header note: MetalContext must not be instantiated here). This matches how
+    // rtoptions defines "mock enabled" (mock_cluster_desc_path non-empty, set from
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH). In mock mode use the descriptor filename as this rank's hostname
+    // so mock-cluster test runs get stable, matching hostnames; otherwise use the OS hostname.
+    if (const char* mock_cluster_desc_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        mock_cluster_desc_path != nullptr && mock_cluster_desc_path[0] != '\0') {
+        return std::filesystem::path(mock_cluster_desc_path).filename().string();
+    }
+    return get_host_name();
+}
 
 std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
@@ -41,29 +82,48 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    tt::umd::Cluster& cluster, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
+    tt::umd::ClusterDescriptor& cluster_desc,
+    ChipId chip_id,
+    const std::string& mobo_name,
+    bool using_mock_cluster_desc) {
+    // SIENAD8-2L2T has two observed PCIe slot enumerations:
+    //   - canonical: trays 1..4 map to 0xc1,0x01,0x41,0x42
+    //   - 0x43 variant: trays 1..4 map to 0xc1,0x01,0x43,0x41
+    // Select the 0x43 variant when that bus is present on the host.
+    static const std::vector<uint16_t> sienad8_canonical_bus_ids = {0xc1, 0x01, 0x41, 0x42};
+    static const std::vector<uint16_t> sienad8_bus_0x43_variant_bus_ids = {0xc1, 0x01, 0x43, 0x41};
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
-        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
+        {"SIENAD8-2L2T", sienad8_canonical_bus_ids},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
-        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
+        {"H13DSG-O-CPU", {0x21, 0x01, 0x41, 0x61, 0xa1, 0x81, 0xc1, 0xe1}},
     };
 
     if (using_mock_cluster_desc) {
         return TrayID{0};
     }
     if (!mobo_to_bus_ids.contains(mobo_name)) {
-        auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+        auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
         log_warning(
             tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
             "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
             mobo_name,
             chip_id,
             bus_id);
-        return TrayID{0};
+        return TrayID{static_cast<uint32_t>(bus_id)};
     }
-    const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+
+    std::vector<uint16_t> ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
+    if (mobo_name == "SIENAD8-2L2T") {
+        const auto& chip_to_bus_id = cluster_desc.get_chip_to_bus_id();
+        const bool has_bus_0x43 = std::any_of(
+            chip_to_bus_id.begin(), chip_to_bus_id.end(), [](const auto& entry) { return entry.second == 0x43; });
+        if (has_bus_0x43) {
+            ordered_bus_ids = sienad8_bus_0x43_variant_bus_ids;
+        }
+    }
+
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
@@ -71,32 +131,32 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    tt::umd::Cluster& cluster,
+    tt::umd::ClusterDescriptor& cluster_desc,
     ChipId chip_id,
     bool using_mock_cluster_desc,
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray,
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
-        cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
+    if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
+        cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
-        auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
-        auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
+        auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
+        auto pcie_id = cluster_desc.get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
         pcie_id_to_asic_location[pcie_id] = ASICLocation{ubb_id.asic_id};
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     }
-    auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
+    auto tray_id = get_tray_id_for_chip(cluster_desc, chip_id, get_mobo_name(), using_mock_cluster_desc);
     ASICLocation asic_location;
-    tt::ARCH arch = cluster_desc->get_arch(chip_id);
+    tt::ARCH arch = cluster_desc.get_arch(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Derive ASIC Location based on the tunnel depth for Wormhole systems
         // TODO: Remove this once UMD populates the ASIC Location for WH systems.
-        auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-        auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
+        auto mmio_device = cluster_desc.get_closest_mmio_capable_chip(chip_id);
+        auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
+
         const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
         for (const auto& devices_on_tunnel : tunnels) {
             auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
@@ -107,7 +167,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         }
     } else if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
         // Query ASIC Location from the Cluster Descriptor for BH/QUASAR.
-        asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
+        asic_location = ASICLocation{cluster_desc.get_asic_location(chip_id)};
     } else {
         TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
     }
@@ -123,19 +183,19 @@ bool resolve_hostname_uniqueness(
     bool all_hostnames_unique = true;
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
-        hostnames.push_back(get_host_name());
+        hostnames.push_back(get_local_discovery_hostname());
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
                 distributed_context->recv(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
                 std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
                 distributed_context->recv(
-                    tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
+                    ttsl::as_writable_bytes(
+                        ttsl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
 
@@ -147,28 +207,28 @@ bool resolve_hostname_uniqueness(
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 distributed_context->send(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&all_hostnames_unique), sizeof(all_hostnames_unique)),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
             }
         }
     } else {
-        auto host_name = get_host_name();
+        auto host_name = get_local_discovery_hostname();
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
         distributed_context->send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_hostname_size), sizeof(serialized_hostname_size)),
             Rank{controller_rank},
             Tag{0});
         distributed_context->send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
             Rank{controller_rank},
             Tag{0});
 
         distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&all_hostnames_unique), sizeof(all_hostnames_unique)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&all_hostnames_unique), sizeof(all_hostnames_unique)),
             Rank{controller_rank},
             Tag{0});
     }
@@ -199,6 +259,42 @@ void validate_eth_fw_versions(
         peer_host_name,
         psd.get_ethernet_firmware_version().to_string(),
         peer_ethernet_firmware_version.to_string());
+}
+
+void validate_fw_bundle_versions(
+    PhysicalSystemDescriptor& psd,
+    const std::optional<tt::umd::FirmwareBundleVersion>& peer_firmware_bundle_version,
+    const std::string& my_host_name,
+    const std::string& peer_host_name) {
+    // Skip validation if firmware bundle versions are not available (e.g., CPU-only tests, older UMD)
+    if (!psd.get_firmware_bundle_version().has_value() || !peer_firmware_bundle_version.has_value()) {
+        log_warning(
+            tt::LogMetal,
+            "Skipping firmware bundle version validation between {} and {}: firmware bundle versions not available "
+            "(local: {}, peer: {}). This may occur in CPU-only mode or with older UMD versions.",
+            my_host_name,
+            peer_host_name,
+            psd.get_firmware_bundle_version().has_value() ? "available" : "unavailable",
+            peer_firmware_bundle_version.has_value() ? "available" : "unavailable");
+        return;
+    }
+
+    log_debug(
+        tt::LogMetal,
+        "Validating firmware bundle versions: {} has {} vs {} has {}",
+        my_host_name,
+        psd.get_firmware_bundle_version()->to_string(),
+        peer_host_name,
+        peer_firmware_bundle_version->to_string());
+
+    TT_FATAL(
+        peer_firmware_bundle_version.value() == psd.get_firmware_bundle_version().value(),
+        "Firmware Bundle Versions are expected to be consistent across all nodes in the cluster. The following "
+        "hosts have different Firmware Bundle Versions: {} ({}) and {} ({})",
+        my_host_name,
+        psd.get_firmware_bundle_version()->to_string(),
+        peer_host_name,
+        peer_firmware_bundle_version->to_string());
 }
 
 void remove_unresolved_nodes(PhysicalSystemDescriptor& psd) {
@@ -251,10 +347,70 @@ void generate_cross_host_connections(PhysicalSystemDescriptor& psd) {
     }
 }
 
+struct OneSidedConnection {
+    std::string host;
+    std::string src_host;
+    std::string dst_host;
+    AsicID src_asic;
+    AsicID dst_asic;
+    uint8_t src_chan;
+    uint8_t dst_chan;
+};
+
+void erase_one_sided_connections(PhysicalSystemDescriptor& psd, const std::vector<OneSidedConnection>& connections) {
+    auto& system_graph = psd.get_system_graph();
+    auto& exit_node_table = psd.get_exit_node_connection_table();
+
+    for (const auto& conn : connections) {
+        // Remove from asic_connectivity_graph
+        auto& asic_group = system_graph.asic_connectivity_graph[conn.host];
+        if (auto src_it = asic_group.find(conn.src_asic); src_it != asic_group.end()) {
+            auto& dst_edges = src_it->second;
+            auto dst_it = std::find_if(dst_edges.begin(), dst_edges.end(), [&](const AsicConnectionEdge& edge) {
+                return edge.first == conn.dst_asic;
+            });
+            if (dst_it != dst_edges.end()) {
+                auto& eth_conns = dst_it->second;
+                std::erase_if(eth_conns, [&](const EthConnection& ec) {
+                    return ec.src_chan == conn.src_chan && ec.dst_chan == conn.dst_chan;
+                });
+                if (eth_conns.empty()) {
+                    dst_edges.erase(dst_it);
+                }
+            }
+            if (dst_edges.empty()) {
+                asic_group.erase(src_it);
+            }
+        }
+
+        // Remove from exit_node_connection_table
+        if (auto host_it = exit_node_table.find(conn.host); host_it != exit_node_table.end()) {
+            std::erase_if(host_it->second, [&](const ExitNodeConnection& enc) {
+                return enc.src_exit_node == conn.src_asic && enc.dst_exit_node == conn.dst_asic &&
+                       enc.eth_conn.src_chan == conn.src_chan && enc.eth_conn.dst_chan == conn.dst_chan;
+            });
+        }
+
+        // Remove from host_connectivity_graph
+        if (auto host_it = system_graph.host_connectivity_graph.find(conn.src_host);
+            host_it != system_graph.host_connectivity_graph.end()) {
+            for (auto& host_edge : host_it->second) {
+                if (host_edge.first == conn.dst_host) {
+                    std::erase_if(host_edge.second, [&](const ExitNodeConnection& enc) {
+                        return enc.src_exit_node == conn.src_asic && enc.dst_exit_node == conn.dst_asic &&
+                               enc.eth_conn.src_chan == conn.src_chan && enc.eth_conn.dst_chan == conn.dst_chan;
+                    });
+                }
+            }
+        }
+    }
+}
+
 void validate_graphs(PhysicalSystemDescriptor& psd) {
     // Validate that the representation of the system is internally consistent.
     const auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
+    std::vector<OneSidedConnection> connections_to_drop;
 
     for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
@@ -263,6 +419,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                 continue;
             }
             const auto& src_host = asic_descriptors.at(src_asic).host_name;
+            const auto& src_desc = asic_descriptors.at(src_asic);
 
             // Skip if host_connectivity_graph doesn't have src_host (shouldn't happen, but be defensive)
             if (!system_graph.host_connectivity_graph.contains(src_host)) {
@@ -276,6 +433,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                     continue;
                 }
                 const auto& dst_host = asic_descriptors.at(dst_asic).host_name;
+                const auto& dst_desc = asic_descriptors.at(dst_asic);
 
                 bool all_local = std::all_of(
                     eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return conn.is_local; });
@@ -314,12 +472,26 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                             return host_edge.first == dst_host;
                         });
 
-                    TT_FATAL(
-                        host_edge_it != src_host_edges.end(),
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
-                        "connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (host_edge_it == src_host_edges.end()) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Physical Discovery Warning: Global Connection between host {} and host {} is not found "
+                            "in the host connectivity graph. ASIC {} (Tray {} Location {} chan {}) -> ASIC {} "
+                            "(Tray {} Location {} chan {}). Dropping one-sided link.",
+                            src_host,
+                            dst_host,
+                            src_asic,
+                            src_desc.tray_id,
+                            src_desc.asic_location,
+                            eth_conn.src_chan,
+                            dst_asic,
+                            dst_desc.tray_id,
+                            dst_desc.asic_location,
+                            eth_conn.dst_chan);
+                        connections_to_drop.push_back(
+                            {host, src_host, dst_host, src_asic, dst_asic, eth_conn.src_chan, eth_conn.dst_chan});
+                        continue;
+                    }
 
                     const auto& exit_node_conns = host_edge_it->second;
                     bool exit_conn_found = std::any_of(
@@ -330,15 +502,36 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
 
-                    TT_FATAL(
-                        exit_conn_found,
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (!exit_conn_found) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Physical Discovery Warning: Exit node connection not found between host {} and host {}. "
+                            "ASIC {} (Tray {} Location {} chan {}) -> ASIC {} (Tray {} Location {} chan {}). "
+                            "Dropping one-sided link.",
+                            src_host,
+                            dst_host,
+                            src_asic,
+                            src_desc.tray_id,
+                            src_desc.asic_location,
+                            eth_conn.src_chan,
+                            dst_asic,
+                            dst_desc.tray_id,
+                            dst_desc.asic_location,
+                            eth_conn.dst_chan);
+                        connections_to_drop.push_back(
+                            {host, src_host, dst_host, src_asic, dst_asic, eth_conn.src_chan, eth_conn.dst_chan});
+                    }
                 }
             }
         }
+    }
+
+    if (!connections_to_drop.empty()) {
+        log_warning(
+            tt::LogMetal,
+            "Physical Discovery: Dropping {} one-sided connection(s). Link retraining will attempt recovery.",
+            connections_to_drop.size());
+        erase_one_sided_connections(psd, connections_to_drop);
     }
 }
 
@@ -348,10 +541,12 @@ void exchange_metadata(
     bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
-    if (*(distributed_context->size()) == 1) {
+    auto my_rank = *(distributed_context->rank());
+    auto total_size = *(distributed_context->size());
+
+    if (total_size == 1) {
         return;
     }
-    auto my_rank = *(distributed_context->rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
 
@@ -370,19 +565,18 @@ void exchange_metadata(
             }
         }
     }
-
     if (sender_ranks.contains(my_rank)) {
         auto serialized_desc = serialize_physical_system_descriptor_to_bytes(psd);
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
             distributed_context->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
 
             distributed_context->send(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
         }
@@ -390,14 +584,14 @@ void exchange_metadata(
         for (auto rank : sender_ranks) {
             std::size_t peer_descriptor_size = 0;
             distributed_context->recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
             distributed_context->recv(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
@@ -412,18 +606,22 @@ void exchange_metadata(
                 peer_desc.get_ethernet_firmware_version(),
                 psd.get_asic_descriptors().begin()->second.host_name,
                 peer_desc.get_asic_descriptors().begin()->second.host_name);
+            validate_fw_bundle_versions(
+                psd,
+                peer_desc.get_firmware_bundle_version(),
+                psd.get_asic_descriptors().begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
             psd.merge(std::move(peer_desc));
         }
     }
     distributed_context->barrier();
 }
 
-bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (cluster_desc->get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
+    if (cluster_desc.get_board_type(0) != BoardType::UBB_BLACKHOLE) {
         return false;
     }
-    uint64_t board_id = cluster_desc->get_board_id_for_chip(0);
+    uint64_t board_id = cluster_desc.get_board_id_for_chip(0);
     uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
     return revision_bits >= 3;
 }
@@ -433,33 +631,25 @@ bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
 namespace discovery_impl {
 
 PhysicalSystemDescriptor run_local_discovery(
-    tt::umd::Cluster& cluster,
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
-    bool run_live_discovery,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
-    if (is_bh_galaxy_rev_c(cluster)) {
+    if (is_bh_galaxy_rev_c(cluster_desc)) {
         psd.set_is_bh_galaxy_rev_c(true);
     }
 
-    std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
-    if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {
-        cluster_desc = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
-    } else {
-        // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
-        cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    }
-    const auto& chip_unique_ids = cluster_desc->get_chip_unique_ids();
-    const auto& eth_connections = cluster_desc->get_ethernet_connections();
-    auto cross_host_eth_connections = cluster_desc->get_ethernet_connections_to_remote_devices();
+    const auto& chip_unique_ids = cluster_desc.get_chip_unique_ids();
+    const auto& eth_connections = cluster_desc.get_ethernet_connections();
+    auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context->rank());
-    auto hostname = get_host_name();
+    auto hostname = get_local_discovery_hostname();
 
-    // When multiple ranks exist and hostnames are not unique (e.g. mock, same machine), use hostname_rank
-    // so each rank gets its own entry during merge. When hostnames are unique (different machines),
-    // use hostname so graph keys match my_host_name() for lookups (e.g. get_host_neighbors).
+    // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
+    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
+    // PSD merge keys stay unique and global eth links validate correctly.
     auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
                             ? (hostname + "_" + std::to_string(my_rank))
                             : hostname;
@@ -471,9 +661,21 @@ PhysicalSystemDescriptor run_local_discovery(
     auto& asic_graph = psd.get_system_graph().asic_connectivity_graph[hostname_key];
     auto& exit_nodes = psd.get_exit_node_connection_table()[hostname_key];
 
+    auto make_eth_connection = [&](AsicID src_asic, uint8_t src_chan, uint8_t dst_chan, bool is_local) {
+        return EthConnection{
+            src_chan,
+            dst_chan,
+            is_local,
+            to_metal_port_type(tt::scaleout_tools::resolve_port_type(
+                psd.get_asic_descriptors().at(src_asic).board_type,
+                *psd.get_asic_descriptors().at(src_asic).asic_location,
+                src_chan)),
+        };
+    };
+
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] = get_asic_position(
-            cluster,
+            cluster_desc,
             src_chip_id,
             target_device_type != TargetDevice::Silicon,
             psd.get_pcie_devices_per_tray()[hostname_key],
@@ -481,7 +683,7 @@ PhysicalSystemDescriptor run_local_discovery(
         psd.get_asic_descriptors()[src_unique_id] = ASICDescriptor{
             TrayID{tray_id},
             asic_location,
-            cluster_desc->get_board_type(src_chip_id),
+            cluster_desc.get_board_type(src_chip_id),
             src_unique_id,
             src_chip_id,
             hostname_key};
@@ -503,12 +705,13 @@ PhysicalSystemDescriptor run_local_discovery(
             if (!visited_dst.contains(dst_chip)) {
                 // This neighbor has not been visited. Add it to the graph and mark visited.
                 asic_graph[src_unique_id].push_back(
-                    {AsicID{chip_unique_ids.at(dst_chip)}, {EthConnection(chan, dst_chan, true)}});
+                    {AsicID{chip_unique_ids.at(dst_chip)}, {make_eth_connection(src_unique_id, chan, dst_chan, true)}});
                 visited_dst[dst_chip] = asic_graph[src_unique_id].size() - 1;
             } else {
                 // This neighbor has already been visited. There is more than one channel to it.
                 // Update the existing entry with the new channel.
-                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(EthConnection(chan, dst_chan, true));
+                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(
+                    make_eth_connection(src_unique_id, chan, dst_chan, true));
             }
         }
     }
@@ -526,30 +729,42 @@ PhysicalSystemDescriptor run_local_discovery(
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = std::get<1>(remote_info);
             if (!visited_dst.contains(dst_unique_id)) {
-                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
+                asic_graph[local_unique_id].push_back(
+                    {dst_unique_id, {make_eth_connection(local_unique_id, eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
             } else {
                 asic_graph[local_unique_id][visited_dst[dst_unique_id]].second.push_back(
-                    EthConnection(eth_chan, dst_chan, false));
+                    make_eth_connection(local_unique_id, eth_chan, dst_chan, false));
             }
             exit_nodes.push_back(ExitNodeConnection{
                 .src_exit_node = local_unique_id,
                 .dst_exit_node = dst_unique_id,
-                .eth_conn = EthConnection(eth_chan, dst_chan, false)});
+                .eth_conn = make_eth_connection(local_unique_id, eth_chan, dst_chan, false),
+            });
         }
     }
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster.get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    // Get Firmware Bundle Version from the driver
+    psd.get_firmware_bundle_version() = cluster_desc.get_cluster_firmware_bundle_version();
 
     return psd;
+}
+
+PhysicalSystemDescriptor run_local_discovery_live(
+    tt::umd::ClusterDescriptor& cluster_desc,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    tt::TargetDevice target_device_type,
+    bool all_hostnames_unique) {
+    return run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
 
 PhysicalSystemDescriptor run_physical_system_discovery(
-    tt::umd::Cluster& cluster,
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
@@ -560,13 +775,24 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
-    auto psd = discovery_impl::run_local_discovery(
-        cluster, distributed_context, target_device_type, run_live_discovery, all_hostnames_unique);
+
+    static constexpr bool dispatch_local_discovery = false;
+    static constexpr bool dispatch_live_discovery = true;
+
+    const bool dispatch_live = (!run_live_discovery || (target_device_type != TargetDevice::Silicon))
+                                   ? dispatch_local_discovery
+                                   : dispatch_live_discovery;
+
+    PhysicalSystemDescriptor psd =
+        dispatch_live
+            ? discovery_impl::run_local_discovery_live(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
+            : discovery_impl::run_local_discovery(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
-    auto hostname = get_host_name();
-    psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
+    psd.set_discovery_data(get_local_discovery_hostname(), my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);
@@ -576,10 +802,6 @@ PhysicalSystemDescriptor run_physical_system_discovery(
             remove_unresolved_nodes(psd);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
-
-            // With multi-rank (size > 1), run_local_discovery uses hostname_rank keys from the start,
-            // so asic_connectivity_graph, exit_node_connection_table, and host_connectivity_graph
-            // already have the correct keys. No rename needed.
         }
         exchange_metadata(psd, distributed_context, false);
     }

@@ -27,14 +27,15 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_device_perf_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -89,14 +90,31 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        HF_HUB_OFFLINE: 1
+        # Only the per-runner BH cache modes (local-disk, lfc) need HF online
+        # so first-use can populate the cache. Shared NFS modes (cloud-mlperf
+        # for BH and the implicit WH mount) keep HF offline — those are :ro
+        # and HF would try to write metadata (refs/main, .no_exist markers)
+        # on every HEAD call even when the cache already has the model,
+        # crashing with `OSError [Errno 30] Read-only file system`.
+        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        # Mount the HF / tt_cache root so it always appears inside the container
+        # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
+        # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
+        # (populated from the weights-cache-mode field in .github/sku_config.yaml by prepare_test_matrix.py):
+        #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
+        #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
+        #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
+        #   (no mode → WH SKU)      → host /mnt/MLPerf (whole tree; preserves access to
+        #                             /mnt/MLPerf/tt_dnn-models still used by one WH entry)
+        # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
+        # shared NFS honors mlperf-read-only.
+        - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
@@ -104,7 +122,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -124,9 +143,12 @@ jobs:
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports
-          ${{ matrix.test-group.cmd }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            ${{ matrix.test-group.cmd }}
       - name: Merge test reports
         id: generate-device-perf-report
         if: ${{ !cancelled() }}
@@ -191,5 +213,57 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, models-device-perf-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
+          run-result: ${{ needs.models-device-perf-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

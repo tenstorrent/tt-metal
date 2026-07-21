@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 
@@ -15,7 +16,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
     // This approximation defines erfinv(x) as:
     // erfinv(x) = sqrt( - 2/(pi*a) - log(1 - x^2)/2 + sqrt( ( 2/(pi*a) + log(1 - x^2)) ^2 - 1/a log(1 - x^2)) )
@@ -23,60 +24,42 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // function)
 
     // Compute log(1 - x^2)
-    sfpi::vFloat log_value = in * in;
-    log_value = 1 - log_value;
-    log_value = calculate_log_body<false, false, true>(log_value, 0);  // use fp32 to avoid intermediate rounding
-
-    sfpi::vFloat temp = log_value * 0.5;
+    sfpi::vFloat log_value = calculate_log_body<false, false, false>(1.0f - x * x, 0);
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:
-    constexpr float TwoPiA = 4.330746750799873f;   // 2 / (pi * a)
+    constexpr float TwoPiA = -4.330746750799873f;  // -2 / (pi * a)
     constexpr float OneDivA = 6.802721088435375f;  // 1/a
 
     // tmp = -2 / (pi * a) - log(1 - x^2)/2
-    temp = TwoPiA + temp;
-    temp = -temp;
+    sfpi::vFloat tmp = TwoPiA + -0.5f * log_value;
 
     // calculated_value = temp + sqrt( temp^2 - log_value / a)
-    sfpi::vFloat calculated_value = (temp * temp) - (log_value * OneDivA);
-    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false>(calculated_value);
-    calculated_value = temp + intermediate_result;
+    sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
+    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 2>(calculated_value);
+    calculated_value = tmp + intermediate_result;
 
     // result = sqrt(calculated_value)
-    sfpi::vFloat result = sfpu_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat result = sfpu_sqrt_custom<false, 2>(calculated_value);
 
     return result;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_erfinv() {
-    // SFPU microcode
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat result;
-
-        // Since erfinv(-x) = -erfinv(x), we can compute the result for the absolute value of the input.
-        // This reduces the number of edge cases.
-        sfpi::vFloat abs_v = sfpi::abs(v);
-
-        v_if(abs_v == 1.0f) { result = std::numeric_limits<float>::infinity(); }
-        v_elseif(abs_v > 1.0f) {  // Nan not supported
-            result = std::numeric_limits<float>::quiet_NaN();
-        }
-        v_else { result = calculate_erfinv_body<true>(abs_v); }
-        v_endif;
-
-        result = sfpi::setsgn(result, v);  // restore sign
-
-        sfpi::dst_reg[0] = result;
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = calculate_erfinv_body<false>(in);
+        in = sfpi::dst_reg[0];  // reload due to register pressure
+        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     log_init<false, false, false>();
 }
 

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <random>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -120,7 +121,13 @@ void NamedShm::unlink() {
 
 std::string generate_shm_name(const std::string& prefix) {
     static std::atomic<uint32_t> counter{0};
-    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
+    static const uint32_t random_number = []() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dist;
+        return dist(gen);
+    }();
+    return fmt::format("/tt_{}_{}_{}_{}", prefix, getpid(), random_number, counter.fetch_add(1));
 }
 
 }  // namespace tt::tt_metal::distributed

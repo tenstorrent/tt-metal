@@ -2,21 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "softmax_program_factory_attention_optimized_sharded.hpp"
-
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "softmax_device_operation.hpp"
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <bit>
+#include <map>
 #include <utility>
 
 namespace ttnn::prim {
-SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedProgramFactoryAttentionOptimized::create(
-    const SoftmaxParams& attributes, const SoftmaxInputs& tensor_args, Tensor& output_tensor) {
-    tt::tt_metal::Program program{};
+
+tt::tt_metal::ProgramDescriptor
+SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_descriptor(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    using namespace tt::tt_metal;
+
     auto* device = tensor_args.input_tensor.device();
 
     // Guard against non-sharded inputs when using a sharded program config
@@ -25,26 +27,29 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
         "Input tensor must be sharded when using SoftmaxShardedMultiCoreProgramConfig");
 
     // convert data format
-    tt::DataFormat in0_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
+    tt::DataFormat in0_cb_data_format = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
-    tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat out0_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat mask_cb_data_format = tensor_args.mask.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.mask->dtype())
+                                             ? datatype_to_dataformat_converter(tensor_args.mask->dtype())
                                              : tt::DataFormat::Float16_b;
-    tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat fused_attention_scale_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat max_scaler_cb_data_format =
+        in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat sum_scaler_cb_data_format =
+        im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     log_debug(tt::LogOp, "in0_cb_data_format: {}", in0_cb_data_format);
     log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
     log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
     log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "scale_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "scalar_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "max_scaler_cb_data_format: {}", max_scaler_cb_data_format);
+    log_debug(tt::LogOp, "sum_scaler_cb_data_format: {}", sum_scaler_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -78,8 +83,9 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
     uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
     uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
-    uint32_t scale_tile_size = tt::tile_size(scale_cb_data_format);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_cb_data_format);
+    uint32_t fused_attention_scale_tile_size = tt::tile_size(fused_attention_scale_cb_data_format);
+    uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
+    uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
     // in out buffer
     auto* src0_buffer = tensor_args.input_tensor.buffer();
     auto* out0_buffer = output_tensor.buffer();
@@ -90,11 +96,12 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     // block size for in0 (tensor a)
     uint32_t in0_CB_size = program_config.block_w * program_config.block_h * in0_tile_size;
     // scaler for reduce coming from reader
-    uint32_t in1_CB_size = 1 * scalar_tile_size;
+    uint32_t max_scaler_CB_size = 1 * max_scaler_tile_size;
+    uint32_t sum_scaler_CB_size = 1 * sum_scaler_tile_size;
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
-    uint32_t in2_CB_size = 1 * scale_tile_size;
+    uint32_t in2_CB_size = 1 * fused_attention_scale_tile_size;
     // attention mask
-    uint32_t in3_CB_size;
+    uint32_t in3_CB_size = 0;
     if (attributes.is_causal_mask) {
         if (tensor_args.mask.value().is_sharded()) {
             in3_CB_size = program_config.block_w * program_config.block_h * mask_tile_size;
@@ -126,14 +133,13 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
     uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    uint32_t num_cores = num_cores_c * num_cores_r;
-    CoreRange all_device_cores(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
+    const CoreRangeSet all_device_cores{CoreRange(
+        {static_cast<std::size_t>(start_core_x), static_cast<std::size_t>(start_core_y)},
+        {static_cast<std::size_t>(start_core_x) + num_cores_c - 1,
+         static_cast<std::size_t>(start_core_y) + num_cores_r - 1})};
     // reader compile arg
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)program_config.block_w};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.mask ? tensor_args.mask->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(program_config.block_w)};
+    TensorAccessorArgs(tensor_args.mask ? tensor_args.mask->buffer() : nullptr).append_to(reader_compile_time_args);
     std::map<std::string, std::string> softmax_defines;
     // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel =
@@ -147,14 +153,14 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     }
     if (attributes.is_causal_mask) {
         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
-            reader_compile_time_args.push_back((std::uint32_t)program_config.block_h / mask_Ht);  // fused head
+            reader_compile_time_args.push_back(static_cast<uint32_t>(program_config.block_h) / mask_Ht);  // fused head
         } else {
-            reader_compile_time_args.push_back((std::uint32_t)program_config.block_h);
+            reader_compile_time_args.push_back(static_cast<uint32_t>(program_config.block_h));
         }
     }
     reader_compile_time_args.push_back(
-        (std::uint32_t)(mask_cb_data_format == tt::DataFormat::Float32));  // mask float32
-    reader_compile_time_args.push_back((std::uint32_t)mask_Ht);
+        static_cast<uint32_t>(mask_cb_data_format == tt::DataFormat::Float32));  // mask float32
+    reader_compile_time_args.push_back(static_cast<uint32_t>(mask_Ht));
 
     if (tensor_args.mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -175,11 +181,15 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
         reader_kernel_path =
             std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/reader_unary_sharded_sm_causal_mask_hw_dims.cpp";
     }
-    auto reader_kernels_id = CreateKernel(
-        program,
-        reader_kernel_path,
-        all_device_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines));
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = reader_kernel_path;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_device_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = KernelDescriptor::Defines(softmax_defines.begin(), softmax_defines.end());
+    reader_desc.config = ReaderConfigDescriptor{};
+
     // compute kernel compile time args
     std::vector<uint32_t> compute_compile_time_args = {
         program_config.block_h,
@@ -192,84 +202,157 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
-    CreateKernel(
-        program,
-        std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_sharded.cpp",
-        all_device_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = softmax_defines});
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/compute/softmax_sharded.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_device_cores;
+    compute_desc.compile_time_args = compute_compile_time_args;
+    compute_desc.defines = KernelDescriptor::Defines(softmax_defines.begin(), softmax_defines.end());
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     // Create circular buffers
+    ProgramDescriptor desc;
     // in0 sharded
-    using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
-    using tt::tt_metal::CircularBufferConfig;
-    auto c_in0_config = CircularBufferConfig(in0_CB_size, {{tt::CBIndex::c_0, in0_cb_data_format}})
-                            .set_page_size(tt::CBIndex::c_0, in0_tile_size)
-                            .set_globally_allocated_address(*src0_buffer);
-    auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
-    // in1 scalar
-    auto c_in1_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_1, scalar_cb_data_format}})
-                            .set_page_size(tt::CBIndex::c_1, scalar_tile_size);
-    CreateCircularBuffer(program, all_device_cores, c_in1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_CB_size,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = in0_cb_data_format,
+            .page_size = in0_tile_size,
+        }}},
+        .buffer = src0_buffer,
+    });
+    // in1 max scaler
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = max_scaler_CB_size,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = max_scaler_cb_data_format,
+            .page_size = max_scaler_tile_size,
+        }}},
+    });
+    // sum scaler
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = sum_scaler_CB_size,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
+            .data_format = sum_scaler_cb_data_format,
+            .page_size = sum_scaler_tile_size,
+        }}},
+    });
     // in2 in3 attn scale mask
-    std::optional<CBHandle> cb_intermed2_id;
-    std::optional<CBHandle> cb_in2_id;
-    std::optional<CBHandle> cb_in3_id;
     if (tensor_args.mask.has_value()) {
         // im2
-        auto c_intermed2_config = CircularBufferConfig(im2_CB_size, {{tt::CBIndex::c_8, im_cb_data_format}})
-                                      .set_page_size(tt::CBIndex::c_8, im_tile_size);
-        cb_intermed2_id = CreateCircularBuffer(program, all_device_cores, c_intermed2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = im2_CB_size,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
+                .data_format = im_cb_data_format,
+                .page_size = im_tile_size,
+            }}},
+        });
         // in2 scale
-        auto c_in2_config = CircularBufferConfig(in2_CB_size, {{tt::CBIndex::c_2, scale_cb_data_format}})
-                                .set_page_size(tt::CBIndex::c_2, scale_tile_size);
-        cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in2_CB_size,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                .data_format = fused_attention_scale_cb_data_format,
+                .page_size = fused_attention_scale_tile_size,
+            }}},
+        });
         // in3 attn mask
         if (tensor_args.mask->is_sharded()) {
             auto* mask_buffer = tensor_args.mask->buffer();
-            auto c_in3_config = CircularBufferConfig(in3_CB_size, {{tt::CBIndex::c_3, mask_cb_data_format}})
-                                    .set_page_size(tt::CBIndex::c_3, mask_tile_size)
-                                    .set_globally_allocated_address(*mask_buffer);
-            cb_in3_id = CreateCircularBuffer(program, all_device_cores, c_in3_config);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in3_CB_size,
+                .core_ranges = all_device_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                    .data_format = mask_cb_data_format,
+                    .page_size = mask_tile_size,
+                }}},
+                .buffer = mask_buffer,
+            });
         } else {
-            auto c_in3_config = CircularBufferConfig(in3_CB_size, {{tt::CBIndex::c_3, mask_cb_data_format}})
-                                    .set_page_size(tt::CBIndex::c_3, mask_tile_size);
-            cb_in3_id = CreateCircularBuffer(program, all_device_cores, c_in3_config);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in3_CB_size,
+                .core_ranges = all_device_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                    .data_format = mask_cb_data_format,
+                    .page_size = mask_tile_size,
+                }}},
+            });
         }
     }
     // out
-    auto c_out0_config = CircularBufferConfig(out_CB_size, {{tt::CBIndex::c_11, out0_cb_data_format}})
-                             .set_page_size(tt::CBIndex::c_11, out0_tile_size)
-                             .set_globally_allocated_address(*out0_buffer);
-    auto cb_out0_id = CreateCircularBuffer(program, all_device_cores, c_out0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_CB_size,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
+            .data_format = out0_cb_data_format,
+            .page_size = out0_tile_size,
+        }}},
+        .buffer = out0_buffer,
+    });
     // im0 for exp(x)
-    auto c_intermed0_config = CircularBufferConfig(im0_CB_size, {{tt::CBIndex::c_6, im_cb_data_format}})
-                                  .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    CreateCircularBuffer(program, all_device_cores, c_intermed0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im0_CB_size,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+            .data_format = im_cb_data_format,
+            .page_size = im_tile_size,
+        }}},
+    });
     // im1 for 1/sum(exp(x))
-    auto c_intermed1_config = CircularBufferConfig(im1_CB_size, {{tt::CBIndex::c_7, im_cb_data_format}})
-                                  .set_page_size(tt::CBIndex::c_7, im_tile_size);
-    CreateCircularBuffer(program, all_device_cores, c_intermed1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im1_CB_size,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+            .data_format = im_cb_data_format,
+            .page_size = im_tile_size,
+        }}},
+    });
     if (attributes.numeric_stable) {
         // cb_max
-        auto c_intermed3_config = CircularBufferConfig(max_CB_size, {{tt::CBIndex::c_9, im_cb_data_format}})
-                                      .set_page_size(tt::CBIndex::c_9, im_tile_size);
-        CreateCircularBuffer(program, all_device_cores, c_intermed3_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = max_CB_size,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
+                .data_format = im_cb_data_format,
+                .page_size = im_tile_size,
+            }}},
+        });
         // cb_x
-        auto c_intermed4_config = CircularBufferConfig(x_CB_size, {{tt::CBIndex::c_10, im_cb_data_format}})
-                                      .set_page_size(tt::CBIndex::c_10, im_tile_size);
-        CreateCircularBuffer(program, all_device_cores, c_intermed4_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = x_CB_size,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
+                .data_format = im_cb_data_format,
+                .page_size = im_tile_size,
+            }}},
+        });
     }
 
     // Runtime Args
-    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
-    uint32_t scale_value =
-        std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
+    Buffer* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask->buffer() : nullptr;
+    uint32_t scale_u = std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 
     uint32_t num_tiles_in_attn_mask = 0;
@@ -282,21 +365,22 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t num_cores_per_batch_index = 0;
 
     if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-        for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+        for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+            for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+                CoreCoord core = {
+                    static_cast<std::size_t>(start_core_x) + core_idx_x,
+                    static_cast<std::size_t>(start_core_y) + core_idx_y};
 
                 // reader args
-                std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(scale_value);
-                reader_args.push_back(mask_addr);
+                std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+                reader_args.push_back(scale_u);
+                reader_args.push_back(mask_buffer);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     reader_args.push_back(num_tiles_in_attn_mask);
                 }
 
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+                reader_desc.emplace_runtime_args(core, reader_args);
 
                 num_cores_per_batch_index++;
 
@@ -322,21 +406,22 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
             }
         }
     } else {
-        for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-            for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+        for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+                CoreCoord core = {
+                    static_cast<std::size_t>(start_core_x) + core_idx_x,
+                    static_cast<std::size_t>(start_core_y) + core_idx_y};
 
                 // reader args
-                std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(scale_value);
-                reader_args.push_back(mask_addr);
+                std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+                reader_args.push_back(scale_u);
+                reader_args.push_back(mask_buffer);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     reader_args.push_back(num_tiles_in_attn_mask);
                 }
 
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
+                reader_desc.emplace_runtime_args(core, reader_args);
 
                 num_cores_per_batch_index++;
 
@@ -362,40 +447,11 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
             }
         }
     }
-    return {
-        std::move(program),
-        {reader_kernels_id,
-         cb_in0_id,
-         cb_out0_id,
-         cb_in3_id,
-         num_cores,
-         program_config.compute_with_storage_grid_size}};
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-void SoftmaxShardedProgramFactoryAttentionOptimized::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SoftmaxParams& /*attributes*/,
-    const SoftmaxInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto* in0_buffer = tensor_args.input_tensor.buffer();
-    const auto& mask_tensor = tensor_args.mask;
-    auto* out_buffer = output_tensor.buffer();
-
-    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_in0_id, *in0_buffer);
-    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_out0_id, *out_buffer);
-    if (mask_tensor.has_value() && mask_tensor->is_sharded()) {
-        UpdateDynamicCircularBufferAddress(
-            cached_program.program, cached_program.shared_variables.cb_in3_id.value(), *mask_tensor->buffer());
-    }
-
-    if (mask_tensor.has_value()) {
-        for (uint32_t i = 0; i < cached_program.shared_variables.num_cores; ++i) {
-            CoreCoord core = {
-                i % cached_program.shared_variables.grid_size.x, i / cached_program.shared_variables.grid_size.x};
-            auto& runtime_args =
-                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernels_id, core);
-            runtime_args[2] = mask_tensor->buffer()->address();
-        }
-    }
-}
 }  // namespace ttnn::prim

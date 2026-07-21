@@ -41,6 +41,7 @@
 
 #include "context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -188,8 +189,7 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
         return;
     }
 
-    // Guard: skip on Mock devices
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+    if (cluster.is_mock_or_emulated()) {
         return;
     }
 
@@ -203,58 +203,48 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
     size_t capture_addr = buffer_map.channel_trimming_capture.l1_address;
     size_t capture_size = buffer_map.channel_trimming_capture.size_bytes;
 
-    auto all_chips = cluster.all_chip_ids();
-
     YAML::Emitter emitter;
     emitter << YAML::BeginMap;
     emitter << YAML::Key << "channel_trimming_capture" << YAML::Value << YAML::BeginMap;
 
     auto& umd_cluster = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    for (ChipId chip_id : all_chips) {
-        FabricNodeId fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        for (const auto& mesh_coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
+            auto fabric_chip_id = mesh_graph.coordinate_to_chip(mesh_id, mesh_coord);
+            FabricNodeId fabric_node_id(mesh_id, fabric_chip_id);
+            ChipId chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
 
-        const auto logical_cores = control_plane.get_active_ethernet_cores(chip_id);
-        if (logical_cores.empty()) {
-            continue;
-        }
-
-        const auto& chan_map = cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map;
-
-        // Collect cores that have a valid channel mapping before emitting
-        std::vector<std::pair<CoreCoord, chan_id_t>> mapped_cores;
-        for (const auto& logical_core : logical_cores) {
-            auto chan_it = chan_map.find(logical_core);
-            if (chan_it != chan_map.end()) {
-                mapped_cores.emplace_back(logical_core, static_cast<chan_id_t>(chan_it->second));
+            // Export only the channels that the control plane admitted into the
+            // current fabric topology. This avoids mixing "locally visible ETH
+            // cores" with the smaller set of fabric-routed channels.
+            const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+            if (active_channels.empty()) {
+                continue;
             }
-        }
-        if (mapped_cores.empty()) {
-            continue;
-        }
 
-        cluster.l1_barrier(chip_id);
+            cluster.l1_barrier(chip_id);
 
-        emitter << YAML::Key << fmt::format("chip_{}", chip_id) << YAML::Value << YAML::BeginMap;
-
-        for (const auto& [logical_core, channel_id] : mapped_cores) {
-            eth_chan_directions direction = control_plane.get_eth_chan_direction(fabric_node_id, channel_id);
+            emitter << YAML::Key << fmt::format("chip_{}", chip_id) << YAML::Value << YAML::BeginMap;
 
             const auto& soc_desc = umd_cluster.get_soc_descriptor(chip_id);
-            tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel_id, tt::CoordSystem::LOGICAL);
+            for (const auto& [channel_id, direction] : active_channels) {
+                tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel_id, tt::CoordSystem::LOGICAL);
 
-            std::vector<std::byte> buffer(capture_size);
-            umd_cluster.read_from_device(buffer.data(), chip_id, eth_core, capture_addr, capture_size);
+                std::vector<std::byte> buffer(capture_size);
+                umd_cluster.read_from_device(buffer.data(), chip_id, eth_core, capture_addr, capture_size);
 
-            CaptureResults capture{};
-            std::memcpy(&capture, buffer.data(), std::min(capture_size, sizeof(CaptureResults)));
+                CaptureResults capture{};
+                std::memcpy(&capture, buffer.data(), std::min(capture_size, sizeof(CaptureResults)));
 
-            emitter << YAML::Key << fmt::format("eth_channel_{}", channel_id) << YAML::Value << YAML::BeginMap;
-            emit_capture_channel_yaml(emitter, capture, direction_to_string(direction));
+                emitter << YAML::Key << fmt::format("eth_channel_{}", channel_id) << YAML::Value << YAML::BeginMap;
+                emit_capture_channel_yaml(emitter, capture, direction_to_string(direction));
+                emitter << YAML::EndMap;
+            }
+
             emitter << YAML::EndMap;
         }
-
-        emitter << YAML::EndMap;
     }
 
     emitter << YAML::EndMap;

@@ -13,8 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 
 using namespace tt;
@@ -36,10 +36,13 @@ uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
 
 // Run a pack relu test using the same infrastructure as test_direct.cpp's quasar path:
 // direct_reader_unary.cpp → eltwise_copy.cpp (with PACK_RELU) → direct_writer_unary.cpp
-static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::function<float(float)>& golden_fn) {
-    Program program = CreateProgram();
+static void run_pack_relu_test(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t relu_config,
+    const std::function<float(float)>& golden_fn) {
+    IDevice* dev = mesh_device->get_devices()[0];
+    const experimental::NodeCoord node{0, 0};
 
-    CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
@@ -54,64 +57,123 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
     auto dst_dram_buffer = CreateBuffer(dst_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    // DFB config for Quasar
-    tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
+    // via Gen2Config::disable_dfb_implicit_sync_for). The program-level
+    // reservation flag set below is independent of per-DFB sync mode.
+    experimental::DataflowBufferSpec input_dfb_spec{
+        .unique_id = INPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .num_producers = 1,
-        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true,
-        .data_format = tt::DataFormat::Float16_b};
-    tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = OUTPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .num_producers = 1,
-        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true,
-        .data_format = tt::DataFormat::Float16_b};
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
 
-    uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
-    uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source =
 
-    KernelHandle reader = tt_metal::experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
-        core,
-        tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb, /*use_dfbs=*/true}});
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
 
-    KernelHandle writer = tt_metal::experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
-        core,
-        tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb, /*use_dfbs=*/true}});
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source =
 
-    KernelHandle compute = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
-        core,
-        tt_metal::experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {num_tiles, /*use_dfbs=*/true},
-            .defines = {{"PACK_RELU", "1"}}});
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
 
-    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-        program, l1_input_dfb, reader, compute);
-    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-        program, l1_output_dfb, compute, writer);
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source =
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"PACK_RELU", "1"}}},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INPUT_DFB,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUTPUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
+        .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
+        .hw_config = experimental::ComputeGen2Config{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "pack_relu",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Stimulus: random bfloat16 in [-1, 1]
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
     detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, 0, num_tiles});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, num_tiles});
-    SetRuntimeArgs(program, compute, core, {relu_config});
+    const uint32_t src_aligned_page_size = static_cast<uint32_t>(src_dram_buffer->aligned_page_size());
+    const uint32_t dst_aligned_page_size = static_cast<uint32_t>(dst_dram_buffer->aligned_page_size());
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", dram_buffer_src_addr},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", src_aligned_page_size}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dram_buffer_dst_addr},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", dst_aligned_page_size}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = COMPUTE,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"relu_config", relu_config}}),
+        },
+    };
+    experimental::SetProgramRunArgs(program, params);
 
     detail::LaunchProgram(dev, program, true);
 
@@ -142,24 +204,24 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
 
 // ZERO_RELU: max(0, x)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluZero) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    run_pack_relu_test(dev, make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
+    run_pack_relu_test(
+        this->devices_.at(0), make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
 }
 
 // MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
-    IDevice* dev = devices_[0]->get_devices()[0];
     const float threshold = 0.25f;
-    run_pack_relu_test(dev, make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
-        return x <= threshold ? 0.0f : x;
-    });
+    run_pack_relu_test(
+        this->devices_.at(0), make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
+            return x <= threshold ? 0.0f : x;
+        });
 }
 
 // MAX_THRESHOLD_RELU: clamp to [0, threshold] (threshold = 0.5)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThreshold) {
-    IDevice* dev = devices_[0]->get_devices()[0];
     const float threshold = 0.5f;
-    run_pack_relu_test(dev, make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
-        return x < 0.0f ? 0.0f : std::min(x, threshold);
-    });
+    run_pack_relu_test(
+        this->devices_.at(0), make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
+            return x < 0.0f ? 0.0f : std::min(x, threshold);
+        });
 }

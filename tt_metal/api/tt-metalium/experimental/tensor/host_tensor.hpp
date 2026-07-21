@@ -30,58 +30,28 @@ namespace tt::tt_metal {
 class HostTensorImpl;
 
 /**
- * HostTensor represents a Tensor in host memory.
- * Unlike from MeshTensor, copying a HostTensor will perform a value-copy semantics of the underlying config and
- * HostBuffer. Note that this usually doesn't mean a deep copy of the underlying data, as the HostBuffer is usually
- * a view into a contiguous memory region.
- *
- * HostTensor has limited transformation operations supported (via tensor_apis.hpp), and is intended to be used with
- * MeshTensor for host <-> device communication.
+ * HostTensor represents a Tensor in host memory. It is intended to be used with MeshTensor for host <-> device
+ * communication, and has a limited set of transformation operations supported (via tensor_apis.hpp).
  *
  * Invariants of HostTensor:
- * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed HostTensor. Incompatible member function
- *   call to this state is checked by TT_ASSERT (enabled at debug build) in accessors. This is mirrors MeshTensor.
- * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
+ * - The DistributedHostBuffer data is laid out in a way that conforms to the TensorSpec.
+ *
+ * Notes:
+ * - HostTensor is copyable with value semantics: TensorSpec and TensorTopology are deep-copied; the
+ *   DistributedHostBuffer follows its own copy semantics, which is typically a shallow copy (view into the
+ *   same underlying data).
+ * - Unlike MeshTensor, HostTensor does not have unique ownership semantics.
+ *
+ * Note: A moved-from HostTensor is in a valid but unspecified state. All member functions except destruction and
+ * assignment will fail on a moved-from instance.
  */
 class HostTensor {
-    /*
-     * Refactoring Notes:
-     * To avoid disruption to existing users, HostTensor will deviate very little from the existing (host) Tensor
-     * semantics. The only significant changes are:
-     * - Eliminating implicit data movement APIs.
-     * - Remove transformation methods like to_layout and pad from the class methods. These seem better as free
-     *   functions that operate on a HostTensor than as methods of HostTensor. (Separation of data storage and data
-     *   manipulation.) In the existing Tensor, these are already duplicated as both methods and free functions.
-     */
-
 public:
     using volume_type = std::uint64_t;
 
     // Special Member functions
 
-    /**
-     * Constructs a host tensor in the default constructed state, acting like a nullptr.
-     */
-    HostTensor();
-
-    /**
-     * Constructs a host tensor from a distributed host buffer.
-     */
-    explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
-    /**
-     * Constructs a host tensor from a single device host storage.
-     * The buffer is occupies the 0x0 shard of the distributed host buffer.
-     */
-    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
-    /**
-     * Move constructor with new spec and topology.
-     * Moves the buffer from other and uses the provided spec/topology.
-     * This is meant for transition as TTNN-Tensor current has a two-step construction for HostTensor.
-     */
-    HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology);
+    HostTensor() = delete;
 
     ~HostTensor();
 
@@ -107,7 +77,7 @@ public:
      * Move constructor.
      *
      * Takes over properties of the other HostTensor.
-     * The other HostTensor becomes a default-constructed HostTensor.
+     * The other HostTensor is left in a valid but unspecified state.
      */
     HostTensor(HostTensor&& other) noexcept;
 
@@ -115,13 +85,24 @@ public:
      * Move assignment operator.
      *
      * Takes over properties of the other HostTensor.
-     * The other HostTensor becomes a default-constructed HostTensor.
+     * The other HostTensor is left in a valid but unspecified state.
      */
     HostTensor& operator=(HostTensor&& other) noexcept;
 
     // End special member functions
 
     // Factory methods for creating an Engaged HostTensor.
+
+    /**
+     * Constructs a host tensor from a distributed host buffer.
+     */
+    static HostTensor from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+    /**
+     * Constructs a host tensor from a single device host buffer.
+     * The buffer occupies the 0x0 shard of the distributed host buffer.
+     */
+    static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
@@ -131,7 +112,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -160,37 +141,33 @@ public:
      * Converts a `Tensor` to a `std::vector<T>`.
      * Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
      * the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
-     *
-     * pre-condition: The HostTensor must be engaged.
      */
     template <typename T>
     std::vector<T> to_vector() const;
 
     /**
      * Returns the TensorSpec of the HostTensor.
-     *
-     * pre-condition: The HostTensor must be engaged.
      */
     const TensorSpec& tensor_spec() const;
 
     /**
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
-     *
-     * pre-condition: The HostTensor must be engaged.
      */
     const TensorTopology& tensor_topology() const;
 
     /**
-     * Returns the DistributedHostBuffer of the HostTensor.
+     * Returns true if this HostTensor was left in a moved-from state.
      *
-     * pre-condition: The HostTensor must be engaged.
+     * A HostTensor becomes valueless when it is the source of a move construction or move assignment.
+     * Unlike every other member function (except destruction and assignment), this function is safe to
+     * call on a moved-from instance; it is in fact the intended way to detect that state.
+     */
+    bool is_valueless_after_move() const;
+
+    /**
+     * Returns the DistributedHostBuffer of the HostTensor.
      */
     const DistributedHostBuffer& buffer() const;
-
-    // TODO(#40348): This should be removed.
-    // We need to maintain invariant of this buffer.
-    // Giving out mutable reference allows user to assign into it.
-    DistributedHostBuffer& buffer();
 
     // Derivables:
 
@@ -216,16 +193,28 @@ public:
 
     Strides strides() const;
 
-    // Questionables:
-
     // Applies a transformation function to each host buffer across devices in parallel, returning a new HostTensor.
     HostTensor transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
 
     // Updates the topology of the HostTensor post construction.
     void update_tensor_topology(TensorTopology tensor_topology);
 
+    /**
+     * Access to the implementation.
+     *
+     * pre-condition: The HostTensor must be initialized.
+     */
+    HostTensorImpl& impl();
+    const HostTensorImpl& impl() const;
+
 private:
-    std::unique_ptr<HostTensorImpl> impl;
+    // Internal constructors. Use the from_buffer factories to build a HostTensor from a backing buffer.
+    explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+    // impl_ could be a nullptr if HostTensor is in a moved-from state.
+    // Avoid using impl_ pointer directly, use the impl() accessor instead.
+    // Otherwise, please add manual TT_FATAL checks for nullptr.
+    std::unique_ptr<HostTensorImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

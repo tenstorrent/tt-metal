@@ -1,52 +1,59 @@
 name: "All Model Tests"
 
+run-name: >-
+  All Model Tests —
+  Tiers[${{ inputs.tier-1 && '1' || '' }}${{ inputs.tier-1 && inputs.tier-2 && ',' || '' }}${{ inputs.tier-2 && '2' || '' }}${{ (inputs.tier-1 || inputs.tier-2) && inputs.tier-3 && ',' || '' }}${{ inputs.tier-3 && '3' || '' }}]
+  Tests[${{ inputs.run-unit-tests && 'unit' || '' }}${{ inputs.run-unit-tests && inputs.run-e2e-tests && ',' || '' }}${{ inputs.run-e2e-tests && 'e2e' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests) && inputs.run-sweep-tests && ',' || '' }}${{ inputs.run-sweep-tests && 'sweep' || '' }}]
+  Model[${{ inputs.model || 'all' }}]
+  SKUs[${{ inputs.skus }}]
+
 on:
   workflow_dispatch:
     inputs:
-      # ── Tier selection (checkboxes) ───────────────────────────────
-      tier-1:
-        description: "Tier 1"
-        required: false
-        type: boolean
-        default: true
-      tier-2:
-        description: "Tier 2"
-        required: false
-        type: boolean
-        default: true
-      tier-3:
-        description: "Tier 3"
-        required: false
-        type: boolean
-        default: false
-
       # ── Test type selection (checkboxes) ──────────────────────────
       run-unit-tests:
-        description: "Unit tests"
+        description: "Model Unit tests"
         required: false
         type: boolean
         default: true
       run-e2e-tests:
-        description: "End-to-end tests"
+        description: "Model End-to-end tests"
         required: false
         type: boolean
         default: true
       run-sweep-tests:
-        description: "Sweep tests"
+        description: "Model Sweep tests"
+        required: false
+        type: boolean
+        default: false
+
+      # ── Tier selection (checkboxes) ───────────────────────────────
+      tier-1:
+        description: "Tier 1 (Critical Models)"
+        required: false
+        type: boolean
+        default: true
+      tier-2:
+        description: "Tier 2 (Standard Models)"
+        required: false
+        type: boolean
+        default: true
+      tier-3:
+        description: "Tier 3 (Lower Priority Models)"
         required: false
         type: boolean
         default: false
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy"
+        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy]"
         required: false
         type: string
         default: "all"
 
       # ── Other filters ─────────────────────────────────────────────
       model:
-        description: "Model filter (e.g. llama3.1-8b). Leave 'all' to run everything."
+        description: "Model filter — substring match (e.g. 'llama' matches llama3.1-8b, llama3.2-70b). See models/model_ci_tiers.md for the full list. Leave 'all' to run everything."
         required: false
         default: all
         type: string
@@ -83,11 +90,17 @@ on:
 permissions:
   packages: write
   contents: write
+  # models-unit-tests-impl has a multihost leg that requests id-token: write (ttop OIDC). A reusable
+  # workflow can't request more than its caller grants, and that check runs at startup regardless of
+  # the leg's `if:` guard — so the unit-test caller jobs must be able to pass id-token down even when
+  # no exabox SKU is selected, or the whole run fails at startup. Granted here (workflow-wide) so the
+  # caller jobs inherit it without per-job blocks.
+  id-token: write
 
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
       has-t1-unit: ${{ steps.check.outputs.has-t1-unit }}
@@ -101,7 +114,8 @@ jobs:
       has-any-tests: ${{ steps.check.outputs.has-any-tests }}
     steps:
       - name: Checkout test definitions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: tests/pipeline_reorg
           sparse-checkout-cone-mode: true
@@ -109,8 +123,22 @@ jobs:
       - name: Resolve SKU selection
         id: resolve-skus
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf,wh_galaxy"
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox_perf wh_galaxy"
+          WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
+          BH_SKUS="bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="$WH_SKUS,$BH_SKUS"
+          # NOTE: exabox multihost SKUs (bh_sc1/bh_sc4/bh_sc4-blitz/bh_sc4-mgd/bh_sc16) are intentionally NOT
+          # dispatchable from all-model-tests yet — exabox model-unit tests are dispatched via the
+          # standalone models-t1/t2/t3-unit-tests workflows (which grant ttop OIDC on their caller
+          # jobs). This workflow already grants `id-token: write` workflow-wide (see top-level
+          # permissions), so the caller jobs can pass it down.
+          # TODO: to dispatch exabox jobs here alongside everything else, we must:
+          #   1. add the exabox SKUs to VALID_SKUS below (keep them out of ALL_SKUS/bh_all so `all`
+          #      never auto-allocates scarce exabox hardware);
+          #   2. fix run reconciliation — models-unit-tests-impl exposes multihost legs in a separate
+          #      `matrix_multihost` output that the "Aggregate child matrices" step here does not
+          #      union, and the multihost job emits no per-leg summary artifact; without both,
+          #      dispatched multihost legs would be misreported as INFRA_FAILURE.
+          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p150b_civ2 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -119,7 +147,7 @@ jobs:
           if [[ "$SKU_INPUT" == "all" ]]; then
             SKUS="$ALL_SKUS"
           else
-            SKUS=""
+            SKUS_RAW=""
             IFS=',' read -ra ITEMS <<< "$SKU_INPUT"
             for item in "${ITEMS[@]}"; do
               # Trim leading/trailing whitespace from each token
@@ -127,10 +155,28 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy"
+                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy]"
                 exit 1
               fi
-              SKUS="${SKUS:+$SKUS,}$item"
+              if [[ "$item" == "wh_all" ]]; then
+                SKUS_RAW="${SKUS_RAW:+$SKUS_RAW,}$WH_SKUS"
+              elif [[ "$item" == "bh_all" ]]; then
+                SKUS_RAW="${SKUS_RAW:+$SKUS_RAW,}$BH_SKUS"
+              else
+                SKUS_RAW="${SKUS_RAW:+$SKUS_RAW,}$item"
+              fi
+            done
+
+            # Deduplicate while preserving first-seen order.
+            declare -A seen
+            SKUS=""
+            IFS=',' read -ra EXPANDED <<< "$SKUS_RAW"
+            for sku in "${EXPANDED[@]}"; do
+              [[ -z "$sku" ]] && continue
+              if [[ -z "${seen[$sku]}" ]]; then
+                seen[$sku]=1
+                SKUS="${SKUS:+$SKUS,}$sku"
+              fi
             done
           fi
 
@@ -146,12 +192,32 @@ jobs:
 
       - name: Check which tier/test-type combos have matching tests
         id: check
+        env:
+          ENABLED_SKUS: ${{ steps.resolve-skus.outputs.enabled-skus }}
+          MODEL_FILTER: ${{ inputs.model || 'all' }}
+          TIER_1: ${{ inputs.tier-1 }}
+          TIER_2: ${{ inputs.tier-2 }}
+          TIER_3: ${{ inputs.tier-3 }}
+          RUN_UNIT: ${{ inputs.run-unit-tests }}
+          RUN_E2E: ${{ inputs.run-e2e-tests }}
+          RUN_SWEEP: ${{ inputs.run-sweep-tests }}
         run: |
           python3 - <<'PYEOF'
           import yaml, os, sys
 
-          enabled_skus = "${{ steps.resolve-skus.outputs.enabled-skus }}".split(",")
-          model_filter = "${{ inputs.model || 'all' }}"
+          enabled_skus = os.environ["ENABLED_SKUS"].split(",")
+          model_filter = os.environ["MODEL_FILTER"]
+
+          # Which tiers and test types did the user select?
+          enabled_tiers = set()
+          if os.environ.get("TIER_1") == "true": enabled_tiers.add(1)
+          if os.environ.get("TIER_2") == "true": enabled_tiers.add(2)
+          if os.environ.get("TIER_3") == "true": enabled_tiers.add(3)
+
+          enabled_test_types = set()
+          if os.environ.get("RUN_UNIT") == "true": enabled_test_types.add("unit")
+          if os.environ.get("RUN_E2E") == "true": enabled_test_types.add("e2e")
+          if os.environ.get("RUN_SWEEP") == "true": enabled_test_types.add("sweep")
 
           # Map of test-type -> YAML file
           test_files = {
@@ -159,6 +225,18 @@ jobs:
               "e2e":   "tests/pipeline_reorg/models_e2e_tests.yaml",
               "sweep": "tests/pipeline_reorg/models_sweep_tests.yaml",
           }
+
+          def model_matches(test_model, filter_str):
+              """Substring match, comma-separated OR-list.
+
+              'llama' matches 'llama3.1-8b', 'llama3.2-70b', etc.
+              'llama3.1-8b,qwen3-32b' matches a model containing either token.
+              """
+              if filter_str == "all":
+                  return True
+              tm = test_model.lower()
+              return any(tok.strip() and tok.strip().lower() in tm
+                         for tok in filter_str.split(","))
 
           github_output = os.environ.get("GITHUB_OUTPUT", "")
           results = {}
@@ -183,14 +261,15 @@ jobs:
                       # Check if any SKU matches both the enabled list and the tier
                       for sku_name, sku_cfg in skus.items():
                           if sku_name in enabled_skus and sku_cfg.get("tier") == tier:
-                              # Check model filter
-                              if model_filter == "all" or test.get("model") == model_filter:
+                              # Check model filter (substring match)
+                              if model_matches(test.get("model", ""), model_filter):
                                   found = True
                                   break
                       if found:
                           break
                   results[key] = "true" if found else "false"
-                  if found:
+                  # Only count toward any_tests if the user actually selected this tier and test type
+                  if found and tier in enabled_tiers and test_type in enabled_test_types:
                       any_tests = True
 
           results["has-any-tests"] = "true" if any_tests else "false"
@@ -207,18 +286,36 @@ jobs:
               print(f"  {icon} {k} = {v}")
 
           if not any_tests:
-              print("\n::warning::No tests match the selected combination of tiers, test types, SKUs, and model filter. Nothing will run.")
+              missing = []
+              if not enabled_test_types:
+                  missing.append("test group")
+              if not enabled_tiers:
+                  missing.append("tier")
+              if not enabled_skus or enabled_skus == [""]:
+                  missing.append("SKU")
+              if not model_filter:
+                  missing.append("model")
+              if missing:
+                  print(f"\n::error::No tests to run. Please select at least one: {', '.join(missing)}.")
+              else:
+                  print(f"\n::error::No tests to run. No tests match the selected filters (tiers={sorted(enabled_tiers)}, test groups={sorted(enabled_test_types)}, SKUs={enabled_skus}, model={model_filter}).")
+              sys.exit(1)
           PYEOF
+
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
 
   # ── Build (only if at least one combo has tests) ─────────────────
   build-artifact:
-    needs: preflight
+    needs: [check-harbor, preflight]
     if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -340,3 +437,79 @@ jobs:
       tier: "3"
 
   # Note: Tier 3 sweep tests not yet defined — no sweep entries with tier 3 exist in models_sweep_tests.yaml
+
+  # ── AI run summary ────────────────────────────────────────────────
+  # Aggregates per-leg ai-job-summary artifacts into one run-level report.
+  ai-run-summary:
+    needs:
+      - t1-unit-tests
+      - t1-e2e-tests
+      - t1-sweep-tests
+      - t2-unit-tests
+      - t2-e2e-tests
+      - t2-sweep-tests
+      - t3-unit-tests
+      - t3-e2e-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Aggregate child matrices and results
+        id: aggregate
+        env:
+          # toJSON(needs) gives one object keyed by child workflow name,
+          # each with `result` and `outputs.matrix`. Using it here keeps
+          # the aggregation data-driven — adding/removing a tier or
+          # test-type only requires updating the `needs:` list above.
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # Union of every child's matrix output. Skipped children expose
+          # null or "" for outputs.matrix; both must be filtered before
+          # `fromjson` (which would otherwise throw).
+          EXPECTED=$(jq -cn --argjson n "$NEEDS" '
+            [$n[] | .outputs.matrix | select(. != null and . != "") | fromjson] | add // []')
+          echo "expected-jobs=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "Merged $(echo "$EXPECTED" | jq 'length') expected legs"
+
+          # Most-severe-wins precedence: failure > cancelled > success > skipped.
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "Combined run-result: $RESULT"
+
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.aggregate.outputs.expected-jobs }}
+          run-result: ${{ steps.aggregate.outputs.run-result }}
+
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

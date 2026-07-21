@@ -8,49 +8,42 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include <type_traits>
+#include "sfpu/ckernel_sfpu_load_config.h"
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
-    constexpr int sfpload_instr_mod = static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
-    // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    // Each Dest tile is 64 rows; sfpi dst_reg[] indexes in stride units (SFP_DESTREG_STRIDE == 2),
+    // so 64 raw rows == 32 sfpi stride units.
+    constexpr uint dst_tile_size = 32;
+
+    // Reverse subtract: out = in1 - in0. sfpi's `b - a` lowers to the same SFPIADD that 2's-complements
+    // the subtrahend, matching the original TTI_SFPIADD(..., 2SCOMP_LREG_DST). The load/store DataLayout
+    // is chosen so its SFP load/store format byte equals the original InstrModLoadStore value:
+    //   INT32 (4) -> I32 (sign-mag<->2's-comp conversion), LO16 (6) -> U16, INT32_2S_COMP (12) -> SM32 (raw).
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
+                                        : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
+                                                                                                 : sfpi::DataLayout::I32;
+    using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // operand A - int32/uint32/uint16
-        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
-
-        // operand B - int32/uint32/uint16 (offset by dst_offset * dest tile size)
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-
-        // Reverse subtraction is performed using 2's complement by adding B to the negation of A: LREG1 + (-LREG0)
-        // Uses 6 as imod. Performs integer addition between LREG specified in lreg_c and the 2's complement (4) of LREG
-        // specified in lreg_dest. The condition code register is not modified (2).
-        TTI_SFPIADD(
-            0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-
-        // Store result from LREG_0 to dest
-        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
-
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
+        vType b = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<layout>();
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = b - a;
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 void calculate_rsub_scalar_int32(uint32_t scalar) {
-    int int_scalar = scalar;
-    // Load scalar value param to lreg2
-    _sfpu_load_imm32_(p_sfpu::LREG1, int_scalar);
+    // out = scalar - x. The immediate is materialized once (loop-invariant) outside the loop.
+    sfpi::vInt scalar_vec = static_cast<int>(scalar);
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
-        // Uses 6 as imod. Performs integer addition between LREG specified in lreg_c and the 2's complement (4) of LREG
-        // specified in lreg_dest. The condition code register is not modified (2).
-        TTI_SFPIADD(
-            0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
+        sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = scalar_vec - x;
         sfpi::dst_reg++;
     }
 }

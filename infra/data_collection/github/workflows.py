@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pathlib
-import re
 import json
+import re
 from datetime import datetime, timedelta
 from functools import partial
 from typing import List
@@ -13,8 +12,8 @@ from loguru import logger
 
 from infra.data_collection import junit_xml_utils, pydantic_models
 
-
 smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
+tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*(\[.*\])')
 # Define a regex pattern to match timestamps in ISO 8601 format (e.g., 2025-03-26T19:18:31.7521333Z)
 timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
@@ -28,28 +27,181 @@ def search_for_tt_smi_version_in_log_file_(log_file):
     return None
 
 
-def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
-    """
-    Read the job output log for the tt-smi version. The tt-smi version is printed in the
-    Set up runner step, where we call tt-smi-metal -s to dump the smi output.
-    The tt-smi version stored in the "host_sw_vers" dict is only available in
-    higher versions of tt-smi (3.0.4+). For older versions we will not be able to extract
-    the smi version directly from the smi output log dump.
-    See: https://github.com/tenstorrent/tt-metal/issues/19095
-    """
+def search_for_tt_smi_reset_in_log_file_(log_file):
+    ts_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s*")
+    # Strip GitHub Actions annotation prefixes like ##[error], ##[warning]
+    gh_annotation_pattern = re.compile(r"^##\[[a-z]+\]", re.IGNORECASE)
+
+    def strip_ansi(text):
+        return re.sub(r"\x1B[@-_][0-?]*[ -/]*[@-~]", "", text)
+
+    def parse_ts(line):
+        try:
+            line = line.strip()
+            if not ts_pattern.match(line):
+                return None
+            ts_str = line.split(" ")[0].rstrip("Z")
+            if "." in ts_str:
+                base, frac = ts_str.split(".")
+                ts_str = f"{base}.{frac[:6]}"
+            return datetime.fromisoformat(ts_str)
+        except Exception:
+            return None
+
+    def clean_line(line):
+        """Strip ISO timestamp prefix and GitHub annotation prefix, return clean content."""
+        s = line.strip()
+        m = ts_pattern.match(s)
+        if m:
+            s = s[m.end() :]
+        # Strip ##[error] / ##[warning] / ##[group] etc.
+        s = gh_annotation_pattern.sub("", s).strip()
+        return s
+
+    with open(log_file, "r") as f:
+        log = strip_ansi(f.read())
+
+    lines = log.splitlines()
+
+    # Check if there is any tt-smi reset activity in this log at all
+    has_reset = any(
+        "tt-smi reset" in line.lower() or ("tt_metal_infra" in line.lower() and ".sh" in line.lower()) for line in lines
+    )
+
+    if not has_reset:
+        return [
+            {
+                "tt_smi_reset_attempt": 1,
+                "final_status": "UNKNOWN",
+                "total_reset_time_sec": None,
+                "error_summary": None,
+            }
+        ]
+
+    # Find where the reset section starts
+    reset_start_idx = None
+    for i, line in enumerate(lines):
+        lower = line.lower()
+        if (
+            ("tt_metal_infra" in lower and ".sh" in lower)
+            or "starting tt-smi reset" in lower
+            or "tt-smi reset" in lower
+        ):
+            reset_start_idx = i
+            break
+
+    # If no explicit start found, scan from beginning (e.g. WH simple case)
+    if reset_start_idx is None:
+        reset_start_idx = 0
+
+    block_lines = lines[reset_start_idx:]
+    block_start_ts = parse_ts(lines[reset_start_idx])
+    block_end_ts = None
+    # Count internal tt-smi retry attempts via "===== START of output =====" occurrences
+    num_smi_attempts = 0
+    final_status = "UNKNOWN"
+    seen_errors = set()
+    error_lines = []
+
+    reset_done = False
+
+    for line in block_lines:
+        lower = line.strip().lower()
+        ts = parse_ts(line)
+        # Only update end timestamp while reset is still in progress
+        if ts and not reset_done:
+            block_end_ts = ts
+        if "===== start of output =====" in lower:
+            num_smi_attempts += 1
+        if "tt-smi reset was successful" in lower:
+            final_status = "SUCCESS"
+            if ts:
+                block_end_ts = ts
+            reset_done = True
+        if "error:" in lower:
+            # Always collect all conclusive failure lines (there can be multiple)
+            content = clean_line(line)
+            if content and content not in seen_errors:
+                seen_errors.add(content)
+                error_lines.append(content)
+            if not reset_done:
+                final_status = "FAILURE"
+                if ts:
+                    block_end_ts = ts
+                reset_done = True
+
+    # "===== START of output =====" counts internal tt-smi retry invocations.
+    # If it never appeared but we got a clear SUCCESS, the reset ran once without retries.
+    # If it never appeared and status is still UNKNOWN or FAILURE, no real tool ran —
+    # it was a false positive (e.g. "tt-smi reset" / "Error:" in an unrelated log line).
+    if num_smi_attempts == 0:
+        if final_status == "SUCCESS":
+            num_smi_attempts = 1
+        else:
+            return [
+                {
+                    "tt_smi_reset_attempt": 1,
+                    "final_status": "UNKNOWN",
+                    "total_reset_time_sec": None,
+                    "error_summary": None,
+                }
+            ]
+
+    duration = None
+    if block_start_ts and block_end_ts:
+        duration = (block_end_ts - block_start_ts).total_seconds()
+
+    if final_status == "SUCCESS":
+        error_summary = "tt-smi reset was successful"
+    elif error_lines:
+        error_summary = " | ".join(error_lines)
+    else:
+        error_summary = None
+
+    return [
+        {
+            "tt_smi_reset_attempt": num_smi_attempts,
+            "final_status": final_status,
+            "total_reset_time_sec": duration,
+            "error_summary": error_summary,
+        }
+    ]
+
+
+def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
 
-    log_files = logs_dir.glob("*.log")
+    assert logs_dir.exists(), f"Logs dir does not exist: {logs_dir}"
+    assert logs_dir.is_dir(), f"Logs path is not a dir: {logs_dir}"
+
+    log_files = list(logs_dir.glob("*.log"))
+    assert log_files, f"No log files found in {logs_dir}"
 
     github_job_ids_to_tt_smi_versions = {}
+    github_job_ids_to_tt_smi_resets = {}
+
     for log_file in log_files:
+        filename = log_file.stem
+
+        assert filename.isdigit(), f"Unexpected filename format: {filename}"
+
+        github_job_id = int(filename)
+        assert github_job_id > 0
+
         tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
         if tt_smi_version:
-            github_job_id = log_file.name.replace(".log", "")
-            assert github_job_id.isnumeric(), f"{github_job_id}"
-            github_job_id = int(github_job_id)
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
-    return github_job_ids_to_tt_smi_versions
+
+        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
+        for reset in tt_smi_reset:
+            reset["workflow_attempt"] = workflow_attempt
+        assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
+
+        assert github_job_id not in github_job_ids_to_tt_smi_resets, f"Duplicate reset key detected: {github_job_id}"
+
+        github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
+
+    return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 
 
 def parse_github_log_timestamp(line):
@@ -76,7 +228,14 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
     ** Threshold may be reduced in the future
     """
     log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-    log_file = log_dir.joinpath(str(workflow_job_id) + ".log")
+    assert str(workflow_job_id).isdigit()
+    matching_logs = list(log_dir.glob(f"{workflow_job_id}.log"))
+
+    if not matching_logs:
+        logger.warning(f"Unable to find github job log file for job: {workflow_job_id}")
+        return False
+
+    log_file = matching_logs[0]
     max_time_delta_seconds = 300
 
     if not log_file.exists():
@@ -141,7 +300,7 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         try:
             # read all *.xml in test_report_dir (gtest can have one xml files per test executable)
             xml_file_paths = [file.resolve(strict=True) for file in list(test_report_dir.glob("*.xml"))]
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             logger.warning(f"No pytest or gtest xml file found in {test_report_dir}, skipping directory.")
         else:
             workflow_run_test_reports_path[test_report_uuid] = xml_file_paths
@@ -178,9 +337,9 @@ def get_github_job_ids_to_workflow_run_uuids_(workflow_outputs_dir, workflow_run
         artifact_uuid_name = search_for_uuid_in_log_file_(log_file)
         if artifact_uuid_name:
             uuid = artifact_uuid_name.replace("test_reports_", "")
-            github_job_id = log_file.name.replace(".log", "")
-            assert github_job_id.isnumeric(), f"{github_job_id}"
-            github_job_id = int(github_job_id)
+            filename = log_file.stem
+            assert filename.isdigit(), f"Unexpected filename format: {filename}"
+            github_job_id = int(filename)
             github_job_ids_to_workflow_run_uuids[github_job_id] = uuid
     return github_job_ids_to_workflow_run_uuids
 
@@ -239,9 +398,9 @@ def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int)
             annot_json_info = json.load(f)
         if annot_json_info:
             # Map job id to annotation info (list of dict)
-            github_job_id = annot_json_file.name.replace("_annotations.json", "")
-            assert github_job_id.isnumeric(), f"{github_job_id}"
-            github_job_id = int(github_job_id)
+            filename = annot_json_file.name.replace("_annotations.json", "")
+            assert filename.isdigit(), f"Unexpected filename format: {filename}"
+            github_job_id = int(filename)
             github_job_ids_to_annotation_jsons[github_job_id] = annot_json_info
     return github_job_ids_to_annotation_jsons
 

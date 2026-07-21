@@ -4,10 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
@@ -24,10 +23,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out0(cb_id_out0);
+    Noc noc;
+    CircularBuffer cb_out0(cb_id_out0);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {

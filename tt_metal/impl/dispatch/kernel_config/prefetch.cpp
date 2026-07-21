@@ -8,6 +8,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include <array>
 #include <map>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -32,6 +33,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -63,8 +65,13 @@ PrefetchKernel::PrefetchKernel(
         get_reads_dispatch_cores) {
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
-    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
+    // respect code space
+    force_watcher_no_inline_ =
+        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline());
 
+    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+    static_config_.dispatch_telemetry_disabled = descriptor.rtoptions().get_dispatch_telemetry_disabled();
     DispatchWorkerType type = PREFETCH;
     if (h_variant && d_variant) {
         this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
@@ -78,6 +85,7 @@ PrefetchKernel::PrefetchKernel(
         type = PREFETCH_D;
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
+    this->send_to_brisc_ = true;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -87,16 +95,17 @@ void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
-    auto l1_size = my_dispatch_constants.get_prefetcher_l1_size();
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB, cq_id_);
     static_config_.fabric_header_rb_entries = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS, cq_id_);
+    static_config_.dispatch_telemetry_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id_);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        bool is_mock = descriptor_.cluster().get_target_device_type() == tt::TargetDevice::Mock;
+        bool is_mock = descriptor_.cluster().is_mock_or_emulated();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr =
@@ -113,17 +122,17 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
         static_config_.prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id_);
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
         static_config_.prefetch_q_pcie_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
 
-        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base();
+        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base(cq_id_);
         static_config_.cmddat_q_size = my_dispatch_constants.cmddat_q_size();
 
-        static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base();
+        static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base(cq_id_);
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -138,9 +147,10 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         uint32_t dispatch_s_buffer_base = 0xff;
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
-            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
+            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -170,17 +180,17 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
         static_config_.prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id_);
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
         static_config_.prefetch_q_pcie_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
 
-        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base();
+        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base(cq_id_);
         static_config_.cmddat_q_size = my_dispatch_constants.cmddat_q_size();
 
-        static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base();
+        static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base(cq_id_);
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id = 0;  // Unused for prefetch_h
         static_config_.ringbuffer_size = my_dispatch_constants.ringbuffer_size();
@@ -209,15 +219,15 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.prefetch_q_base = 0;
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
         static_config_.prefetch_q_pcie_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
 
-        static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base();
+        static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.cmddat_q_size = my_dispatch_constants.prefetch_d_buffer_size();
 
         uint32_t pcie_alignment = descriptor_.hal().get_alignment(HalMemType::HOST);
-        static_config_.scratch_db_base = (my_dispatch_constants.dispatch_buffer_base() +
+        static_config_.scratch_db_base = (my_dispatch_constants.dispatch_buffer_base(cq_id_) +
                                           my_dispatch_constants.prefetch_d_buffer_size() + pcie_alignment - 1) &
                                          (~(pcie_alignment - 1));
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
@@ -233,9 +243,10 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         uint32_t dispatch_s_buffer_base = 0xff;
         {  // Just to make it match previous implementation
-            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
+            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -254,14 +265,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
     } else {
         TT_FATAL(false, "PrefetchKernel must be one of (or both) H and D variants");
     }
-    auto scratch_db_base = static_config_.scratch_db_base.value_or(0);
-    auto ringbuffer_size = static_config_.ringbuffer_size.value_or(0);
-    TT_ASSERT(
-        scratch_db_base + ringbuffer_size <= l1_size,
-        "Prefetcher allocations exceed L1 size: scratch_db_base: 0x{:X}, ringbuffer_size: 0x{:X} B, L1 size: 0x{:X} B",
-        scratch_db_base,
-        ringbuffer_size,
-        l1_size);
 
     if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
@@ -502,6 +505,8 @@ void PrefetchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+        {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
 
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
@@ -538,6 +543,9 @@ void PrefetchKernel::CreateKernel() {
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
+    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
+
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
@@ -556,19 +564,24 @@ void PrefetchKernel::CreateKernel() {
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
-    configure_kernel_variant(
-        dispatch_kernel_file_names[PREFETCH],
-        {},
-        defines,
-        false,
-        true,
-        // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
-        // respect code space
-        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline()),
-        optimization_level);
+    configure_kernel_variant(dispatch_kernel_file_names[PREFETCH], {}, defines, optimization_level);
 }
 
 void PrefetchKernel::ConfigureCore() {
+    TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
+    TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
+    dispatch_telemetry_types::PrefetchCoreTelemetry zero_prefetch_telemetry{};
+    if (static_config_.dispatch_telemetry_disabled.value()) {
+        zero_prefetch_telemetry.signature = dispatch_telemetry_types::INVALID_TELEMETRY_SIGNATURE;
+    }
+    detail::WriteToDeviceL1(
+        device_,
+        logical_core_,
+        static_config_.dispatch_telemetry_addr.value(),
+        std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(&zero_prefetch_telemetry), sizeof(zero_prefetch_telemetry)),
+        GetCoreType());
+
     // Only H-type prefetchers need L1 configuration
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ
@@ -576,15 +589,17 @@ void PrefetchKernel::ConfigureCore() {
         const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
+        const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();
+        TT_ASSERT(prefetch_q_bytes % sizeof(uint32_t) == 0);
+        std::vector<uint32_t> prefetch_q(prefetch_q_bytes / sizeof(uint32_t), 0);
         uint32_t prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id_);
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
             (uint32_t)(prefetch_q_base + my_dispatch_constants.prefetch_q_size())};
         uint32_t prefetch_q_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
         uint32_t prefetch_q_pcie_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
         const uint32_t command_queue_start_addr =
             device_->sysmem_manager().is_dram_backed()
                 ? get_absolute_cq_offset(

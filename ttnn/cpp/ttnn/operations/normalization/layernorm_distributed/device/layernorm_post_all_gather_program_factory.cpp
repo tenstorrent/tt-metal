@@ -2,64 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_post_all_gather_program_factory.hpp"
+#include "layernorm_post_all_gather_device_operation.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
 
 #include <bit>
-#include <optional>
+#include <map>
 #include <string>
 #include <variant>
 
 using uint32_t = std::uint32_t;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
 
 // =============================================================================
 // LayerNormPostAllGatherProgramFactory - Normal (non-Welford) operation
 // =============================================================================
 
-LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherProgramFactory::create(
+tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_descriptor(
     const LayerNormPostAllGatherParams& operation_attributes,
     const LayerNormPostAllGatherInputs& tensor_args,
     Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
-    using tt::tt_metal::CircularBufferConfig;
-
     const auto& a = tensor_args.input;
     const auto& stats = tensor_args.stats;
     const auto& gamma = tensor_args.gamma;
@@ -74,6 +44,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
+    // Logical (un-padded) width is used for the normalization scaler so that
+    // non-tile-aligned widths normalise by the true N, not the tile-padded N.
+    const uint32_t logical_W = a.logical_shape()[-1];
 
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
@@ -103,6 +76,13 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    // FP32 input/stats require fp32_dest_acc_en: the intermediate CBs (cb_data_format) only become
+    // Float32 when it is set, otherwise a Float32 input/stats CB feeds Float16_b intermediates and
+    // precision is silently lost. Reject the unsupported combination up front.
+    TT_FATAL(
+        !((in_data_format == tt::DataFormat::Float32 || stats_data_format == tt::DataFormat::Float32) &&
+          !fp32_dest_acc_en),
+        "FLOAT32 input/stats require fp32_dest_acc_en=true in the compute kernel config.");
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value()
                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
@@ -127,11 +107,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    auto a_addr = a.buffer()->address();
-    auto stats_addr = stats.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto dst_addr = output.buffer()->address();
+    // Optional gamma/beta: bind the Buffer* when present, else nullptr (framework emits 0u).
+    Buffer* gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    Buffer* beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
 
     [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_hw : 0;
     [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_hw : 0;
@@ -233,13 +211,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     const uint32_t intermed7_tiles = cb_length;
     const uint32_t out0_tiles = cb_length;
 
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
-
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)block_size,
-        (std::uint32_t)stats_tiles_cols,
+        block_size,
+        stats_tiles_cols,
     };
 
     uint32_t gamma_stick_size = 0;
@@ -262,12 +236,15 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
         beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
-    reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)beta_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
-    reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
-    reader_compile_time_args.push_back((std::uint32_t)cb_length);
-    reader_compile_time_args.push_back((std::uint32_t)tiles_per_core_y);
+    reader_compile_time_args.push_back(gamma_stick_size);
+    reader_compile_time_args.push_back(beta_stick_size);
+    reader_compile_time_args.push_back(gamma_is_row_major);
+    reader_compile_time_args.push_back(beta_is_row_major);
+    reader_compile_time_args.push_back(cb_length);
+    reader_compile_time_args.push_back(tiles_per_core_y);
+    const uint32_t reduce_factor = logical_W * num_devices;
+    // Reader uses this compile-time reduction width to generate the AVG scaler tile.
+    reader_compile_time_args.push_back(reduce_factor);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
@@ -276,7 +253,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    std::vector<uint32_t> writer_compile_time_args = {block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
@@ -287,20 +264,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     if (beta.has_value()) {
         reader_defines["FUSE_BETA"] = "1";
     }
-
-    auto reader_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
-
-    auto writer_kernels_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_blocked.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get program config
     ttnn::prim::LayerNormDefaultProgramConfig program_config;
@@ -313,11 +276,11 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         tiles_per_core_y,
         block_size,
         stats_tiles_cols,
-        gamma.has_value(),
-        beta.has_value(),
-        fp32_dest_acc_en,
-        float32_reduction ? 1 : 0,
-        program_config.legacy_rsqrt ? 1 : 0,
+        static_cast<uint32_t>(gamma.has_value()),
+        static_cast<uint32_t>(beta.has_value()),
+        static_cast<uint32_t>(fp32_dest_acc_en),
+        static_cast<uint32_t>(float32_reduction),
+        static_cast<uint32_t>(program_config.legacy_rsqrt),
         cb_length};
 
     const auto* compute_kernel_file =
@@ -325,120 +288,15 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      "rmsnorm_post_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_post_allgather.cpp";
-    auto compute_config = tt::tt_metal::ComputeConfig{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
-        .compile_args = compute_args,
-        .defines = compute_defines};
-    auto compute_kernels_id = tt::tt_metal::CreateKernel(program, compute_kernel_file, all_cores, compute_config);
 
-    // Create circular buffers
-    // c_in0 -> a
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
-            .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-    // c_in1 -> stats
-    CircularBufferConfig cb_stats_config =
-        CircularBufferConfig(in1_tiles * stats_single_tile_size, {{tt::CBIndex::c_1, stats_data_format}})
-            .set_page_size(tt::CBIndex::c_1, stats_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_stats_config);
-    // c_in2 -> gamma
-    if (gamma.has_value()) {
-        CircularBufferConfig cb_gamma_config =
-            CircularBufferConfig(in2_tiles * gamma_single_tile_size, {{tt::CBIndex::c_2, gamma_cb_data_format}})
-                .set_page_size(tt::CBIndex::c_2, gamma_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_gamma_config);
-    }
-    // c_in3 -> beta
-    if (beta.has_value()) {
-        CircularBufferConfig cb_beta_config =
-            CircularBufferConfig(in3_tiles * beta_single_tile_size, {{tt::CBIndex::c_3, beta_cb_data_format}})
-                .set_page_size(tt::CBIndex::c_3, beta_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_beta_config);
-    }
-    // c_in4 -> epsilon
-    CircularBufferConfig cb_eps_config =
-        CircularBufferConfig(in4_tiles * bfloat16_tile_size, {{tt::CBIndex::c_4, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_4, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_eps_config);
-    // c_in5 -> reduce scalar
-    CircularBufferConfig cb_reduce_config =
-        CircularBufferConfig(in5_tiles * bfloat16_tile_size, {{tt::CBIndex::c_5, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_5, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduce_config);
+    uint32_t eps_u = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // LN and RMS shared intermediates
-    // c_intermed0 -> [mean(x**2), mean(x)]
-    CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_6, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
-    // c_intermed2 -> var = mean(x**2) - mean(x)**2
-    CircularBufferConfig cb_intermed2_config =
-        CircularBufferConfig(intermed2_tiles * single_tile_size, {{tt::CBIndex::c_8, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_8, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
-    // c_intermed3 -> var + epsilon
-    CircularBufferConfig cb_intermed3_config =
-        CircularBufferConfig(intermed3_tiles * single_tile_size, {{tt::CBIndex::c_9, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_9, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
-    // c_intermed4 -> 1/sqrt(var + epsilon)
-    CircularBufferConfig cb_intermed4_config =
-        CircularBufferConfig(intermed4_tiles * single_tile_size, {{tt::CBIndex::c_10, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_10, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed4_config);
-    // c_intermed6 -> (x - mean(x)) * 1/sqrt(var + epsilon)
-    CircularBufferConfig cb_intermed6_config =
-        CircularBufferConfig(intermed6_tiles * single_tile_size, {{tt::CBIndex::c_12, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_12, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed6_config);
+    // Build runtime args per core.  Buffer base addresses are bound via
+    // emplace_runtime_args() so the framework patches them on cache hits.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+    KernelDescriptor compute_kernel_desc;
 
-    // LN-specific intermediates
-    if (!is_rmsnorm) {
-        // c_intermed1 -> mean(x)**2
-        CircularBufferConfig cb_intermed1_config =
-            CircularBufferConfig(intermed1_tiles * single_tile_size, {{tt::CBIndex::c_7, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_7, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
-        // c_intermed5 -> x - mean(x)
-        CircularBufferConfig cb_intermed5_config =
-            CircularBufferConfig(intermed5_tiles * single_tile_size, {{tt::CBIndex::c_11, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_11, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed5_config);
-        if (beta.has_value()) {
-            // c_intermed7 -> (x - mean(x)) * 1/sqrt(var + epsilon) * gamma
-            CircularBufferConfig cb_intermed7_config =
-                CircularBufferConfig(intermed7_tiles * single_tile_size, {{tt::CBIndex::c_13, cb_data_format}})
-                    .set_page_size(tt::CBIndex::c_13, single_tile_size);
-            tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed7_config);
-        }
-    }
-
-    CircularBufferConfig cb_out0_config =
-        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
-            .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
-
-    // Log all circular buffers
-    for (const auto& cb : program.circular_buffers()) {
-        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
-        }
-    }
-
-    uint32_t curr_row = 0;
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
-
-    // Set runtime arguments based on kernel layout type
     if (use_2d_kernel) {
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
@@ -453,27 +311,25 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                     core.x,
                     tile_offset,
                     tiles_per_core_y);
-                tt::tt_metal::SetRuntimeArgs(
-                    program,
-                    reader_kernels_id,
+                reader_kernel_desc.emplace_runtime_args(
                     core,
-                    {a_addr,
+                    {a.buffer(),
                      tiles_per_core_x,
                      tiles_per_core_y,
                      tile_offset,
                      stats_offset,
-                     packed_winv_value,
-                     eps,
-                     gamma_dram_addr,
-                     beta_dram_addr,
-                     stats_addr,
+                     eps_u,
+                     gamma_buffer,
+                     beta_buffer,
+                     stats.buffer(),
                      y * tiles_per_core_y});
-                tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {tiles_per_core_x});
-                tt::tt_metal::SetRuntimeArgs(
-                    program, writer_kernels_id, core, {dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
+                compute_kernel_desc.emplace_runtime_args(core, {tiles_per_core_x});
+                writer_kernel_desc.emplace_runtime_args(
+                    core, {output.buffer(), tiles_per_core_x * tiles_per_core_y, tile_offset});
             }
         }
     } else {
+        uint32_t curr_row = 0;
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -490,71 +346,215 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
             uint32_t stats_offset = curr_row * stats_tiles_cols;
             uint32_t y_offset = 0;
 
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernels_id,
+            reader_kernel_desc.emplace_runtime_args(
                 core,
-                {a_addr,
+                {a.buffer(),
                  num_tile_rows_per_core,
                  Wt,
                  tile_offset,
                  stats_offset,
-                 packed_winv_value,
-                 eps,
-                 gamma_dram_addr,
-                 beta_dram_addr,
-                 stats_addr,
+                 eps_u,
+                 gamma_buffer,
+                 beta_buffer,
+                 stats.buffer(),
                  y_offset});
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
-            tt::tt_metal::SetRuntimeArgs(
-                program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+            compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
+            writer_kernel_desc.emplace_runtime_args(core, {output.buffer(), num_tile_rows_per_core * Wt, tile_offset});
             curr_row += num_tile_rows_per_core;
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = cores}};
-}
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build ProgramDescriptor
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor program_descriptor;
 
-void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const LayerNormPostAllGatherParams& /*operation_attributes*/,
-    const LayerNormPostAllGatherInputs& tensor_args,
-    Tensor& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    // Reader kernel
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto stats_addr = tensor_args.stats.buffer()->address();
-    const bool has_gamma = tensor_args.gamma.has_value();
-    const bool has_beta = tensor_args.beta.has_value();
-    const auto gamma_addr = has_gamma ? tensor_args.gamma.value().buffer()->address() : 0;
-    const auto beta_addr = has_beta ? tensor_args.beta.value().buffer()->address() : 0;
-    const auto output_addr = output.buffer()->address();
+    // Writer kernel
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id_blocked.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
-    auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-    auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+    // Compute kernel
+    compute_kernel_desc.kernel_source = compute_kernel_file;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
+    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
-    for (const auto& core : shared_vars.cores) {
-        {
-            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build CBDescriptors
+    ////////////////////////////////////////////////////////////////////////////
+    // c_in0 -> a
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in0_tiles * in_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = in_data_format,
+            .page_size = in_single_tile_size}}}});
 
-            reader_args[0] = input_addr;
-            reader_args[9] = stats_addr;
-            if (has_gamma) {
-                reader_args[7] = gamma_addr;
-            }
-            if (has_beta) {
-                reader_args[8] = beta_addr;
-            }
-        }
+    // c_in1 -> stats
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in1_tiles * stats_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = stats_data_format,
+            .page_size = stats_single_tile_size}}}});
 
-        {
-            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-            writer_args[0] = output_addr;
+    // c_in2 -> gamma
+    if (gamma.has_value()) {
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = in2_tiles * gamma_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                .data_format = gamma_cb_data_format,
+                .page_size = gamma_single_tile_size}}}});
+    }
+
+    // c_in3 -> beta
+    if (beta.has_value()) {
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = in3_tiles * beta_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = beta_cb_data_format,
+                .page_size = beta_single_tile_size}}}});
+    }
+
+    // c_in4 -> epsilon
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in4_tiles * bfloat16_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = bfloat16_tile_size}}}});
+
+    // c_in5 -> reduce scalar
+    const tt::DataFormat scaler_data_format =
+        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = in5_tiles * scaler_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+            .data_format = scaler_data_format,
+            .page_size = scaler_tile_size}}}});
+
+    // LN and RMS shared intermediates
+    // c_intermed0 -> [mean(x**2), mean(x)] (CB 6)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed0_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_intermed2 -> var = mean(x**2) - mean(x)**2 (CB 8)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed2_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_intermed3 -> var + epsilon (CB 9)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed3_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_intermed4 -> 1/sqrt(var + epsilon) (CB 10)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed4_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // c_intermed6 -> (x - mean(x)) * 1/sqrt(var + epsilon) (CB 12)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = intermed6_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_12),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size}}}});
+
+    // LN-specific intermediates
+    if (!is_rmsnorm) {
+        // c_intermed1 -> mean(x)**2 (CB 7)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = intermed1_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
+
+        // c_intermed5 -> x - mean(x) (CB 11)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = intermed5_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
+
+        if (beta.has_value()) {
+            // c_intermed7 -> (x - mean(x)) * 1/sqrt(var + epsilon) * gamma (CB 13)
+            program_descriptor.cbs.push_back(CBDescriptor{
+                .total_size = intermed7_tiles * single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size}}}});
         }
     }
+
+    // Output (CB 14)
+    program_descriptor.cbs.push_back(CBDescriptor{
+        .total_size = out0_tiles * out_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+            .data_format = out_data_format,
+            .page_size = out_single_tile_size}}}});
+
+    return program_descriptor;
 }
 
 }  // namespace ttnn::prim

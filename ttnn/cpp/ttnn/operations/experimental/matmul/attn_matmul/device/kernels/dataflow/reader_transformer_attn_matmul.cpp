@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -33,11 +33,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_intermed1 = tt::CBIndex::c_3;
     constexpr uint32_t cb_id_intermed2 = tt::CBIndex::c_4;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0_obj(cb_id_in0);
-    experimental::CircularBuffer cb_in1_obj(cb_id_in1);
-    experimental::CircularBuffer cb_intermed1_obj(cb_id_intermed1);
-    experimental::CircularBuffer cb_intermed2_obj(cb_id_intermed2);
+    Noc noc;
+    CircularBuffer cb_in0_obj(cb_id_in0);
+    CircularBuffer cb_in1_obj(cb_id_in1);
+    CircularBuffer cb_intermed1_obj(cb_id_intermed1);
+    CircularBuffer cb_intermed2_obj(cb_id_intermed2);
 
     constexpr uint32_t onetile = 1;
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
@@ -45,8 +45,8 @@ void kernel_main() {
 
     constexpr auto in0_args = TensorAccessorArgs<2>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto s0 = TensorAccessor(in0_args, src0_addr, in0_tile_bytes);
-    const auto s1 = TensorAccessor(in1_args, src1_addr, in1_tile_bytes);
+    const auto s0 = TensorAccessor(in0_args, src0_addr);
+    const auto s1 = TensorAccessor(in1_args, src1_addr);
 
     uint32_t itileA_batch = itileA_start;
     uint32_t itileB_batch;
@@ -64,7 +64,7 @@ void kernel_main() {
 
     uint32_t local_noc_x = my_x[noc.get_noc_id()];
     uint32_t local_noc_y = my_y[noc.get_noc_id()];
-    experimental::UnicastEndpoint local_src;
+    UnicastEndpoint local_src;
 
     for (uint32_t b = 0; b < blocks; b++) {
         itileA_Mt = itileA_batch;
@@ -107,7 +107,7 @@ void kernel_main() {
 
                     // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
                     cb_intermed1_obj.wait_front(1);
-                    experimental::CoreLocalMem<uint32_t> local_dst(cb_intermed2_addr);
+                    CoreLocalMem<uint32_t> local_dst(cb_intermed2_addr);
                     noc.async_read(
                         local_src,
                         local_dst,

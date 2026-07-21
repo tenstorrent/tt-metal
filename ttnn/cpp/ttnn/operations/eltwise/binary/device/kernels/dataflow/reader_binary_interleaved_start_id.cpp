@@ -8,9 +8,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -34,23 +34,23 @@ void kernel_main() {
     constexpr auto src1_args = TensorAccessorArgs<1>();
 #endif
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb0(cb_id_in0);
-    experimental::CircularBuffer cb1(cb_id_in1);
+    Noc noc;
+    DataflowBuffer dfb0(cb_id_in0);
+    DataflowBuffer dfb1(cb_id_in1);
 
 #ifdef IN0_SHARDED
-    cb0.reserve_back(num_tiles);
-    cb0.push_back(num_tiles);
+    dfb0.reserve_back(num_tiles);
+    dfb0.push_back(num_tiles);
 #else
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 #endif
 #ifdef IN1_SHARDED
-    cb1.reserve_back(num_tiles);
-    cb1.push_back(num_tiles);
+    dfb1.reserve_back(num_tiles);
+    dfb1.push_back(num_tiles);
 #else
     uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 #endif
 
 #if !(defined IN0_SHARDED && defined IN1_SHARDED)
@@ -63,24 +63,24 @@ void kernel_main() {
             uint32_t tile_id = row_start_tile_id;
             for (uint32_t w = 0; w < block_width; w++) {
 #ifndef IN0_SHARDED
-                cb0.reserve_back(onetile);
-                noc.async_read(s0, cb0, src0_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+                dfb0.reserve_back(onetile);
+                noc.async_read(s0, dfb0, src0_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
 #endif
 
 #ifndef IN1_SHARDED
-                cb1.reserve_back(onetile);
-                noc.async_read(s1, cb1, src1_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+                dfb1.reserve_back(onetile);
+                noc.async_read(s1, dfb1, src1_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
 #endif
 
                 tile_id++;
                 noc.async_read_barrier();
 
 #ifndef IN0_SHARDED
-                cb0.push_back(onetile);
+                dfb0.push_back(onetile);
 #endif
 
 #ifndef IN1_SHARDED
-                cb1.push_back(onetile);
+                dfb1.push_back(onetile);
 #endif
             }
             row_start_tile_id += num_cores_y * block_width;
@@ -88,23 +88,23 @@ void kernel_main() {
     } else {
         for (uint32_t tile_id = start_id; tile_id < start_id + num_tiles; tile_id++) {
 #ifndef IN0_SHARDED
-            cb0.reserve_back(onetile);
-            noc.async_read(s0, cb0, src0_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+            dfb0.reserve_back(onetile);
+            noc.async_read(s0, dfb0, src0_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
 #endif
 
 #ifndef IN1_SHARDED
-            cb1.reserve_back(onetile);
-            noc.async_read(s1, cb1, src1_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+            dfb1.reserve_back(onetile);
+            noc.async_read(s1, dfb1, src1_tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
 #endif
 
             noc.async_read_barrier();
 
 #ifndef IN0_SHARDED
-            cb0.push_back(onetile);
+            dfb0.push_back(onetile);
 #endif
 
 #ifndef IN1_SHARDED
-            cb1.push_back(onetile);
+            dfb1.push_back(onetile);
 #endif
         }
     }

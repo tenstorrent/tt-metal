@@ -40,6 +40,8 @@ sys.modules[f"{__name__}.distributed"] = distributed
 from .linear_regression import LinearRegression, create_linear_regression_model
 from .nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 from .llama import Llama, LlamaConfig
+from .deepseek import DeepSeek, DeepSeekConfig
+from .qwen3 import Qwen3, Qwen3Config
 
 __all__ = [
     # C++ enums / classes
@@ -54,11 +56,15 @@ __all__ = [
     "gpt2",
     "mlp",
     # Python implementations
+    "DeepSeek",
+    "DeepSeekConfig",
     "Llama",
     "LlamaConfig",
     "LinearRegression",
     "NanoGPT",
     "NanoGPTConfig",
+    "Qwen3",
+    "Qwen3Config",
     "create_linear_regression_model",
     "create_nanogpt",
 ]

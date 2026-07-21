@@ -4,6 +4,7 @@
 
 
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 from loguru import logger
 from tt_lib.utils import (
     tilize_to_list,
@@ -43,7 +44,7 @@ def run_tilize_matmul_test(M, K, N, device):
         device,
     )
     print("Shape of B_t - " + str(b_t.padded_shape))
-    t2 = ttnn.matmul(a_t, b_t)
+    t2 = ttnn_matmul(a_t, b_t)
     assert list(t2.padded_shape) == output_shape
     tt_host_rm = t2.cpu().to_torch_with_padded_shape()
     pyt_got_back = tt_host_rm.reshape(output_shape)
@@ -59,4 +60,5 @@ def run_tilize_matmul_test(M, K, N, device):
 
 @skip_for_blackhole("Hanging on BH, see #12349")
 def test_tilize_hpadding_matmul(device):
+    torch.manual_seed(0)
     run_tilize_matmul_test(4, 32 * 9, 32, device)

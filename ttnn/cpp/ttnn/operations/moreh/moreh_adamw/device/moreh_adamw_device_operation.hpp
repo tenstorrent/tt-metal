@@ -5,12 +5,14 @@
 #pragma once
 
 #include <optional>
-#include <variant>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
@@ -25,6 +27,17 @@ struct MorehAdamWDeviceOperation {
         bool amsgrad = false;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        // lr and step are excluded from the program hash (they vary every optimizer step, so
+        // hashing them would recompile every call); they are re-applied on each cache hit via
+        // override_runtime_arguments(). beta1/beta2/eps/weight_decay are rarely-varying
+        // hyperparameters and stay in the hash.
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "beta1", "beta2", "eps", "weight_decay", "amsgrad", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                beta1, beta2, eps, weight_decay, amsgrad, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -44,32 +57,10 @@ struct MorehAdamWDeviceOperation {
 
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
-    struct MultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_group1_id{};
-            tt::tt_metal::KernelHandle compute_kernel_group2_id{};
-            CoreRangeSet core_group_1;
-            CoreRangeSet core_group_2;
-            std::size_t num_cores{};
-            std::size_t num_cores_y{};
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    using program_factory_t = std::variant<MultiCore>;
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     // Mandatory methods
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
@@ -80,7 +71,14 @@ struct MorehAdamWDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),
+    // since the hash excludes lr/step. Re-derives from create_descriptor; see the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::operations::moreh::moreh_adamw
 

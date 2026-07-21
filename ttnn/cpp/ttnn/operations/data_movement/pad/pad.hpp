@@ -21,19 +21,23 @@ struct PadSpecDim {
 
 // This function signature is similar to pytorch's signature
 // Any rank tensor supported
+//
+// use_multicore defaults to true here to match the Python binding's default
+// (pad_nanobind.cpp). Aligned defaults prevent callers from silently routing
+// to a different code path than Python-driven tests cover.
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<operations::data_movement::PadSpecDim>& padding,
+    const ttsl::SmallVector<operations::data_movement::PadSpecDim>& padding,
     float value,
-    bool use_multicore,
+    bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     float value,
-    bool use_multicore = false,
+    bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
@@ -43,7 +47,7 @@ ttnn::Tensor pad(
     const tt::tt_metal::Array4D& output_padded_shape,
     const tt::tt_metal::Array4D& input_tensor_start,
     float value,
-    bool use_multicore = false,
+    bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 

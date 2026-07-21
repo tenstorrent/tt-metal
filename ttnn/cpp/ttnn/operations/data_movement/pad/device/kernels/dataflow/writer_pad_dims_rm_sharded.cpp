@@ -4,37 +4,44 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    DataflowBuffer dfb(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
         ptr[i] = val;
     }
 
-    uint32_t pad_val_addr = get_read_ptr(cb_id);
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
+    uint32_t pad_val_addr = dfb.get_write_ptr();
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        noc_async_read(pad_val_noc_addr, l1_write_addr, num_bytes_risc);
+        CoreLocalMem<uint32_t> dst(l1_write_addr);
+        noc.async_read(
+            UnicastEndpoint{},
+            dst,
+            num_bytes_risc,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = pad_val_addr},
+            {.offset_bytes = 0});
         l1_write_addr += num_bytes_risc;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t pad_val_addr = get_read_ptr(cb_id);
-    uint32_t l1_write_addr = pad_val_addr;
-
-    for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        noc_async_read(zeros_noc_addr, l1_write_addr, num_bytes_risc);
-        l1_write_addr += num_bytes_risc;
-    }
-    noc_async_read_barrier();
+    Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    DataflowBuffer dfb(cb_id);
+    noc.async_write_zeros(dfb, num_bytes_risc * num_noc_transfer);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -66,18 +73,21 @@ void kernel_main() {
     }
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
+    DataflowBuffer dfb_pad_exp(cb_pad);
+    DataflowBuffer dfb_out0_exp(dfb_out0);
 
-    uint32_t pad_val_addr = get_read_ptr(cb_pad);
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
+    Noc noc;
+
+    const uint32_t pad_val_addr = dfb_pad_exp.get_read_ptr();
 
     if constexpr (not_pad_by_zero) {
-        fill_pad_cb_with_val(cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
+        fill_pad_cb_with_val(noc, cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
     } else {
-        fill_pad_cb_with_zero(cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
+        fill_pad_cb_with_zero(noc, cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
     }
 
-    uint32_t l1_write_addr = get_write_ptr(cb_out0);
+    uint32_t l1_write_addr = dfb_out0_exp.get_write_ptr();
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
@@ -90,7 +100,15 @@ void kernel_main() {
             i_stick++;
 
         } else {
-            noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_bytes);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                stick_size_bytes,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = pad_val_addr},
+                {.offset_bytes = 0});
             l1_write_addr += stick_size_bytes;
         }
 
@@ -105,5 +123,5 @@ void kernel_main() {
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

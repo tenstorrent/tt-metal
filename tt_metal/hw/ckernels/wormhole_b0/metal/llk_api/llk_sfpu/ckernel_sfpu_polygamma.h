@@ -10,6 +10,8 @@
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -72,11 +74,11 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
             // Compute reciprocal first, then raise to power (avoids overflow of large intermediates)
             sfpi::vFloat inv_xi;
             if constexpr (APPROXIMATION_MODE) {
-                inv_xi = _sfpu_reciprocal_<0>(xi);
+                inv_xi = sfpu_reciprocal_iter<0>(xi);
             } else if constexpr (is_fp32_dest_acc_en) {
-                inv_xi = _sfpu_reciprocal_<2>(xi);
+                inv_xi = sfpu_reciprocal_iter<2>(xi);
             } else {
-                inv_xi = _sfpu_reciprocal_<1>(xi);
+                inv_xi = sfpu_reciprocal_iter<1>(xi);
             }
 
             sfpi::vFloat inv_power = inv_xi;
@@ -94,11 +96,11 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
         sfpi::vFloat inv_z;
         if constexpr (APPROXIMATION_MODE) {
-            inv_z = _sfpu_reciprocal_<0>(z);
+            inv_z = sfpu_reciprocal_iter<0>(z);
         } else if constexpr (is_fp32_dest_acc_en) {
-            inv_z = _sfpu_reciprocal_<2>(z);
+            inv_z = sfpu_reciprocal_iter<2>(z);
         } else {
-            inv_z = _sfpu_reciprocal_<1>(z);
+            inv_z = sfpu_reciprocal_iter<1>(z);
         }
 
         sfpi::vFloat inv_z2 = inv_z * inv_z;
@@ -120,7 +122,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         sfpi::vFloat result = sum * scale;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -129,7 +131,8 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void polygamma_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
 }  // namespace ckernel::sfpu

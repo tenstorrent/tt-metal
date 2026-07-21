@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
@@ -9,6 +10,22 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+namespace {
+
+bool uses_multicore_path(const ArgmaxParams& args, const ArgmaxInputs& tensor_args) {
+    if (tensor_args.input.layout() != Layout::ROW_MAJOR) {
+        return false;
+    }
+    if (!args.dim.has_value()) {
+        return true;
+    }
+    const int32_t rank = static_cast<int32_t>(tensor_args.input.logical_shape().rank());
+    const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+    return normalized_dim == rank - 1;
+}
+
+}  // namespace
 
 /*
  * Generates the output shape for the reduction operation.
@@ -19,10 +36,10 @@ namespace ttnn::prim {
  * @param keepdim Whether to keep the reduced dimension.
  * @return The output shape.
  */
-ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim) {
+ttsl::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim) {
     auto input_shape = input_tensor.logical_shape();
     int rank = input_shape.size();
-    ttnn::SmallVector<uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
 
     // If no reduction dims are specified, we reduce all dimensions
     auto all_dim_reduce = not dim.has_value();
@@ -34,7 +51,7 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
         rank);
 
     // Adjust negative reduction dimension to positive
-    red_dim = red_dim < 0 ? red_dim + rank : red_dim;
+    red_dim = normalize_dim(red_dim, rank);
 
     // Generate output shape
     // Iterate over the input shape and adjust the output shape for keepdim
@@ -57,8 +74,8 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 }
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
-    if (args.use_multicore) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (uses_multicore_path(args, tensor_args)) {
         return ArgMaxMultiCoreProgramFactory{};
     }
     return ArgMaxSingleCoreProgramFactory{};
@@ -129,21 +146,31 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (args.dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.logical_shape().rank();
-        const uint32_t normalized_dim = args.dim.value() < 0 ? args.dim.value() + input_rank : args.dim.value();
-
-        // TODO: Add support for normalized_dim = 0, 1, 2
-        TT_FATAL(
-            normalized_dim == (input_rank - 1),
-            "Only argmax on last dim is supported! Got dim={} (normalized={}), expected {}",
-            args.dim.value(),
-            normalized_dim,
-            input_rank - 1);
+        const int32_t rank = static_cast<int32_t>(input_tensor_a.logical_shape().rank());
+        const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+        if (input_layout == Layout::TILE) {
+            // Last dim: W, second-to-last: H.
+            const bool w_dim = (normalized_dim == rank - 1);
+            const bool h_dim = (rank >= 2 && normalized_dim == rank - 2);
+            TT_FATAL(
+                w_dim or h_dim,
+                "TILE: argmax dim must be H (rank-2) or W (last). Got dim={} (normalized={}) for rank {}.",
+                args.dim.value(),
+                normalized_dim,
+                rank);
+        } else {
+            TT_FATAL(
+                normalized_dim == (rank - 1),
+                "ROW_MAJOR: only argmax on the last dim is supported. Got dim={} (normalized={}), expected {}",
+                args.dim.value(),
+                normalized_dim,
+                rank - 1);
+        }
     } else {
         TT_FATAL(input_layout != Layout::TILE, "For inputs with TILE layout, dim parameter must be specified!");
     }
 
-    if (args.use_multicore) {
+    if (uses_multicore_path(args, tensor_args)) {
         if (args.sub_core_grids.has_value()) {
             TT_FATAL(
                 args.sub_core_grids->ranges().size() <= 2,
@@ -152,8 +179,17 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(
             input_tensor_a.layout() == Layout::ROW_MAJOR,
-            "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}",
+            "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}. "
+            "(ROW_MAJOR tensors reduced along height are converted to TILE internally; that path uses single-core "
+            "argmax.)",
             input_tensor_a.layout());
+    }
+
+    if (uses_multicore_path(args, tensor_args) && args.sub_core_grids.has_value()) {
+        ReduceOpDeviceGridValidationOptions grid_opts;
+        grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
+        validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 }
 
@@ -184,7 +220,6 @@ ttnn::Tensor argmax(
     std::optional<int> dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor) {
     return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
@@ -193,7 +228,6 @@ ttnn::Tensor argmax(
             .dim = dim,
             .keepdim = keepdim,
             .sub_core_grids = sub_core_grids,
-            .use_multicore = use_multicore,
             .output_mem_config = output_mem_config,
         },
         ArgMaxDeviceOperation::tensor_args_t{

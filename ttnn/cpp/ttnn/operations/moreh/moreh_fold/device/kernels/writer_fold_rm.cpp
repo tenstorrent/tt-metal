@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -16,14 +19,17 @@ void kernel_main() {
 
     constexpr int onetile = 1;
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s = TensorAccessor(output_args, output_addr, output_cb_page_size);
 
+    Noc noc;
+    DataflowBuffer output_dfb(output_cb_id);
+
     for (uint32_t i = start_id; i < start_id + num_units_per_core; i++) {
-        cb_wait_front(output_cb_id, onetile);
-        uint32_t l1_read_addr = get_read_ptr(output_cb_id);
-        uint64_t dst_noc_addr = get_noc_addr(i, s);
-        noc_async_write(l1_read_addr, dst_noc_addr, output_cb_page_size);
-        noc_async_write_barrier();
-        cb_pop_front(output_cb_id, onetile);
+        output_dfb.wait_front(onetile);
+        noc.async_write(output_dfb, s, output_cb_page_size, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        output_dfb.pop_front(onetile);
     }
 }

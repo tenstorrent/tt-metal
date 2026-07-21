@@ -27,7 +27,8 @@
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_io.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -91,18 +92,21 @@ public:
 
     const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
 
+    // WH B0 unconditionally, BH with ETH FW >= 1.9.0.
+    bool supports_ethernet_link_retraining() const;
+
     // Sets the HAL to be used for this Cluster
     void set_hal(const tt_metal::Hal* hal);
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
-        return this->cluster_desc_->get_chip_unique_ids();
+        return this->get_cluster_desc()->get_chip_unique_ids();
     }
 
     // Returns map of logical chip ID to PCIe device ID
     const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
-        return this->cluster_desc_->get_chips_with_mmio();
+        return this->get_cluster_desc()->get_chips_with_mmio();
     }
 
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
@@ -202,15 +206,37 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    // Returns a writer object which holds a pointer to a static tlb
-    // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
-    // traversals
-    umd::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    /**
+     * Returns a pointer to the static TLB window associated with the given target.
+     *
+     * Ownership:
+     *   - The returned TlbWindow is owned and managed by the underlying driver.
+     *   - Callers must not delete, free, or otherwise take ownership of the pointer.
+     *
+     * Lifetime:
+     *   - The pointer remains valid for as long as the underlying driver/device
+     *     context for this Cluster instance remains initialized and the static TLB
+     *     configuration is not torn down by the driver.
+     *   - Callers may cache the pointer, but must ensure they do not use it after
+     *     the Cluster/driver has been destroyed or the device has been deinitialized.
+     *
+     * Concurrency:
+     *   - The driver may return the same TlbWindow instance across multiple calls
+     *     (i.e., this is typically a cached/static window).
+     *   - It is safe to share the pointer across threads for read-only operations.
+     *   - If callers perform operations that mutate the TlbWindow or its underlying
+     *     mappings, they must provide appropriate external synchronization.
+     */
+    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_writer(target.chip, target_coord);
+        return driver_->get_static_tlb_window(target.chip, target_coord);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
+        // Simulation/mock/emule chips do not have host NUMA affinity; UMD throws if queried.
+        if (this->target_type_ != tt::TargetDevice::Silicon) {
+            return 0;
+        }
         uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
@@ -222,6 +248,8 @@ public:
         const void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
     void read_sysmem(void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
 
+    void advance_device_execution(ChipId device_id) const;
+
     // System memory buffer allocation methods
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
         ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
@@ -229,6 +257,9 @@ public:
         ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
+
+    uint32_t get_arc_timer_heartbeat(const ChipId& chip_id) const;
+    bool is_arc_telemetry_available(const ChipId& chip_id) const;
 
     void dram_barrier(ChipId chip_id) const;
     void l1_barrier(ChipId chip_id) const;
@@ -279,18 +310,18 @@ public:
 
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<ChipId, EthernetChannel>>>&
     get_ethernet_connections() const {
-        return this->cluster_desc_->get_ethernet_connections();
+        return this->get_cluster_desc()->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<uint64_t, EthernetChannel>>>&
     get_ethernet_connections_to_remote_devices() const {
-        return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
+        return this->get_cluster_desc()->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     ChipId get_associated_mmio_device(ChipId device_id) const {
-        return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
+        return this->get_cluster_desc()->get_closest_mmio_capable_chip(device_id);
     }
 
     uint16_t get_assigned_channel_for_device(ChipId device_id) const {
@@ -337,6 +368,14 @@ public:
 
     tt::TargetDevice get_target_device_type() const { return this->target_type_; }
 
+    /// Returns true if target device is Mock or Emulated (both skip firmware/dispatch).
+    bool is_mock_or_emulated() const {
+        return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
+    }
+
+    void register_sim_fabric_endpoint_direction(
+        ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const;
+
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
@@ -368,6 +407,10 @@ public:
     const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
         return this->frequent_retrain_cores_.at(chip_id);
     }
+
+    // Re-runs UMD topology discovery and rebuilds ethernet_sockets_ and frequent_retrain_cores_.
+    // Call after link retraining to allow continued operation without restarting the process.
+    void rediscover_ethernet_links();
 
     const std::unordered_map<CoreCoord, EthRouterMode>& get_eth_routing_info(ChipId chip_id) const {
         return this->device_eth_routing_info_.at(chip_id);
@@ -411,11 +454,6 @@ private:
     bool iommu_enabled_ = false;
     // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
     bool noc_mapping_enabled_ = false;
-
-    // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
-    // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
-    // devices
-    umd::ClusterDescriptor* cluster_desc_ = nullptr;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

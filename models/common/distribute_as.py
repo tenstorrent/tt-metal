@@ -29,11 +29,13 @@ def from_torch_dist_as(
     Distribute a torch.Tensor over a mesh using the same topology as an existing TTNN tensor.
 
     Args:
-        tensor_pt: Source PyTorch tensor on host
-        tensor_tt: Reference TTNN tensor whose topology (placements + distribution shape) will be mirrored
+        from_tensor_pt: Source PyTorch tensor on host.
+        as_tensor_tt: Reference TTNN tensor whose topology (placements + distribution shape) will be mirrored.
+        device: Optional mesh device. If omitted, inferred from ``as_tensor_tt`` when possible.
 
     Returns:
-        A TTNN tensor distributed according to `tensor_tt`'s topology.
+        A TTNN tensor distributed according to ``as_tensor_tt``'s topology and memory configuration
+        (e.g. height-sharded decode heads).
     """
     mapper, device = _infer_mesh_mapper_from_topology(as_tensor_tt, device=device)
 
@@ -41,11 +43,13 @@ def from_torch_dist_as(
     # Pattern 1: Using mesh_mapper without device (tensor stays in host memory) Programming_Mesh_of_Devices_with_TT-NN.md:370-375
     # Then transfer to device separately: Programming_Mesh_of_Devices_with_TT-NN.md:404-405
     # Pattern 2: Using both mesh_mapper and device together (direct to device) llms.md:1204-1218
+    mem_cfg = as_tensor_tt.memory_config()
     return ttnn.from_torch(
         from_tensor_pt,
         dtype=getattr(as_tensor_tt, "dtype", None),
         layout=getattr(as_tensor_tt, "layout", None),
         device=device,
+        memory_config=mem_cfg,
         mesh_mapper=mapper,
     )
 

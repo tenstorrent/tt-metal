@@ -5,8 +5,6 @@
 # Make it match pyproject.toml
 loguru==0.6.0
 
-tt-smi==4.0.0; platform_machine == "x86_64"
-
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
 
@@ -15,7 +13,7 @@ pytest-github-actions-annotate-failures==0.3.0
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
 platformdirs<4.0.0
 pre-commit==3.5.0
-black==24.3.0
+black==26.3.1
 clang-format==19.1.4
 build==0.10.0
 twine==4.0.2
@@ -29,25 +27,36 @@ mypy==1.9.0
 -r ../../tests/sweep_framework/requirements-sweeps.txt
 
 # For Mistral-7B-v0.3 demo tests
-protobuf==3.20.2
+protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
-transformers == 4.53.0
+transformers == 5.10.2
 huggingface-hub >= 0.30.0
 
+# For Qwen-VL / multimodal demo preprocessing: qwen-vl-utils (process_vision_info for image prompts)
+# and av/pyav (the transformers load_video backend used for video prompts, e.g. qwen36 vision_demo)
+qwen-vl-utils
+av
+
+# For Tracy WASM profiler web GUI server
+websockets==16.0
+
 # testing
-pytest==8.4.2
+pytest==9.0.3
 pytest-cov==7.0.0
 pytest-timeout==2.4.0
-pytest-split==0.10.0
-pytest-benchmark==5.1.0
+pytest-split==0.11.0
+pytest-benchmark==5.2.3
+pytest-repeat==0.9.4
 jsbeautifier==1.14.7
-datasets==2.9.0
-pyarrow==20.0.0
-torch==2.7.1 ; platform_machine == 'aarch64'
+
+datasets>=2.20,<3
+
+pyarrow>=21.0.0,<22
+torch==2.11.0 ; platform_machine == 'aarch64'
 networkx==3.1
-torchvision==0.22.1 ; platform_machine == 'aarch64'
-torchmetrics==1.3.1
+torchvision==0.26.0 ; platform_machine == 'aarch64'
+torchmetrics==1.9.0
 torch-fidelity==0.3.0
 xlsxwriter==3.0.8
 tiktoken==0.7.0
@@ -59,11 +68,11 @@ librosa==0.10.0
 timm>=1.0.0
 ultralytics==8.3.107
 opencv-python-headless==4.8.1.78
-diffusers==0.35.1
+diffusers==0.38.0
 accelerate==1.7.0
 peft==0.18.1
 ftfy==6.1.1
-gitpython==3.1.41
+gitpython==3.1.50
 einops==0.6.1
 # Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
 # transitive dep, which uses dill >=0.3.7, however many packages require
@@ -74,7 +83,7 @@ bert-score==0.3.12
 fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent/tt-metal/issues/3314
 docopt==0.6.2
 tabulate==0.9.0
-blobfile==2.1.1 # Required for llama3
+blobfile==3.1.0 # Required for llama3
 numpy>=1.24.4,<2
 pydantic==2.9.2 # Required for Superset benchmarking
 fiftyone==0.25.2 # Required for Yolo benchmarking
@@ -86,10 +95,10 @@ open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
 # Needed for various tests
 pyyaml>=5.4
 matplotlib
-Pillow==12.1.1
-jupyterlab==4.2.5
+Pillow==12.2.0
+jupyterlab==4.5.9
 ipywidgets==8.1.1
-bokeh==3.1.1
+bokeh==3.8.2
 click==8.1.7
 dash==2.15.0
 pandas==2.3.3
@@ -98,11 +107,8 @@ seaborn==0.13.2
 medpy==0.5.2 # Required for vanilla unet
 kagglehub==0.2.9
 efficientnet-pytorch==0.7.1
-mmcv==2.2.0 # Required for UniAD model
-casadi==3.7.1 # Required for UniAD model
-mmcv-full==1.7.2 #Required for UniAD model
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1 ; platform_machine == 'x86_64'
-torchvision==0.22.1 ; platform_machine == 'x86_64'
+torch==2.11.0 ; platform_machine == 'x86_64'
+torchvision==0.26.0 ; platform_machine == 'x86_64'

@@ -65,8 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Initialize binary operands unpacker - unpack 1 tile per MOP run
     _llk_unpack_binary_operands_init_(buf_desc_id_a, buf_desc_id_b, 1);
 
-    // Unpack all tiles for both operands
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(params.INPUT_TILE_CNT); ++i)
     {
         _llk_unpack_binary_operands_(i, i);
     }
@@ -98,16 +97,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     // Configure math hardware with proper Quasar API
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
-
+    DataFormat math_format     = static_cast<DataFormat>(formats.math);
+    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+    if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+    {
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+    }
+    else
+    {
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
+    }
     // Initialize eltwise binary operation with default 32x32 tensor shape
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE, ACC_TO_DEST); // tiny-tile testing not yet supported
 
     // Perform eltwise binary operation for each tile
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    std::uint32_t dest_idx = 0;
+    for (std::uint32_t remaining_tiles = static_cast<std::uint32_t>(params.INPUT_TILE_CNT); remaining_tiles > 0;
+         remaining_tiles -= std::min(remaining_tiles, params.NUM_TILES_IN_BLOCK))
     {
-        _llk_math_eltwise_binary_(i);
+        const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, params.NUM_TILES_IN_BLOCK);
+        for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+        {
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, ckernel::DEFAULT_TENSOR_SHAPE);
+        }
+        ++dest_idx;
     }
 
     // Signal math completion
@@ -150,12 +163,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Configure and initialize pack hardware
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, 1);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
     // Pack all result tiles
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(params.OUTPUT_TILE_CNT); ++i)
     {
-        _llk_pack_(i, i);
+        _llk_pack_(i, i, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 
     // Signal pack completion

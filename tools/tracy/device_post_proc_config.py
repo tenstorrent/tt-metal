@@ -14,6 +14,30 @@ class default_setup(metaclass=MergeMetaclass):
         "TRISC_1",
         "TRISC_2",
         "ERISC",
+        "QUASAR_DM0",
+        "QUASAR_DM1",
+        "QUASAR_DM2",
+        "QUASAR_DM3",
+        "QUASAR_DM4",
+        "QUASAR_DM5",
+        "QUASAR_DM6",
+        "QUASAR_DM7",
+        "QUASAR_NEO0_TRISC0",
+        "QUASAR_NEO0_TRISC1",
+        "QUASAR_NEO0_TRISC2",
+        "QUASAR_NEO0_TRISC3",
+        "QUASAR_NEO1_TRISC0",
+        "QUASAR_NEO1_TRISC1",
+        "QUASAR_NEO1_TRISC2",
+        "QUASAR_NEO1_TRISC3",
+        "QUASAR_NEO2_TRISC0",
+        "QUASAR_NEO2_TRISC1",
+        "QUASAR_NEO2_TRISC2",
+        "QUASAR_NEO2_TRISC3",
+        "QUASAR_NEO3_TRISC0",
+        "QUASAR_NEO3_TRISC1",
+        "QUASAR_NEO3_TRISC2",
+        "QUASAR_NEO3_TRISC3",
     ]
 
     riscTypes = [
@@ -22,6 +46,7 @@ class default_setup(metaclass=MergeMetaclass):
         "TRISC",
         "ERISC",
         "TENSIX_RISC_AGG",
+        "DM",
     ]
 
     timerAnalysis = {
@@ -170,7 +195,7 @@ class default_setup(metaclass=MergeMetaclass):
         "perf_counter_data": {
             "across": "device",
             "type": "event",
-            "marker": {"risc": "TRISC_1"},
+            "marker": {"risc": "BRISC"},
         },
     }
 
@@ -249,76 +274,30 @@ class test_multi_op_buffer_overflow(default_setup):
     detectOps = False
 
 
+CUSTOM_CYCLE_KERNEL_RISCS = (
+    [("BRISC", "BRISC-KERNEL"), ("NCRISC", "NCRISC-KERNEL")]
+    + [(f"TRISC_{t}", "TRISC-KERNEL") for t in range(3)]
+    + [(f"QUASAR_DM{i}", "DM-KERNEL") for i in range(2, 8)]
+    + [(f"QUASAR_NEO{n}_TRISC{t}", "TRISC-KERNEL") for n in range(4) for t in range(4)]
+)
+
+
 class test_custom_cycle_count(default_setup):
     timerAnalysis = {
-        "BRISC KERNEL_START->KERNEL_END": {
+        f"{risc} KERNEL_START->KERNEL_END": {
             "across": "core",
             "type": "adjacent",
-            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-        },
-        "NCRISC KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-        },
-        "TRISC_0 KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-        },
-        "TRISC_1 KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
-        },
-        "TRISC_2 KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
-        },
+            "start": {"core": "ANY", "risc": risc, "zone_name": zone},
+            "end": {"core": "ANY", "risc": risc, "zone_name": zone},
+        }
+        for risc, zone in CUSTOM_CYCLE_KERNEL_RISCS
     }
     detectOps = False
 
 
-class test_custom_cycle_count_slow_dispatch(default_setup):
-    timerAnalysis = {
-        "BRISC KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-        },
-        "NCRISC KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-        },
-        "TRISC_0 KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-        },
-        "TRISC_1 KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
-        },
-        "TRISC_2 KERNEL_START->KERNEL_END": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
-        },
-    }
-    detectOps = False
+# Slow dispatch runs the same kernels on the same processors; inherit rather than duplicate the analysis.
+class test_custom_cycle_count_slow_dispatch(test_custom_cycle_count):
+    pass
 
 
 class test_full_buffer(default_setup):

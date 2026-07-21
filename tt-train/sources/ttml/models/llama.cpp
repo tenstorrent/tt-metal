@@ -264,7 +264,7 @@ LlamaConfig read_config(const YAML::Node& config) {
     }
     llama_config.dropout_prob = config["dropout_prob"].as<float>(0.0F);
     llama_config.num_blocks = config["num_blocks"].as<uint32_t>(6U);
-    llama_config.vocab_size = config["vocab_size"].as<uint32_t>(96U);
+    llama_config.vocab_size = config["vocab_size"].as<uint32_t>(0U);
     llama_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>(256U);
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);

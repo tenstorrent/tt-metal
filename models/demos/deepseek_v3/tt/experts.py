@@ -8,6 +8,12 @@ from pathlib import Path
 import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
+from ttnn.experimental.moe_compute_utils import (
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -17,6 +23,9 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -32,6 +41,7 @@ class Experts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
 
     WEIGHT_TORCH_DTYPE = torch.bfloat16
+    _warned_legacy_expert_checkpoint = False
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -46,6 +56,72 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
+        if is_quad_mesh(mesh_device) and is_ring_fabric(get_fabric_config()):
+            return cls._convert_weights_quad_ring(hf_config, state_dicts, output_path, mesh_device)
+        return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
+
+    @classmethod
+    def _load_expert_weight(
+        cls, state_dict: dict[str, torch.Tensor], hf_name: str, n_routed_experts: int
+    ) -> torch.Tensor:
+        view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+        stacked_state_dict = view_with_prefix("experts_stacked.") if callable(view_with_prefix) else state_dict
+        stacked_lookup_names = {f"{name}.weight" for name in ("gate_proj", "down_proj", "up_proj")}
+        if not callable(view_with_prefix):
+            stacked_lookup_names = {f"experts_stacked.{name}" for name in stacked_lookup_names}
+        present_stacked_lookup_names = {name for name in stacked_lookup_names if name in stacked_state_dict}
+
+        stacked_weight_name = f"experts_stacked.{hf_name}.weight"
+        stacked_lookup_name = f"{hf_name}.weight" if callable(view_with_prefix) else stacked_weight_name
+        if stacked_lookup_name in stacked_state_dict:
+            stacked_weight = get_dequantized_tensor(
+                stacked_state_dict, stacked_lookup_name, dtype=cls.WEIGHT_TORCH_DTYPE
+            )
+            if stacked_weight.ndim != 3:
+                raise ValueError(
+                    f"Expected stacked expert weight '{stacked_weight_name}' to have rank 3, got {stacked_weight.ndim}"
+                )
+            if stacked_weight.shape[0] != n_routed_experts:
+                raise ValueError(
+                    f"Expected stacked expert weight '{stacked_weight_name}' to contain "
+                    f"{n_routed_experts} experts, got {stacked_weight.shape[0]}"
+                )
+            return stacked_weight.contiguous()
+
+        if present_stacked_lookup_names:
+            raise ValueError(
+                f"Checkpoint mixes stacked and legacy expert weights: missing '{stacked_weight_name}' while "
+                "other stacked expert tensors are present. Regenerate the stacked checkpoint so all expert "
+                "projections are exported together."
+            )
+
+        if not cls._warned_legacy_expert_checkpoint:
+            logger.warning(
+                "Stacked expert tensors were not found in the DeepSeek checkpoint. "
+                "Falling back to the slower legacy per-expert compatibility path. "
+                "Generate a stacked checkpoint with "
+                "`python models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py "
+                "<source-model-path> --stack-experts` "
+                "and point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting "
+                "`*-dequantized-stacked` directory."
+            )
+            cls._warned_legacy_expert_checkpoint = True
+
+        weight_name = f"{hf_name}.weight"
+        expert_weights: list[torch.Tensor] = []
+        for expert_id in range(n_routed_experts):
+            full_weight_name = f"experts.{expert_id}.{weight_name}"
+            expert_weights.append(get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE))
+        return torch.stack(expert_weights).contiguous()
+
+    @classmethod
+    def _convert_weights_default(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        output_path: Path,
+        mesh_device: ttnn.Device,
+    ) -> WeightConfig:
         assert hf_config.n_routed_experts % mesh_device.get_num_devices() == 0, (
             f"Number of experts ({hf_config.n_routed_experts}) must be divisible by the number of devices "
             f"({mesh_device.get_num_devices()})"
@@ -53,22 +129,11 @@ class Experts(AbstractModule):
         (state_dict,) = state_dicts
         assert state_dict is not None
 
-        def _load_expert_weight(hf_name: str) -> torch.Tensor:
-            weight_name = f"{hf_name}.weight"
-            expert_weights: list[torch.Tensor] = []
-            for expert_id in range(hf_config.n_routed_experts):
-                full_weight_name = f"experts.{expert_id}.{weight_name}"
-                expert_weights.append(
-                    get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
-                )
-
-            return torch.stack(expert_weights)
-
         return {
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2),
+                    cls._load_expert_weight(state_dict, hf_name, hf_config.n_routed_experts).unsqueeze(0).contiguous(),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
@@ -80,6 +145,142 @@ class Experts(AbstractModule):
                 ("down_proj", "w2_experts"),
                 ("up_proj", "w3_experts"),
             ]
+        }
+
+    @classmethod
+    def _convert_weights_quad_ring(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        output_path: Path,
+        mesh_device: ttnn.Device,
+    ) -> WeightConfig:
+        assert hf_config.n_routed_experts % mesh_device.get_num_devices() == 0, (
+            f"Number of experts ({hf_config.n_routed_experts}) must be divisible by the number of devices "
+            f"({mesh_device.get_num_devices()})"
+        )
+        (state_dict,) = state_dicts
+        assert state_dict is not None
+
+        num_layers = 1
+        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
+        num_routed_experts = hf_config.n_routed_experts
+
+        hidden_size = hf_config.hidden_size
+        matmul_N = hf_config.moe_intermediate_size
+        w0_w1_shard_map, w2_shard_map, compute_matmul_dram_core_range_set = get_weight_core_shard_maps(
+            mesh_device, hidden_size, matmul_N
+        )
+
+        prepared_state_dict = state_dict
+        prepared_key_pairs = (
+            ("experts_quad_ring.w0_w1.weight", "experts_quad_ring.w2.weight"),
+            ("w0_w1.weight", "w2.weight"),
+        )
+        prepared_w0_w1_key = prepared_key_pairs[0][0]
+        prepared_w2_key = prepared_key_pairs[0][1]
+        has_prepared_w0_w1 = False
+        has_prepared_w2 = False
+        for candidate_w0_w1_key, candidate_w2_key in prepared_key_pairs:
+            candidate_has_w0_w1 = candidate_w0_w1_key in prepared_state_dict
+            candidate_has_w2 = candidate_w2_key in prepared_state_dict
+            if candidate_has_w0_w1 or candidate_has_w2:
+                prepared_w0_w1_key = candidate_w0_w1_key
+                prepared_w2_key = candidate_w2_key
+                has_prepared_w0_w1 = candidate_has_w0_w1
+                has_prepared_w2 = candidate_has_w2
+                break
+
+        if has_prepared_w0_w1 or has_prepared_w2:
+            if not (has_prepared_w0_w1 and has_prepared_w2):
+                raise ValueError(
+                    "Checkpoint contains partial quad-ring prepared expert tensors. "
+                    f"Expected both '{prepared_w0_w1_key}' and '{prepared_w2_key}'."
+                )
+            prepared_w0_w1 = get_dequantized_tensor(
+                prepared_state_dict, prepared_w0_w1_key, dtype=cls.WEIGHT_TORCH_DTYPE
+            )
+            prepared_w2 = get_dequantized_tensor(prepared_state_dict, prepared_w2_key, dtype=cls.WEIGHT_TORCH_DTYPE)
+        else:
+            allow_repack = os.getenv("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK", "0").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if not allow_repack:
+                raise ValueError(
+                    "Quad-ring MoE weight loading requires prepacked HF expert tensors "
+                    f"'{prepared_w0_w1_key}' and '{prepared_w2_key}' so cold TTNN weight-cache loads stay fast. "
+                    "Run `python models/demos/deepseek_v3/scripts/prepare_quad_ring_hf_checkpoint.py "
+                    "<stacked-dequantized-model>` and point DEEPSEEK_V3_HF_MODEL at the generated "
+                    "`*-quad-ring` checkpoint, or set DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK=1 "
+                    "to allow slow in-process repacking."
+                )
+
+            w0 = cls._load_expert_weight(state_dict, "gate_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+            w1 = cls._load_expert_weight(state_dict, "up_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+            w2 = cls._load_expert_weight(state_dict, "down_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+
+            prepared_w0_w1 = []
+            prepared_w2 = []
+            for i in range(0, num_routed_experts, num_experts_per_device):
+                prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
+                    w0[:, i : i + num_experts_per_device, :, :],
+                    w1[:, i : i + num_experts_per_device, :, :],
+                    num_layers,
+                    num_experts_per_device,
+                    hidden_size,
+                    matmul_N,
+                    w0_w1_shard_map,
+                )
+                prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
+                    w2[:, i : i + num_experts_per_device, :, :],
+                    num_layers,
+                    num_experts_per_device,
+                    matmul_N,
+                    hidden_size,
+                    w2_shard_map,
+                    w0_w1_shard_map,
+                )
+
+                prepared_w0_w1.append(prepared_w0_w1_tensor)
+                prepared_w2.append(prepared_w2_tensor)
+
+            prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
+            prepared_w2 = torch.cat(prepared_w2, dim=2)
+
+        w0_w1_memory_config, w2_memory_config, _, _ = get_weight_mem_configs(
+            num_layers,
+            num_experts_per_device,
+            hidden_size,
+            matmul_N,
+            w0_w1_shard_map,
+            w2_shard_map,
+            compute_matmul_dram_core_range_set,
+        )
+
+        return {
+            "quad_ring_w0_w1_experts": {
+                "input_tensor_b": shard_and_save(
+                    output_path / "quad_ring_w0_w1_experts.input_tensor_b",
+                    prepared_w0_w1,
+                    shard_dims=(2, 2),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    memory_config=w0_w1_memory_config,
+                )
+            },
+            "quad_ring_w2_experts": {
+                "input_tensor_b": shard_and_save(
+                    output_path / "quad_ring_w2_experts.input_tensor_b",
+                    prepared_w2,
+                    shard_dims=(2, 2),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    memory_config=w2_memory_config,
+                )
+            },
         }
 
     @classmethod
@@ -95,7 +296,6 @@ class Experts(AbstractModule):
         """
         return mesh_device.shape[1] == 8
 
-    @classmethod
     @classmethod
     def _create_model_config(
         cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, mode: str
@@ -115,31 +315,45 @@ class Experts(AbstractModule):
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Construct the config
-        return {
+        config = {
             "mesh_device": MeshDeviceStub(mesh_device.shape),
-            "w1_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            ),
-            "w2_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-            ),
-            "w3_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            ),
-            "mul_experts": MulConfig(
-                memory_config=output_memory_config,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            ),
             "input_memory_config": input_memory_config,
             "output_memory_config": output_memory_config,
             "num_experts_per_device": num_experts_per_device,
         }
+
+        if is_quad_mesh(mesh_device) and is_ring_fabric(get_fabric_config()):
+            config["quad_ring_w0_w1_experts"] = {
+                "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+            }
+            config["quad_ring_w2_experts"] = {
+                "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+            }
+        else:
+            config["w1_experts"] = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
+                memory_config=output_memory_config,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            )
+            config["w2_experts"] = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
+                memory_config=output_memory_config,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+            )
+            config["w3_experts"] = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
+                memory_config=output_memory_config,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            )
+            config["mul_experts"] = MulConfig(
+                memory_config=output_memory_config,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            )
+
+        return config
 
     @classmethod
     def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:

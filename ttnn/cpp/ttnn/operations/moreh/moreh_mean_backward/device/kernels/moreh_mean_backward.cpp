@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     // compile-time args
@@ -15,58 +16,63 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
     constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input
-    constexpr auto cb_in1 = tt::CBIndex::c_1;  // zero tile
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    DataflowBuffer dfb_in0_obj(cb_in0);  // input
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    DataflowBuffer dfb_in1_obj(cb_in1);  // zero tile
     constexpr auto cb_scalar = tt::CBIndex::c_2;
+    DataflowBuffer dfb_scalar_obj(cb_scalar);
     constexpr auto cb_out0 = tt::CBIndex::c_16;
+    DataflowBuffer dfb_out0_obj(cb_out0);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    cb_wait_front(cb_in1, onetile);
+    dfb_in1_obj.wait_front(onetile);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         tile_regs_acquire();
-        cb_wait_front(cb_in0, onetile);
+        dfb_in0_obj.wait_front(onetile);
         if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short_with_dt(cb_in1, cb_in0);
+            add_bcast_scalar_init_short_with_dt(dfb_in1_obj, dfb_in0_obj);
             add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            add_bcast_rows_init_short_with_dt(cb_in1, cb_in0);
+            add_bcast_rows_init_short_with_dt(dfb_in1_obj, dfb_in0_obj);
             add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            add_bcast_cols_init_short_with_dt(cb_in1, cb_in0);
+            add_bcast_cols_init_short_with_dt(dfb_in1_obj, dfb_in0_obj);
             add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
         } else {
-            copy_tile_init_with_dt(cb_in0);
+            copy_tile_init_with_dt(dfb_in0_obj);
             copy_tile(cb_in0, 0, dst0);
         }
         tile_regs_commit();
 
-        cb_reserve_back(cb_intermed0, onetile);
+        dfb_intermed0_obj.reserve_back(onetile);
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_intermed0);
+        pack_tile_with_dt(dst0, dfb_intermed0_obj);
         tile_regs_release();
 
-        cb_push_back(cb_intermed0, onetile);
-        cb_pop_front(cb_in0, onetile);
+        dfb_intermed0_obj.push_back(onetile);
+        dfb_in0_obj.pop_front(onetile);
 
         // output * (1 / number_of_elements)
         tile_regs_acquire();
-        cb_wait_front(cb_intermed0, onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
+        dfb_intermed0_obj.wait_front(onetile);
+        mul_tiles_bcast_scalar_init_short_with_dt(dfb_intermed0_obj, dfb_scalar_obj);
         mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
         tile_regs_commit();
 
-        cb_reserve_back(cb_out0, onetile);
+        dfb_out0_obj.reserve_back(onetile);
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0);
+        pack_tile_with_dt(dst0, dfb_out0_obj);
         tile_regs_release();
 
-        cb_push_back(cb_out0, onetile);
-        cb_pop_front(cb_intermed0, onetile);
+        dfb_out0_obj.push_back(onetile);
+        dfb_intermed0_obj.pop_front(onetile);
     }
-    cb_pop_front(cb_in1, onetile);
+    dfb_in1_obj.pop_front(onetile);
 }

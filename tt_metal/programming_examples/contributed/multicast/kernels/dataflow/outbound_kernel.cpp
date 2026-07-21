@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/device_print.h"
+#include "api/debug/dprint.h"
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -12,21 +12,20 @@ void kernel_main() {
 
     ////////// BUFFER SETUP //////////
     constexpr uint32_t cb_id_out0 = tt::CB::c_out0;  // CBIndex::c_16
-    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
     constexpr auto dram_writer_args = TensorAccessorArgs<0>();
-    const auto dram_writer = TensorAccessor(dram_writer_args, dst_addr, tile_bytes);
+    const auto dram_writer = TensorAccessor(dram_writer_args, dst_addr);
 
     cb_wait_front(cb_id_out0, 1);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
     ////////// CALCULATE OFFSET AND WRITE TO DRAM //////////
     uint32_t dram_tile_id = tile_offset;
-    noc_async_write_tile(dram_tile_id, dram_writer, l1_read_addr);
+    noc_async_write_page(dram_tile_id, dram_writer, l1_read_addr);
     noc_async_write_barrier();
 
     cb_pop_front(cb_id_out0, 1);
 
-    DEVICE_PRINT(
+    DPRINT(
         "Core ({},{}): Outbound kernel has written tile to DRAM index {}.\n",
         get_absolute_logical_x(),
         get_absolute_logical_y(),

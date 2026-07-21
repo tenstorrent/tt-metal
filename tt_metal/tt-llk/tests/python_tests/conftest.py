@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -6,21 +6,46 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+# ttsim runs in-process (no ExalensServer). Its init must complete before any helpers.* import,
+# because helpers.chip_architecture.get_chip_architecture() reaches check_context() and this
+# conftest calls it at module-load time via the skip_for_* markers defined further down.
+# TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
+# TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
+# Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
+# and skip --compile-producer (it only compiles ELFs and never talks to a device). xdist workers
+# inherit env vars but not the controller's argv, so trust the env var when PYTEST_XDIST_WORKER
+# is set.
+_SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
+    "TT_UMD_SIMULATOR_PATH"
+)
+_IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+_SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
+    "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
+)
+if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+    from ttexalens import tt_exalens_init as _tt_exalens_init
+
+    _tt_exalens_init.init_ttexalens(
+        simulation_directory=_SIMULATOR_PATH, use_4B_mode=False
+    )
+
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
+import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException, _send_arc_message
+from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
-from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -76,65 +101,32 @@ def init_llk_home():
 init_llk_home()
 
 
-def check_hardware_headers():
-    """Check if hardware-specific headers have been downloaded for the current architecture."""
-
-    arch_name = TestConfig.ARCH.value
-    header_dir = TestConfig.LLK_ROOT / "tests" / "hw_specific" / arch_name / "inc"
-
-    required_headers = [
-        "core_config.h",
-        "cfg_defines.h",
-        "dev_mem_map.h",
-        "tensix.h",
-        "tensix_types.h",
-    ]
-    required_headers_quasar = [
-        "core_config.h",
-        "cfg_defines.h",
-        "dev_mem_map.h",
-        "t6_debug_map.h",
-        "t6_mop_config_map.h",
-        "tensix_types.h",
-        "tensix.h",
-        "tt_t6_trisc_map.h",
-    ]
-
-    # Quasar has a somewhat different set of headers
-    if TestConfig.ARCH == ChipArchitecture.QUASAR:
-        required_headers = required_headers_quasar
-
-    # Check if header directory exists
-    if not header_dir.exists():
-        pytest.exit(
-            f"ERROR: Hardware-specific header directory not found: {header_dir}\n\n"
-            f"SOLUTION: Run the setup script to download required headers:\n"
-            f"  cd {TestConfig.LLK_ROOT}/tests\n"
-            f"  ./setup_testing_env.sh\n",
-            returncode=1,
-        )
-
-    # Check for required headers
-    missing_headers = []
-    for header in required_headers:
-        if not (header_dir / header).exists():
-            missing_headers.append(header)
-
-    if missing_headers:
-        pytest.exit(
-            f"ERROR: Missing required hardware headers for {arch_name}:\n"
-            + "\n".join(f"  {header}" for header in missing_headers)
-            + "\n\n"
-            f"SOLUTION: Run the setup script to download missing headers:\n"
-            f"  cd {TestConfig.LLK_ROOT}/tests\n"
-            f"  ./setup_testing_env.sh\n",
-            returncode=1,
-        )
-
-
 @pytest.fixture()
 def regenerate_cpp(request):
     return not request.config.getoption("--skip-codegen")
+
+
+# Default seed for deterministic stimuli. Override via LLK_TEST_SEED to reproduce
+# a specific run or to sweep different random inputs.
+_LLK_TEST_SEED = os.environ.get("LLK_TEST_SEED")
+try:
+    _DEFAULT_TORCH_SEED = int(_LLK_TEST_SEED, 0) if _LLK_TEST_SEED is not None else 42
+except ValueError as e:
+    raise pytest.UsageError(
+        f"LLK_TEST_SEED must be an integer, got {_LLK_TEST_SEED!r}"
+    ) from e
+
+
+@pytest.fixture(autouse=True)
+def _seed_torch_rng():
+    """Lock torch's global RNG before every test to avoid flaky failures.
+
+    Stimuli that don't set an explicit StimuliSpec.seed fall back to torch's
+    global generator, so seeding here makes both generate_stimuli() and any
+    direct torch.rand/randn/randint/uniform_ calls reproducible.
+    """
+    torch.manual_seed(_DEFAULT_TORCH_SEED)
+    yield
 
 
 # Define the possible custom command line options
@@ -251,6 +243,62 @@ def pytest_addoption(parser):
         help="Path to folder where stimuli should be loaded from",
     )
 
+    parser.addoption(
+        "--enable-perf-counters",
+        action="store_true",
+        default=False,
+        help="Enable hardware performance counter collection during perf tests",
+    )
+
+    parser.addoption(
+        "--dump-raw-counters",
+        action="store_true",
+        default=False,
+        help="Print raw hardware counter values to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-raw-metrics",
+        action="store_true",
+        default=False,
+        help="Print derived efficiency metrics to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-csv-counters",
+        action="store_true",
+        default=False,
+        help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--disable-sfploadmacro",
+        action="store_true",
+        default=False,
+        help="Compile kernels with -DDISABLE_SFPLOADMACRO so SFPLOADMACRO-based SFPU "
+        "kernels fall back to their plain sfpi/TTI calculate path (equivalent to "
+        "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
+    )
+
+    parser.addoption(
+        "--op",
+        action="append",
+        default=[],
+        metavar="OP",
+        help="Run only tests for the given SFPU op(s), by MathOperation name "
+        "(case-insensitive, exact). Repeatable: --op=exp --op=log.",
+    )
+
+    parser.addoption(
+        "--mode",
+        action="store",
+        default="accuracy",
+        choices=["accuracy", "perf", "both"],
+        help="SFPU sweep selector (accuracy | perf | both): keeps only that sweep "
+        "test and deselects the other two. Defaults to 'accuracy'. "
+        "Exact-match shorthand for -k.",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -268,7 +316,35 @@ def pytest_configure(config):
         config.option.log_cli_level = log_level
         config.option.log_cli = True
 
+    # Let the CLI flag drive the compile define; test_config reads the env var
+    # when assembling per-variant compile options.
+    if config.getoption("--disable-sfploadmacro", default=False):
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
+
     config.coverage_enabled = config.getoption("--coverage", default=False)
+    TestConfig.DUMP_RAW_COUNTERS = config.getoption(
+        "--dump-raw-counters", default=False
+    )
+    TestConfig.DUMP_RAW_METRICS = config.getoption("--dump-raw-metrics", default=False)
+    TestConfig.DUMP_CSV_COUNTERS = config.getoption(
+        "--dump-csv-counters", default=False
+    )
+    # --dump-raw-counters, --dump-raw-metrics, or --dump-csv-counters imply --enable-perf-counters
+    TestConfig.ENABLE_PERF_COUNTERS = (
+        config.getoption("--enable-perf-counters", default=False)
+        or TestConfig.DUMP_RAW_COUNTERS
+        or TestConfig.DUMP_RAW_METRICS
+        or TestConfig.DUMP_CSV_COUNTERS
+    )
+
+    # Device print is enabled on debug or trace.
+    resolved_log_level = (
+        config.getoption("--logging-level", default=None)
+        or os.getenv("LOGURU_LEVEL", "INFO")
+    ).upper()
+    TestConfig.DEVICE_PRINT_ENABLED = (
+        resolved_log_level in ("DEBUG", "TRACE") and not config.coverage_enabled
+    )
 
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
@@ -278,9 +354,15 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
+    worker_id = getattr(config, "workerinput", {}).get("workerid", "master")
+
+    if worker_id != "master":
+        import torch
+
+        torch.set_num_threads(1)
+
     TestConfig.setup_mode(
-        # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
-        getattr(config, "workerinput", {}).get("workerid", "master"),
+        worker_id,
         config.getoption("--compile-consumer", default=False),
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
@@ -289,6 +371,8 @@ def pytest_configure(config):
 
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
+
+    TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 
@@ -304,9 +388,11 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
+    is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     if (
-        TestConfig.ARCH != ChipArchitecture.QUASAR
-        and not TestConfig.BUILD_MODE == BuildMode.PRODUCE
+        (is_ttsim or not TestConfig.TEST_TARGET.run_simulator)
+        and TestConfig.ARCH != ChipArchitecture.QUASAR
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
     ):
         override_gprs_used_by_tensix_dump()
 
@@ -314,7 +400,6 @@ def pytest_configure(config):
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
-        check_hardware_headers()
         if os.path.exists(log_file):
             os.remove(log_file)
 
@@ -328,33 +413,142 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    initialize_test_target_from_pytest(config)
-    test_target = TestTargetConfig()
-
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        if test_target.run_simulator:
-            simulator_path = os.environ.get("TT_UMD_SIMULATOR_PATH")
-
-            if simulator_path is None:
+        if TestConfig.TEST_TARGET.run_simulator:
+            if _SIMULATOR_PATH is None:
                 pytest.exit(
-                    "ERROR: --run-simulator requires TT_UMD_SIMULATOR_PATH "
-                    "environment variable to be set.",
+                    "ERROR: --run-simulator requires TT_METAL_SIMULATOR "
+                    "(or TT_UMD_SIMULATOR_PATH) environment variable to be set.",
                     returncode=1,
                 )
 
-            # Only the controller process manages the server; xdist workers
-            # just connect to the already-running instance.
-            if not hasattr(config, "workerinput"):
+            if _SIMULATOR_PATH.endswith(".so"):
+                # ttsim: already initialized at module import above; runs in-process, no server.
+                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+                # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
+                if TestConfig.TEST_TARGET.reset_simulator_per_test:
+                    pytest.exit(
+                        "ERROR: --reset-simulator-per-test is not supported with ttsim. "
+                        "Re-run without it.",
+                        returncode=1,
+                    )
+            elif not hasattr(config, "workerinput"):
+                # RTL simulator: only the controller process manages the server; xdist workers
+                # just connect to the already-running instance.
                 global _exalens_server
                 _exalens_server = ExalensServer(
-                    simulator_path=simulator_path,
-                    port=test_target.simulator_port,
+                    simulator_path=_SIMULATOR_PATH,
+                    port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
+def pytest_ignore_collect(collection_path, config):
+    # Skip collecting the quasar/ dir on non-quasar arch — those tests are
+    # deselected there anyway, so there's no need to collect them.
+    if (
+        get_chip_architecture() != ChipArchitecture.QUASAR
+        and "quasar" in collection_path.parts
+    ):
+        return True
+    return None
+
+
+def _collapse_runtime_only_variants(config, items):
+    """Keep only one test per unique compile key, dropping runtime only duplicates.
+
+    Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
+    ``compile_key_fn`` on their ``runtime_axes`` pytest mark.  That function extracts
+    the compile time subset of each item's params.  Items that share the same compile
+    key produce identical ELFs, so only the first is kept for the compile-producer pass.
+    """
+    from helpers.param_config import RUNTIME_AXES_MARK
+
+    seen = set()
+    keep = []
+    deselected = []
+    for item in items:
+        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+        if marker is None:
+            keep.append(item)
+            continue
+        compile_key_fn = marker.kwargs["compile_key_fn"]
+        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
+        if key not in seen:
+            seen.add(key)
+            keep.append(item)
+        else:
+            deselected.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = keep
+
+
+def _item_op_names(item) -> set:
+    """Return the op name(s) a test covers, lowercased.
+
+    Reads the MathOperation from the test's parameters, falling back to the op name in the test id.
+    """
+    from helpers.llk_params import MathOperation
+
+    names = set()
+    callspec = getattr(item, "callspec", None)
+    if callspec is not None:
+        for val in callspec.params.values():
+            if isinstance(val, MathOperation):
+                names.add(val.name.lower())
+    if not names:
+        names.update(
+            m.lower() for m in re.findall(r"MathOperation\.(\w+)", item.nodeid)
+        )
+    return names
+
+
+def _select_tests_by_op(config, items):
+    """Run only the tests for the op(s) passed with --op.
+
+    Each op is a MathOperation name, matched case-insensitively and exactly. An
+    unknown name raises an error; a valid op with no matching test selects
+    nothing. Does nothing without --op.
+    """
+    requested = config.getoption("--op") or []
+    if not requested:
+        return
+
+    from helpers.llk_params import MathOperation
+
+    valid = {op.name.lower() for op in MathOperation}
+    wanted = set()
+    for raw in requested:
+        key = raw.lower()
+        if key not in valid:
+            raise pytest.UsageError(
+                f"--op {raw!r}: not a known SFPU op. Expected a MathOperation "
+                f"name (case-insensitive), e.g. Exp, Reciprocal, Gelu."
+            )
+        wanted.add(key)
+
+    selected, deselected = [], []
+    for item in items:
+        (selected if _item_op_names(item) & wanted else deselected).append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    logger.info(
+        f"--op kept {len(selected)} test(s) for op(s): {', '.join(sorted(wanted))}"
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    _select_tests_by_op(config, items)
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -420,6 +614,62 @@ def _stringify_params(params):
             parts.append(f"{name}={str(value)}")
 
     return f"[{' | '.join(parts)}]"
+
+
+# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
+#   [<clk>] ERROR: <Category>: <function>: <details>
+_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_logreport(report):
+    # pytest-forked appends a crashed child's captured streams to report.sections
+    # using lowercase headers ("captured stdout"/"captured stderr"), but pytest's
+    # TestReport.capstdout/capstderr properties only match headers that start with
+    # "Captured stdout"/"Captured stderr" (capital C). The junit XML writer reads
+    # via those properties, so without renaming, <system-out> stays empty for
+    # forked crashes. Rename in place so the ttsim "ERROR: ..." line lands in the
+    # XML and any junit-XML-aware viewer (junit2html, CI, etc.) can render it.
+    sections = getattr(report, "sections", None)
+    if sections:
+        report.sections = [
+            (
+                ("Captured stdout call", content)
+                if name == "captured stdout"
+                else (
+                    ("Captured stderr call", content)
+                    if name == "captured stderr"
+                    else (name, content)
+                )
+            )
+            for name, content in sections
+        ]
+
+    # Rewrite the headline of forked-crash reports from the useless
+    #   ":-1: running the test CRASHED with signal 0"
+    # to the actual ttsim category/function so it shows up in the test summary,
+    # in <error message="..."> in the junit XML, and in CI annotations.
+    #
+    # We also normalize report.when from pytest-forked's sentinel "???" to "call".
+    # Without this, pytest-sugar (and other reporters that count by phase) treat
+    # forked-crash reports as setup-phase errors and miss them in the live
+    # pass/fail/skip footer; the junit writer also classifies them as <error>
+    # rather than <failure>. Setting when="call" makes the report indistinguish-
+    # able from a normal call-phase failure, which is what we actually want:
+    # the test ran, ttsim hit an unimplemented path mid-execution, the test
+    # failed.
+    if report.outcome == "failed" and "CRASHED with signal" in str(
+        report.longrepr or ""
+    ):
+        report.when = "call"
+        m = _TTSIM_ERR_RE.search(report.capstdout or "")
+        if m:
+            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
+            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+            props = list(getattr(report, "user_properties", []))
+            props.append(("ttsim_category", cat))
+            props.append(("ttsim_func", func))
+            report.user_properties = props
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -493,6 +743,10 @@ def pytest_runtest_makereport(item, call):
                     report.longrepr = f"LLK ASSERT HIT {test_file_and_func}{report.test_params} {exc_msg}"
                 elif exc_type == TimeoutError:
                     report.longrepr = f"TENSIX TIMED OUT {test_file_and_func}{report.test_params} {exc_msg}"
+                    # Log the timeout error
+                    logger.error(
+                        f"TENSIX TIMED OUT {test_file_and_func}{report.test_params} {exc_msg}"
+                    )
                 elif exc_type == AssertionError:
                     # If we want to record test ordering, we already now from order report if test failed, thus to de-clutter logs,
                     # we will mark test as if it passed to speed the whole execution up
@@ -521,8 +775,7 @@ _reset_simulator_pending = False
 
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
-    test_target = TestTargetConfig()
-    if not test_target.reset_simulator_per_test:
+    if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:
         return
@@ -541,12 +794,10 @@ def pytest_runtest_setup(item):
     if _exalens_server is None:
         return
 
-    test_target = TestTargetConfig()
-
     if not _exalens_server.running and not _exalens_server.ever_started:
         _exalens_server.start()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
@@ -556,7 +807,7 @@ def pytest_runtest_setup(item):
         tt_exalens_init.cleanup_global_context()
         _exalens_server.restart()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
 
 
@@ -564,9 +815,42 @@ def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
 
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_BUSY", test_target.device_id)
+
+@pytest.fixture(scope="module", autouse=True)
+def counter_report(request, worker_id):
+    """Separate report for raw hardware counter CSV data (--dump-csv-counters)."""
+    if not TestConfig.DUMP_CSV_COUNTERS:
+        PerfConfig.COUNTER_REPORT = None
+        yield None
+        return
+
+    test_module = request.path.stem
+    temp_report = PerfReport()
+    PerfConfig.COUNTER_REPORT = temp_report
+
+    try:
+        yield temp_report
+    except Exception as e:
+        logger.warning("Counter report: Unexpected error, saving anyway: {}", e)
+
+    PerfConfig.COUNTER_REPORT = None
+
+    if TestConfig.MODE == TestMode.PRODUCE:
+        return
+
+    if PerfConfig.TEST_COUNTER == 0:
+        return
+
+    temp_report.assert_single_schema(
+        context=f"{test_module} counters (worker {worker_id})"
+    )
+
+    counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
+
+    if counters_path.exists():
+        counters_path.unlink()
+
+    temp_report.dump_csv(counters_path)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -587,6 +871,11 @@ def perf_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
+    # Fail loud before writing: a single CSV must hold exactly one column schema.
+    # More than one means two unrelated tests/ops share this module (split them
+    # into separate files) or one test emits inconsistent columns across its sweep.
+    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
+
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"
 
@@ -604,10 +893,6 @@ def perf_report(request, worker_id):
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_IDLE", test_target.device_id)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()

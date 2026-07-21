@@ -4,9 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t shard_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb = get_compile_time_arg_val(0);
     constexpr uint32_t num_x_cores = get_compile_time_arg_val(1);
     constexpr uint32_t num_y_cores = get_compile_time_arg_val(2);
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
@@ -20,7 +25,9 @@ void kernel_main() {
     const uint32_t num_ranges = get_arg_val<uint32_t>(arg_index++);
     const uint32_t output_page_offset = get_arg_val<uint32_t>(arg_index++);
 
-    uint32_t l1_write_addr = get_write_ptr(shard_cb) + output_page_offset * page_size;
+    Noc noc;
+    DataflowBuffer dfb(shard_dfb);
+    uint32_t l1_write_addr = dfb.get_write_ptr() + output_page_offset * page_size;
 
     uint32_t mask_byte = 0x0ff;     // 8 bits
     uint32_t mask_short = 0x0ffff;  // 16 bits
@@ -52,8 +59,13 @@ void kernel_main() {
             if (!skip) {
                 uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
                 uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
-                uint64_t noc_address = get_noc_addr(core_id_x, core_id_y, input_shard_addr + addr_offset);
-                noc_async_read(noc_address, l1_write_addr, stride_size);
+                CoreLocalMem<uint32_t> dst(l1_write_addr);
+                noc.async_read(
+                    UnicastEndpoint{},
+                    dst,
+                    stride_size,
+                    {.noc_x = core_id_x, .noc_y = core_id_y, .addr = input_shard_addr + addr_offset},
+                    {.offset_bytes = 0});
                 l1_write_addr += stride_size;
             } else {
                 l1_write_addr += stride_size;
@@ -67,5 +79,5 @@ void kernel_main() {
             core_id_y_index += stride_y;
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

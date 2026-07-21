@@ -235,6 +235,26 @@ def test_multi_op_buffer_overflow():
         ), "Wrong Marker Repeat count"
 
 
+EXPECTED_KERNEL_RISCS = {
+    "wormhole_b0": ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"],
+    "blackhole": ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"],
+    "quasar": [f"QUASAR_DM{i}" for i in range(2, 8)] + [f"QUASAR_NEO{n}_TRISC{t}" for n in range(4) for t in range(4)],
+}
+
+
+def _assert_kernel_cycle_counts(devicesData, ref_min, ref_max):
+    arch = devicesData["data"]["deviceInfo"]["arch"]
+    assert arch in EXPECTED_KERNEL_RISCS, f"Unhandled arch '{arch}' for custom cycle count test"
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in EXPECTED_KERNEL_RISCS[arch]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+        assert statName in stats, f"Missing device analysis for {statName}"
+        avg = stats[statName]["stats"]["Average"]
+        assert avg < ref_max, f"{statName}: cycle count too high ({avg} >= {ref_max})"
+        assert avg > ref_min, f"{statName}: cycle count too low ({avg} <= {ref_min})"
+
+
 def test_custom_cycle_count_slow_dispatch():
     REF_CYCLE_COUNT_PER_LOOP = 52
     LOOP_COUNT = 2000
@@ -247,14 +267,7 @@ def test_custom_cycle_count_slow_dispatch():
 
     devicesData = run_device_profiler_test(setupAutoExtract=True, slowDispatch=True)
 
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-
-    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
-        statName = f"{risc} KERNEL_START->KERNEL_END"
-
-        assert statName in stats.keys(), "Wrong device analysis format"
-        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+    _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
 def test_custom_cycle_count():
@@ -269,14 +282,7 @@ def test_custom_cycle_count():
 
     devicesData = run_device_profiler_test(setupAutoExtract=True)
 
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-
-    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
-        statName = f"{risc} KERNEL_START->KERNEL_END"
-
-        assert statName in stats.keys(), "Wrong device analysis format"
-        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+    _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
 @pytest.mark.skip_post_commit
@@ -776,6 +782,130 @@ def verify_trace_ids_in_device_csv(csv_path=None, riscs=("BRISC", "NCRISC")):
 
     if errors:
         error_msg = f"Found {len(errors)} trace_id mismatches between BRISC and NCRISC:\n" + "\n".join(errors[:10])
+        if len(errors) > 10:
+            error_msg += f"\n... and {len(errors) - 10} more errors"
+        assert False, error_msg
+
+
+DEVICE_ID_NUM_BITS = 10
+DEVICE_OP_ID_NUM_BITS = 31
+
+# create_basic_sync_program() in sub_device_test_utils.hpp assigns these runtime ids:
+# waiter -> sub_device_2, syncer/incrementer -> sub_device_1
+SUBDEVICE_TEST_PROGRAM_RUNTIME_ID_TO_SUB_DEVICE = {
+    1: 1,
+    2: 0,
+    3: 0,
+}
+
+SUBDEVICE_TEST_CORE_TO_SUB_DEVICE = {(x, y): 0 for x in range(3) for y in range(3)}
+SUBDEVICE_TEST_CORE_TO_SUB_DEVICE.update({(3, 3): 1, (4, 4): 1})
+
+
+def decode_run_host_id(encoded_run_host_id):
+    encoded_run_host_id = int(encoded_run_host_id)
+    device_id = encoded_run_host_id & ((1 << DEVICE_ID_NUM_BITS) - 1)
+    base_program_id = (encoded_run_host_id & ((1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS
+    return device_id, base_program_id
+
+
+def get_base_program_id(run_host_id):
+    run_host_id = int(run_host_id)
+    if run_host_id == 0:
+        return None
+    if run_host_id >= (1 << DEVICE_ID_NUM_BITS):
+        _, base_program_id = decode_run_host_id(run_host_id)
+        return base_program_id
+    return run_host_id
+
+
+def parse_device_csv_meta_data(meta_data_str):
+    if meta_data_str is None or (isinstance(meta_data_str, float) and pd.isna(meta_data_str)):
+        return None
+    meta_data_str = str(meta_data_str).strip()
+    if not meta_data_str:
+        return None
+    try:
+        return json.loads(meta_data_str.replace(";", ","))
+    except json.JSONDecodeError:
+        return None
+
+
+def verify_sub_device_ids_in_device_csv(csv_path=None):
+    """
+    Verify sub-device metadata in profile_log_device.csv for sub-device dispatch tests.
+
+    Every row with non-empty meta data must include sub_device_id and sub_device_manager_id.
+    When the owning program or worker core is known, sub_device_id must match the test layout.
+    """
+    if csv_path is None:
+        csv_path = PROFILER_LOGS_DIR / "profile_log_device.csv"
+
+    if not os.path.isfile(csv_path):
+        assert False, f"Device log CSV not found at {csv_path}"
+
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+
+    errors = []
+    validated_rows = 0
+    manager_ids = set()
+
+    for row in df.itertuples(index=False):
+        meta_data = parse_device_csv_meta_data(row[-1])
+        if meta_data is None:
+            continue
+
+        validated_rows += 1
+
+        if "sub_device_id" not in meta_data or "sub_device_manager_id" not in meta_data:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), run_host_id {row[7]}: "
+                f"meta data missing sub_device fields: {meta_data}"
+            )
+            continue
+
+        sub_device_id = int(meta_data["sub_device_id"])
+        manager_ids.add(int(meta_data["sub_device_manager_id"]))
+
+        base_program_id = get_base_program_id(row[7])
+
+        expected_from_program = (
+            SUBDEVICE_TEST_PROGRAM_RUNTIME_ID_TO_SUB_DEVICE.get(base_program_id)
+            if base_program_id is not None
+            else None
+        )
+        expected_from_core = SUBDEVICE_TEST_CORE_TO_SUB_DEVICE.get((int(row[1]), int(row[2])))
+
+        if expected_from_program is not None and sub_device_id != expected_from_program:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), program {base_program_id}, run_host_id {row[7]}: "
+                f"expected sub_device_id {expected_from_program}, got {sub_device_id}. meta_data={meta_data}"
+            )
+        elif expected_from_program is None and expected_from_core is not None and sub_device_id != expected_from_core:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), run_host_id {row[7]}: "
+                f"expected sub_device_id {expected_from_core} from core location, got {sub_device_id}. "
+                f"meta_data={meta_data}"
+            )
+        elif expected_from_program is None and expected_from_core is None and sub_device_id not in {0, 1}:
+            errors.append(
+                f"Chip {row[0]}, Core ({row[1]}, {row[2]}), run_host_id {row[7]}: "
+                f"unexpected sub_device_id {sub_device_id} (expected 0 or 1). meta_data={meta_data}"
+            )
+
+    if validated_rows == 0:
+        assert False, f"No meta data rows found in device CSV at {csv_path}"
+
+    if len(manager_ids) != 1:
+        errors.append(f"Expected one sub_device_manager_id across all markers, found {sorted(manager_ids)}")
+
+    logger.info(
+        f"Sub-device CSV validation: checked {validated_rows} meta data rows, "
+        f"sub_device_manager_id={next(iter(manager_ids)) if len(manager_ids) == 1 else manager_ids}"
+    )
+
+    if errors:
+        error_msg = f"Found {len(errors)} sub_device meta data mismatches:\n" + "\n".join(errors[:10])
         if len(errors) > 10:
             error_msg += f"\n... and {len(errors) - 10} more errors"
         assert False, error_msg
@@ -1312,14 +1442,24 @@ def test_fabric_event_profiler_2d():
 
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
-    run_gtest_profiler_test(
+    # Skip process_device_log.py post-processing: it resolves profiler paths relative to
+    # tools/tracy when cwd changes, while the device CSV is written under TT_METAL_HOME.
+    # Sub-device correctness is validated directly on profile_log_device.csv.
+    ran_basic = run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardFixture.TensixTestSubDeviceBasicPrograms",
+        skip_get_device_data=True,
     )
-    run_gtest_profiler_test(
+    if ran_basic:
+        verify_sub_device_ids_in_device_csv()
+
+    ran_trace = run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+        skip_get_device_data=True,
     )
+    if ran_trace:
+        verify_sub_device_ids_in_device_csv()
 
 
 def validate_programs_perf_durations(perf_data):

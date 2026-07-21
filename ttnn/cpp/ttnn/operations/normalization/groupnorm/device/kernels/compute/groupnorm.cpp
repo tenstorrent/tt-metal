@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -16,11 +13,11 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -122,7 +119,8 @@ void kernel_main() {
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W =
+        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
@@ -209,29 +207,29 @@ void kernel_main() {
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex(cb_ex_id);
-    experimental::CircularBuffer cb_ex2(cb_ex2_id);
-    experimental::CircularBuffer cb_ex2_global(cb_ex2_global_id);
-    experimental::CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_in0(cb_in0_id);
-    experimental::CircularBuffer cb_inbeta(cb_inbeta_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_outbeta(cb_outbeta_id);
-    experimental::CircularBuffer cb_outgamma(cb_outgamma_id);
-    experimental::CircularBuffer cb_reread_out(cb_reread_out_id);
-    experimental::CircularBuffer cb_reread_write_out(cb_reread_write_out_id);
-    experimental::CircularBuffer cb_scaler(cb_scaler_id);
-    experimental::CircularBuffer cb_scaler_global(cb_scaler_global_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
-    experimental::CircularBuffer cb_xmm(cb_xmm_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex(cb_ex_id);
+    CircularBuffer cb_ex2(cb_ex2_id);
+    CircularBuffer cb_ex2_global(cb_ex2_global_id);
+    CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_external(cb_ex_external_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_inbeta(cb_inbeta_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_outbeta(cb_outbeta_id);
+    CircularBuffer cb_outgamma(cb_outgamma_id);
+    CircularBuffer cb_reread_out(cb_reread_out_id);
+    CircularBuffer cb_reread_write_out(cb_reread_write_out_id);
+    CircularBuffer cb_scaler(cb_scaler_id);
+    CircularBuffer cb_scaler_global(cb_scaler_global_id);
+    CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_xmm(cb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -276,8 +274,9 @@ void kernel_main() {
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * 16 / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
+        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes / single_tile_size_bytes;
+    if ((num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes) %
+        single_tile_size_bytes) {
         cb_ex_external_tiles_required++;
     }
 
@@ -345,54 +344,34 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_input_mask_id, cb_scaler_id);
 
                 // Partial/E[x]
-                index_h_offset = 0;
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x_id, cb_scaler_id, cb_ex_partial_id);
-                cb_ex_partial.reserve_back(1);
-                tile_regs_acquire();
-                cb_scaler.wait_front(1);
                 cb_x.wait_front(out_block_hw_normal);
-
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x_id, cb_scaler_id, index, scaler0, dst0);
-                    }
-                    index_h_offset += block_w;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_partial_id);
-                tile_regs_release();
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    cb_x_id,
+                    cb_scaler_id,
+                    cb_ex_partial_id,
+                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_x.pop_front(out_block_hw_normal);
-                cb_ex_partial.push_back(1);
-                reduce_uninit<FP32_DEST_ACC>();
 
                 cb_ex_partial.wait_front(1);
             }
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
-                cb_ex_global.reserve_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex.reserve_back(1);
-                }
-                tile_regs_acquire();
-                cb_scaler_global.wait_front(1);
-                cb_ex_external.wait_front(cb_ex_external_tiles_required);
-                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                        cb_ex_external_id, cb_scaler_global_id, external_i, scaler0, dst0);
-                }
-                cb_ex_external.pop_front(cb_ex_external_tiles_required);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global_id);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_ex_global.push_back(1);
-                if (num_cores_per_mcast_group > 1) {
                     cb_ex.push_back(1);
                 }
             }
@@ -497,52 +476,32 @@ void kernel_main() {
                 cb_xmm.push_back(out_block_hw_normal);
 
                 // Partial-Var(x)
-                index_h_offset = 0;
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm_id, cb_scaler_id, cb_ex2_partial_id);
-                cb_ex2_partial.reserve_back(1);
-                tile_regs_acquire();
                 cb_xmm.wait_front(out_block_hw_normal);
-                cb_scaler.wait_front(1);  // TODO DELETE THIS
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                            cb_xmm_id, cb_scaler_id, index, scaler0, dst0);
-                    }
-                    index_h_offset += block_w;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2_partial_id);
-                tile_regs_release();
-                cb_ex2_partial.push_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    cb_xmm_id,
+                    cb_scaler_id,
+                    cb_ex2_partial_id,
+                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_xmm.pop_front(out_block_hw_normal);
-                reduce_uninit<FP32_DEST_ACC>();
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, cb_ex2_global_id);
-                cb_ex2_global.reserve_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex2_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex2.reserve_back(1);
-                }
-                tile_regs_acquire();
-                cb_scaler_global.wait_front(1);
-                cb_ex_external.wait_front(cb_ex_external_tiles_required);  // TODO DELETE THIS AND ADD POP
-                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                        cb_ex_external_id, cb_scaler_global_id, external_i, scaler0, dst0);
-                }
-                cb_ex_external.pop_front(cb_ex_external_tiles_required);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2_global_id);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_ex2_global.push_back(1);
-                if (num_cores_per_mcast_group > 1) {
                     cb_ex2.push_back(1);
                 }
             }

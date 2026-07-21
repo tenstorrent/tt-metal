@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -15,6 +19,7 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -129,7 +134,8 @@ void kernel_main() {
     const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t termination_sync_address = get_semaphore(termination_sync_id);
     uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -160,7 +166,7 @@ void kernel_main() {
     arg_idx += rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
-    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
 #ifdef USE_WORKER_MUX
@@ -195,6 +201,9 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 #endif
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
     uint32_t self_write_done_semaphore_addr;
@@ -268,6 +277,7 @@ void kernel_main() {
                 ASSERT(false);
             }
         }
+
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -343,23 +353,23 @@ void kernel_main() {
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
-            size_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_output.wait_front(num_tiles_to_write_per_packet);
+                size_t l1_read_addr = cb_output.get_read_ptr();
 
-            uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
-            uint64_t noc_addrs[4] = {0, 0, 0, 0};
-            uint64_t local_noc_addrs[4] = {0, 0, 0, 0};
-            for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
-                uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-                pages_read_in_row++;
-                if (pages_read_in_row >= input_tensor_Wt) {
-                    row_offset += output_tensor_Wt;
-                    pages_read_in_row = 0;
+                uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+                uint64_t noc_addrs[4] = {0, 0, 0, 0};
+                uint64_t local_noc_addrs[4] = {0, 0, 0, 0};
+                for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
+                    uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= input_tensor_Wt) {
+                        row_offset += output_tensor_Wt;
+                        pages_read_in_row = 0;
+                    }
+
+                    noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
+                    local_noc_addrs[i] = output_addrgen.get_noc_addr(tile_id);
                 }
-
-                noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
-                local_noc_addrs[i] = get_noc_addr(tile_id, output_addrgen);
-            }
 
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
@@ -384,7 +394,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                 }
-                noc_async_write_barrier();
+                noc_obj.async_write_barrier();
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
@@ -407,9 +417,9 @@ void kernel_main() {
             }
             tiles_read += tiles_to_put_in_current_packet;
 
-                noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
 
-                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+            cb_output.pop_front(num_tiles_to_write_per_packet);
 
             chunk_count++;
             if (chunk_count % chunks_per_sync == 0) {
@@ -421,7 +431,7 @@ void kernel_main() {
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
             }
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
         }
 
         if (chunk_count % chunks_per_sync != 0) {
@@ -560,8 +570,8 @@ void kernel_main() {
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
-                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_output.wait_front(num_tiles_to_write_per_packet);
+                size_t l1_read_addr = cb_output.get_read_ptr();
 
                 uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
                 uint64_t noc_addrs[4] = {0, 0, 0, 0};
@@ -593,9 +603,9 @@ void kernel_main() {
 
                 tiles_read += tiles_to_put_in_current_packet;
 
-                noc_async_writes_flushed();
+                noc_obj.async_writes_flushed();
 
-                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+                cb_output.pop_front(num_tiles_to_write_per_packet);
 
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
@@ -605,7 +615,7 @@ void kernel_main() {
                         pkt_hdr_sem_inc,
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
-                noc_async_writes_flushed();
+                noc_obj.async_writes_flushed();
             }
 
             if (chunk_count % chunks_per_sync != 0) {
@@ -657,21 +667,21 @@ void kernel_main() {
         slice_writes++;
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 #ifdef USE_WORKER_MUX
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*fabric_direction_connection);
 
         if (is_termination_master) {
-            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            Semaphore<> termination_sync(termination_sync_id);
+            termination_sync.wait(num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
             noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            noc_obj.async_atomic_barrier();
         }
     }
 #else
@@ -679,5 +689,5 @@ void kernel_main() {
         fabric_connection.close();
     }
 #endif
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

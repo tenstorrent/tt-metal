@@ -31,12 +31,27 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     }
     auto result = tensor;
     for (const auto& cluster_axis : cluster_axes) {
-        result = ttnn::all_reduce(result, cluster_axis);
+        result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
     }
 
     result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));
     return result;
 }
+
+namespace {
+
+// Returns true if the parameter's current placement on the given mesh axis is a
+// Shard{...} rather than Replicate.
+bool is_sharded_on_axis(const tt::tt_metal::Tensor& value, uint32_t axis) {
+    const auto& topology = value.tensor_topology();
+    const auto& placements = topology.placements();
+    if (axis >= placements.size()) {
+        return false;
+    }
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+}
+
+}  // namespace
 
 void synchronize_gradients(const serialization::NamedParameters& parameters) {
     if (!autograd::ctx().is_parallelism_context_initialized()) {
@@ -51,8 +66,31 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
         cluster_axes.push_back(pctx.get_ddp_axis().value());
     }
     for (auto& [name, tensor] : parameters) {
+        if (!tensor->is_grad_initialized()) {
+            continue;
+        }
+        // Build per-param axes, dropping any axis on which this parameter is
+        // sharded: FSDP already reduce-scattered the grad over the DDP axis in
+        // its backward-post hook.
+        ttsl::SmallVector<uint32_t> axes_for_param;
+        for (uint32_t axis : cluster_axes) {
+            if (!is_sharded_on_axis(tensor->get_value(), axis)) {
+                axes_for_param.push_back(axis);
+            }
+        }
+        if (axes_for_param.empty()) {
+            continue;
+        }
+        tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes_for_param));
+    }
+}
+
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes) {
+    ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
+    for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), cluster_axes));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes));
         }
     }
 }

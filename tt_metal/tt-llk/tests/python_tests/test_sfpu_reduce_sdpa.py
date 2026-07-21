@@ -4,18 +4,26 @@
 import torch
 from conftest import skip_for_coverage
 from helpers.format_config import DataFormat
+from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathOperation,
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_OP,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -34,7 +42,7 @@ from helpers.utils import passed_test
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
     input_dimensions=[
-        [128, 64],  # 4x2 subblock
+        [512, 64],  # four independent 4x2 subblocks
     ],
 )
 def test_sfpu_reduce_sdpa(
@@ -60,12 +68,17 @@ def test_sfpu_reduce_sdpa(
     # Undo tilization so src_A is standard [32, 32]
     src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
 
-    # Take max along the height (dim=0) for each column
-    col_max = torch.max(src_A_untilized, dim=0).values
-
-    # Construct golden tensor: first row is column max, others are zero
+    # Each destination block is an independent 4x2 SDPA reduction subblock.
     golden_tensor = torch.zeros_like(src_A_untilized)
-    golden_tensor[0, :] = col_max
+    subblock_rows = 4 * 32
+    for row in range(0, input_dimensions[0], subblock_rows):
+        golden_tensor[row, :] = torch.max(
+            src_A_untilized[row : row + subblock_rows, :], dim=0
+        ).values
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
 
     # *******************************************************
 
@@ -73,10 +86,16 @@ def test_sfpu_reduce_sdpa(
         "sources/sfpu_reduce_sdpa_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions, input_dimensions, block_ct_dim=2, block_rt_dim=4
+            ),
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -95,5 +114,5 @@ def test_sfpu_reduce_sdpa(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
-    # Check only the first row for correctness, not full tensors
-    assert passed_test(golden_tensor[0], res_tensor[0], formats.output_format)
+    for row in range(0, input_dimensions[0], subblock_rows):
+        assert passed_test(golden_tensor[row], res_tensor[row], formats.output_format)

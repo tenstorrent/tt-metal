@@ -5,6 +5,7 @@
 
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
+#include "dataflow_utils.hpp"
 
 // =============================================================================
 // Per-RISC includes
@@ -58,19 +59,6 @@ namespace deepseek_b1_ops {
 // =============================================================================
 #if defined(COMPILE_FOR_BRISC)
 
-/** Fabric destination addresses (where data lands on remote device) */
-struct SdpaFabricDest {
-    uint64_t dst_noc;  // Destination L1 address (varies per packet)
-    uint64_t sem_noc;  // Semaphore address (constant per round)
-};
-
-/** Forwarder destination addresses (local forwarder slot) */
-struct SdpaForwarderDest {
-    uint64_t slot_noc;  // Forwarder slot NOC address
-    uint64_t sem_noc;   // Forwarder semaphore NOC address (constant per round)
-    uint32_t slot_idx;  // Slot index for bit-packed signaling
-};
-
 /** Per-round configuration for sending packets. */
 struct SdpaRoundConfig {
     uint32_t cb_l;
@@ -97,6 +85,8 @@ template <
     uint32_t num_l_chunks,
     uint32_t tiles_per_l_chunk>
 struct SdpaChunkSender {
+    static constexpr bool use_posted_forwarder_writes = true;
+
     // Core coordinates (constant across rounds)
     uint32_t current_core_x;
     uint32_t current_core_y;
@@ -107,96 +97,116 @@ struct SdpaChunkSender {
     SdpaRoundConfig cfg;
 
     // Precomputed NOC addresses (computed once per round in setup_round)
-    uint64_t sem_noc;      // Fabric destination semaphore
-    uint64_t fwd_sem_noc;  // Forwarder semaphore
+    uint64_t dst_base_noc;       // Fabric destination payload base for L chunks
+    uint64_t sem_noc;            // Fabric destination semaphore
+    uint64_t fwd_sem_noc;        // Forwarder semaphore
+    volatile PACKET_HEADER_TYPE* header;
 
     // Derived constants
     static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
     static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+    static constexpr uint32_t aligned_ms_payload_bytes = align(ms_tile_size_bytes, l1_alignment);
+    static constexpr uint32_t aligned_l_chunk_payload_bytes = align(l_chunk_size_bytes, l1_alignment);
 
     // Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
     static constexpr uint32_t MS_SLOT_OFFSET = 0;
     static constexpr uint32_t L_SLOT_OFFSET = 1;
 
+    FORCE_INLINE void setup_forwarder_write_state() const {
+        // Only the forwarder core coordinate is fixed across rounds; the destination L1 address is still per-slot.
+        ncrisc_noc_write_set_state</*posted=*/use_posted_forwarder_writes, /*one_packet=*/false>(
+            noc_index, write_cmd_buf, get_noc_addr(fwd_core_x, fwd_core_y, 0), 0, NOC_UNICAST_WRITE_VC);
+    }
+
     FORCE_INLINE void setup_round(const SdpaRoundConfig& new_cfg) {
         cfg = new_cfg;
+        dst_base_noc = get_noc_addr(current_core_x, current_core_y, cfg.dst_base_addr);
         sem_noc = get_noc_addr(current_core_x, current_core_y, cfg.sem_addr);
         fwd_sem_noc = get_noc_addr(fwd_core_x, fwd_core_y, cfg.fwd_sem_addr);
 
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
-        (void)fabric_set_unicast_route(header, cfg.dst_chip_id, cfg.dst_mesh_id);
-    }
+        header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
 
-    FORCE_INLINE SdpaFabricDest get_fabric_dest(uint32_t dst_addr) const {
-        return {
-            get_noc_addr(current_core_x, current_core_y, dst_addr),
-            sem_noc  // precomputed
-        };
-    }
+        // SDPA reduce-to-all only exchanges immediate torus neighbors, so the next hop is the final destination.
+        const auto next_hop_direction = get_next_hop_router_direction(cfg.dst_mesh_id, cfg.dst_chip_id);
+        fabric_set_single_hop_unicast_route_from_direction(
+            header, next_hop_direction, cfg.dst_chip_id, cfg.dst_mesh_id);
 
-    template <bool is_ms>
-    FORCE_INLINE SdpaForwarderDest get_forwarder_dest(uint32_t l_chunk_idx = 0) const {
-        uint32_t slot_offset = is_ms ? MS_SLOT_OFFSET : (L_SLOT_OFFSET + l_chunk_idx);
-        uint32_t slot_idx = cfg.base_slot_idx + slot_offset;
-        uint32_t fwd_slot_addr = cfg.fwd_slot_addr + slot_offset * slot_size;
-        return {
-            get_noc_addr(fwd_core_x, fwd_core_y, fwd_slot_addr),
-            fwd_sem_noc,  // precomputed
-            slot_idx};
-    }
-
-    FORCE_INLINE void send_packet(
-        const SdpaFabricDest& fabric_dest,
-        const SdpaForwarderDest& fwd_dest,
-        uint32_t src_addr,
-        uint32_t payload_size) const {
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
         constexpr uint32_t ATOMIC_INC_VAL = 1;
         constexpr bool FLUSH_WRITES = false;
         header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                fabric_dest.dst_noc, fabric_dest.sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
-            align(payload_size, l1_alignment));
-
-        noc_async_write(cfg.header_addr, fwd_dest.slot_noc, packet_header_size_bytes);
-        uint64_t fwd_payload_noc = fwd_dest.slot_noc + packet_header_size_bytes;
-        noc_async_write(src_addr, fwd_payload_noc, payload_size);
-        noc_async_writes_flushed();
-        noc_semaphore_inc(fwd_dest.sem_noc, 1u << fwd_dest.slot_idx);
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_base_noc, sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
+            aligned_l_chunk_payload_bytes);
     }
 
-    FORCE_INLINE void send_ms() const {
-        uint32_t dst_addr = cfg.dst_base_addr + total_l_bytes;
-        auto fabric_dest = get_fabric_dest(dst_addr);
-        auto fwd_dest = get_forwarder_dest<true>();
-        send_packet(fabric_dest, fwd_dest, get_read_ptr(cfg.cb_ms), ms_tile_size_bytes);
+    FORCE_INLINE void send_packet(
+        uint64_t dst_noc,
+        uint32_t fwd_slot_addr,
+        uint32_t fwd_slot_idx,
+        uint32_t src_addr,
+        uint32_t payload_size) const {
+        header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc);
+        ncrisc_noc_write_with_state<
+            noc_mode,
+            /*posted=*/use_posted_forwarder_writes,
+            /*update_counter=*/true,
+            /*one_packet=*/false>(noc_index, write_cmd_buf, cfg.header_addr, fwd_slot_addr, packet_header_size_bytes);
+        ncrisc_noc_write_with_state<
+            noc_mode,
+            /*posted=*/use_posted_forwarder_writes,
+            /*update_counter=*/true,
+            /*one_packet=*/false>(
+            noc_index, write_cmd_buf, src_addr, fwd_slot_addr + packet_header_size_bytes, payload_size);
+        // The forwarder reads packet size from the staged header, so the whole slot must be visible before signaling.
+        if constexpr (use_posted_forwarder_writes) {
+            noc_async_posted_writes_flushed();
+        } else {
+            noc_async_writes_flushed();
+        }
+        noc_semaphore_inc(fwd_sem_noc, 1u << fwd_slot_idx);
     }
 
-    FORCE_INLINE void send_l_chunk(uint32_t l_chunk_idx) const {
-        uint32_t dst_addr = cfg.dst_base_addr + l_chunk_idx * l_chunk_size_bytes;
-        uint32_t src_addr = get_read_ptr(cfg.cb_l) + l_chunk_idx * l_chunk_size_bytes;
-        auto fabric_dest = get_fabric_dest(dst_addr);
-        auto fwd_dest = get_forwarder_dest<false>(l_chunk_idx);
-        send_packet(fabric_dest, fwd_dest, src_addr, l_chunk_size_bytes);
+    FORCE_INLINE void send_ms(uint32_t src_addr) const {
+        if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
+            header->set_payload_size_bytes(aligned_ms_payload_bytes);
+        }
+        send_packet(dst_base_noc + total_l_bytes, cfg.fwd_slot_addr, cfg.base_slot_idx, src_addr, ms_tile_size_bytes);
+    }
+
+    template <bool streaming>
+    FORCE_INLINE void send_l_chunks(uint32_t src_addr) const {
+        if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
+            header->set_payload_size_bytes(aligned_l_chunk_payload_bytes);
+        }
+
+        uint64_t current_dst_noc = dst_base_noc;
+        uint32_t current_fwd_slot_addr = cfg.fwd_slot_addr + (L_SLOT_OFFSET * slot_size);
+        uint32_t current_fwd_slot_idx = cfg.base_slot_idx + L_SLOT_OFFSET;
+        uint32_t current_src_addr = src_addr;
+        for (uint32_t i = 0; i < num_l_chunks; i++) {
+            if constexpr (streaming) {
+                cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
+            }
+
+            send_packet(
+                current_dst_noc, current_fwd_slot_addr, current_fwd_slot_idx, current_src_addr, l_chunk_size_bytes);
+            current_dst_noc += l_chunk_size_bytes;
+            current_fwd_slot_addr += slot_size;
+            current_fwd_slot_idx++;
+            current_src_addr += l_chunk_size_bytes;
+        }
     }
 
     FORCE_INLINE void send_all() const {
         cb_wait_front(cfg.cb_ms, 1);
-        send_ms();
+        send_ms(get_read_ptr(cfg.cb_ms));
         cb_wait_front(cfg.cb_l, num_l_chunks * tiles_per_l_chunk);
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            send_l_chunk(i);
-        }
+        send_l_chunks</*streaming=*/false>(get_read_ptr(cfg.cb_l));
     }
 
     FORCE_INLINE void send_streaming() const {
         cb_wait_front(cfg.cb_ms, 1);
-        send_ms();
-
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
-            send_l_chunk(i);
-        }
+        send_ms(get_read_ptr(cfg.cb_ms));
+        send_l_chunks</*streaming=*/true>(get_read_ptr(cfg.cb_l));
     }
 };
 
@@ -217,7 +227,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -239,7 +249,7 @@ ALWI void sdpa_tail_streaming(
     // TODO: Unit test perf seemed better if we operated on all chunks
     // Retest in streaming context since unit test doesn't need to wait for input
     if constexpr (untilize) {
-        custom_pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
+        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense, false>(cb_l_out);
         cb_wait_front(cb_l1, total_size);
         cb_wait_front(cb_l2, total_size);
         cb_reserve_back(cb_l_out, total_size);
@@ -248,6 +258,7 @@ ALWI void sdpa_tail_streaming(
         pack_untilize_uninit(cb_l_out);
     } else {
         bool acquire_regs = !normalize;
+        pack_block_contiguous_init(cb_l_out);
         for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
             cb_wait_front(cb_l1, (chunk + 1) * block_size);
             cb_wait_front(cb_l2, (chunk + 1) * block_size);
@@ -273,6 +284,9 @@ ALWI void sdpa_forward_data(
     uint32_t cb_l_out,
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
+    // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
+    PACK((llk_pack_init<ckernel::PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(
+        cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
@@ -285,22 +299,20 @@ ALWI void sdpa_forward_data(
     tile_regs_release();
 
     cb_push_back(cb_cur_max_sum, 1);
-
+    pack_block_contiguous_init(cb_l_out);
     for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
         cb_reserve_back(cb_l_out, block_size);
 
         uint32_t tile_index = chunk * block_size;
+        tile_regs_acquire();
         for (uint32_t i = 0; i < block_size; i++) {
-            tile_regs_acquire();
             copy_tile(cb_l1, tile_index + i, i);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(i, cb_l_out);
-            tile_regs_release();
         }
-
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_block_contiguous(0, cb_l_out, block_size);
+        tile_regs_release();
         cb_push_back(cb_l_out, block_size);
     }
 }
@@ -312,7 +324,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming_conditional(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -496,6 +508,7 @@ struct SdpaReduceWorker {
         uint32_t scaleFp32,
         uint32_t tilesPerLChunk,
         uint32_t numLChunks,
+        uint32_t computeBlockSize,
         uint32_t positionEnabled,
         uint32_t perDeviceChunkSize,
         uint32_t finalReduction>
@@ -508,13 +521,20 @@ struct SdpaReduceWorker {
         static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
         static constexpr uint32_t cb_l_out = cbLOut;
         static constexpr uint32_t scale_fp32 = scaleFp32;
-        static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t num_l_chunks = numLChunks;
+        static constexpr uint32_t transport_tiles_per_l_chunk = tilesPerLChunk;
+        static constexpr uint32_t transport_num_l_chunks = numLChunks;
         static constexpr uint32_t position_enabled = positionEnabled;
         static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
         static constexpr bool final_reduction = finalReduction;
-        // SDPA uses "block_size" terminology
-        static constexpr uint32_t block_size = tilesPerLChunk;
+        static constexpr uint32_t total_l_tiles = transport_num_l_chunks * transport_tiles_per_l_chunk;
+        // Blackhole's non-dense SDPA srcB-reuse path tops out at 8 logical 8x32 tiles per block.
+        static constexpr uint32_t max_compute_block_size = 8;
+        // SDPA uses "block_size" terminology on the compute path.
+        static constexpr uint32_t block_size = computeBlockSize;
+        static_assert(block_size > 0, "compute block_size must be > 0");
+        static_assert(block_size <= max_compute_block_size, "compute block_size exceeds supported maximum");
+        static_assert(total_l_tiles % block_size == 0, "total_l_tiles must be divisible by compute block_size");
+        static constexpr uint32_t num_l_blocks = total_l_tiles / block_size;
     };
 
     // ========================================================================
@@ -528,7 +548,7 @@ struct SdpaReduceWorker {
         uint32_t r1_recv_buffer_addr;
         uint32_t r2_recv_buffer_addr;
         // Position args (only meaningful when position_enabled CTArg is set)
-        uint32_t pos_addr;
+        uint32_t global_pos;
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
         uint32_t r2_neighbor_r1_neighbor_idx;
@@ -561,7 +581,7 @@ struct SdpaReduceWorker {
 
     // Compute args (TRISC): position validity for SDPA reduction
     struct ComputeArgs {
-        uint32_t pos_addr;
+        uint32_t global_pos;
         uint32_t device_idx;
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
@@ -585,6 +605,12 @@ struct SdpaReduceWorker {
             writer_impl(args);
 #elif defined(COMPILE_FOR_TRISC)
             compute_impl(args);
+#endif
+        }
+
+        void set_global_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t global_pos) {
+#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
+            args.global_pos = global_pos;
 #endif
         }
 
@@ -624,8 +650,7 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (CTArgs::position_enabled) {
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                uint32_t position_id = pos_ptr[0];
+                uint32_t position_id = args.global_pos;
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
                 r2_neighbor_r1_valid = (position_id >= args.r2_neighbor_device_idx * chunk) ||
@@ -686,6 +711,7 @@ struct SdpaReduceWorker {
 
             // Initialize sender with core coordinates
             Sender sender{args.current_core_x, args.current_core_y, args.fwd_core_x, args.fwd_core_y};
+            sender.setup_forwarder_write_state();
             PacketHeaderPool::reset();
             auto* header = PacketHeaderPool::allocate_header(1);
 
@@ -729,24 +755,50 @@ struct SdpaReduceWorker {
                     scatter_dest_noc_y[i] = scatter_dest_coords[i * 2 + 1];
                 }
 
-                cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
+                constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
+                static_assert(scatter_payload_bytes <= NOC_MAX_BURST_SIZE);
+                constexpr bool posted = CTArgs::scatter_arrival_enabled;
                 uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
 
-                constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
+                uint64_t dest_noc_addr =
+                    get_noc_addr(scatter_dest_noc_x[0], scatter_dest_noc_y[0], args.scatter_dest_l1_addr);
+                unified_kernels::unicast_write_set_state<posted, true, true, true, false, write_cmd_buf>(
+                    src_addr, dest_noc_addr, scatter_payload_bytes);
 
-                for (uint32_t row = 0; row < CTArgs::scatter_num_rows; row++) {
+                if constexpr (CTArgs::scatter_arrival_enabled) {
+                    uint64_t sem_addr =
+                        get_noc_addr(scatter_dest_noc_x[0], scatter_dest_noc_y[0], args.scatter_arrival_sem_addr);
+                    unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
+                        sem_addr, 1);
+                }
+
+                cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
+                unified_kernels::unicast_write_increment_counters<posted>(CTArgs::scatter_num_rows);
+                unified_kernels::noc_async_write_issue_txn<posted, false>();
+                if constexpr (CTArgs::scatter_arrival_enabled) {
+                    unified_kernels::unicast_atomic_inc_increment_counters<false>(CTArgs::scatter_num_rows);
+                    unified_kernels::noc_async_atomic_inc_issue_txn<false, false>();
+                }
+                src_addr += scatter_payload_bytes;
+
+                for (uint32_t row = 1; row < CTArgs::scatter_num_rows; row++) {
                     uint64_t dest_noc_addr =
                         get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_dest_l1_addr);
-                    noc_async_write(src_addr, dest_noc_addr, scatter_payload_bytes);
-                    src_addr += scatter_payload_bytes;
+                    unified_kernels::unicast_write_set_state<posted, true, true, false, false, write_cmd_buf>(
+                        src_addr, dest_noc_addr, scatter_payload_bytes);
+
+                    unified_kernels::noc_async_write_issue_txn<posted, false>();
 
                     // Signal scatter arrival on destination core (used by fused ops
                     // to synchronize downstream stages like matmul1)
                     if constexpr (CTArgs::scatter_arrival_enabled) {
                         uint64_t sem_addr = get_noc_addr(
                             scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_arrival_sem_addr);
-                        noc_semaphore_inc(sem_addr, 1);
+                        unified_kernels::unicast_atomic_inc_set_state<false, true, false, false, write_at_cmd_buf>(
+                            sem_addr, 1);
+                        unified_kernels::noc_async_atomic_inc_issue_txn<false, false>();
                     }
+                    src_addr += scatter_payload_bytes;
                 }
                 if constexpr (CTArgs::scatter_arrival_enabled) {
                     noc_async_atomic_barrier();
@@ -763,11 +815,11 @@ struct SdpaReduceWorker {
         // TRISC (Compute) - streaming SDPA tail reduction
         // ==================================================================
         void compute_impl([[maybe_unused]] const ComputeArgs& args) {
-            constexpr int vector_mode = VectorMode::RC_custom;
+            constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);
-            exp_tile_init<EXP_APPROX_MODE, false>();
+            exp_tile_init<EXP_APPROX_MODE>();
 
             bool local_valid = true;
             bool r1_neighbor_valid = true;
@@ -785,8 +837,7 @@ struct SdpaReduceWorker {
                 r1_neighbor_device_idx = args.r1_neighbor_device_idx;
                 r2_neighbor_device_idx = args.r2_neighbor_device_idx;
 
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                position_id = pos_ptr[0];
+                position_id = args.global_pos;
 
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 local_valid = (position_id >= device_idx * chunk);
@@ -805,8 +856,7 @@ struct SdpaReduceWorker {
                 unified_kernels::update_local_cb_rd_ptr(
                     CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr + 0 * neighbor_cb_page_size);
                 unified_kernels::update_local_cb_rd_ptr(
-                    CTArgs::cb_neighbor_ms,
-                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size) * neighbor_cb_page_size);
+                    CTArgs::cb_neighbor_ms, neighbor_cb_base_rd_ptr + CTArgs::total_l_tiles * neighbor_cb_page_size);
             }));
 
             // ROUND 1: reduce(local, r1_neighbor) -> r1_result (unnormalized)
@@ -816,7 +866,7 @@ struct SdpaReduceWorker {
                 false /* untilize - R1 doesn't untilize */,
                 CTArgs::block_size,
                 CTArgs::scale_fp32,
-                CTArgs::num_l_chunks,
+                CTArgs::num_l_blocks,
                 vector_mode>(
                 CTArgs::cb_neighbor_ms,
                 CTArgs::cb_local_ms,
@@ -833,16 +883,15 @@ struct SdpaReduceWorker {
             // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
             // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
             cb_pop_front(CTArgs::cb_neighbor_ms, 1);
-            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::total_l_tiles);
 
             UNPACK(({
                 unified_kernels::update_local_cb_rd_ptr(
                     CTArgs::cb_neighbor_l,
-                    neighbor_cb_base_rd_ptr + (CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                    neighbor_cb_base_rd_ptr + (CTArgs::total_l_tiles + 1) * neighbor_cb_page_size);
                 unified_kernels::update_local_cb_rd_ptr(
                     CTArgs::cb_neighbor_ms,
-                    neighbor_cb_base_rd_ptr +
-                        (2 * CTArgs::num_l_chunks * CTArgs::block_size + 1) * neighbor_cb_page_size);
+                    neighbor_cb_base_rd_ptr + (2 * CTArgs::total_l_tiles + 1) * neighbor_cb_page_size);
             }));
 
             // ROUND 2: reduce(r1_result, r2_neighbor) -> final output (normalized L)
@@ -857,7 +906,7 @@ struct SdpaReduceWorker {
                 true /* untilize */,
                 CTArgs::block_size,
                 CTArgs::scale_fp32,
-                CTArgs::num_l_chunks,
+                CTArgs::num_l_blocks,
                 vector_mode>(
                 CTArgs::cb_neighbor_ms,
                 CTArgs::cb_r1_result_ms,
@@ -873,7 +922,7 @@ struct SdpaReduceWorker {
             // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)
             // after send_streaming() reads it for R2 forwarding.
             cb_pop_front(CTArgs::cb_neighbor_ms, 1);
-            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
+            cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::total_l_tiles);
             UNPACK(({
                 unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_l, neighbor_cb_base_rd_ptr);
                 unified_kernels::update_local_cb_rd_ptr(CTArgs::cb_neighbor_ms, neighbor_cb_base_rd_ptr);

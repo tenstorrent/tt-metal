@@ -17,6 +17,8 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketDescriptor;
+struct HDSocketConnectorState;
 
 /**
  * @brief A socket for streaming data from a device core to the host.
@@ -76,6 +78,44 @@ public:
     D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
 
     /**
+     * @brief Identifies an L1 region on the sender core that the caller has already
+     *        reserved for the socket's configuration buffer.
+     *
+     * Used by callers that own their sender core's L1 layout (e.g. the real-time
+     * profiler, which carves its config out of dispatch L1 on the reserved
+     * profiler tensix). The region must be at least
+     * D2HSocket::required_config_buffer_size() bytes, L1-aligned, and live for
+     * the lifetime of the socket.
+     */
+    struct ExternalConfigBuffer {
+        uint32_t address;  // L1 address on the sender core
+    };
+
+    /**
+     * @brief Minimum size in bytes that an ExternalConfigBuffer region must have.
+     *
+     * Equals sender_socket_md + bytes_acked + sender_downstream_encoding, each
+     * rounded up to L1_ALIGNMENT. Callers carving their own L1 region for the
+     * socket's configuration buffer should use this to size that region (or
+     * static_assert their own constant against it).
+     */
+    static uint32_t required_config_buffer_size();
+
+    /**
+     * @brief Constructs a D2HSocket using a caller-provided config buffer address.
+     *
+     * Skips the user-space MeshBuffer allocation that the standard constructor
+     * performs and writes the socket metadata directly to `external_config.address`
+     * on the sender core. Intended for callers that need their sender-core L1 to
+     * be off-allocator (e.g. cores not present in the L1 bank table).
+     */
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        ExternalConfigBuffer external_config);
+
+    /**
      * @brief Connects to an existing D2HSocket from another process.
      *
      * Waits for the flatbuffer descriptor exported by the owner, opens the named
@@ -89,6 +129,22 @@ public:
      */
     static std::unique_ptr<D2HSocket> connect(
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
+
+    /**
+     * @brief Attaches to an existing D2HSocket from an in-memory descriptor.
+     *
+     * Used by D2HStreamService::connect to attach every per-coord socket from
+     * the embedded service descriptor without a separate file read per socket.
+     */
+    static std::unique_ptr<D2HSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
+     * @brief Populates an HDSocketDescriptor from the owner-side socket state.
+     *
+     * Used by D2HStreamService::export_descriptor to embed socket descriptors
+     * inline in the service descriptor.
+     */
+    HDSocketDescriptor populate_descriptor() const;
 
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.
@@ -120,6 +176,13 @@ public:
      * @return The page size in bytes, or 0 if not yet set.
      */
     uint32_t get_page_size() const { return page_size_; }
+
+    /**
+     * @brief Returns the current size of the FIFO in bytes.
+     *
+     * @return The current size of the FIFO in bytes.
+     */
+    uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
@@ -154,11 +217,12 @@ public:
      * without blocking. Useful for poll-based readers that need to check
      * a shutdown flag between iterations.
      *
-     * @return true if at least one page can be read immediately.
+     * @param num_bytes_to_check Optional number of bytes to check. If not provided, the default page size is used.
+     * @return true if at least the requested number of bytes can be read immediately.
      *
      * @throws TT_FATAL if page_size has not been set.
      */
-    bool has_data();
+    bool has_data(std::optional<uint32_t> num_bytes_to_check = std::nullopt);
 
     /**
      * @brief Reads data pages from the socket FIFO.
@@ -189,9 +253,48 @@ public:
      */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
+    /**
+     * @brief Non-blocking query for the number of pages currently available in the FIFO.
+     *
+     * @return The number of complete pages that can be read immediately.
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    uint32_t pages_available();
+
+    /**
+     * @brief Discards any currently-available pages WITHOUT reading the data
+     *        region.  Rebases the host's bytes_acked counter to the current
+     *        bytes_sent value (and notifies the device), which is the correct
+     *        operation when the host wants to ignore any pending bytes — e.g.
+     *        before initiating a sync handshake.
+     *
+     * Unlike a sequence of `read()` calls, this does NOT touch the data
+     * region (which on Wormhole/Blackhole is mapped through PCIe and may
+     * contain undefined values from a prior device run or stale shmem
+     * counters).
+     *
+     * @return The number of pages that were discarded (0 if there was nothing
+     *         pending).
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    uint32_t discard_pending_pages();
+
     std::vector<MeshCoreCoord> get_active_cores() const;
 
     MeshDevice* get_mesh_device() const;
+
+    /**
+     * @brief Returns whether the prior connector process shut down cleanly.
+     *
+     * On the owner side this is always true (no prior connector existed). On a
+     * connector created via connect(), this reflects the clean_shutdown flag
+     * left in SHM by the previous process: true if it ran its destructor, false
+     * if it exited via crash, _exit, or kill. Useful for warning the operator
+     * or deciding whether to call discard_pending_pages() to drop stale data.
+     */
+    bool had_clean_prior_shutdown() const { return prior_clean_shutdown_; }
 
     D2HSocket(const D2HSocket&) = delete;
     D2HSocket& operator=(const D2HSocket&) = delete;
@@ -210,11 +313,12 @@ private:
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment,
         const std::string& shm_name);
+    PinnedBufferInfo init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
-        const PinnedBufferInfo& bytes_sent_info);
+        const PinnedBufferInfo& bytes_sent_info) const;
     void init_sender_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
@@ -222,6 +326,13 @@ private:
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
 
+    // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
+    // into `config_buffer_address_`, and configures the sender-side TLB. The caller must
+    // populate `config_buffer_address_` (and own the backing L1 reservation) first.
+    void init_common(const std::shared_ptr<MeshDevice>& mesh_device);
+
+    // Owned only by the standard ctor. The external-config ctor leaves this null
+    // and points `config_buffer_address_` at caller-owned L1.
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     MeshCoreCoord sender_core_;
     uint32_t fifo_size_ = 0;
@@ -244,6 +355,15 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+    HDSocketConnectorState* connector_state_ = nullptr;
+    uint32_t connector_state_offset_ = 0;
+    bool prior_clean_shutdown_ = true;
+
+    bool using_hugepage_ = false;
+    uint32_t* hugepage_data_host_ptr_ = nullptr;
+    volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
+
+    std::optional<DeviceAddr> svc_config_l1_addr_;
 };
 
 }  // namespace tt::tt_metal::distributed

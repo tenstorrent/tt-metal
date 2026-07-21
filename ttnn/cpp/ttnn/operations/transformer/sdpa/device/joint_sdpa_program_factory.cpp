@@ -2,18 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
-#include <optional>
-#include <string>
+#include <bit>
+#include <climits>
 #include <cmath>
+#include <map>
+#include <string>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
@@ -22,8 +25,12 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
-    const JointSDPAParams& args, const JointSDPAInputs& tensor_args, JointSDPAResult& output_tensors) {
+ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& args = operation_attributes;
+    auto& output_tensors = tensor_return_value;
     /*
     Q: B x NH x N x DH
     K: B x NH x N x DH
@@ -132,8 +139,6 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
 
     log_debug(tt::LogOp, "use_joint_mask: {}", use_joint_mask);
 
-    Program program = CreateProgram();
-
     IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -146,7 +151,7 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
             ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
@@ -255,14 +260,10 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = args.scale;
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(args.scale);
 
     // log scale
-    log_debug(tt::LogOp, "scale: {}", scale_union.f);
+    log_debug(tt::LogOp, "scale: {}", args.scale);
 
     std::vector<uint32_t> reader_compile_time_args = {
         B,
@@ -291,9 +292,9 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     // bug in the mask generation code, which would mask a full, valid chunk
     // with -inf.
     const uint32_t mask_chunk_0 =
-        (padded_Nk != N) ? (padded_Nkt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in first sequence
+        (padded_Nk != N) ? (padded_Nkt / Sk_chunk_t) - 1 : UINT32_MAX;  // idx of last chunk in first sequence
     const uint32_t mask_chunk_1 =
-        (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in second sequence
+        (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : UINT32_MAX;  // idx of last chunk in second sequence
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -312,8 +313,8 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
         L,
         num_cores,
         packed_identity_scalar,
-        scale_union.u,
-        (uint32_t)use_joint_mask,
+        scale_packed,
+        static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
     };
@@ -340,51 +341,33 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        (uint32_t)use_joint_mask,
+        static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
-        scale_union.u,
+        scale_packed,
     };
 
-    std::map<std::string, std::string> defines;
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    std::map<std::string, std::string> defines_map;
+    defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
+    defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+    defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
+    defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+    defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+    KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+    // ---- Circular buffers ----
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/joint_sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
-
-    // Create circular buffers
+    ProgramDescriptor desc;
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -408,89 +391,212 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = q_tiles * q_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = q_df,
+            .page_size = q_tile_size,
+        }}},
+    });
 
-    CreateCircularBuffer(program, core_grid, c_in0_config);
     // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = k_tiles * k_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = k_df,
+            .page_size = k_tile_size,
+        }}},
+    });
+
     // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = v_tiles * v_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+            .data_format = v_df,
+            .page_size = v_tile_size,
+        }}},
+    });
 
     // Only create mask buffer if it's going to be used
     if (use_joint_mask) {
         // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                                .set_page_size(tt::CB::c_in3, mask_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in3_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = mask_tiles * mask_tile_size,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = mask_df,
+                .page_size = mask_tile_size,
+            }}},
+        });
     }
 
     // identity scalar input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in5_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
+
     // identity column input
-    auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = qk_tiles * im_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * im_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_25),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed2_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * im_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_26),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed3_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_27),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed4_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_28),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed5_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed6_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * out_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
+            .data_format = out_df,
+            .page_size = out_tile_size,
+        }}},
+    });
 
-    uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = input_tensor_k.buffer()->address();
-    uint32_t v_addr = input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
-    uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
-    uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
+    // ---- Kernels ----
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = defines;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.defines = defines;
+    writer_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/joint_sdpa.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = compute_compile_time_args;
+    compute_desc.defines = defines;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    auto* const q_buf = input_tensor_q.buffer();
+    auto* const k_buf = input_tensor_k.buffer();
+    auto* const v_buf = input_tensor_v.buffer();
+    auto* const joint_q_buf = joint_tensor_q.buffer();
+    auto* const joint_k_buf = joint_tensor_k.buffer();
+    auto* const joint_v_buf = joint_tensor_v.buffer();
+    auto* const out_buf = output_tensor.buffer();
+    auto* const joint_out_buf = joint_output_tensor.buffer();
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -521,16 +627,14 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
         log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
         log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
 
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
+        reader_desc.emplace_runtime_args(
             core,
-            {q_addr,
-             k_addr,
-             v_addr,
-             joint_q_addr,
-             joint_k_addr,
-             joint_v_addr,
+            {q_buf,
+             k_buf,
+             v_buf,
+             joint_q_buf,
+             joint_k_buf,
+             joint_v_buf,
              local_batch_start,
              local_batch_end,
              local_nh_start,
@@ -539,12 +643,10 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
              local_q_end});
 
         // Writer args
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
+        writer_desc.emplace_runtime_args(
             core,
-            {out_addr,
-             joint_out_addr,
+            {out_buf,
+             joint_out_buf,
              local_batch_start,
              local_batch_end,
              local_nh_start,
@@ -553,67 +655,15 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
              local_q_end});
 
         // Compute args
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
-            core,
-            {local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end});
+        compute_desc.emplace_runtime_args(
+            core, {local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end});
     }
 
-    return cached_program_t{
-        std::move(program), {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void JointSDPAProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const JointSDPAParams& /*args*/,
-    const JointSDPAInputs& tensor_args,
-    JointSDPAResult& output_tensors) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-
-    // Get addresses for regular tensors
-    auto* q_buffer = tensor_args.input_q.buffer();
-    auto* k_buffer = tensor_args.input_k.buffer();
-    auto* v_buffer = tensor_args.input_v.buffer();
-    auto* joint_q_buffer = tensor_args.joint_q.buffer();
-    auto* joint_k_buffer = tensor_args.joint_k.buffer();
-    auto* joint_v_buffer = tensor_args.joint_v.buffer();
-
-    // Get addresses for output tensors
-    auto* out_buffer = output_tensors[JOINT_SDPA_OUTPUT_IDX].buffer();
-    auto* joint_out_buffer = output_tensors[JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
-
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t joint_q_addr = joint_q_buffer->address();
-    uint32_t joint_k_addr = joint_k_buffer->address();
-    uint32_t joint_v_addr = joint_v_buffer->address();
-    uint32_t out_addr = out_buffer->address();
-    uint32_t joint_out_addr = joint_out_buffer->address();
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
-
-    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
-
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-
-        // Update reader args
-        reader_args[0] = q_addr;
-        reader_args[1] = k_addr;
-        reader_args[2] = v_addr;
-        reader_args[3] = joint_q_addr;
-        reader_args[4] = joint_k_addr;
-        reader_args[5] = joint_v_addr;
-
-        // Update writer args
-        writer_args[0] = out_addr;
-        writer_args[1] = joint_out_addr;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

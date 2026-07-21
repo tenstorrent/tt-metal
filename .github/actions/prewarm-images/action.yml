@@ -1,0 +1,138 @@
+name: "Prewarm Images"
+description: "Pull images through Harbor to warm the cache. Fails if Harbor pull fails — no fallback."
+
+inputs:
+  harbor-prefix:
+    description: "Harbor prefix for pull-through (required; action fails if empty)"
+    required: true
+  images:
+    description: |
+      Images to prewarm. Can be either:
+      1. JSON object with tag fields (e.g., tool-tags output)
+      2. JSON array of image tag strings
+    required: true
+  title:
+    description: "Description for logging purposes"
+    required: false
+    default: "Images"
+  json-keys:
+    description: |
+      If images is a JSON object, list of keys to extract (space-separated).
+      Defaults to empty (treat images as array of tags).
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Prewarm images
+      shell: bash
+      env:
+        HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+        IMAGES_INPUT: ${{ inputs.images }}
+        TITLE: ${{ inputs.title }}
+        JSON_KEYS: ${{ inputs.json-keys }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "$HARBOR_PREFIX" ]; then
+          echo "::error::Harbor is not available (HARBOR_PREFIX is empty). Prewarming requires Harbor pull-through; skipping is not supported."
+          exit 1
+        fi
+
+        echo "Prewarming ${TITLE} from GHCR via Harbor pull-through..."
+
+        # Build list of image tags to prewarm
+        declare -a IMAGE_TAGS=()
+
+        if [ -n "$JSON_KEYS" ]; then
+          # Extract tags from JSON object using specified keys
+          for key in $JSON_KEYS; do
+            tag=$(echo "$IMAGES_INPUT" | jq -r ".\"${key}\"" 2>/dev/null || echo "")
+            if [ -n "$tag" ] && [ "$tag" != "null" ]; then
+              IMAGE_TAGS+=("$tag")
+            fi
+          done
+        else
+          # Parse as JSON array or newline-separated list
+          if echo "$IMAGES_INPUT" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            # It's a JSON array
+            mapfile -t IMAGE_TAGS < <(echo "$IMAGES_INPUT" | jq -r '.[]')
+          else
+            # Assume it's a single image tag or newline-separated list
+            IMAGE_TAGS+=("$IMAGES_INPUT")
+          fi
+        fi
+
+        # Deduplicate tags before processing
+        declare -A _SEEN=()
+        declare -a UNIQUE_TAGS=()
+        for ghcr_tag in "${IMAGE_TAGS[@]}"; do
+          if [ -z "$ghcr_tag" ] || [[ -v _SEEN["$ghcr_tag"] ]]; then
+            continue
+          fi
+          if [[ "$ghcr_tag" != *":"* && "$ghcr_tag" != *"@sha256:"* ]]; then
+            echo "::warning::Skipping invalid image ref (no tag or digest): $ghcr_tag"
+            continue
+          fi
+          _SEEN["$ghcr_tag"]=1
+          UNIQUE_TAGS+=("$ghcr_tag")
+        done
+
+        # ── Phase 1: batch-query Harbor in parallel ───────────────────────────
+        # Check Harbor's local cache path, not the GHCR proxy path, so newly
+        # built upstream images do not satisfy the probe before blobs are cached.
+        echo "Batch-checking which ${TITLE} are already cached in Harbor..."
+        TMPDIR_CHECK=$(mktemp -d)
+        trap 'rm -rf "$TMPDIR_CHECK"' EXIT  # only EXIT trap in this shell
+
+        harbor_pull_ref() {
+          local image_ref="$1"
+          printf '%s%s' "$HARBOR_PREFIX" "$image_ref"
+        }
+
+        harbor_cache_ref() {
+          local image_ref="$1"
+          # Query Harbor's cached repository path without triggering a GHCR proxy lookup.
+          printf '%s%s' "$HARBOR_PREFIX" "${image_ref#ghcr.io/}"
+        }
+
+        declare -A HARBOR_CHECK_PIDS=()
+        declare -a HARBOR_CHECK_ORDER=()
+        idx=0
+        for ghcr_tag in "${UNIQUE_TAGS[@]}"; do
+          harbor_cached_tag="$(harbor_cache_ref "$ghcr_tag")"
+          (
+            if docker manifest inspect "$harbor_cached_tag" > /dev/null 2>&1; then
+              echo "present"
+            else
+              echo "missing"
+            fi
+          ) > "${TMPDIR_CHECK}/${idx}" &
+          HARBOR_CHECK_PIDS["$ghcr_tag"]="${idx}:$!"   # "index:pid"
+          HARBOR_CHECK_ORDER+=("$ghcr_tag")
+          ((idx++)) || true  # prevent set -e exit on counter overflow (never happens)
+        done
+
+        # ── Phase 2: collect results and pull only missing images ─────────────
+        for ghcr_tag in "${HARBOR_CHECK_ORDER[@]}"; do
+          harbor_tag="$(harbor_pull_ref "$ghcr_tag")"
+          harbor_cached_tag="$(harbor_cache_ref "$ghcr_tag")"
+          entry="${HARBOR_CHECK_PIDS[$ghcr_tag]}"
+          file_idx="${entry%%:*}"
+          pid="${entry##*:}"
+          wait "$pid"
+          status=$(<"${TMPDIR_CHECK}/${file_idx}")
+
+          if [ "$status" = "present" ]; then
+            echo "  ✓ Already cached in Harbor: $harbor_cached_tag (skipping pull)"
+          else
+            echo "Pulling $harbor_tag (to warm Harbor cache)..."
+            if docker pull "$harbor_tag"; then
+              echo "  ✓ Successfully pulled through Harbor"
+            else
+              echo "::error::Harbor pull failed for $harbor_tag — the image must be accessible through Harbor. No fallback."
+              exit 1
+            fi
+          fi
+        done

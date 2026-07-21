@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <optional>
+#include <vector>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include <tt_stl/reflection.hpp>  // For ttsl::hash::hash_t
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::bernoulli {
 
@@ -17,6 +22,11 @@ struct BernoulliDeviceOperation {
         const DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        // seed is re-applied via get_dynamic_runtime_args, so it's excluded from the hash.
+        // Shape/device come from the input tensor (tensor_args).
+        static constexpr auto attribute_names = std::forward_as_tuple("dtype", "memory_config", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(dtype, memory_config, compute_kernel_config); }
     };
 
     struct tensor_args_t {
@@ -27,35 +37,24 @@ struct BernoulliDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct ProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            std::vector<CoreCoord> cores;
-        };
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-    };
-
-    using program_factory_t = std::variant<ProgramFactory>;
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // seed is excluded from the program hash (so calls differing only in seed cache-hit); it is
+    // DYNAMIC and re-applied to the cached program on every dispatch. Must mirror the compute-kernel
+    // seed runtime arg built in create_descriptor().
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::bernoulli

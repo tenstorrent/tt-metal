@@ -28,12 +28,12 @@ void kernel_main() {
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
 
-    const auto s0 = TensorAccessor(cache_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(cache_args, cache_addr);
 #ifdef INPUT_SHARDED
     cb_reserve_back(input_cb_id, Wt * num_batched_heads);
     cb_push_back(input_cb_id, Wt * num_batched_heads);
 #else
-    const auto s1 = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto s1 = TensorAccessor(input_args, input_addr);
     uint32_t input_id = input_start_id;
 #endif
 
@@ -45,7 +45,7 @@ void kernel_main() {
         cb_reserve_back(input_cb_id, Wt);
         uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
         for (uint32_t i = 0; i < Wt; ++i) {
-            noc_async_read_tile(input_id, s1, input_l1_write_addr);
+            noc_async_read_page(input_id, s1, input_l1_write_addr);
             input_l1_write_addr += input_tile_bytes;
             input_id++;
         }
@@ -57,7 +57,7 @@ void kernel_main() {
             uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
             for (uint32_t g = 0; g < granularity; ++g) {
                 for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                    noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                    noc_async_read_page(curr_cache_id, s0, cache_l1_write_addr);
                     cache_l1_write_addr += cache_tile_bytes;
                 }
                 cache_id += cache_batch_num_tiles;  // Input is read in by batch, then heads so skip to next batch

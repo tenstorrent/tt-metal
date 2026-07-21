@@ -62,8 +62,10 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 def test_ttnn_linear(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
+    torch.manual_seed(0)
     grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
+    use_high_accuracy_compute = input_a_dtype == ttnn.bfloat16 and input_b_dtype == ttnn.bfloat16
 
     input_shape_a = [1, 1, m_size, k_size]
     input_shape_b = [1, 1, k_size, n_size]
@@ -87,6 +89,14 @@ def test_ttnn_linear(
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=False,
+    )
+    # use hifi2 for bfloat16 to match torch behavior
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2 if use_high_accuracy_compute else ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
     )
 
     with ttnn.tracer.trace():
@@ -133,6 +143,7 @@ def test_ttnn_linear(
             program_config=program_config,
             memory_config=output_memory_config,
             dtype=input_a_dtype,
+            compute_kernel_config=compute_kernel_config,
         )
         if output_is_sharded:
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, interleaved_memory_config)
@@ -140,7 +151,24 @@ def test_ttnn_linear(
         output_tensor = ttnn.to_torch(output_tensor)
         ttnn.tracer.visualize(output_tensor)
 
-    assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.9996)
+    if use_high_accuracy_compute:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            atol=0.004 * k_size,
+            rtol=0.227 * k_size,
+            frobenius_threshold=0.01,
+            pcc_threshold=0.9996,
+        )
+    else:
+        # BFLOAT8_B input/output quantization is not represented by the BF16-rounded FP32 golden.
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+            check_allclose=False,
+        )
 
 
 @pytest.mark.parametrize("m_size", [32])

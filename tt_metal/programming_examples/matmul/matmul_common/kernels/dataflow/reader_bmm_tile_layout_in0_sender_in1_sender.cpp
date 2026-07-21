@@ -93,9 +93,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
 
     constexpr auto s0_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(s0_args, in0_tensor_addr, single_tile_size_bytes);
+    const auto s0 = TensorAccessor(s0_args, in0_tensor_addr);
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(s1_args, in1_tensor_addr, single_tile_size_bytes);
+    const auto s1 = TensorAccessor(s1_args, in1_tensor_addr);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
@@ -112,7 +112,7 @@ void kernel_main() {
             for (uint32_t h = 0; h < in0_block_h; h++) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in0_block_w; w++) {
-                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+                    noc_async_read_page(in0_tensor_tile_id, s0, l1_write_addr_in0);
                     l1_write_addr_in0 += single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
                     in0_block_size_bytes += single_tile_size_bytes;
@@ -174,7 +174,7 @@ void kernel_main() {
             for (uint32_t h = 0; h < in1_block_h; h++) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in1_block_w; w++) {
-                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                    noc_async_read_page(in1_tensor_tile_id, s1, l1_write_addr_in1);
                     l1_write_addr_in1 += single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                     in1_block_size_bytes += single_tile_size_bytes;

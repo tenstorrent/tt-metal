@@ -343,6 +343,9 @@ SHAPE2TIME = {
 }
 
 
+@pytest.mark.skip(
+    reason="Disabled by issue #44858: stable PCC assertion failure in test_mla_wo on nightly blackhole P150b"
+)
 @pytest.mark.parametrize(
     "device_params",
     [

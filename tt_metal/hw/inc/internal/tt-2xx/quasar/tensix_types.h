@@ -255,7 +255,8 @@ enum class DataFormat : std::uint8_t {
     Int32 = 8,
     Int8 = 14,
     Int16 = 9,
-    UInt8 = 17,  // Unsigned INT with 8-bit magnitude
+    UInt8 = 17,    // Unsigned INT with 8-bit magnitude
+    UInt16 = 130,  // Unsigned INT with 16-bit magnitude
     Int4 = 23,
     UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :
@@ -271,6 +272,14 @@ enum class DataFormat : std::uint8_t {
     automatic = 0xfe,  // Not a valid HW enum value, but useful to have it here for SW
     Invalid = 0xff     // Not a valid HW enum value, but useful to have it here for SW
 };
+
+// True for the 2x-packed, src-register-only DataFormats (one Src register lane holds two packed
+// sub-elements, driving the matmul EN_X2 traversal). These never appear as L1/CB formats — only as
+// an unpack_dst (Src register) format. MxFp4_2x_A/B are Quasar-only; Int8_2x/UInt8_2x are Trinity.
+constexpr inline bool is_2x_format(DataFormat format) {
+    return format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B || format == DataFormat::Int8_2x ||
+           format == DataFormat::UInt8_2x;
+}
 
 typedef struct {
     unsigned l1_addr_16B : 20 __attribute__((packed));

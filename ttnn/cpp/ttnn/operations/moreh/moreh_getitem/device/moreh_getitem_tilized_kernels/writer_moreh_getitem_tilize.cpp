@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -30,12 +33,14 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = tt::CBIndex::c_0;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, 1024 * element_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
+
+    Noc noc;
+    DataflowBuffer dfb_out_obj(cb_id_out);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_wait_front(cb_id_out, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+        dfb_out_obj.wait_front(1);
 
         uint32_t stick_idx = i;
 
@@ -53,10 +58,9 @@ void kernel_main() {
 
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
-        uint64_t dst_noc_addr = get_noc_addr(noc_id, s0, noc_offset);
-
-        noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, 1);
+        noc.async_write(
+            dfb_out_obj, s0, stick_size, {.offset_bytes = 0}, {.page_id = noc_id, .offset_bytes = noc_offset});
+        noc.async_write_barrier();
+        dfb_out_obj.pop_front(1);
     }
 }

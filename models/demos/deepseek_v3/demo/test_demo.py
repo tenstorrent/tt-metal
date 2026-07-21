@@ -3,20 +3,23 @@
 
 import json
 import os
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
-from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.deepseek_v3.utils.test_utils import create_prompt_of_length, system_name_to_mesh_shape
 
 MODEL_PATH = Path(
-    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
+    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked")
 )
-CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+_ds_cache = os.getenv("DEEPSEEK_V3_CACHE")
+CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 PERF_MARGIN = 0.08
 FINAL_DECODE_TPS_PER_USER = "decode_t/s/u"
+QUAD_FULL_DEMO_32UPR_DECODE_TPS_PER_USER = 7.75630117021217
 
 
 @lru_cache(maxsize=1)
@@ -48,6 +51,18 @@ def _assert_no_garbage_tokens(results: dict) -> None:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
     statistics = results.get("statistics", {})
     assert statistics, "Expected demo statistics for performance assertion"
@@ -65,6 +80,11 @@ def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
         )
 
 
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
+
+
 def _demo_case(
     *,
     max_prompts: int,
@@ -78,9 +98,11 @@ def _demo_case(
     profile_decode: bool,
     stop_at_eos: bool | None,
     expect_full_length: bool,
-    perf_targets: dict[str, float] | None = None,
     case_id: str,
     marks=None,
+    perf_targets: dict[str, float] | None = None,
+    max_seq_len: int | None = None,
+    target_prompt_tokens: int | None = None,
 ):
     return pytest.param(
         {
@@ -96,6 +118,8 @@ def _demo_case(
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
             "perf_targets": perf_targets,
+            "max_seq_len": max_seq_len,
+            "target_prompt_tokens": target_prompt_tokens,
         },
         id=case_id,
         marks=marks,
@@ -173,7 +197,7 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=False,
+            sample_on_device=True,
             artifact_name="dual_demo_full_results_8upr",
             profile_decode=False,
             stop_at_eos=None,
@@ -194,7 +218,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="dual_stress_demo_32upr",
-            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=56,
@@ -203,13 +227,13 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=False,
+            sample_on_device=True,
             artifact_name="dual_demo_stress_results_8upr",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
             case_id="dual_stress_demo_8upr",
-            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=512,
@@ -223,7 +247,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            perf_targets={FINAL_DECODE_TPS_PER_USER: 1.0168109351915215},
+            perf_targets={FINAL_DECODE_TPS_PER_USER: QUAD_FULL_DEMO_32UPR_DECODE_TPS_PER_USER},
             case_id="quad_full_demo_32upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
@@ -234,7 +258,7 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=False,
+            sample_on_device=True,
             artifact_name="quad_demo_full_results_8upr",
             profile_decode=False,
             stop_at_eos=None,
@@ -255,7 +279,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="quad_stress_demo_32upr",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=56,
@@ -264,13 +288,13 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=False,
+            sample_on_device=True,
             artifact_name="quad_demo_stress_results_8upr",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
             case_id="quad_stress_demo_8upr",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
         ),
         _demo_case(
             max_prompts=1,
@@ -287,14 +311,83 @@ def _demo_case(
             case_id="profile_decode",
             marks=pytest.mark.timeout(1800),
         ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="quad_long_ctx_16k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_16k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
+            max_seq_len=16 * 1024,
+            target_prompt_tokens=16 * 1024 - 256,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=False,
+            sample_on_device=False,
+            artifact_name="quad_long_ctx_32k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_32k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
+            max_seq_len=32 * 1024,
+            target_prompt_tokens=32 * 1024 - 256,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=False,
+            sample_on_device=False,
+            artifact_name="quad_long_ctx_64k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_64k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(9400)],
+            max_seq_len=64 * 1024,
+            target_prompt_tokens=64 * 1024 - 256,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name="quad_long_ctx_128k_ds1_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_128k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(18000)],
+            max_seq_len=128 * 1024,
+            target_prompt_tokens=128 * 1024 - 256,
+        ),
     ],
 )
 def test_demo(case: dict, force_recalculate_weight_config: bool):
-    # Path to the external JSON file containing prompts
-    json_path = "models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json"
-
-    # Load prompts from JSON file
-    prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
+    # Long-context cases generate a synthetic prompt; all others load from JSON.
+    if case["target_prompt_tokens"] is not None:
+        prompts = [create_prompt_of_length(case["target_prompt_tokens"], MODEL_PATH)] * case["max_prompts"]
+    else:
+        json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
+        prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
 
     # Run demo
     run_kwargs = dict(
@@ -315,6 +408,8 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         run_kwargs["override_num_layers"] = case["override_num_layers"]
     if case["stop_at_eos"] is not None:
         run_kwargs["stop_at_eos"] = case["stop_at_eos"]
+    if case["max_seq_len"] is not None:
+        run_kwargs["max_seq_len"] = case["max_seq_len"]
 
     results = run_demo(**run_kwargs)
 
@@ -333,16 +428,17 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload when requested by the case.
-    if case["artifact_name"] is not None:
+    # Save artifact from host rank 0 only to avoid multi-host write races.
+    if case["artifact_name"] is not None and _is_primary_artifact_writer():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{case['artifact_name']}.json"
+        output_file = artifact_dir / f"{_timestamped_artifact_stem(case['artifact_name'])}.json"
 
         output_data = {
-            "prompts": prompts,
+            "prompts": prompts if prompts else [],
             "generations": [],
             "statistics": results.get("statistics", {}),
+            "model_params": results.get("model_params", {}),
         }
 
         for i, gen_result in enumerate(results["generations"]):

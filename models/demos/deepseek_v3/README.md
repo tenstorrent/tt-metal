@@ -13,6 +13,18 @@ This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deep
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
+## Preferred Checkpoint Format
+
+The recommended DeepSeek-V3 runtime path is:
+- export a stacked dequantized checkpoint with `models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py`
+- point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting `*-dequantized-stacked` directory
+- run without an on-disk TT weight cache
+
+`--cache-dir` and `DEEPSEEK_V3_CACHE` remain available for reference/test caches, but DeepSeek weights are converted
+directly in memory on this path. If you explicitly want to consume a prebuilt legacy TT weight cache
+(for example BSPM output), pass `--use-weight-cache --cache-dir <cache-root>`. Legacy caches generated before the
+current DeepSeek SavedWeight metadata/versioning must be regenerated first; older-format and unversioned caches are rejected.
+
 ## Running on Multi-Host Galaxy (2x or 4x)
 
 DeepSeek-V3 requires a multi-host Galaxy setup. Use the `launch_multihost_galaxy.py` script to run commands across all hosts:
@@ -29,7 +41,6 @@ DeepSeek-V3 requires a multi-host Galaxy setup. Use the `launch_multihost_galaxy
 # Run the demo
 ./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
-  --cache-dir \$DEEPSEEK_V3_CACHE \
   "Your prompt here!"
 
 # Dry run (print command without executing)
@@ -42,7 +53,9 @@ The script automatically:
 - Detects the current hostname and selects the appropriate cluster configuration
 - Sources the Python virtual environment (`python_env/bin/activate`)
 - Sets `MESH_DEVICE` environment variable (`DUAL` for 2x, `QUAD` for 4x)
-- Exports required environment variables (`DEEPSEEK_V3_HF_MODEL`, `DEEPSEEK_V3_CACHE`)
+- Exports `DEEPSEEK_V3_HF_MODEL` and `DEEPSEEK_V3_CACHE`
+- Defaults `DEEPSEEK_V3_HF_MODEL` to the stacked dequantized checkpoint path
+- Leaves `DEEPSEEK_V3_CACHE` available for reference/test caches; DeepSeek weights do not use it as an on-disk TT weight cache
 - Wraps your command with **`tt-run`** (MPI) for multi-host execution; see [tt-run README](../../../ttnn/ttnn/distributed/README_ttrun.md) for **auto allocation** (`--mesh-graph-descriptor`, `--hosts`) vs **legacy** (`--rank-binding`, rankfile)
 
 ### Special Commands
@@ -76,8 +89,7 @@ MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
              --prompts-file models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json \
              --output-path deepseek_tt_out_batch_4.json \
              --max-new-tokens 128 \
-             --model-path $DEEPSEEK_V3_HF_MODEL \
-             --cache-dir $DEEPSEEK_V3_CACHE
+             --model-path $DEEPSEEK_V3_HF_MODEL
 ```
 
 This is useful for development and testing when multi-host resources are not available.
@@ -91,14 +103,12 @@ Running the demo on Galaxy (2x or 4x):
 # On 2x Galaxy
 ./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
-  --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \
   "Write a haiku about autumnal days by the sea"
 
 # On 4x Galaxy
 ./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
-  --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \
   "Write a haiku about autumnal days by the sea"
 ```
@@ -108,7 +118,6 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 ```bash
 ./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
-  --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \
   "Write a haiku about autumnal days by the sea"
 ```
@@ -120,7 +129,8 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--num-prompts N`: Limit the number of prompts loaded from `--prompts-file`.
 - `--output-path FILE`: Save generations/statistics to JSON when using `--prompts-file`. Defaults to `<prompts-file-stem>_output.json`.
 - `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
-- `--cache-dir PATH`: Directory for converted TTNN weights/cache. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
+- `--cache-dir PATH`: Optional directory for reference/test caches. Defaults to `$DEEPSEEK_V3_CACHE` when set. Also used as the legacy TT weight-cache root when `--use-weight-cache` is enabled.
+- `--use-weight-cache`: Load a prebuilt current-format legacy TT weight cache from `--cache-dir` instead of converting weights in memory. Use this for workflows such as BSPM-generated caches. Caches generated before the current DeepSeek SavedWeight metadata/versioning must be regenerated first.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
 - `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
 - `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS. Use this for fixed-length stress or perf runs.
@@ -131,7 +141,6 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
 - `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).
 - `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
-- `--tf-prompt-len N`: Override the teacher-forcing prompt length pulled from the reference file.
 
 You should also provide one or more prompts (each in quotes as in the above example) as positional arguments, unless using `--random-weights`. In `--random-weights` mode, prompts are optional.
 
@@ -178,6 +187,15 @@ run_demo(None, random_weights=True)
 
 # Fixed-length generation even after EOS
 run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3", stop_at_eos=False)
+
+# Consume a prebuilt BSPM / legacy TT weight cache
+# Regenerate the cache first if it predates the current DeepSeek SavedWeight metadata/versioning.
+run_demo(
+    ["Write a haiku about hardware"],
+    model_path="/abs/path/to/deepseek-v3-dequantized-stacked",
+    cache_dir="/abs/path/to/bspm_cache",
+    use_weight_cache=True,
+)
 ```
 
 ### Performance metrics
@@ -186,53 +204,50 @@ The demo logs wall-clock statistics (prefill/decode times, tokens per second, an
 
 ### Teacher Forcing Accuracy Verification
 
-You can verify accuracy under teacher forcing using a reference file with tokenized ground-truth. The expected format matches the tt_transformers demos/tests:
+You can verify accuracy under teacher forcing using a multi-prompt reference file with tokenized ground-truth.
 
-- Keys: `reference_tokens` (LongTensor [1, T]) and optional `top5_tokens` (LongTensor [T, 5]).
-- The demo splits `reference_tokens` at `T//2 + 1` into input prompt and ground-truth continuation.
+- The expected payload is `multi_prompt_v1` (or `multi_prompt_v1_lzma_v1`), with an `entries` list.
+- Each entry contains `prompt_tokens`, `generated_tokens`, `top5_tokens`, and `tf_prompt_len`.
+- In teacher-forcing mode, prompt count must match reference entry count.
 
-Generate a compatible reference file with the tt_transformers helper (use the same tokenizer/model family as your DeepSeek model to ensure token IDs match):
+Generate a compatible multi-prompt reference file with:
 
-- Hugging Face path:
-  - `python models/tt_transformers/tests/generate_reference_outputs.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
-- Or use the HF-only variant:
-  - `python models/tt_transformers/tests/generate_reference_hf.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
+- `python models/demos/deepseek_v3/demo/convert_api_json_to_refpt.py --input <api-results.json> --output models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --model-path <local-hf-model-path> --num-entries 256 --max-new-tokens 128`
 
 Run the DeepSeek-V3 demo with teacher forcing:
 
-- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
-  - Optionally control prompt length independently with `--tf-prompt-len`, e.g.:
-  - `... --tf-prompt-len 1024 --max-new-tokens 256`
+- `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/demos/deepseek_v3/demo/deepseek_r1_teacher_forcing_256.refpt --prompts-file <prompts.json> --num-prompts 256 --max-new-tokens 128`
 
 Notes:
 
 - `--token-accuracy` is not compatible with `--random-weights` and requires tokenizer files in `--model-path`.
-- The demo decodes a single sequence in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens in the reference file.
+- Use the same prompts JSON and prompt count that were used to generate the API results converted into the reference file.
+- The demo decodes one sequence per reference entry in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens per entry.
 - If `top5_tokens` is present in the reference, the demo reports both top-1 and top-5 accuracies; otherwise, only top-1.
 
 ## How to develop
 
 If you are not running on Tenstorrent internal infrastructure, you need to set the following environment variables:
 
-- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/deepseek_v3/reference`. Download the model from Hugging Face set this to the model directory.
-- `DEEPSEEK_V3_CACHE`: Path to a directory where cached data such as converted weights and test inputs/outputs will be stored.
+- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/deepseek_v3/reference`. In practice this should normally point at a `*-dequantized-stacked` checkpoint created by `models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py`.
+- `DEEPSEEK_V3_CACHE`: Path to a directory where reference outputs, test inputs/outputs, and similar artifacts can be stored. This is no longer a TT weight cache for the DeepSeek-V3 runtime.
 
 These variables are used in scripts for generating test data and running tests.
 
 This codebase separates model execution into three distinct stages, each of which can be run independently:
-1. Convert PyTorch weights to TTNN tensor files and generate the WeightConfig
+1. Convert PyTorch weights to TTNN tensors and generate the WeightConfig
 2. Generate ModelConfigs for prefill and decode modes
-3. Load TTNN tensor files using WeightConfig, create a shared state using create_state, merge them with ModelPrefillConfig and ModelDecodeConfig to create a RunPrefillConfig and RunDecodeConfig, and execute the model with either of the model configs
+3. Merge the converted weights with model state/config to create a RunPrefillConfig or RunDecodeConfig and execute the model
 
 The modules are not instantiated directly, but rather used as a namespace for the methods that define the model's behavior in prefill and decode. This is to make it easy to separate the stateful and stateless parts of the model, and allow for easy re-use of the methods.
 
 ### Weight Configuration
-Generated by static method `convert_weights` on each module class. Returns a dict mapping operation names to their TTNN weight file paths:
+Generated by static method `convert_weights` on each module class. For the DeepSeek-V3 runtime these weights are typically materialized directly as TTNN tensors in memory rather than written to an on-disk TT cache.
 ```python
 {
-    "w1": "/path/to/weights/w1.input_tensor_b",
-    "w2": "/path/to/weights/w2.input_tensor_b",
-    "w3": "/path/to/weights/w3.input_tensor_b"
+    "w1": <ttnn.Tensor>,
+    "w2": <ttnn.Tensor>,
+    "w3": <ttnn.Tensor>,
 }
 ```
 
@@ -263,7 +278,7 @@ Generated by static methods `prefill_model_config` and `decode_model_config` on 
 
 ### Example Usage
 ```python
-# Stage 1: Convert weights and get weight_config (saves to disk in standard format)
+# Stage 1: Convert weights and get weight_config (DeepSeek-V3 runtime keeps these in memory)
 weight_config = MLP.convert_weights(hf_config, torch_state_dict, Path("weights/mlp"), mesh_device)
 
 # Stage 2: Generate operator configs (returns nested dicts with TTNN objects)
@@ -295,7 +310,6 @@ export PYTHON_ENV_DIR=$TT_METAL_HOME/build/python_env_vllm
 source $VLLM_DIR/tt_metal/setup-metal.sh
 source $PYTHON_ENV_DIR/bin/activate
 
-export VLLM_TARGET_DEVICE="tt"
 export ARCH_NAME=wormhole_b0
 export HF_HOME=<hugging face home directory>
 export HF_MODEL="deepseek-ai/DeepSeek-R1-0528"
@@ -307,13 +321,14 @@ export HF_TOKEN=<HF token>
 Launch the server with long-lived RPC settings and TT mesh sizing:
 
 ```bash
+cd $VLLM_DIR
 VLLM_RPC_TIMEOUT=1000000 \
 MESH_DEVICE="(4,8)" \
-python examples/server_example_tt.py \
+python plugins/vllm-tt-plugin/examples/server_example_tt.py \
   --model "deepseek-ai/DeepSeek-R1-0528" \
   --max_model_len 1024 \
   --block_size 32 \
-  --override_tt_config '{"trace_mode": false}'
+  --additional-config '{"tt": {"trace_mode": false}}'
 ```
 
 In another terminal, send a client request:

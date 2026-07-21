@@ -27,100 +27,13 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
-// Existing implementation of _lgamma.
-// TODO: Remove this once the multigammaln is uplifted.
-Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result(x);
-    {
-        Tensor t(x);
-        {
-            Tensor temp_log(x);
-            {
-                Tensor temp(x);
-                Tensor input = ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config);
-                {
-                    Tensor z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-                        76.18009172947146f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(z1, 1.0f, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 2.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -86.50532032941677f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 3.0f, std::nullopt, output_mem_config), output_mem_config),
-                        24.01409824083091f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 4.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -1.231739572450155f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 5.0f, std::nullopt, output_mem_config), output_mem_config),
-                        0.1208650973866179e-2f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-
-                    z1 = ttnn::multiply(
-                        ttnn::reciprocal(ttnn::add(input, 6.0f, std::nullopt, output_mem_config), output_mem_config),
-                        -0.5395239384953e-5f,
-                        std::nullopt,
-                        output_mem_config);
-                    temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-                }
-                {
-                    Tensor t_log(x);
-                    {
-                        t = ttnn::add(input, 5.5f, std::nullopt, output_mem_config);
-                        t_log = ttnn::log(t, true, output_mem_config);
-                    }
-                    temp_log = ttnn::log(temp, true, output_mem_config);
-                    result = ttnn::add(
-                        ttnn::multiply(
-                            ttnn::add(input, 0.5f, std::nullopt, output_mem_config),
-                            t_log,
-                            std::nullopt,
-                            output_mem_config),
-                        0.918938531357171f,
-                        std::nullopt,
-                        output_mem_config);
-                }
-            }
-            result = ttnn::add(result, temp_log, std::nullopt, output_mem_config);
-        }
-        result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
-        {
-            {
-                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
-            }
-            {
-                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
-            }
-        }
-    }
-    return result;
-}
-
 // Function variance of whole tensor.
 Tensor _variance_impl(
     const Tensor& y,
     const Tensor& /*mean_y*/,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
     auto shape_wh = y.padded_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
@@ -149,13 +62,13 @@ std::vector<Tensor> split_tensor_for_glu(
     std::vector<Tensor> t_split;
     ttnn::Shape inshape(input_a.padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttsl::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
+    ttsl::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
-    ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
+    ttsl::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    ttsl::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
     Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
     Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
 
@@ -191,23 +104,25 @@ Tensor _make_global_from_hw_impl(
 
 namespace ttnn {
 
-// multivariate log-gamma function
+// Multivariate log-gamma function for p=4:
+// ln(Gamma_4(a)) = 3*ln(pi) + ln(Gamma(a)) + ln(Gamma(a - 0.5)) + ln(Gamma(a - 1.0)) + ln(Gamma(a - 1.5))
+// Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = detail::_lgamma(x, output_mem_config);
+    Tensor result = ttnn::lgamma(x, output_mem_config);
     result = ttnn::add(
         result,
-        detail::_lgamma(ttnn::subtract(x, 0.5f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::lgamma(ttnn::subtract(x, 0.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     result = ttnn::add(
         result,
-        detail::_lgamma(ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::lgamma(ttnn::subtract(x, 1.0f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     result = ttnn::add(
         result,
-        detail::_lgamma(ttnn::subtract(x, 1.5f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::lgamma(ttnn::subtract(x, 1.5f, std::nullopt, output_mem_config), output_mem_config),
         std::nullopt,
         output_mem_config);
     result = ttnn::add(result, 3.434189657547f, std::nullopt, output_mem_config);
@@ -216,7 +131,7 @@ Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_m
 
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     return detail::_variance_impl(y, mean_y, output_memory_config);
 }
@@ -231,7 +146,7 @@ Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = detail::_std(y, mean_y, y_minus_mean_y, output_mem_config);
@@ -425,7 +340,7 @@ Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCon
     float fact_val = std::tgamma(1.0f + k);       // k!
     float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)
     float scale = fact_val * pos_neg;
-    return ttnn::detail::unary_impl(
+    return ttnn::operations::unary::detail::unary_impl(
         input_a,
         {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::POLYGAMMA, {n, scale})},
         output_mem_config);

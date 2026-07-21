@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_math_common_api.h"
 #include "llk_sfpu_types.h"
 #include "llk_math_welfords_sfpu.h"
 #include "llk_math_welfords_sfpu_params.h"
@@ -13,6 +14,14 @@ namespace ckernel {
 inline void llk_math_welfords_sfpu_init() { _llk_math_welfords_sfpu_init_(); }
 
 inline void llk_math_welfords_sfpu_clear_previous_mean_and_m2() { ckernel::sfpu::_clear_previous_mean_and_m2_(); }
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_math_welfords_sfpu_reinit(const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t dst_format = get_operand_dst_format(operand_id);
+    _llk_math_welfords_sfpu_reinit_<is_fp32_dest_acc_en>(num_faces, dst_format);
+}
 
 template <uint32_t reciprocal_size>
 inline void llk_math_welfords_sfpu_calculate_welfords_tile_(

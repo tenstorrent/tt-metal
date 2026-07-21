@@ -3,93 +3,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+#include "mesh_tensor_impl.hpp"
 
 namespace tt::tt_metal {
-
-class MeshTensorImpl {
-public:
-    MeshTensorImpl(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
-        MeshTensorImpl(std::move(mesh_buffer), std::move(spec), std::move(topology), nullptr) {}
-
-    MeshTensorImpl(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
-        TensorSpec spec,
-        TensorTopology topology,
-        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
-        mesh_buffer_(std::move(mesh_buffer)),
-        spec_(std::move(spec)),
-        topology_(std::move(topology)),
-        root_mesh_buffer_(std::move(root_mesh_buffer)) {
-        TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
-        TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
-        TT_FATAL(
-            mesh_buffer_->size() >= spec_.compute_packed_buffer_size_bytes(),
-            "MeshBuffer must be large enough to hold the tensor.");
-    }
-
-    // Two step construction for MeshTensor,
-    // for transiet purpose.
-    MeshTensorImpl(MeshTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
-        mesh_buffer_(std::move(other.mesh_buffer_)),
-        spec_(std::move(spec)),
-        topology_(std::move(topology)),
-        root_mesh_buffer_(std::move(other.root_mesh_buffer_)) {}
-
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer() const { return mesh_buffer_; }
-    const TensorSpec& spec() const { return spec_; }
-    const TensorTopology& topology() const { return topology_; }
-    void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
-
-private:
-    // Invariant:
-    // 1. Cannot be nullptr and must be allocated.
-    // 2. Must be large enough to hold a tensor describale with spec_
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
-    TensorSpec spec_;
-    // TODO(river): What is the invariant of topology?
-    TensorTopology topology_;
-
-    // Experimental feature: Accomodates #38101
-    // This keeps mesh_buffer_ alive in limited cases.
-    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer_;
-};
-
-MeshTensor::MeshTensor() = default;
 
 MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
 
 MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
 
 MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
-
-MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology) {
-    TT_FATAL(other.is_initialized(), "Cannot move from a default-constructed or moved-from MeshTensor.");
-    impl = std::make_unique<MeshTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology));
-}
+    impl_(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
 
 MeshTensor::~MeshTensor() = default;
 
-distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
-
-std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
-    TT_FATAL(is_initialized(), "MeshTensor is in default constructed state.");
-    return impl->mesh_buffer();
+MeshTensorImpl& MeshTensor::impl() {
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
+    return *impl_;
 }
 
-distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
-
-bool MeshTensor::is_initialized() const { return impl != nullptr; }
-
-const TensorSpec& MeshTensor::tensor_spec() const {
-    TT_FATAL(is_initialized(), "MeshTensor is in default constructed state.");
-    return impl->spec();
+const MeshTensorImpl& MeshTensor::impl() const {
+    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
+    return *impl_;
 }
 
-const TensorTopology& MeshTensor::tensor_topology() const {
-    TT_FATAL(is_initialized(), "MeshTensor is in default constructed state.");
-    return impl->topology();
-}
+const distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return impl().mesh_buffer(); }
+
+const distributed::MeshDevice& MeshTensor::device() const { return mutable_device(); }
+
+distributed::MeshDevice& MeshTensor::mutable_device() const { return *mesh_buffer().device(); }
+
+const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
+
+const TensorTopology& MeshTensor::tensor_topology() const { return impl().topology(); }
+
+bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
 
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 
@@ -109,7 +59,7 @@ const MemoryConfig& MeshTensor::memory_config() const { return tensor_spec().mem
 
 bool MeshTensor::is_sharded() const { return memory_config().is_sharded(); }
 
-const std::optional<ShardSpec>& MeshTensor::legacy_shard_spec() const { return memory_config().shard_spec(); }
+const std::optional<ShardSpec>& MeshTensor::shard_spec() const { return memory_config().shard_spec(); }
 
 const std::optional<NdShardSpec>& MeshTensor::nd_shard_spec() const { return memory_config().nd_shard_spec(); }
 
@@ -120,6 +70,7 @@ std::size_t MeshTensor::element_size() const {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
@@ -130,8 +81,28 @@ std::size_t MeshTensor::element_size() const {
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
 void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_FATAL(is_initialized(), "MeshTensor is in default constructed state.");
-    impl->update_topology(std::move(tensor_topology));
+    impl().update_topology(std::move(tensor_topology));
+}
+
+MeshTensor MeshTensor::allocate_on_device(
+    distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
+    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
+    // check this, but we enforce it here at the device-binding boundary so any path that
+    // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
+    // generating programs that misbehave later.
+    if (spec.data_type() == DataType::FP8_E4M3) {
+        TT_FATAL(
+            mesh_device.arch() == tt::ARCH::BLACKHOLE,
+            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            mesh_device.arch());
+    }
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
+    return MeshTensor::from_buffer(std::move(*mesh_buffer), spec, topology);
+}
+
+MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
+    return MeshTensor(
+        std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
 }
 
 }  // namespace tt::tt_metal

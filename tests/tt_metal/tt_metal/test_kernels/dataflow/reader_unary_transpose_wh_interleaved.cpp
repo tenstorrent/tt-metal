@@ -4,75 +4,43 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#else
-#include "experimental/circular_buffer.h"
-#endif
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t N = get_arg_val<uint32_t>(1);
-    uint32_t Ht = get_arg_val<uint32_t>(2);
-    uint32_t Wt = get_arg_val<uint32_t>(3);
-    uint32_t HtWt = get_arg_val<uint32_t>(4);
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t HtWt = get_arg(args::HtWt);
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
-
-    experimental::Noc noc;
-#ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb0(0);
+    Noc noc;
+    DataflowBuffer dfb0(dfb::out_data);
     const uint32_t tile_bytes = dfb0.get_entry_size();
-#else
-    constexpr uint32_t cb_id_in0 = 0;
-    experimental::CircularBuffer cb0(cb_id_in0);
-    const uint32_t tile_bytes = cb0.get_tile_size();
-#endif
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
 #ifdef REDUCE_SCALER
-#ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb1(1);
+    DataflowBuffer dfb1(dfb::out_scaler);
     dfb1.reserve_back(1);
-#else
-    constexpr uint32_t cb_id_in2 = 2;
-    experimental::CircularBuffer cb2(cb_id_in2);
-    cb2.reserve_back(1);
-#endif
-    constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-    experimental::UnicastEndpoint mem_zero_endpoint;
+    constexpr uint32_t scaler = get_arg(args::scaler);
 
-    // Fill tile with zeros by reading from local core's MEM_ZEROS region.
-    // Must supply local NOC coordinates explicitly — UnicastEndpoint defaults to (0,0) which on
-    // Blackhole is a DRAM bank, causing a stricter 64-byte DRAM alignment check in ttsim to fail
-    // because MEM_ZEROS_BASE (0x32e0) is only 32-byte aligned.
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-#ifdef ARCH_QUASAR
-        noc.async_read(
-            mem_zero_endpoint, dfb1, MEM_ZEROS_SIZE, {.addr = MEM_ZEROS_BASE}, {.offset_bytes = i * MEM_ZEROS_SIZE});
-#else
-        noc.async_read(
-            mem_zero_endpoint,
-            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb2),
-            MEM_ZEROS_SIZE,
-            {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = MEM_ZEROS_BASE},
-            {.offset_bytes = i * MEM_ZEROS_SIZE});
-#endif
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(dfb1, 2048);
+    noc.write_zeros_l1_barrier();
 
-#ifdef ARCH_QUASAR
+    // On Quasar, dfb.get_write_ptr() returns a cacheable-alias L1 address; the noncacheable
+    // alias (required for NOC-port writes to be visible) is reached by adding
+    // MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR. On Gen1 the returned pointer is already
+    // usable; the macro doesn't exist there.
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+#ifdef ARCH_QUASAR
         dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
 #else
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in2));
+        dfb1.get_write_ptr());
 #endif
     uint32_t idx = 0;
     for (uint32_t k = 0; k < 4; ++k) {
@@ -83,34 +51,23 @@ void kernel_main() {
         }
         idx += 128;
     }
-#ifdef ARCH_QUASAR
     dfb1.push_back(onetile);
-#else
-    cb2.push_back(onetile);
-#endif
 #endif
 
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(tensor::src_tensor);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {
         i_tile = i_tile_N;
         for (uint32_t w = 0; w < Wt; w++) {
             for (uint32_t h = 0; h < Ht; h++) {
-#ifdef ARCH_QUASAR
                 dfb0.reserve_back(onetile);
                 noc.async_read(s, dfb0, tile_bytes, {.page_id = i_tile}, {});
                 noc.async_read_barrier();
                 dfb0.push_back(onetile);
-#else
-                cb0.reserve_back(onetile);
-                noc.async_read(s, cb0, tile_bytes, {.page_id = i_tile}, {});
-                noc.async_read_barrier();
-                cb0.push_back(onetile);
-#endif
                 i_tile += Wt;  // stride in H
             }  // Ht
             i_tile -= HtWt;  // go back to H=0

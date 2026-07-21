@@ -4,18 +4,12 @@
 
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt::tt_metal {
 
 TensorAttributes::TensorAttributes(HostStorage storage) : storage_(std::move(storage)) {}
 
 TensorAttributes::TensorAttributes(DeviceStorage storage) : storage_(std::move(storage)) {}
-
-// Transitional: assumes a HostStorage constructed without proper TensorSpec and TensorTopology.
-// Overrides the existing spec and topology in the HostStorage.
-TensorAttributes::TensorAttributes(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    storage_(HostStorage(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }

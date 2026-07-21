@@ -79,6 +79,18 @@ ttnn::Tensor reduce_scatter_minimal_async(
         }
     }
 
+    // For fp32 inputs without an explicit compute_kernel_config, enable fp32 dest accumulation
+    // so the line_reduction sum runs at fp32 precision in dst (Tf32 unpack-dst). Without this,
+    // the JIT data-format selection picks a 7-bit-mantissa dst, silently truncating the
+    // cross-device sum.
+    auto resolved_compute_kernel_config = compute_kernel_config;
+    if (!resolved_compute_kernel_config.has_value() && input_tensor.dtype() == DataType::FLOAT32) {
+        resolved_compute_kernel_config = ttnn::DeviceComputeKernelConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+        };
+    }
+
     // Call the prim operation
     auto result = ttnn::prim::reduce_scatter_minimal_async(
         input_tensor,
@@ -98,7 +110,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
-        compute_kernel_config);
+        resolved_compute_kernel_config);
 
     // Return the output tensor (index 1, intermediate is at index 0)
     return result.at(1);

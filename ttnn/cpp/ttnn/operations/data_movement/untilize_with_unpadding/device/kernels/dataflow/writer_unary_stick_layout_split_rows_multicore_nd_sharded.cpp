@@ -5,7 +5,10 @@
 #include <stdint.h>
 #include <array>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
 
 namespace {
@@ -19,15 +22,13 @@ void kernel_main() {
     const uint32_t start_shard_id = get_arg_val<uint32_t>(2);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
     constexpr uint32_t output_element_size = get_compile_time_arg_val(5);
     constexpr uint32_t num_cols_per_input_block = get_compile_time_arg_val(6);
     constexpr uint32_t num_cols_per_output_block = get_compile_time_arg_val(7);
-    constexpr uint32_t input_single_tile_size = get_compile_time_arg_val(8);
     constexpr uint32_t num_shards = get_compile_time_arg_val(9);
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
     constexpr uint32_t num_tiles_per_input_row = get_compile_time_arg_val(11);
@@ -37,84 +38,61 @@ void kernel_main() {
     constexpr uint32_t output_tensor_height = get_compile_time_arg_val(15);
     constexpr uint32_t tensor_rank = get_compile_time_arg_val(16);
     constexpr auto dst_args = TensorAccessorArgs<17>();
-    const auto accessor_dst = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
-    const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
+    const auto accessor_src = TensorAccessor(src0_args, src0_addr);
+
+    Noc noc;
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     auto write_tiles_in_current_block = [&](uint32_t start_row,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
                                             uint32_t num_rows_to_write) {
-        cb_wait_front(cb_id_out0, num_tiles_per_input_block);
+        dfb_out.wait_front(num_tiles_per_input_block);
 
-        // Base address of the row of elements we are going to be writing.
-        // If the input is unevenly sharded width wise and we are processing a block in the
-        // last shard width wise, we will not be writing the entire row of elements as the
-        // last x elements will be garbage. Tracking the base address of the row allows us to
-        // easily increment the current_read_addr to the next row of elements.
-        uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+        uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
 
-        // Process each row of elements in the input block
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
             uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
 
-            // Note: For width or block sharding (either input, output, or both), there may be more/less blocks width
-            // wise in the output tensor compared to the input tensor. As a result, for the first output block we write
-            // to, we may be writing to the middle of a page (i.e. some byte offset within the page). For all following
-            // writes we'll be writing to the beginning of a page and not require an offset.
-
-            // Output page_id that we are going to be writing to
             uint32_t num_rows_already_processed = start_row + j;
             uint32_t num_pages_already_processed_in_previous_rows =
                 num_rows_already_processed * num_output_blocks_across_width;
             uint32_t output_page_id =
                 num_pages_already_processed_in_previous_rows + width_wise_output_block_start_index;
 
-            // For the first output page that we write to in the current row, it's first x columns may have been
-            // written to from a different input block. So we need to calculate the offset within this first output page
-            // to write to (which may be 0). We also need to determine how many columns in this output page have not yet
-            // been written to in order to determine how many columns from the input block to writer (min of all
-            // remaining columns in the input block, and the remaining unprocessed columns in the current output block).
             uint32_t num_cols_remaining_in_current_output_block =
                 num_cols_per_output_block - num_cols_already_processed_in_first_output_block;
             uint32_t output_offset_within_page_in_bytes =
                 num_cols_already_processed_in_first_output_block * output_element_size;
 
-            // Iterate through all columns in the input block that this core is processing
             uint32_t num_input_cols_processed = 0;
             while (num_input_cols_processed < num_unpadded_cols_per_input_block) {
-                // How many elements to write from the input block to the output block.
-                // Min of the number of remaining unprocessed columns in the input block
-                // and the number of remaining unprocessed columns in the current output block.
                 uint32_t num_cols_to_write = std::min(
                     num_unpadded_cols_per_input_block - num_input_cols_processed,
                     num_cols_remaining_in_current_output_block);
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
-                // Perform the write
-                uint64_t dst_noc_addr = accessor_dst.get_noc_addr(output_page_id, output_offset_within_page_in_bytes);
-                noc_async_write(current_l1_read_addr, dst_noc_addr, num_bytes_to_write);
+                CoreLocalMem<uint32_t> src(current_l1_read_addr);
+                noc.async_write(
+                    src,
+                    accessor_dst,
+                    num_bytes_to_write,
+                    {.offset_bytes = 0},
+                    {.page_id = output_page_id, .offset_bytes = output_offset_within_page_in_bytes});
 
-                // Increment the number of cols we've processed in the input block
                 num_input_cols_processed += num_cols_to_write;
-
-                // Increment l1_read_addr past the bytes we just read
                 current_l1_read_addr += num_bytes_to_write;
-
-                // Increment the output_page_id we're writing to. If we wrote the entire input block
-                // then this has no effect as the while loop terminates. If we wrote to a subset of the
-                // input block, then that subset corresponds to an entire output block, so we increment
-                // the output_page_id to the following output block.
                 output_page_id++;
-                // Only the first output block we write to can have some of it's columns already processed/written-to
                 num_cols_remaining_in_current_output_block = num_cols_per_output_block;
                 output_offset_within_page_in_bytes = 0;
             }
         }
 
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_input_block);
+        noc.async_write_barrier();
+        dfb_out.pop_front(num_tiles_per_input_block);
     };
 
     uint32_t output_tensor_shape[tensor_rank];
@@ -150,13 +128,12 @@ void kernel_main() {
             }
 
             if (!block_is_in_output_tensor) {  // This input block is entirely outside the output tensor, so skip it
-                cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-                cb_pop_front(cb_id_out0, num_tiles_per_input_block);
+                dfb_out.wait_front(num_tiles_per_input_block);
+                dfb_out.pop_front(num_tiles_per_input_block);
                 continue;
             }
 
             uint32_t num_output_tensor_planes_before_current_block = 0;
-            // Here a "plane" is a 2D slice of the output tensor of size [H, W] (i.e., the last 2 dims)
             for (int i = 0; i <= static_cast<int>(tensor_rank - 3); ++i) {
                 num_output_tensor_planes_before_current_block =
                     num_output_tensor_planes_before_current_block * output_tensor_shape[i] + global_coord[i];
@@ -175,13 +152,11 @@ void kernel_main() {
             uint32_t last_column_tensor_index_in_block =
                 (tile_index_width + num_tiles_per_input_block) * tile_width - 1;
             if (last_column_tensor_index_in_block >= output_tensor_width) {
-                // we have columns which go beyond the output tensor width, so ignore those last columns
                 num_unpadded_cols_per_input_block = (output_tensor_width - tile_index_width * tile_width);
             }
             uint32_t last_row_tensor_index_in_block = global_coord[tensor_rank - 2] + tile_height - 1;
             uint32_t num_rows_to_write = tile_height;
             if (last_row_tensor_index_in_block >= output_tensor_height) {
-                // we have rows which go beyond the output tensor height, so ignore those last rows.
                 num_rows_to_write = (output_tensor_height - global_coord[tensor_rank - 2]);
             }
             uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;

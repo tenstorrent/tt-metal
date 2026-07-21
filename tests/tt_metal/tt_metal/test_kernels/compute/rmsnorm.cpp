@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -14,9 +11,6 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -70,18 +64,22 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            ACQ();
-            // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
+            tile_regs_acquire();
+            // DPRINT_UNPACK("Waiting on cb_x\n");
             cb_wait_front(cb_in, blk);
-            // UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
+            // DPRINT_UNPACK("Waiting on cb_inb\n");
             cb_wait_front(cb_inb, blk);
-            // UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
+            // DPRINT_UNPACK("Done Waiting on cb_inb\n");
             cb_reserve_back(cb_x, blk);
             for (uint32_t j = 0; j < blk; j++) {
                 add_tiles(cb_in, cb_inb, j, j, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_x);
             }
-            REL();
+            tile_regs_release();
             cb_push_back(cb_x, blk);  // push the sum into the same buffer
             cb_pop_front(cb_in, blk);
             cb_pop_front(cb_inb, blk);
@@ -96,35 +94,42 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             cb_reserve_back(cb_x2, blk);  // can probably use less space for this if we block
-            ACQ();
+            tile_regs_acquire();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles(cb_x, cb_x, wt + wtr, wt + wtr, wtr);
                 // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_x2);
             }
             cb_push_back(cb_x2, blk);
-            REL();
+            tile_regs_release();
         }
 
         /* Var(x)
          * compute E[(x)^2]
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_x2, cb_scaler, cb_ex2);
-        ACQ();
+        reconfig_data_format(cb_scaler, cb_x2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex2);
+        tile_regs_acquire();
         cb_wait_front(cb_x2, Wt);
         // cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                reduce_tile(cb_x2, cb_scaler, wt + wtr, scaler0, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, wt + wtr, scaler0, dst0);
             }
             // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_x2, Wt);
         reduce_uninit();
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst0, cb_ex2);
-        REL();
+        tile_regs_release();
 
         cb_push_back(cb_ex2, 1);
         cb_wait_front(cb_ex2, 1);
@@ -132,16 +137,18 @@ void kernel_main() {
         /* Var(x) + eps
          * add epsilon E[(x-E[x])^2]+eps
          */
-        ACQ();
+        tile_regs_acquire();
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
         rsqrt_tile_init();
         rsqrt_tile(dst0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
-        REL();
+        tile_regs_release();
 
         /* ln(x) * gamma + beta (gamma and beta are optional)
          * now xmm = (x-E[x])
@@ -151,23 +158,25 @@ void kernel_main() {
         cb_reserve_back(cb_ex2pe, 1);  // 2
         cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
-            // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
-            // if (ht == 1) DEVICE_PRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
+            // if (ht == 1) DPRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
             cb_reserve_back(cb_im_or_out, blk);
 
-            ACQ();
+            tile_regs_acquire();
             mul_bcast_cols_init_short(cb_x, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_x, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             cb_push_back(cb_im_or_out, blk);  // if no gamma/beta are provided, this will be passed on to the writer
-            REL();
+            tile_regs_release();
 
             if (do_gamma) {
-                ACQ();
+                tile_regs_acquire();
                 uint32_t cb_outg = do_beta ? cb_fusion : tt::CBIndex::c_16;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, blk);
@@ -175,28 +184,36 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, blk);
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     pack_tile(wtr, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
                 cb_pop_front(cb_fusion, blk);
                 // we don't pop gamma
                 cb_push_back(cb_outg, blk);
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                REL();
+                tile_regs_release();
             }
             if (do_beta) {
-                ACQ();
+                tile_regs_acquire();
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 cb_reserve_back(tt::CBIndex::c_16, blk);
                 cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
                 cb_wait_front(cb_fusion, blk);
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     pack_tile(wtr, tt::CBIndex::c_16);  // pack either to intermediate (cb_fusion or out0)
                 }
                 cb_pop_front(cb_fusion, blk);
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
                 cb_push_back(tt::CBIndex::c_16, blk);
-                REL();
+                tile_regs_release();
             }
         }
         cb_pop_front(cb_ex2pe, 1);

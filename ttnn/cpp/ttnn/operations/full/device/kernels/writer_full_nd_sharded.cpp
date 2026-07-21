@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "full_kernel_common.hpp"
 
 void kernel_main() {
@@ -14,7 +17,6 @@ void kernel_main() {
     constexpr uint32_t cb_value = get_compile_time_arg_val(0);
     constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_shards = get_compile_time_arg_val(4);
     constexpr uint32_t num_cores = get_compile_time_arg_val(5);
     constexpr auto dst_args = TensorAccessorArgs<6>();
@@ -22,12 +24,15 @@ void kernel_main() {
     value val;
     val.u = fill_value;
 
-    cb_reserve_back(cb_value, onepage);
+    Noc noc;
+    CircularBuffer cb(cb_value);
 
-    uint32_t write_addr = get_write_ptr(cb_value);
+    cb.reserve_back(onepage);
+
+    uint32_t write_addr = cb.get_write_ptr();
 
     if (val.u == 0) {
-        zero_buffer(write_addr, page_size);
+        zero_buffer(cb_value, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -49,22 +54,21 @@ void kernel_main() {
 #endif
     }
 
-    cb_push_back(cb_value, 1);
+    cb.push_back(1);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_addr, aligned_page_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_addr);
 
-    cb_wait_front(cb_value, 1);
+    cb.wait_front(1);
 
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = dst_accessor.shard_pages(shard_id);
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end(); ++page_iter) {
             uint32_t page_id = page_iter->page_id();
-            const auto cb_value_addr = get_read_ptr(cb_value);
-            noc_async_write_page(page_id, dst_accessor, cb_value_addr);
+            noc.async_write(cb, dst_accessor, dst_accessor.get_aligned_page_size(), {}, {.page_id = page_id});
         }
     }
 
-    noc_async_writes_flushed();
-    cb_pop_front(cb_value, 1);
-    noc_async_write_barrier();
+    noc.async_writes_flushed();
+    cb.pop_front(1);
+    noc.async_write_barrier();
 }

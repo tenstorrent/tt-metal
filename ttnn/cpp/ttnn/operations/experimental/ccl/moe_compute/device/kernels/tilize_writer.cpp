@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using namespace ttnn::operations::ccl::common;
@@ -27,14 +30,19 @@ FORCE_INLINE uint64_t get_safe_multicast_noc_addr(
 }
 
 FORCE_INLINE void noc_async_write_linked_multicast(
-    uint32_t src_local_l1_addr, uint64_t dst_noc_addr_multicast, uint32_t size, uint32_t num_dests, uint8_t noc) {
+    Noc& noc, uint32_t src_local_l1_addr, uint64_t dst_noc_addr_multicast, uint32_t size, uint32_t num_dests) {
+    // Device 2.0 migration: legacy primitive retained: dst_noc_addr_multicast is a precomposed uint64_t
+    // NoC multicast address (returned by get_safe_multicast_noc_addr above). Noc::async_write_multicast
+    // takes a typed Dst (MulticastEndpoint, TensorAccessor) plus separate dst_args; there is no wrapper
+    // for a raw uint64_t multicast address today
     while (size > NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast(src_local_l1_addr, dst_noc_addr_multicast, NOC_MAX_BURST_SIZE, num_dests, true, noc);
+        noc_async_write_multicast(
+            src_local_l1_addr, dst_noc_addr_multicast, NOC_MAX_BURST_SIZE, num_dests, true, noc.get_noc_id());
         src_local_l1_addr += NOC_MAX_BURST_SIZE;
         dst_noc_addr_multicast += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
     }
-    noc_async_write_multicast(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, false, noc);
+    noc_async_write_multicast(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, false, noc.get_noc_id());
 }
 
 void print_tile_rows(
@@ -45,26 +53,10 @@ void print_tile_rows(
     uint16_t end_row = 32,
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
-    DPRINT << "======" << ENDL();
-    DEVICE_PRINT("======\n");
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-        DEVICE_PRINT(
+        DPRINT(
             "{} : {}\n",
             r,
             TileSlice(
@@ -80,8 +72,7 @@ void print_tile_rows(
                 true,
                 untilize));
     }
-    DPRINT << "++++++" << ENDL();
-    DEVICE_PRINT("++++++\n");
+    DPRINT("++++++\n");
 }
 
 template <
@@ -91,9 +82,9 @@ template <
     uint32_t MeshCols,
     ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
-                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
-                                                                          : MeshCols;
+    [[maybe_unused]] constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
+                                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
+                                                                                           : MeshCols;
     const uint32_t device_in_group = t / TokensPerDevice;
 
     if constexpr (Axis == ReplicateGroup::NONE) {
@@ -139,6 +130,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t hidden_size = get_named_compile_time_arg_val("hidden_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
@@ -190,11 +183,35 @@ void kernel_main() {
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
     constexpr uint32_t initial_gather_semaphore_id = get_named_compile_time_arg_val("initial_gather_semaphore_id");
 
+    Semaphore<> matmul_chunk_available_sem(matmul_chunk_available_semaphore_id);
+    Semaphore<> tilize_chunk_ready_sem(tilize_chunk_ready_semaphore_id);
+    Semaphore<> matmul_chunk_ready_sem(matmul_chunk_ready_semaphore_id);
+    Semaphore<> previous_chunk_sent_sem(previous_chunk_sent_semaphore_id);
+    Semaphore<> initial_gather_sem(initial_gather_semaphore_id);
+
+    // Device 2.0 migration: legacy primitives retained: these raw L1 semaphore addresses are
+    // used as bases for multicast destinations (set_multicast / get_safe_multicast_noc_addr /
+    // get_noc_addr) and for direct noc_semaphore_set with the legacy address-taking overload.
     uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
-    uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
     uint32_t initial_gather_semaphore_addr = get_semaphore(initial_gather_semaphore_id);
+
+    // Noc typed wrappers
+    Noc noc_obj(noc_index);
+    Noc noc_alt_obj(1 - noc_index);
+
+    // CircularBuffer typed wrappers
+    CircularBuffer cb_tilize_output(tilize_output_cb_id);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    CircularBuffer cb_total_chunks(total_chunks_cb_id);
+    CircularBuffer cb_indices_tensor(indices_tensor_cb_id);
+    CircularBuffer cb_scores_tensor(scores_tensor_cb_id);
+    CircularBuffer cb_mapping_tensor(mapping_tensor_cb_id);
+    CircularBuffer cb_brisc_e_t(brisc_e_t_cb_id);
+    CircularBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
+    CircularBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
+    CircularBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -223,14 +240,13 @@ void kernel_main() {
     constexpr uint32_t one_page = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
     constexpr uint32_t element_size = tilize_output_page_size / (TILE_HEIGHT * TILE_WIDTH);
     constexpr uint32_t tile_width_bytes = TILE_WIDTH * element_size;
 
     // For parallel metadata processing - BRISC processes second half of this core's token range
     // Note: These are computed at runtime based on core_token_start/end in Step 3
-    constexpr uint32_t brisc_token_start = tokens / 2;
-    constexpr uint32_t brisc_token_end = tokens;
+    [[maybe_unused]] constexpr uint32_t brisc_token_start = tokens / 2;
+    [[maybe_unused]] constexpr uint32_t brisc_token_end = tokens;
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
@@ -257,10 +273,10 @@ void kernel_main() {
     uint32_t brisc_tokens_capacity = tokens_this_core / 2;
 
     // Wait for NCRISC to finish reading the mapping tensor
-    cb_wait_front(mapping_tensor_cb_id, num_devices);
+    cb_mapping_tensor.wait_front(num_devices);
 
     // Get mapping base pointer (read by NCRISC)
-    const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
+    const uint32_t mapping_base = cb_mapping_tensor.get_read_ptr();
 
     // Build local_expert_ids array - experts that map to this device
     uint16_t* expert_to_device_map =
@@ -278,12 +294,12 @@ void kernel_main() {
     }
 
     // Reserve BRISC's e_t buffer (single page contains all experts' token lists)
-    cb_reserve_back(brisc_e_t_cb_id, one_page);
-    const uint32_t brisc_e_t_buffer_base = get_write_ptr(brisc_e_t_cb_id);
+    cb_brisc_e_t.reserve_back(one_page);
+    const uint32_t brisc_e_t_buffer_base = cb_brisc_e_t.get_write_ptr();
 
     // Reserve BRISC's expert_activation buffer (single page contains all activation rows)
-    cb_reserve_back(brisc_expert_activation_cb_id, one_page);
-    const uint32_t brisc_expert_activation_base = get_write_ptr(brisc_expert_activation_cb_id);
+    cb_brisc_expert_activation.reserve_back(one_page);
+    const uint32_t brisc_expert_activation_base = cb_brisc_expert_activation.get_write_ptr();
 
     // Initialize BRISC's expert_activation buffer with sentinel values (selected_experts_k)
     for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
@@ -297,8 +313,8 @@ void kernel_main() {
     }
 
     // Indices and scores accessible via CB (drain has shard, non-drain read via NOC in reader)
-    const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
-    const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
+    const uint32_t indices_base = cb_indices_tensor.get_read_ptr();
+    const uint32_t scores_base = cb_scores_tensor.get_read_ptr();
 
     // Per-expert token counts for BRISC's half
     uint32_t brisc_num_tokens_per_expert[experts_per_device] = {0};
@@ -371,28 +387,28 @@ void kernel_main() {
     }
 
     // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer)
-    cb_push_back(brisc_e_t_cb_id, one_page);
+    cb_brisc_e_t.push_back(one_page);
 
     // Push BRISC's expert_activation buffer
-    cb_push_back(brisc_expert_activation_cb_id, one_page);
+    cb_brisc_expert_activation.push_back(one_page);
 
     // Push BRISC's per-expert counts to CB for NCRISC to read
-    cb_reserve_back(brisc_expert_counts_cb_id, one_page);
-    uint32_t* brisc_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(brisc_expert_counts_cb_id));
+    cb_brisc_expert_counts.reserve_back(one_page);
+    uint32_t* brisc_counts_ptr = reinterpret_cast<uint32_t*>(cb_brisc_expert_counts.get_write_ptr());
     for (uint32_t e = 0; e < experts_per_device; e++) {
         brisc_counts_ptr[e] = brisc_num_tokens_per_expert[e];
     }
-    cb_push_back(brisc_expert_counts_cb_id, one_page);
+    cb_brisc_expert_counts.push_back(one_page);
 
     // Push BRISC's activated token count
-    cb_reserve_back(brisc_activated_count_cb_id, one_page);
-    *reinterpret_cast<uint32_t*>(get_write_ptr(brisc_activated_count_cb_id)) = brisc_num_activated_tokens;
-    cb_push_back(brisc_activated_count_cb_id, one_page);
+    cb_brisc_activated_count.reserve_back(one_page);
+    *reinterpret_cast<uint32_t*>(cb_brisc_activated_count.get_write_ptr()) = brisc_num_activated_tokens;
+    cb_brisc_activated_count.push_back(one_page);
 
     // Wait for reader to push per-expert token counts (includes merged NCRISC + BRISC counts)
-    cb_wait_front(per_expert_total_tokens_cb_id, 1);
+    cb_per_expert_total_tokens.wait_front(1);
     volatile tt_l1_ptr uint32_t* per_expert_counts =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_per_expert_total_tokens.get_read_ptr());
 
     // Read per-expert token counts into local array
     uint32_t num_tokens_per_expert[experts_per_device];
@@ -401,9 +417,9 @@ void kernel_main() {
     }
 
     // Wait for reader to push total_chunks
-    cb_wait_front(total_chunks_cb_id, one_page);
+    cb_total_chunks.wait_front(one_page);
     [[maybe_unused]] uint32_t total_chunks =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(total_chunks_cb_id));
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_total_chunks.get_read_ptr());
 
     /************************************************************************/
     /* Synchronization setup for signalling between tilize and matmul cores */
@@ -435,7 +451,7 @@ void kernel_main() {
 
     // This decides which half of the matmul input buffer we send to
     bool use_second_half_buffer = false;
-    uint32_t matmul_chunk_input_cb_base_addr = get_read_ptr(tilize_output_cb_id);
+    uint32_t matmul_chunk_input_cb_base_addr = cb_tilize_output.get_read_ptr();
     uint32_t first_half_buffer_addr = matmul_chunk_input_cb_base_addr;
     uint32_t second_half_buffer_addr =
         matmul_chunk_input_cb_base_addr + (tiles_per_global_chunk * tilize_output_page_size);
@@ -483,8 +499,8 @@ void kernel_main() {
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; chunk++) {
             // Wait for compute to push tiles_per_local_chunk tiles
-            cb_wait_front(tilize_output_cb_id, shared_cb_num_pages);
-            uint32_t l1_read_addr = get_read_ptr(tilize_output_cb_id);
+            cb_tilize_output.wait_front(shared_cb_num_pages);
+            uint32_t l1_read_addr = cb_tilize_output.get_read_ptr();
 
             /*
              * Send chunks to MM cores;
@@ -526,15 +542,16 @@ void kernel_main() {
             if (num_chunks_sent >= 2) {
                 // wait_min as MM may signal twice (once per buffer slot) before we acknowledge the first (empty) buffer
                 // slot
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_available_semaphore_addr),
-                    matmul_chunk_available_semaphore_wait_value);
+                matmul_chunk_available_sem.wait_min(matmul_chunk_available_semaphore_wait_value);
                 matmul_chunk_available_semaphore_wait_value += num_matmul_cores;
 
                 // MM only signals to the drain-sync-core, which then forwards it to the non-drain-sync cores
                 if (is_drain_tilize_core && num_tilize_cores > 1) {
                     // use the local value of the semaphore, which is the value we just waited on (no need to set local
                     // value)
+                    // Device 2.0 migration: legacy primitive retained: multicast loopback op using
+                    // a precomposed multicast NOC address that honors the NOC1 coordinate-swap
+                    // convention via get_safe_multicast_noc_addr
                     noc_semaphore_set_multicast(
                         matmul_chunk_available_semaphore_addr,
                         matmul_chunk_available_semaphore_tilize_mcast_addr,
@@ -556,9 +573,7 @@ void kernel_main() {
 
                     // == 5a ==
                     // wait for all gathered sub-chunks to arrive
-                    noc_semaphore_wait(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(initial_gather_semaphore_addr),
-                        primary_mcast_gather_group_num_cores - 1);
+                    initial_gather_sem.wait(primary_mcast_gather_group_num_cores - 1);
 
                     // == 6a ==
 
@@ -575,22 +590,22 @@ void kernel_main() {
 
                     // mcast the data
                     noc_async_write_linked_multicast(
+                        noc_obj,
                         l1_read_addr,
                         first_iteration_primary_mcast_group_matmul_chunk_input_mcast_addr,
                         bytes_to_mcast,
-                        matmul_bounding_box_num_cores,
-                        noc_index);
+                        matmul_bounding_box_num_cores);
 
                     // == 8a ==
                     // wait for secondary mcaster to signal that all secondary mcast sub-chunks have been delivered
                     // also bump local value (value of primary mcast group)
+                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+                    // (tilize_chunk_ready_drain_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc.
                     noc_semaphore_inc(
                         tilize_chunk_ready_drain_semaphore_noc_addr,
                         primary_mcast_gather_group_num_cores - 1,
                         noc_index);
-                    noc_semaphore_wait(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
-                        tilize_chunk_ready_wait_value);
+                    tilize_chunk_ready_sem.wait(tilize_chunk_ready_wait_value);
                     tilize_chunk_ready_wait_value += (num_tilize_cores - 1);
                 } else if (is_secondary_mcaster) {
                     // mcasts data over NoC0 (secondary NoC for tilize cores, usually reserved for MM cores reading
@@ -598,9 +613,7 @@ void kernel_main() {
 
                     // == 5a ==
                     // wait for all gathered sub-chunks to arrive
-                    noc_semaphore_wait(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(initial_gather_semaphore_addr),
-                        secondary_mcast_gather_group_num_cores - 1);
+                    initial_gather_sem.wait(secondary_mcast_gather_group_num_cores - 1);
 
                     // == 6a ==
 
@@ -617,16 +630,18 @@ void kernel_main() {
 
                     // mcast the data
                     noc_async_write_linked_multicast(
+                        noc_alt_obj,
                         l1_read_addr,
                         first_iteration_secondary_mcast_group_matmul_chunk_input_mcast_addr,
                         bytes_to_mcast,
-                        matmul_bounding_box_num_cores,
-                        1 - noc_index);
+                        matmul_bounding_box_num_cores);
 
                     // == 7a ==
                     // explicit barrier since we're on different NoC than primary mcaster (which is the one that signals
                     // to MM cores) signal to primary mcaster (drain-sync core) that we've sent our sub-chunks
-                    noc_async_write_barrier(1 - noc_index);
+                    noc_alt_obj.async_write_barrier();
+                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+                    // (tilize_chunk_ready_drain_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc.
                     noc_semaphore_inc(
                         tilize_chunk_ready_drain_semaphore_noc_addr, secondary_mcast_gather_group_num_cores, noc_index);
                 } else {
@@ -636,6 +651,10 @@ void kernel_main() {
                     // send to proper offset on our initial mcast gather core
                     uint32_t target_l1_initial_gather_addr =
                         l1_read_addr + mcast_group_tile_offset * tilize_output_page_size;
+                    // Device 2.0 migration: legacy primitive retained: initial_gather_noc_addr is a
+                    // precomposed uint64_t NoC unicast address. Noc::async_write takes a typed Dst
+                    // (UnicastEndpoint with .noc_x/.noc_y/.addr args, or TensorAccessor) — there is no
+                    // wrapper for a raw uint64_t address today
                     uint64_t initial_gather_noc_addr = get_noc_addr(
                         initial_mcast_gather_core_nox_x,
                         initial_mcast_gather_core_nox_y,
@@ -646,10 +665,12 @@ void kernel_main() {
                         initial_gather_noc_addr,
                         tiles_per_local_chunk * tilize_output_page_size,
                         noc_index);
-                    noc_async_write_barrier(noc_index);
+                    noc_obj.async_write_barrier();
 
                     // == 4a ==
                     // signal to our initial mcast gather core that we've delivered our sub-chunk
+                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+                    // (initial_gather_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc
                     uint64_t initial_gather_semaphore_noc_addr = get_noc_addr(
                         initial_mcast_gather_core_nox_x,
                         initial_mcast_gather_core_nox_y,
@@ -664,9 +685,7 @@ void kernel_main() {
                 if (is_drain_tilize_core) {
                     // == 5b ==
                     // wait until non-drain-sync cores send us their sub-chunks
-                    noc_semaphore_wait(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
-                        tilize_chunk_ready_wait_value);
+                    tilize_chunk_ready_sem.wait(tilize_chunk_ready_wait_value);
                     tilize_chunk_ready_wait_value += (num_tilize_cores - 1);
 
                     // == 6b ==
@@ -678,15 +697,19 @@ void kernel_main() {
 
                     // mcast the data
                     noc_async_write_linked_multicast(
+                        noc_obj,
                         l1_read_addr,
                         matmul_chunk_input_mcast_addr,
                         normal_iteration_bytes_to_mcast,
-                        matmul_bounding_box_num_cores,
-                        noc_index);
+                        matmul_bounding_box_num_cores);
                 } else {
                     // == 3b ==
                     // send to proper offset on global mmcast gather core (the drain-sync core)
                     uint32_t gather_addr = l1_read_addr + global_tile_offset * tilize_output_page_size;
+                    // Device 2.0 migration: legacy primitive retained: drain_gather_noc_addr is a
+                    // precomposed uint64_t NoC unicast address. Noc::async_write takes a typed Dst
+                    // (UnicastEndpoint with .noc_x/.noc_y/.addr args, or TensorAccessor) — there is no
+                    // wrapper for a raw uint64_t address today
                     uint64_t drain_gather_noc_addr =
                         get_noc_addr(drain_core_noc_x, drain_core_noc_y, gather_addr, noc_index);
                     noc_async_write(
@@ -694,10 +717,12 @@ void kernel_main() {
                         drain_gather_noc_addr,
                         tiles_per_local_chunk * tilize_output_page_size,
                         noc_index);
-                    noc_async_write_barrier(noc_index);
+                    noc_obj.async_write_barrier();
 
                     // == 4b ==
                     // signal to global mcast gather core that we've delivered our sub-chunk
+                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+                    // (tilize_chunk_ready_drain_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc.
                     noc_semaphore_inc(tilize_chunk_ready_drain_semaphore_noc_addr, 1, noc_index);
                 }
             }
@@ -707,12 +732,13 @@ void kernel_main() {
                 // signal to MM cores that entire chunk has arrived
 
                 // set local value
-                noc_semaphore_set(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
-                    matmul_chunk_ready_semaphore_set_value);
+                matmul_chunk_ready_sem.set(matmul_chunk_ready_semaphore_set_value);
                 matmul_chunk_ready_semaphore_set_value++;
 
                 // mcast sem set
+                // Device 2.0 migration: legacy primitive retained: multicast loopback set
+                // (noc_semaphore_set_multicast) uses precomposed multicast NoC address and is not yet
+                // wrapped by Semaphore<>::set_multicast in a way that takes a raw L1 source addr
                 noc_semaphore_set_multicast(
                     matmul_chunk_ready_semaphore_addr,
                     matmul_chunk_ready_semaphore_mcast_addr,
@@ -725,6 +751,7 @@ void kernel_main() {
                     // Signal to non-drain-sync cores that they can start sending the next chunk
                     // Use local semaphore value (no need to explicitly set it)
                     // Local value is from when drain-sync waits until gather process is done (8a and 5b)
+                    // Device 2.0 migration: legacy primitive retained: multicast loopback set
                     noc_semaphore_set_multicast(
                         tilize_chunk_ready_semaphore_addr,
                         tilize_chunk_ready_mcast_addr,
@@ -736,31 +763,28 @@ void kernel_main() {
                 // == 11 ==
                 // wait until drain-sync signals to us that we can start using NoC again (read in next set of tokens,
                 // output another chunk, etc)
-                noc_semaphore_wait(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
-                    tilize_chunk_ready_wait_value);
+                tilize_chunk_ready_sem.wait(tilize_chunk_ready_wait_value);
                 tilize_chunk_ready_wait_value += (num_tilize_cores - 1);
             }
 
             // we already barrier when using (1 - noc_index), so just need to flush on noc_index here
-            noc_async_writes_flushed(noc_index);
+            noc_obj.async_writes_flushed();
 
             // pop the tiles from CB
-            cb_pop_front(tilize_output_cb_id, shared_cb_num_pages);
+            cb_tilize_output.pop_front(shared_cb_num_pages);
             num_chunks_sent++;
             use_second_half_buffer = !use_second_half_buffer;
 
             // == 12 ==
             // signal to reader that they can start reading in another set of tokens
-            noc_semaphore_set(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
+            previous_chunk_sent_sem.set(num_chunks_sent);
         }
     }
 
     // Pop the per-expert counts and total_chunks (cleanup)
-    cb_pop_front(per_expert_total_tokens_cb_id, one_page);
-    cb_pop_front(total_chunks_cb_id, one_page);
+    cb_per_expert_total_tokens.pop_front(one_page);
+    cb_total_chunks.pop_front(one_page);
 
-    noc_async_write_barrier(noc_index);
-    noc_async_atomic_barrier(noc_index);
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

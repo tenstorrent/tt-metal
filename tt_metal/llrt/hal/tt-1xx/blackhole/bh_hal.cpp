@@ -12,6 +12,7 @@
 #include <umd/device/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
+#include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
@@ -55,12 +56,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
 
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+}
+
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 
@@ -86,7 +96,14 @@ public:
     HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
         HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
 
-    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+    std::string linker_flags([[maybe_unused]] const Params& params) const override {
+        // Suppress LTO false positive on the device-print lock's atomic exchange.
+        // GCC's -Wstringop-overflow object-size analysis treats the fixed L1
+        // mailbox address backing the atomic as a size-0 object. Source-level
+        // #pragma diagnostic doesn't apply to LTO-emitted warnings, so the
+        // suppression has to live on the link command.
+        return "-Wno-stringop-overflow ";
+    }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
@@ -210,6 +227,12 @@ public:
             enable_2_erisc_mode_) {
             cflags += "-Werror=stack-usage=1912 ";
         }
+        // We need to disable -mtt-fix-whbhebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will
+        // unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
+        }
         return cflags;
     }
 
@@ -302,6 +325,10 @@ void Hal::initialize_bh(
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
         get_dram_backed_command_queues_base(dram_profiler_size);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
@@ -362,8 +389,13 @@ void Hal::initialize_bh(
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
             (addr == IERISC_RESET_PC ||
-             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
-            (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
+             addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
+            (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
+            (addr == ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) ||  // read for active-eth timeout debug
+            // ERISC interrupt registers, written by host to disable base FW interrupts
+            // before switching to runtime FW (see RiscFirmwareInitializer::disable_eth_interrupts).
+            ((addr >= ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR) &&
+             (addr < ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + 4 * ETH_RISC_NUM_INTERRUPT_VECS)));
     };
     // NOLINTEND(misc-redundant-expression)
 
@@ -406,6 +438,7 @@ void Hal::initialize_bh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
@@ -422,6 +455,8 @@ void Hal::initialize_bh(
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
+    this->eth_interrupt_mode_base_reg_ = ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR;
+    this->eth_interrupt_num_vecs_ = ETH_RISC_NUM_INTERRUPT_VECS;
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,

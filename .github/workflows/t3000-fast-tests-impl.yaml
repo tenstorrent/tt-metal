@@ -17,12 +17,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -33,17 +33,17 @@ on:
       run-fabric-tests:
         required: false
         type: string
-        default: 'true'
+        default: "true"
         description: "Run t3k fabric tests"
       run-multiprocess-tests:
         required: false
         type: string
-        default: 'true'
+        default: "true"
         description: "Run t3k ttnn multiprocess tests"
       run-ccl-tests:
         required: false
         type: string
-        default: 'true'
+        default: "true"
         description: "Run t3k ttnn ccl tests"
       ref:
         required: false
@@ -56,8 +56,9 @@ jobs:
     name: T3000 fast tests
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -76,10 +77,11 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
+          filter: blob:none
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
@@ -89,14 +91,21 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-kernel-ccache: true
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
-        timeout-minutes: 20
+        timeout-minutes: ${{ inputs.timeout }}
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
-          source tests/scripts/t3000/run_t3000_unit_tests.sh
-          run_t3000_ttfabric_tests
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report_fabric.json \
+            -- bash -c '
+              source tests/scripts/t3000/run_t3000_unit_tests.sh
+              run_t3000_ttfabric_tests
+            '
       # The multiprocess tests are currently disabled as they are not stable. We will re-enable them once we have improved their stability.
       # - name: Run t3k ttnn multiprocess tests
       #   id: t3k-ttnn-multiprocess-tests
@@ -118,8 +127,55 @@ jobs:
         if: ${{ inputs.run-ccl-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
-          source tests/scripts/t3000/run_t3000_unit_tests.sh
-          run_t3000_ccl_tests
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report_ccl.json \
+            -- bash -c '
+              source tests/scripts/t3000/run_t3000_unit_tests.sh
+              run_t3000_ccl_tests
+            '
+
+      - name: Upload fabric power report
+        if: ${{ inputs.run-fabric-tests == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-t3000-fabric
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report_fabric.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report_fabric.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload CCL power report
+        if: ${{ inputs.run-ccl-tests == 'true' && !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-t3000-ccl
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report_ccl.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report_ccl.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 17
         if: ${{ !cancelled() }}

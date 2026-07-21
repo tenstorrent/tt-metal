@@ -38,7 +38,7 @@ constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
 constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
-constexpr auto kQKResultCbIndex = tt::CBIndex::c_7;      // used for accumulating results
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
 
 constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
 constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
@@ -51,17 +51,41 @@ constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding cur
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumAttnMaskTiles = 1U;
-constexpr uint32_t kQKResultTiles = 1U;
+constexpr uint32_t kNumCausalMaskTiles = 2U;  // [0] = causal-diag pattern (0 kept / -1e9 masked),
+                                              // [1] = all -1e9 (strictly past the diagonal)
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
-constexpr uint32_t kIntermediateTiles = 2U;  // max_val at col 0, recip_sum_exp at col 32
+constexpr uint32_t kIntermediateTiles = 1U;  // logsumexp = max + log(sum_exp), single FP32 tile
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+
+// Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
+// iteration of the compute kernel.
+//
+// Constraints:
+//   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
+//      and so the reader never reads past the end of the sequence).
+//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
+//      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
+//   3. Larger chunks amortize softmax / correction overhead more, but consume L1
+//      proportionally for cb_key, cb_value, and cb_attention_weights.
+//
+// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
+// either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
+// DST cycles.
+uint32_t pick_sk_chunk_t(uint32_t Ht) {
+    constexpr uint32_t kMaxSkChunkT = 4U;
+    for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
+        if (Ht % c == 0U) {
+            return c;
+        }
+    }
+    return 1U;
+}
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA.
@@ -323,7 +347,27 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    const uint32_t block_size = get_block_size(qWt, 4U);
+    // DST register budget. fp32_dest_acc_en=true → 4 slots (FP32 accumulator);
+    // fp32_dest_acc_en=false → 8 slots (BF16). Mirrors TTNN's `dst_size` convention in their
+    // SDPA program factory. Two derived granularities follow:
+    //
+    //   * `block_size`     (cap = dst_size - 1) — for SFPU ops (`update_cur_mm_out`,
+    //     final normalization) that load `block_size` data tiles plus a 1-tile scratch
+    //     for `unary_bcast<COL>`. Needs `block_size + 1 <= dst_size`.
+    //   * `pv_block_size`  (cap = dst_size)     — for `matmul_block` in PV. The MOP writes
+    //     `ct_dim` output tiles directly, no scratch needed; can use the full DST budget.
+    //
+    // Both are clamped to divisors of `vWt` by `get_block_size`, so the matmul outer loop
+    // and the SFPU outer loop each tile `vWt` evenly without remainder handling.
+    constexpr bool fp32_dest_acc_en = true;
+    const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
+    const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
+    const uint32_t pv_block_size = get_block_size(vWt, dst_size);
+
+    // Multi-tile K/V chunking factor. Compute kernel processes Sk_chunk_t K and V tiles per
+    // inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
+    const uint32_t Sk_chunk_t = pick_sk_chunk_t(St);
+    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -335,24 +379,42 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_query = create_circular_buffer(
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    [[maybe_unused]] auto cb_key =
-        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+    // K and V are read in Sk_chunk_t-tile chunks. Double-buffer the chunks so the reader
+    // can overlap next-chunk DRAM with current-chunk compute.
+    [[maybe_unused]] auto cb_key = create_circular_buffer(
+        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * kWt);
 
     [[maybe_unused]] auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * vWt);
 
-    // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
-    // Not needed for AttentionMaskType::None
+    // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly.
+    // Not needed for AttentionMaskType::None.
+    //
+    // Sizing depends on the mask type:
+    //   - Causal (incl. balanced parallelism): two persistently-fronted pre-transformed tiles
+    //     generated on chip
+    //       [0] = causal-diagonal (0.0 on/below diagonal, -1e9 above) — applied on the
+    //             diagonal K tile of every row.
+    //       [1] = all -1e9 — applied on K tiles strictly past the diagonal inside the
+    //             diagonal chunk when Sk_chunk_t > 1.
+    //   - Arbitrary: Sk_chunk_t mask tiles per K chunk are streamed from DRAM; double-buffer them.
     if (mask_type != AttentionMaskType::None) {
+        const uint32_t num_attn_mask_tiles =
+            (mask_type == AttentionMaskType::Causal) ? kNumCausalMaskTiles : (2U * Sk_chunk_t);
         [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
-            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
+            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, num_attn_mask_tiles);
     }
 
     // create intermediate buffer only if we need to return intermediates
-    // Intermediate shape: (B, H, S, 64) = 2 tiles wide (max_val at col 0, recip_sum_exp at col 32)
+    // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp))
     if (args.return_intermediates) {
         [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
-            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kIntermediateTiles);
+            program,
+            all_cores,
+            kIntermediateCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kIntermediateTiles);
     }
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
@@ -361,8 +423,14 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    [[maybe_unused]] auto cb_qk_result = create_circular_buffer(
-        program, all_cores, kQKResultCbIndex, data_format, bfloat16_single_tile_size_bytes, kQKResultTiles);
+    // Holds the Sk_chunk_t QK^T score tiles for the current K chunk. Sized to one chunk
+    // (not double-buffered) since softmax overwrites in-place, then the PV matmul consumes it.
+    //
+    // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
+    // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
+    // through this CB for the softmax critical path (~20 ms regression).
+    [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
+        program, all_cores, kAttentionWeightsCbIndex, precise_data_format, float32_single_tile_size_bytes, Sk_chunk_t);
 
     [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
         program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
@@ -381,13 +449,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
 
-    [[maybe_unused]] auto cb_cur_mm_out =
-        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
+        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
 
     [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -459,14 +527,21 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kBalancedParallelismDefKey] = "1";
     }
 
+    // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
+    // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
+    const auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
+                                                                         : tt::tt_metal::MathFidelity::HiFi4;
+
     SDPAForwardKernels kernels;
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // num tile in inner dim in query(d/TILE_W)
+        qWt,              // num tile in inner dim in query/key (d_qk/TILE_W)
+        vWt,              // num tile in inner dim in value (d_v/TILE_W)
         St,               // num tile in seq len dim (S/TILE_H)
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
+        Sk_chunk_t,       // multi-tile K/V chunking factor
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -481,7 +556,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,  // num tile in inner dim in query(d/TILE_W)
+        vWt,  // num tile in inner dim in output/value (d_v/TILE_W)
         St,   // num tile in seq len dim (S/TILE_H)
         qNH,  // number of heads in query
     };
@@ -494,6 +569,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
+    // UnpackToDestFp32 for mm_out accum buffers and broadcast scratch:
+    // copy_tile from these CBs bypasses SrcA and DMAs directly to DST at full FP32.
+    // Only SFPU operations (mul_binary_tile, etc.) may be used on data loaded this way.
+    auto create_unpack_to_dest_mode = []() {
+        std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        mode[kPrevMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        mode[kCurMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        return mode;
+    };
+
     if (use_balanced_parallelism) {
         // For balanced parallelism, all cores are in one group with uniform work
         // num_pairs is passed as compile-time arg (max pairs per core)
@@ -501,47 +586,83 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
         std::vector<uint32_t> compute_args = {
             max_pairs_per_core,  // num_pairs (or max_pairs if some cores have fewer)
-            block_size,          // per_core_block_size
-            qWt,                 // num tile in inner dim in query(d/TILE_W)
+            block_size,          // SFPU per-core block size (cap = dst_size - 1, needs scratch)
+            qWt,                 // num tile in inner dim in query/key (d_qk/TILE_W)
+            vWt,                 // num tile in inner dim in value (d_v/TILE_W)
             St,                  // num_seq_len / TILE_H
             scaler,              // sqrt(Et) - sdpa scaler factor
             minus_one,           // used to transform mask from 1/0 to 0/-1
             custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
+            Sk_chunk_t,          // multi-tile K/V chunking factor
+            pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
         };
 
-        kernels.compute_group_1 = create_compute_kernel(
-            program, all_cores, compute_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            all_cores,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+                .math_approx_mode = false,
+                .compile_args = compute_args,
+                .defines = defines});
     } else {
         // Standard mode: two potential core groups with different row counts
 
         // Group 1 compile-time arguments
         std::vector<uint32_t> compute_group_1_args = {
             num_rows_per_core_group_1,  // per_core_block_cnt
-            block_size,                 // per_core_block_size
-            qWt,                        // num tile in inner dim in query(d/TILE_W)
+            block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
+            qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
+            vWt,                        // num tile in inner dim in value (d_v/TILE_W)
             St,                         // num_seq_len / TILE_H
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
+            Sk_chunk_t,                 // multi-tile K/V chunking factor
+            pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
         };
 
-        kernels.compute_group_1 = create_compute_kernel(
-            program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            core_group_1,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+                .math_approx_mode = false,
+                .compile_args = compute_group_1_args,
+                .defines = defines});
 
         // Group 2 (if present) compile-time arguments
         if (!core_group_2.ranges().empty()) {
             std::vector<uint32_t> compute_group_2_args = {
                 num_rows_per_core_group_2,  // per_core_block_cnt
-                block_size,                 // per_core_block_size
-                qWt,                        // num tile in inner dim in query(d/TILE_W)
+                block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
+                qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
+                vWt,                        // num tile in inner dim in value (d_v/TILE_W)
                 St,                         // num_seq_len / TILE_H
                 scaler,                     // sqrt(Et) - sdpa scaler factor
                 minus_one,                  // used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
+                Sk_chunk_t,                 // multi-tile K/V chunking factor
+                pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
             };
 
-            kernels.compute_group_2 = create_compute_kernel(
-                program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+            kernels.compute_group_2 = tt::tt_metal::CreateKernel(
+                program,
+                kComputeKernelPath,
+                core_group_2,
+                tt::tt_metal::ComputeConfig{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = true,
+                    .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+                    .math_approx_mode = false,
+                    .compile_args = compute_group_2_args,
+                    .defines = defines});
         }
     }
 

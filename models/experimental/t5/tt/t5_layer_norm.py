@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from models.common.utility_functions import pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 import ttnn
 
@@ -20,7 +20,7 @@ class TtT5LayerNorm(torch.nn.Module):
         # get weights
         pytorch_weights = state_dict[f"{base_address}.weight"]
 
-        self.weight = pad_by_zero(pytorch_weights, device)[0]
+        self.weight = torch2tt_tensor(pytorch_weights, device)
 
     def forward(self, hidden_states):
         return ttnn.rms_norm(hidden_states, epsilon=self.variance_epsilon, weight=self.weight)

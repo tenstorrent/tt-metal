@@ -3,15 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "intimg_device_operation.hpp"
-#include "intimg_program_factory.hpp"
 
-#include "tt-metalium/base_types.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/host_api.hpp"
-#include "tt-metalium/kernel_types.hpp"
-#include "ttnn/tensor/types.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <array>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include "ttnn/tensor/types.hpp"
 
 namespace {
 
@@ -30,32 +32,28 @@ enum class IntImgCB : uint32_t {
     AXIS_3_BUFFER,  // memoizing upper 32 tiles for propagation along axis 3
 };
 
-CBHandle create_cb(
-    Program& program,
-    const DataType& dtype,
-    const IntImgCB& intimg_cb,
-    const CoreRangeSet& core_range_set,
-    const uint32_t& num_tiles) {
+CBDescriptor make_cb(
+    const DataType& dtype, const IntImgCB& intimg_cb, const CoreRangeSet& core_range_set, const uint32_t& num_tiles) {
     const uint32_t cb_id{static_cast<uint32_t>(intimg_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
     const uint32_t single_tile_size{tt::tile_size(cb_data_format)};
-    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
-        cb_id, single_tile_size)};
-    return CreateCircularBuffer(program, core_range_set, cb_config);
+    return CBDescriptor{
+        .total_size = num_tiles * single_tile_size,
+        .core_ranges = core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_id),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    };
 }
 
-KernelHandle create_kernel(
-    Program& program,
-    const char* kernel_path,
-    const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig>& config,
-    const std::vector<uint32_t>& runtime_args = {}) {
-    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
-
-    return kernel_id;
-}
+constexpr std::array<const char*, 3> KERNEL_PATHS{
+    "ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device/kernels/"
+    "intimg_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device/kernels/intimg_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device/kernels/"
+    "intimg_writer.cpp"};
 
 }  // namespace
 
@@ -66,8 +64,10 @@ namespace ttnn::experimental::prim {
 constexpr uint32_t CORES_X = 2;
 constexpr uint32_t CORES_Y = 4;
 
-IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
-    const IntImgParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
+tt::tt_metal::ProgramDescriptor IntImgDeviceOperation::create_descriptor(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -76,8 +76,6 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const auto& input_shape{input_tensor.padded_shape()};
 
     constexpr uint32_t BLOCK_DEPTH = 48;
-
-    Program program{};
 
     auto* src_buffer{input_tensor.buffer()};
     auto* dst_buffer{output_tensor.buffer()};
@@ -92,19 +90,24 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const uint32_t tiles_num_per_full_block_depth_cb = BLOCK_DEPTH;
     const uint32_t tiles_num_per_small_cb = 2;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
-    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_small_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_full_block_depth_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_small_cb);
-    create_cb(
-        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_full_block_depth_cb);
-    create_cb(
-        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_full_block_depth_cb);
-    create_cb(
-        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_full_block_depth_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_full_block_depth_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_small_cb);
-    create_cb(
-        program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_full_block_depth_cb);
+
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(make_cb(input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_small_cb));
+    desc.cbs.push_back(
+        make_cb(input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_full_block_depth_cb));
+    desc.cbs.push_back(make_cb(input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_small_cb));
+    desc.cbs.push_back(
+        make_cb(input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_full_block_depth_cb));
+    desc.cbs.push_back(
+        make_cb(input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_full_block_depth_cb));
+    desc.cbs.push_back(
+        make_cb(input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_full_block_depth_cb));
+    desc.cbs.push_back(
+        make_cb(input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_full_block_depth_cb));
+    desc.cbs.push_back(make_cb(input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_small_cb));
+    desc.cbs.push_back(
+        make_cb(input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_full_block_depth_cb));
     // create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, tiles_num_per_cb);
 
     std::vector<uint32_t> compute_compile_time_args{
@@ -129,50 +132,49 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     auto dataflow_compile_time_args = compute_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(dataflow_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(dataflow_compile_time_args);
-    const ReaderDataMovementConfig reader_config{dataflow_compile_time_args};
-    const ComputeConfig compute_config{
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = KERNEL_PATHS[0];
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_range_set;
+    reader_desc.compile_time_args = dataflow_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
+    // Replicate the same runtime args (input buffer address) across every core in the grid.
+    for (uint32_t x = 0; x < CORES_X; ++x) {
+        for (uint32_t y = 0; y < CORES_Y; ++y) {
+            reader_desc.emplace_runtime_args(CoreCoord{x, y}, {src_buffer});
+        }
+    }
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = KERNEL_PATHS[1];
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_range_set;
+    compute_desc.compile_time_args = compute_compile_time_args;
+    compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = false,
-        .compile_args = compute_compile_time_args,
-        .defines = {}};
-    const WriterDataMovementConfig writer_config{dataflow_compile_time_args};
+    };
 
-    auto reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], core_range_set, reader_config)};
-    auto compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_range_set, compute_config)};
-    auto writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], core_range_set, writer_config)};
-
-    SetRuntimeArgs(program, reader_kernel_id, core_range_set, {src_buffer->address()});
-    SetRuntimeArgs(program, writer_kernel_id, core_range_set, {dst_buffer->address()});
-
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .compute_kernel_id = compute_kernel_id,
-         .writer_kernel_id = writer_kernel_id}};
-}
-
-void IntImgProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const IntImgParams& /*operation_attributes*/,
-    const Tensor& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-
-    auto input_buffer_address = tensor_args.buffer()->address();
-    auto output_buffer_address = tensor_return_value.buffer()->address();
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = KERNEL_PATHS[2];
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_range_set;
+    writer_desc.compile_time_args = dataflow_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
+    // Replicate the same runtime args (output buffer address) across every core in the grid.
     for (uint32_t x = 0; x < CORES_X; ++x) {
         for (uint32_t y = 0; y < CORES_Y; ++y) {
-            const auto core = CoreCoord{x, y};
-            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-
-            reader_runtime_args[0] = input_buffer_address;
-            writer_runtime_args[0] = output_buffer_address;
+            writer_desc.emplace_runtime_args(CoreCoord{x, y}, {dst_buffer});
         }
     }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

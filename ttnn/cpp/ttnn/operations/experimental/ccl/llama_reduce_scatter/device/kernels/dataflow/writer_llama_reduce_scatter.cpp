@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -88,6 +90,13 @@ void kernel_main() {
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
+
+    Noc noc_obj;
+    CircularBuffer cb_fabric_sender(fabric_sender_cb_id);
+    CircularBuffer cb_packet_header(packet_header_cb_id);
+    CircularBuffer cb_accumulator(accumulator_cb_id);
+    CircularBuffer cb_output_tensor(output_tensor_cb_id);
+
     if (sender_core) {
         auto fabric_connection =
             FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
@@ -96,7 +105,7 @@ void kernel_main() {
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
         constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
-        const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
+        const auto packet_header_buffer_addr = cb_packet_header.get_read_ptr();
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
@@ -105,7 +114,8 @@ void kernel_main() {
         sem_inc_packet_header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint32_t>(1)});  // increment 1
 
-        const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
+        CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+        const uint32_t base_receiver_l1_addr = cb_fabric_receiver.get_read_ptr();
 
         // Precompute the packet offset once
         const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
@@ -133,8 +143,8 @@ void kernel_main() {
                 const uint64_t noc0_dest_noc_addr =
                     safe_get_noc_addr(receiver_core_x, receiver_core_y, packet_offset, 0);
 
-                cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
-                const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
+                cb_fabric_sender.wait_front(curr_packet_num_pages);
+                const auto sender_l1_addr = cb_fabric_sender.get_read_ptr();
 
                 const uint64_t sem_noc_addr =
                     safe_get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
@@ -150,7 +160,7 @@ void kernel_main() {
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)unicast_packet_header, packet_header_size);
 
-                cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
+                cb_fabric_sender.pop_front(curr_packet_num_pages);
 
                 num_pages_sent += curr_packet_num_pages;
                 packet++;
@@ -165,8 +175,8 @@ void kernel_main() {
         constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
         uint64_t noc_addresses[num_pages_per_packet];
         uint32_t accumulator_l1_addresses[num_pages_per_packet];
-        uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
-        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
+        uint32_t output_tensor_base_addr = cb_output_tensor.get_read_ptr();
+        auto accumulator_l1_addr = cb_accumulator.get_read_ptr();
 
         uint32_t num_packets = num_pages_per_packet;
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
@@ -184,16 +194,17 @@ void kernel_main() {
             accumulator_l1_addresses[i] = accumulator_l1_addr + i * page_size_bytes;
         }
 
-        cb_wait_front(accumulator_cb_id, num_pages_per_packet);
+        cb_accumulator.wait_front(num_pages_per_packet);
 
         // Process all tiles
         for (uint32_t tile = 0; tile < num_packets; tile++) {
+            // Device 2.0 migration: legacy primitive retained, precomposed uint64_t noc_addresses[]
             noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
         }
-        noc_async_write_barrier();
-        cb_pop_front(accumulator_cb_id, num_pages_per_packet);
+        noc_obj.async_write_barrier();
+        cb_accumulator.pop_front(num_pages_per_packet);
 #else
-        cb_wait_front(output_tensor_cb_id, num_pages_per_packet);
+        cb_output_tensor.wait_front(num_pages_per_packet);
 #endif
     }
 }

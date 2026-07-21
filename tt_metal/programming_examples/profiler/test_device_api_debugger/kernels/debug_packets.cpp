@@ -4,16 +4,16 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     riscv_wait(START_DELAY);
 
-    experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> local_buffer(L1_BUFFER_ADDR);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc;
+    CoreLocalMem<uint32_t> local_buffer(L1_BUFFER_ADDR);
+    UnicastEndpoint unicast_endpoint;
 
     constexpr uint32_t num_bytes = 64;
     for (uint32_t i = 0; i < 10000; ++i) {

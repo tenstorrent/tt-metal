@@ -6,7 +6,13 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifdef ARCH_QUASAR
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
+#else
+#include "ckernel_sfpu_mul_int32.h"
+#include "sfpu/ckernel_sfpu_mul_int.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -35,7 +41,31 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format>(idst0, idst1, odst)));
+#if defined(ARCH_QUASAR)
+    static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
+    // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
+    // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
+    MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
+        idst0, idst1, odst)));
+#else
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
+    if constexpr (data_format == DataFormat::UInt16) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _mul_int_,
+            (APPROX, 8 /* ITERATIONS */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::RC)));
+    } else {
+        MATH(
+            (SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+    }
+#endif
 }
 
 /**
@@ -43,7 +73,19 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 template <DataFormat data_format>
 ALWI void mul_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
     MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
+#else
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
+    if constexpr (data_format == DataFormat::UInt16) {
+        MATH((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
+    } else {
+        MATH((SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROX))));
+    }
+#endif
 }
 
 }  // namespace ckernel

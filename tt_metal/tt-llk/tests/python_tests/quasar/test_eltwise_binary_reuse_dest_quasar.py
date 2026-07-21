@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Test for eltwise binary operations with reuse_dest on Quasar.
-
-
 import pytest
 import torch
 from helpers.format_config import DataFormat
@@ -26,9 +24,10 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -58,6 +57,46 @@ OUTPUT_DIMENSIONS = [
 TILE_DIMENSIONS = [32, 32]
 
 
+def _reuse_dest_tile_count(dimensions) -> int:
+    tile_rows, tile_cols = TILE_DIMENSIONS
+    return (dimensions[0] // tile_rows) * (dimensions[1] // tile_cols)
+
+
+def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
+    """Output dims compatible with reuse_dest for a given input size, format and dest_sync.
+
+    Three constraints, all decidable at collection time so incompatible combinations are
+    never generated (instead of generated then skipped):
+      - input tile count must be an exact multiple of the output tile count, and
+      - that multiple (`inner_dim`) must be > 1 (reuse_dest needs accumulation), and
+      - the output must fit in a single block (the Quasar reuse_dest kernel uses
+        block-relative indexing; multi-block accumulates wrongly).
+    """
+    tile_cnt_input = _reuse_dest_tile_count(input_dimensions)
+    valid = []
+    for out_dims in OUTPUT_DIMENSIONS:
+        tile_cnt_output = _reuse_dest_tile_count(out_dims)
+        if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
+            continue
+        if tile_cnt_input // tile_cnt_output <= 1:
+            continue
+        try:
+            num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
+                dest_sync_mode,
+                DestAccumulation.No,
+                formats,
+                out_dims,
+                (TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]),
+                BlocksCalculationAlgorithm.Standard,
+            )
+        except ValueError:
+            continue  # tiles don't divide evenly into blocks for this combination
+        if num_blocks > 1:
+            continue
+        valid.append(out_dims)
+    return valid
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
@@ -66,21 +105,46 @@ TILE_DIMENSIONS = [32, 32]
             DataFormat.Float16,
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
     ),
-    mathop=[
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-        MathOperation.Elwmul,
-    ],
+    # Elwmul with MxFp8R or MxFp8P input and reuse_dest has rounding differences; skip to avoid flaky tolerance failures
+    mathop=lambda formats: (
+        [
+            MathOperation.Elwadd,
+            MathOperation.Elwsub,
+        ]
+        if (
+            formats.input_format == DataFormat.MxFp8R
+            or formats.input_format == DataFormat.MxFp8P
+        )
+        else [
+            MathOperation.Elwadd,
+            MathOperation.Elwsub,
+            MathOperation.Elwmul,
+        ]
+    ),
+    # Math fidelity only affects multiplication; for add/sub only LoFi is meaningful.
+    math_fidelity=lambda mathop: (
+        [MathFidelity.LoFi]
+        if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
+        else [
+            MathFidelity.LoFi,
+            MathFidelity.HiFi2,
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+    ),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
-    output_dimensions=OUTPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
+    output_dimensions=runtime(valid_output_dimensions),
 )
 def test_eltwise_binary_reuse_dest_quasar(
     formats,
@@ -92,13 +156,6 @@ def test_eltwise_binary_reuse_dest_quasar(
     output_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
-    if math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Quasar reuse_dest eltwise binary supports LoFi only")
-
-    if mathop == MathOperation.Elwmul and formats.input_format.is_mx_format():
-        pytest.skip(
-            "Elwmul with MX input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
-        )
 
     # MX formats require implied_math_format=Yes on Quasar; set it and disable_format_inference so golden matches.
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
@@ -118,14 +175,7 @@ def test_eltwise_binary_reuse_dest_quasar(
         output_dimensions[1] // tile_cols
     )
 
-    if tile_cnt_input % tile_cnt_output != 0:
-        pytest.skip(
-            f"Input tile count ({tile_cnt_input}) must be divisible by "
-            f"output tile count ({tile_cnt_output})"
-        )
     inner_dim = tile_cnt_input // tile_cnt_output
-    if inner_dim == 1:
-        pytest.skip("reuse_dest requires inner_dim > 1")
 
     tile_dimensions_tuple = (tile_rows, tile_cols)
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -136,15 +186,10 @@ def test_eltwise_binary_reuse_dest_quasar(
         tile_dimensions_tuple,
         BlocksCalculationAlgorithm.Standard,
     )
-    if output_num_blocks > 1:
-        pytest.skip(
-            "Quasar reuse_dest kernel supports single output block only; "
-            "multi-block uses block-relative indexing and wrong accumulation"
-        )
     input_tiles_in_block = inner_dim * output_tiles_in_block
     input_num_blocks = output_num_blocks
 
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -179,15 +224,32 @@ def test_eltwise_binary_reuse_dest_quasar(
         src_B_t = quantize_mx_tensor_chunked(
             src_B_t.to(torch.bfloat16), formats.input_format
         )
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-    internal_dtype = torch.bfloat16 if use_mx else torch_format
+    # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
+    # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
+    # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
+    # golden's multi-tile accumulation rounds the same way as HW. The pack
+    # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
+    # detour, so the post-loop tensor is kept in fp32 — feeding bf16 into the
+    # MX quantize would discard 3 mantissa bits the HW preserves.
+    if use_mx:
+        internal_dtype = (
+            torch.float16
+            if formats.input_format == DataFormat.Float16
+            else torch.bfloat16
+        )
+        golden_dtype = torch.float32
+    else:
+        internal_dtype = torch_format
+        golden_dtype = torch_format
+    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=golden_dtype)
 
     eltwise_golden = (
         EltwiseBinaryGolden()
         if (mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi)
         else None
     )
+
     math_format_for_fidelity = (
         (DataFormat.Float16_b if use_mx else formats.output_format)
         if eltwise_golden is not None
@@ -234,26 +296,24 @@ def test_eltwise_binary_reuse_dest_quasar(
                         .to(srcA_m.dtype)
                         .to(internal_dtype)
                     )
-                    dest = dest + product
+                    dest = product
                 else:
-                    dest = dest + srcA * srcB
+                    dest = srcA * srcB
 
-        if formats.output_format.is_mx_format():
-            dest = quantize_mx_tensor_chunked(dest, formats.output_format)
-        golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
+        golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(

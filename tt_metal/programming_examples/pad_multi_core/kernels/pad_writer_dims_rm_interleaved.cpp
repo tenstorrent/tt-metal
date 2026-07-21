@@ -16,14 +16,14 @@ void kernel_main() {
     constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
-    const auto s = TensorAccessor(dst_args, dst_addr, stick_size_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
         cb_wait_front(cb_out0, num_sticks_per_barrier);
         uint32_t l1_read_addr = get_read_ptr(cb_out0);
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint64_t write_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t write_noc_addr = s.get_noc_addr(i_stick);
             noc_async_write(l1_read_addr, write_noc_addr, stick_size_bytes);
             l1_read_addr += stick_size_padded_aligned;
             i_stick += 1;

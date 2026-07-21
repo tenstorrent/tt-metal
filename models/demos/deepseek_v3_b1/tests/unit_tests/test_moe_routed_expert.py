@@ -566,6 +566,8 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
 )
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
 @pytest.mark.requires_grid_size((13, 10))
+# TODO(#42901): Investigate the brisc compile errors and remove this temporary skip.
+@pytest.mark.skip(reason="Brisc compile errors. Issue: #42901")
 def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     """
     Test MoE routed expert fused operation with reduce_to_one on 4x2 mesh.

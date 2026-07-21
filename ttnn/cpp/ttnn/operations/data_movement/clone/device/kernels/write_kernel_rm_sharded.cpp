@@ -3,24 +3,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
     uint32_t stick_size = get_arg_val<uint32_t>(1);
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_dfb_id = get_compile_time_arg_val(0);
+    Noc noc;
+    DataflowBuffer dst_dfb(dst_dfb_id);
 
-    uint64_t local_l1_write_addr = get_noc_addr(output_buffer_address);
+    uint32_t local_l1_write_addr = output_buffer_address;
 
     for (uint32_t i = 0; i < num_sticks; ++i) {
-        cb_wait_front(dst_cb_id, 1);
-        uint32_t dst_cb_read_addr = get_read_ptr(dst_cb_id);
+        dst_dfb.wait_front(1);
+        noc.async_write(
+            dst_dfb,
+            UnicastEndpoint{},
+            stick_size,
+            {.offset_bytes = 0},
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = local_l1_write_addr});
+        noc.async_write_barrier();
 
-        noc_async_write(dst_cb_read_addr, local_l1_write_addr, stick_size);
-        noc_async_write_barrier();
-
-        cb_pop_front(dst_cb_id, 1);
+        dst_dfb.pop_front(1);
         local_l1_write_addr += stick_size;
     }
 }

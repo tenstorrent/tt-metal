@@ -52,8 +52,15 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t mask_addr = get_arg_val<uint32_t>(2);
@@ -76,86 +83,110 @@ void kernel_main() {
 
     constexpr uint32_t src_accessor_offset = 17;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
-    const auto src_accessor = TensorAccessor(src_args, src_addr, input_page_size);
+    const auto src_accessor = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t dst_accessor_offset = src_args.next_compile_time_args_offset();
     constexpr auto dst_args_ct = TensorAccessorArgs<dst_accessor_offset>();
-    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr, output_page_size);
+    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr);
 
     constexpr uint32_t mask_accessor_offset = dst_args_ct.next_compile_time_args_offset();
     constexpr auto mask_args_ct = TensorAccessorArgs<mask_accessor_offset>();
-    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr, mask_page_size);
+    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr);
 
-    uint32_t in_base_addr = get_write_ptr(cb_id_in);
-    uint32_t out_addr = get_write_ptr(cb_id_out);
-    uint32_t mask_l1_addr = get_write_ptr(cb_mask);
+    CircularBuffer cb_in(cb_id_in);
+    CircularBuffer cb_out(cb_id_out);
+    CircularBuffer cb_mask_obj(cb_mask);
+    CircularBuffer cb_gather_tmp_obj(cb_gather_tmp);
+
+    uint32_t in_base_addr = cb_in.get_write_ptr();
+    uint32_t out_addr = cb_out.get_write_ptr();
+    uint32_t mask_l1_addr = cb_mask_obj.get_write_ptr();
 
     // Phase 1: Read this core's shard pages
     for (uint32_t h = 0; h < h_count; h++) {
-        noc_async_read_page(h_start + h, src_accessor, in_base_addr + h * input_page_size);
+        noc.async_read(
+            src_accessor,
+            CoreLocalMem<uint32_t>(in_base_addr + h * input_page_size),
+            input_page_size,
+            {.page_id = h_start + h},
+            {});
     }
 
     // Phase 2: Local histogram counting (BRISC/NCRISC cooperate on same core)
-    uint32_t init_sem_addr = get_semaphore(init_sem_idx);
-    volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem_addr);
+    Semaphore<> init_sem(init_sem_idx);
 
     if constexpr (is_initializer) {
         volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
         for (uint32_t i = 0; i < n_routed_experts; i++) {
             counts[i] = 0;
         }
-        noc_async_read_page(0, mask_accessor, mask_l1_addr);
-        noc_async_read_barrier();
-        noc_semaphore_set(init_sem_ptr, 1);
+        noc.async_read(mask_accessor, CoreLocalMem<uint32_t>(mask_l1_addr), mask_page_size, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        init_sem.set(1);
     } else {
-        noc_async_read_barrier();
-        noc_semaphore_wait(init_sem_ptr, 1);
+        noc.async_read_barrier();
+        init_sem.wait(1);
     }
 
     volatile tt_l1_ptr int32_t* mask = reinterpret_cast<volatile tt_l1_ptr int32_t*>(mask_l1_addr);
 
+    const uint8_t my_noc_id = noc.get_noc_id();
+    const uint32_t my_noc_x = my_x[my_noc_id];
+    const uint32_t my_noc_y = my_y[my_noc_id];
     for (uint32_t h = 0; h < h_count; h++) {
         volatile tt_l1_ptr uint16_t* row =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
         for (uint32_t w = 0; w < num_experts_per_token; w++) {
             uint32_t expert_idx = row[w];
             if (expert_idx < n_routed_experts && mask[expert_idx] >= 0) {
-                uint64_t noc_addr = get_noc_addr(out_addr + expert_idx * sizeof(uint32_t));
+                // TODO: D2.0 has no wrapper for atomic-increment on an arbitrary L1 word
+                // (the target here is a histogram bin, not a registered semaphore). The
+                // NoC atomic-inc primitive is exposed only via Semaphore<>::up(noc, x, y, val),
+                // which resolves a semaphore-id to an L1 address. Keeping the legacy free
+                // function for this specific case is documented as an acceptable fallback.
+                uint64_t noc_addr = get_noc_addr(my_noc_x, my_noc_y, out_addr + expert_idx * sizeof(uint32_t));
                 noc_semaphore_inc(noc_addr, 1);
             }
         }
     }
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 
-    uint32_t done_sem_addr = get_semaphore(done_sem_idx);
-    uint64_t done_sem_noc_addr = get_noc_addr(done_sem_addr);
-    noc_semaphore_inc(done_sem_noc_addr, 1);
-    noc_async_atomic_barrier();
+    // Atomically bump the local done_sem on this core. up(noc, x, y, val) performs a NoC
+    // atomic increment even when the target is the current core, which is needed because
+    // BRISC and NCRISC both increment the same semaphore.
+    Semaphore<> done_sem(done_sem_idx);
+    done_sem.up(noc, my_noc_x, my_noc_y, 1);
+    noc.async_atomic_barrier();
 
     // Phase 3: Tree reduction — BRISC only
     if constexpr (is_initializer) {
-        volatile tt_l1_ptr uint32_t* done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
-        noc_semaphore_wait_min(done_sem_ptr, 2);
+        done_sem.wait_min(2);
 
         uint32_t num_receive = get_arg_val<uint32_t>(4);
         uint32_t parent_noc_x = get_arg_val<uint32_t>(5);
         uint32_t parent_noc_y = get_arg_val<uint32_t>(6);
 
-        uint32_t gather_sem_addr = get_semaphore(gather_sem_idx);
-        volatile tt_l1_ptr uint32_t* gather_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
+        Semaphore<> gather_sem(gather_sem_idx);
 
-        uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
+        uint32_t tmp_addr = cb_gather_tmp_obj.get_write_ptr();
         volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
+        // Wait for ALL children to signal before reading any.
+        // A single gather_sem counter does not identify WHICH child signaled,
+        // so we must wait for all num_receive increments to guarantee every
+        // child's histogram is finalized before reading.
+        gather_sem.wait_min(num_receive);
         for (uint32_t level = 0; level < num_receive; level++) {
-            noc_semaphore_wait_min(gather_sem_ptr, level + 1);
-
             uint32_t child_noc_x = get_arg_val<uint32_t>(7 + level * 2);
             uint32_t child_noc_y = get_arg_val<uint32_t>(7 + level * 2 + 1);
 
-            uint64_t child_hist_noc = get_noc_addr(child_noc_x, child_noc_y, out_addr);
-            noc_async_read(child_hist_noc, tmp_addr, output_page_size);
-            noc_async_read_barrier();
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(tmp_addr),
+                output_page_size,
+                {.noc_x = child_noc_x, .noc_y = child_noc_y, .addr = out_addr},
+                {});
+            noc.async_read_barrier();
 
             volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
             for (uint32_t i = 0; i < n_routed_experts; i++) {
@@ -164,13 +195,12 @@ void kernel_main() {
         }
 
         if (parent_noc_x != 0xFFFFFFFF) {
-            uint64_t parent_gather_noc = get_noc_addr(parent_noc_x, parent_noc_y, gather_sem_addr);
-            noc_semaphore_inc(parent_gather_noc, 1);
-            noc_async_atomic_barrier();
+            // Bump parent's gather_sem (a real semaphore id resolved on each core).
+            gather_sem.up(noc, parent_noc_x, parent_noc_y, 1);
+            noc.async_atomic_barrier();
         } else {
-            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(0);
-            noc_async_write(out_addr, dst_noc_addr, output_page_size);
-            noc_async_write_barrier();
+            noc.async_write(CoreLocalMem<uint32_t>(out_addr), dst_accessor, output_page_size, {}, {.page_id = 0});
+            noc.async_write_barrier();
         }
     }
 }

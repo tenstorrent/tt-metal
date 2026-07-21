@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "pcie_noc_utils.h"
+#include "../../../metadata/metadata.hpp"
+
+#include "../../../unified_kernels/termination.hpp"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -19,23 +23,12 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
 constexpr uint32_t num_whole_fabric_packets_per_link = get_compile_time_arg_val(8);
 constexpr uint32_t partial_packet_size = get_compile_time_arg_val(9);
 constexpr bool use_fabric = get_compile_time_arg_val(10);
-constexpr uint32_t embedding_cb_index = get_compile_time_arg_val(11);
-constexpr uint32_t embedding_page_size = get_compile_time_arg_val(12);
-constexpr uint32_t embedding_addr = get_compile_time_arg_val(13);
-// TensorAccessorArgs for embedding tensor at CT arg index 14
-constexpr auto embedding_args = TensorAccessorArgs<14>();
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(11);
+constexpr uint32_t embedding_cb_index = get_compile_time_arg_val(12);
+constexpr uint32_t embedding_page_size = get_compile_time_arg_val(13);
+constexpr uint32_t embedding_addr = get_compile_time_arg_val(14);
+// TensorAccessorArgs for embedding tensor at CT arg index 15
+constexpr auto embedding_args = TensorAccessorArgs<15>();
 
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
@@ -79,7 +72,7 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t dst_addr) {
     if constexpr (use_fabric) {
         constexpr uint32_t num_fabric_connections = 2;
-        constexpr uint32_t page_size_per_link = embedding_page_size / num_fabric_connections;
+        constexpr uint32_t page_size_per_link = (embedding_page_size + metadata_size_bytes) / num_fabric_connections;
         uint32_t l1_read_addr_0 = l1_read_addr;
         uint32_t l1_read_addr_1 = l1_read_addr + page_size_per_link;
         uint64_t dst_addr_0 = dst_addr;
@@ -123,7 +116,8 @@ FORCE_INLINE void send_pages_over_socket(
         }
         socket_push_pages(sender_socket, 1);
     } else {
-        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, embedding_page_size);
+        write_data_to_local_core_with_ack(
+            sender_socket, l1_read_addr, dst_addr, embedding_page_size + metadata_size_bytes);
     }
 }
 
@@ -133,6 +127,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
 
+    // DPRINT("H2D KERNEL START\n");
     if constexpr (use_fabric) {
         downstream_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -140,7 +135,7 @@ void kernel_main() {
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
 
-    auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr, embedding_page_size);
+    auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
     SocketSenderInterface sender_socket = {};
@@ -149,10 +144,10 @@ void kernel_main() {
 
     if constexpr (!loopback_mode) {
         sender_socket = create_sender_socket_interface(downstream_interface_index);
-        set_sender_socket_page_size(sender_socket, embedding_page_size);
+        set_sender_socket_page_size(sender_socket, (embedding_page_size + metadata_size_bytes));
         downstream_enc = get_downstream_encoding(sender_socket, 0);
     }
-
+    // DPRINT("H2D Page size: {}\n", token_page_size);
     set_receiver_socket_page_size(receiver_socket, token_page_size);
 
     uint32_t read_addr_hi = receiver_socket.h2d.data_addr_hi;
@@ -197,9 +192,10 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
-        if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        // DPRINT("H2D Waiting For Pages Done\n");
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -213,15 +209,26 @@ void kernel_main() {
         }
 
         // TODO: Add and assert that token id is within vocab size
-        volatile tt_l1_ptr uint32_t* token_id_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+        volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(receiver_socket.read_ptr);
+
         // Embedding CB is a scratch pad for now. We only read into the first slot of the CB.
         // TODO: Setup separate reader to pipeline reads.
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
-        uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
+        uint64_t noc_addr = embedding_accessor.get_noc_addr(metadata_ptr->token_id);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
-        noc_async_read_barrier();
 
+        volatile tt_l1_ptr uint32_t* metadata_rd_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+
+        volatile tt_l1_ptr uint32_t* metadata_wr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr + embedding_page_size);
+        uint32_t num_metadata_words = metadata_size_bytes / sizeof(uint32_t);
+
+        for (uint32_t md_idx = 0; md_idx < num_metadata_words; ++md_idx) {
+            metadata_wr_ptr[md_idx] = metadata_rd_ptr[md_idx];
+        }
+        noc_async_read_barrier();
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(
@@ -233,8 +240,9 @@ void kernel_main() {
         } else {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-
+            // DPRINT("H2D Reserving Pages\n");
             socket_reserve_pages(sender_socket, 1);
+            // DPRINT("H2D Reserving Pages Done\n");
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,

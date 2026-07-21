@@ -17,8 +17,8 @@ namespace tt::tt_metal::distributed {
  * Ensures that /dev/shm resources created by H2D/D2H sockets are cleaned up even
  * when the process exits abnormally. Two complementary mechanisms:
  *
- *  1. atexit handler  – cleans up resources on normal exit, uncaught exceptions,
- *     std::exit(), and signals that cause exit() (SIGTERM, SIGINT default handlers).
+ *  1. destructor / signal handler – cleans up resources on normal exit,
+ *     std::exit(), SIGINT, SIGTERM.
  *
  *  2. Stale-PID cleanup – on first use, scans /dev/shm for resources whose owning
  *     PID is no longer alive (handles SIGKILL, hard crashes, power loss).
@@ -29,6 +29,8 @@ namespace tt::tt_metal::distributed {
 class ShmResourceTracker {
 public:
     static ShmResourceTracker& instance();
+
+    ~ShmResourceTracker();
 
     ShmResourceTracker(const ShmResourceTracker&) = delete;
     ShmResourceTracker& operator=(const ShmResourceTracker&) = delete;

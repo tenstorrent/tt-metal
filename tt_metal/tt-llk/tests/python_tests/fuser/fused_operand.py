@@ -2,78 +2,95 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 import torch
-from helpers.llk_params import DataFormat, format_dict
-from helpers.stimuli_generator import generate_random_face
-from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    default_spec_for_format,
+    generate_face,
+)
+from helpers.tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    calculate_tile_size_bytes,
+)
 from helpers.tile_shape import TileShape, construct_tile_shape
-from helpers.tilize_untilize import tilize_block
+from helpers.tilize_untilize import tilize_block, untilize_block
+from helpers.unpack import unpack_res_tiles
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 
 @dataclass
 class Operand:
     name: str
-    dimensions: Optional[Tuple[int, int]] = None
-    data_format: Optional[DataFormat] = None
-    tile_shape: Optional[TileShape] = None
+    dimensions: Tuple[int, int]
+    data_format: DataFormat
+    tile_shape: TileShape = field(
+        default_factory=lambda: construct_tile_shape(
+            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
+    )
     l1_address: Optional[int] = None
     is_output: bool = False
     sfpu: bool = True
-    _data: Optional[torch.Tensor] = None
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
+    const_value: Optional[float] = None
     l1_golden: Optional[torch.Tensor] = None
-    _tile_count: Optional[int] = None
+    tile_count: Optional[int] = None
     tile_count_x: Optional[int] = None
     tile_count_y: Optional[int] = None
+    tile_size: Optional[int] = None
+    acc_atol: float = 0.0
+    acc_rtol: float = 0.0
+    acc_pcc: float = 1.0
+    buf_desc_id: Optional[int] = None
 
     def __post_init__(self):
-        if not self.is_output and (self.dimensions is None or self.data_format is None):
-            raise ValueError(
-                f"Input operand '{self.name}' must have dimensions and data_format"
-            )
+        self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
+        self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
+        self.tile_count = self.tile_count_x * self.tile_count_y
 
-        if self.tile_shape is None:
-            self.tile_shape = construct_tile_shape(
-                (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        self.partial_face = (
+            PartialFace.Yes
+            if (
+                self.tile_shape.total_row_dim() < 16
+                or self.tile_shape.total_col_dim() < 16
             )
+            else PartialFace.No
+        )
 
-        if self.dimensions is not None:
-            self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
-            self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
-            self._tile_count = self.tile_count_x * self.tile_count_y
+        TILE_SIZES = {
+            DataFormat.Bfp8_b: 68,
+            DataFormat.Float32: 256,
+        }
+
+        self.tile_size = (
+            TILE_SIZES.get(self.data_format, 128) * self.tile_shape.total_num_faces()
+        ) // 4
 
     def is_input(self) -> bool:
         return not self.is_output
 
-    def generate_data(self, const_value=None):
-        if self._data is not None:
-            return
-
-        if self.dimensions is None or self.data_format is None:
-            raise ValueError(
-                f"Cannot generate data for operand '{self.name}' without dimensions and format"
-            )
-
+    def generate_data(self):
         height, width = self.dimensions[0], self.dimensions[1]
-        tile_rows = self.tile_shape.total_row_dim()
-        tile_cols = self.tile_shape.total_col_dim()
-        tile_count = (height // tile_rows) * (width // tile_cols)
 
-        faces_needed = tile_count * self.tile_shape.total_num_faces()
+        faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
+        if self.const_value is not None:
+            spec = StimuliSpec.constant(self.const_value)
+        else:
+            spec = default_spec_for_format(self.data_format)
+
         for _ in range(faces_needed):
-            face = generate_random_face(
+            face = generate_face(
+                spec=spec,
                 stimuli_format=self.data_format,
-                const_value=const_value,
-                const_face=const_value is not None,
-                sfpu=self.sfpu,
                 face_r_dim=self.tile_shape.face_r_dim,
-                negative_values=False,
             )
             faces_data.extend(face.tolist())
 
@@ -86,38 +103,10 @@ class Operand:
             height, width
         )
 
-        if self.data_format != DataFormat.Bfp8_b:
-            tilized_data = tilize_block(
-                raw_data, dimensions=self.dimensions, stimuli_format=self.data_format
-            )
-        else:
-            tilized_data = raw_data
-
         self._raw_data = raw_data
-        self._data = tilized_data
-        self._tile_count = tile_count
 
     def set_data(self, raw_data: torch.Tensor):
         self._raw_data = raw_data
-
-        if self.data_format != DataFormat.Bfp8_b:
-            tilized_data = tilize_block(
-                raw_data, dimensions=self.dimensions, stimuli_format=self.data_format
-            )
-        else:
-            tilized_data = raw_data
-
-        self._data = tilized_data
-
-    @property
-    def data(self) -> Optional[torch.Tensor]:
-        if self._data is None and self.is_input():
-            self.generate_data()
-        return self._data
-
-    @data.setter
-    def data(self, value: torch.Tensor):
-        self._data = value
 
     @property
     def raw_data(self) -> Optional[torch.Tensor]:
@@ -131,124 +120,157 @@ class Operand:
             return self.raw_data
         return self._master_golden
 
-    @property
-    def tile_count(self) -> Optional[int]:
-        if self._tile_count is None:
-            if self.dimensions is not None:
-                tile_rows = self.tile_shape.total_row_dim()
-                tile_cols = self.tile_shape.total_col_dim()
-                self._tile_count = (self.dimensions[0] // tile_rows) * (
-                    self.dimensions[1] // tile_cols
-                )
-            elif self.is_input():
-                self.generate_data()
-        return self._tile_count
-
     def __str__(self) -> str:
         return f"{self.name}, {self.dimensions}, {self.data_format}, L1 Addr: {hex(self.l1_address)}"
 
+    def calculate_l1_size(self) -> int:
+        """Calculate the size in L1 memory for this operand."""
+        tile_elements = self.tile_shape.total_tile_size()
+        return self.data_format.num_bytes_per_tile(tile_elements) * self.tile_count
 
-class OperandMapping:
-    def __init__(
-        self,
-        src_a: str,
-        src_b: str,
-        output: str,
-        operand_registry: "OperandRegistry" = None,
-    ):
-        self.src_a = src_a
-        self.src_b = src_b
-        self.output = output
-        self.operand_registry = operand_registry
+    def pack_for_l1(self) -> List[Tuple[int, List]]:
+        """Pack operand data for writing to L1 memory.
 
-    def create_output_operand(
-        self,
-        operand_registry: "OperandRegistry",
-        output_format: DataFormat,
-        output_dims: Tuple[int, int],
-    ):
-        if self.output in operand_registry.operands:
-            return
-
-        max_output_dims = self.resolve_output_dimensions(operand_registry)
-
-        if output_dims[0] > max_output_dims[0] or output_dims[1] > max_output_dims[1]:
-            raise ValueError(f"Max output dimensions are {max_output_dims}")
-
-        operand_registry.add_output(
-            name=self.output,
-            dimensions=output_dims,
-            data_format=output_format,
+        Returns:
+            List of (address, packed_data) tuples, one per tile.
+        """
+        from helpers.pack import (
+            pack_bfp8_b,
+            pack_bfp16,
+            pack_fp8_e4m3,
+            pack_fp16,
+            pack_fp32,
+            pack_int8,
+            pack_int16,
+            pack_int32,
+            pack_uint8,
+            pack_uint16,
+            pack_uint32,
         )
 
-    def resolve_output_dimensions(
-        self, operand_registry: "OperandRegistry"
-    ) -> Tuple[int, int]:
-        src_a_op = operand_registry.get(self.src_a)
-        src_b_op = operand_registry.get(self.src_b)
+        packers = {
+            DataFormat.Float16: pack_fp16,
+            DataFormat.Float16_b: pack_bfp16,
+            DataFormat.Float32: pack_fp32,
+            DataFormat.Bfp8_b: pack_bfp8_b,
+            DataFormat.Int32: pack_int32,
+            DataFormat.UInt32: pack_uint32,
+            DataFormat.Int16: pack_int16,
+            DataFormat.UInt16: pack_uint16,
+            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
+            DataFormat.Int8: pack_int8,
+            DataFormat.UInt8: pack_uint8,
+        }
 
-        M = src_a_op.dimensions[0]
-        N = src_b_op.dimensions[1]
+        pack_function = packers.get(self.data_format)
+        if not pack_function:
+            raise ValueError(f"Unsupported data format: {self.data_format.name}")
 
-        return (M, N)
+        tile_elements = self.tile_shape.total_tile_size()
+        tile_size = self.data_format.num_bytes_per_tile(tile_elements)
 
-    def get_output_tile_count(self, operand_registry: "OperandRegistry") -> int:
-        dims = self.resolve_output_dimensions(operand_registry)
-        output_op = operand_registry.get(self.output)
-        tile_rows = output_op.tile_shape.total_row_dim()
-        tile_cols = output_op.tile_shape.total_col_dim()
-        return (dims[0] // tile_rows) * (dims[1] // tile_cols)
+        tile_dims = (self.tile_shape.total_row_dim(), self.tile_shape.total_col_dim())
+        num_faces = self.tile_shape.total_num_faces()
+
+        buffer = (
+            tilize_block(
+                self.raw_data,
+                dimensions=self.dimensions,
+                stimuli_format=self.data_format,
+                num_faces=num_faces,
+                tile_dimensions=tile_dims,
+            ).flatten()
+            if self.is_input()
+            else torch.zeros(self.dimensions).flatten()
+        )
+
+        packed_tiles = []
+
+        for i in range(self.tile_count):
+            start_idx = tile_elements * i
+            tile_data = buffer[start_idx : start_idx + tile_elements]
+
+            if self.data_format == DataFormat.Bfp8_b:
+                packed = pack_function(
+                    tile_data, num_faces=self.tile_shape.total_num_faces()
+                )
+            else:
+                packed = pack_function(tile_data)
+
+            addr = self.l1_address + i * tile_size
+            packed_tiles.append((addr, packed))
+
+        return packed_tiles
+
+    @property
+    def cpp_name(self) -> str:
+        return f"{self.name}_buffer"
+
+    def cpp_value(self, dest_acc: bool) -> str:
+        buffer_size = calculate_tile_size_bytes(
+            data_format=self.data_format,
+            tile_dimensions=(
+                self.tile_shape.total_row_dim(),
+                self.tile_shape.total_col_dim(),
+            ),
+            format_tile_sizes=format_tile_sizes,
+            use_srcs=True,
+            dest_acc=dest_acc,
+        )
+        return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
 
 class OperandRegistry:
     def __init__(self):
         self.operands: dict[str, Operand] = {}
 
-    def add_input(
+    def create(
         self,
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
-        address: int = None,
-        sfpu: bool = True,
+        const_value: Optional[float] = None,
+        tile_dims: Optional[Tuple[int, int]] = None,
     ) -> Operand:
         if name in self.operands:
-            raise ValueError(f"Operand '{name}' already exists")
+            operand = self.operands[name]
+            if (dimensions is not None and dimensions != operand.dimensions) or (
+                data_format is not None and data_format != operand.data_format
+            ):
+                raise ValueError(
+                    f"Operand '{name}' exists with different parameters: "
+                    f"requested dimensions={dimensions}, data_format={data_format}; "
+                    f"existing dimensions={operand.dimensions}, data_format={operand.data_format}"
+                )
+
+            return operand
+
+        tile_shape = construct_tile_shape(
+            tile_dims
+            if tile_dims is not None
+            else (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
 
         operand = Operand(
             name=name,
             dimensions=dimensions,
             data_format=data_format,
-            l1_address=address,
             is_output=False,
-            sfpu=sfpu,
+            const_value=const_value,
+            tile_shape=tile_shape,
         )
         self.operands[name] = operand
         return operand
 
-    def add_output(
+    def get(
         self,
         name: str,
-        address: int = None,
-        dimensions: Optional[Tuple[int, int]] = None,
-        data_format: Optional[DataFormat] = None,
     ) -> Operand:
-        if name in self.operands:
-            raise ValueError(f"Output operand '{name}' already exists")
-
-        operand = Operand(
-            name=name,
-            dimensions=dimensions,
-            data_format=data_format,
-            l1_address=address,
-            is_output=True,
-        )
-        self.operands[name] = operand
-        return operand
-
-    def get(self, name: str) -> Operand:
         if name not in self.operands:
-            raise KeyError(f"Operand '{name}' not found")
+            raise ValueError(
+                f"Operand '{name}' not found in registry. Define it in the 'operands' section with dims and format."
+            )
+
         return self.operands[name]
 
     def get_all_inputs(self) -> list[Operand]:
@@ -257,61 +279,124 @@ class OperandRegistry:
     def get_all_outputs(self) -> list[Operand]:
         return [op for op in self.operands.values() if op.is_output]
 
-    def update_data(self, name: str, data: torch.Tensor):
-        if name not in self.operands:
-            raise KeyError(f"Operand '{name}' not found")
-        self.operands[name].data = data
+    DEFAULT_L1_START_ADDRESS = 0x00021000
+    DEFAULT_L1_END_ADDRESS = 0x00169FFF
 
-    def create_mapping(
+    def allocate_l1_addresses(
         self,
-        src_a: str,
-        src_b: str,
-        output: str,
-        src_a_dims: Tuple[int, int] = (32, 32),
-        src_b_dims: Tuple[int, int] = (32, 32),
-        output_dims: Tuple[int, int] = (64, 64),
-        input_format: DataFormat = DataFormat.Float16_b,
-        output_format: DataFormat = DataFormat.Float16_b,
-        src_a_tensor: torch.Tensor = None,
-        src_b_tensor: torch.Tensor = None,
-        src_a_const_value: Optional[float] = None,
-        src_b_const_value: Optional[float] = None,
-    ) -> OperandMapping:
-        if src_a not in self.operands:
-            self.add_input(src_a, dimensions=src_a_dims, data_format=input_format)
-        else:
-            existing = self.operands[src_a]
-            if list(existing.dimensions) != list(src_a_dims):
+        start_address: int = DEFAULT_L1_START_ADDRESS,
+        end_address: int = DEFAULT_L1_END_ADDRESS,
+    ) -> None:
+        """
+        Allocate L1 addresses for all operands.
+
+        Addresses are allocated sequentially:
+        1. All input operands
+        2. All output operands
+        """
+
+        if (
+            start_address < self.DEFAULT_L1_START_ADDRESS
+            or start_address > self.DEFAULT_L1_END_ADDRESS
+        ):
+            raise ValueError(
+                f"Start L1 address for operands must be between "
+                f"{self.DEFAULT_L1_START_ADDRESS} and {self.DEFAULT_L1_END_ADDRESS}"
+            )
+
+        current_address = start_address
+
+        for operand in self.get_all_inputs():
+            if operand.l1_address is None:
+                operand.l1_address = current_address
+                current_address += operand.calculate_l1_size()
+
+        for operand in self.get_all_outputs():
+            if operand.l1_address is None:
+                operand.l1_address = current_address
+                current_address += operand.calculate_l1_size()
+                if current_address > end_address:
+                    raise ValueError(
+                        "There is not enough space on device for all operands"
+                    )
+
+    def write_inputs_to_l1(self, location: str = "0,0") -> None:
+        """Write all input operands to L1 memory."""
+
+        for operand in self.get_all_inputs():
+            for addr, packed_data in operand.pack_for_l1():
+                write_to_device(location, addr, packed_data)
+
+        for operand in self.get_all_outputs():
+            for addr, packed_data in operand.pack_for_l1():
+                write_to_device(location, addr, packed_data)
+
+    def read_outputs_from_l1(self, location: str = "0,0") -> None:
+        """Read output operands from L1 memory."""
+
+        for output in self.get_all_outputs():
+            if output.l1_address is None:
                 raise ValueError(
-                    f"Operand '{src_a}' already exists with dimensions {existing.dimensions}, got {src_a_dims}"
+                    f"Output operand '{output.name}' does not have an L1 address."
                 )
 
-        if src_b not in self.operands:
-            self.add_input(src_b, dimensions=src_b_dims, data_format=input_format)
-        else:
-            existing = self.operands[src_b]
-            if list(existing.dimensions) != list(src_b_dims):
-                raise ValueError(
-                    f"Operand '{src_b}' already exists with dimensions {existing.dimensions}, got {src_b_dims}"
-                )
+            output_dimensions = output.dimensions
+            output_format = output.data_format
+            tile_cnt = output.tile_count
+            tile_elements = output.tile_shape.total_tile_size()
 
-        if src_a_tensor is not None:
-            self.operands[src_a].set_data(src_a_tensor)
-        else:
-            self.operands[src_a].generate_data(const_value=src_a_const_value)
+            # Tiles are stored densely in L1 (one num_bytes_per_tile(tile_elements)
+            # slot per tile). For full 32x32 tiles this equals the default stride
+            # unpack_res_tiles assumes, but for sub-32x32 tiles (e.g. 16x32) the dense
+            # stride is smaller. Passing it explicitly for sub-tiles keeps the 32x32
+            # code path byte-identical while making unpack_res_tiles stride correctly
+            # for tiny tiles (otherwise it strides at 32x32 and reads only the first
+            # half of the tiles).
+            tile_dense_bytes = output_format.num_bytes_per_tile(tile_elements)
+            is_full_tile = (
+                output.tile_shape.total_row_dim() == DEFAULT_TILE_R_DIM
+                and output.tile_shape.total_col_dim() == DEFAULT_TILE_C_DIM
+            )
+            tile_stride_bytes = None if is_full_tile else tile_dense_bytes
+            read_bytes_cnt = tile_dense_bytes * tile_cnt
+            read_data = read_from_device(
+                location, output.l1_address, num_bytes=read_bytes_cnt
+            )
 
-        if src_b_tensor is not None:
-            self.operands[src_b].set_data(src_b_tensor)
-        else:
-            self.operands[src_b].generate_data(const_value=src_b_const_value)
+            res_from_l1 = unpack_res_tiles(
+                read_data,
+                output_format,
+                tile_count=tile_cnt,
+                sfpu=False,
+                num_faces=output.tile_shape.total_num_faces(),
+                face_r_dim=output.tile_shape.face_r_dim,
+                tile_stride_bytes=tile_stride_bytes,
+            )
 
-        mapping = OperandMapping(
-            src_a=src_a,
-            src_b=src_b,
-            output=output,
-            operand_registry=self,
-        )
+            torch_format = format_dict[output_format]
+            tilized_tensor = torch.tensor(res_from_l1, dtype=torch_format)
 
-        mapping.create_output_operand(self, output_format, output_dims)
+            raw_tensor = untilize_block(
+                tilized_tensor,
+                stimuli_format=output_format,
+                dimensions=output_dimensions,
+                num_faces=output.tile_shape.total_num_faces(),
+                tile_dimensions=(
+                    output.tile_shape.total_row_dim(),
+                    output.tile_shape.total_col_dim(),
+                ),
+                face_r_dim=output.tile_shape.face_r_dim,
+            )
 
-        return mapping
+            output._raw_data = raw_tensor
+
+    def generate_cpp(self, dest_acc: bool):
+        code = "// Inputs\n"
+        for operand in self.get_all_inputs():
+            code += operand.cpp_value(dest_acc)
+
+        code += "// Outputs\n"
+        for operand in self.get_all_outputs():
+            code += operand.cpp_value(dest_acc)
+
+        return code

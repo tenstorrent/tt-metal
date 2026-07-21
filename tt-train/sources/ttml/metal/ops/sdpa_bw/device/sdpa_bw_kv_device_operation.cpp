@@ -28,12 +28,18 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     const auto value_shape = value.logical_shape();
 
     TT_FATAL(
-        grad_output_shape == query_shape,
-        "Grad output shape {} must match query shape {}",
+        grad_output_shape[0] == query_shape[0] && grad_output_shape[1] == query_shape[1] &&
+            grad_output_shape[2] == query_shape[2] && grad_output_shape[3] == value_shape[3],
+        "Grad output must match query in B, H, S and value in D. Got grad_output={}, query={}, value={}",
         grad_output_shape,
-        query_shape);
+        query_shape,
+        value_shape);
 
-    TT_FATAL(key_shape == value_shape, "Key shape {} must match value shape {}", key_shape, value_shape);
+    TT_FATAL(
+        key_shape[0] == value_shape[0] && key_shape[1] == value_shape[1] && key_shape[2] == value_shape[2],
+        "Key and Value must have matching B, H, S (inner dim can differ). Got Key={}, Value={}",
+        key_shape,
+        value_shape);
 
     TT_FATAL(
         query_shape[0] == key_shape[0] && query_shape[2] == key_shape[2],
@@ -51,8 +57,27 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         grad_output.device() == query.device() && query.device() == key.device() && key.device() == value.device(),
         "All input tensors must be on the same device");
 
-    // Extract and validate heads from tensor shapes
+    TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
+    TT_FATAL(tensor_args.u_scaler.layout() == tt::tt_metal::Layout::TILE, "u_scaler must have TILE layout");
+    TT_FATAL(
+        tensor_args.u_scaler.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "u_scaler must be FLOAT32, got {}",
+        tensor_args.u_scaler.dtype());
+
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
+
+    {
+        const auto u_shape = tensor_args.u_scaler.padded_shape();
+        const auto expected_rows = qB * qH * qS;
+        TT_FATAL(
+            u_shape[-2] == expected_rows && u_shape[-1] == tt::constants::TILE_WIDTH,
+            "u_scaler shape mismatch: expected (*, {}, {}), got {}",
+            expected_rows,
+            tt::constants::TILE_WIDTH,
+            u_shape);
+    }
+
+    // Extract and validate heads from tensor shapes
     const auto [kB, kH, kS, kE] = key_shape.to_array_4D();
     const auto [vB, vH, vS, vE] = value_shape.to_array_4D();
 
@@ -71,13 +96,7 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(kH == vH, "Key and Value must have the same number of heads. Got key_heads={}, value_heads={}", kH, vH);
 
-    // Validate embedding dimensions match
-    TT_FATAL(
-        qE == kE && qE == vE,
-        "Embedding dimensions of Q, K, V must be the same. Got qEmbd={}, kEmbd={}, vEmbd={}",
-        qE,
-        kE,
-        vE);
+    TT_FATAL(qE == kE, "Query and Key must have the same embedding dimension. Got qEmbd={}, kEmbd={}", qE, kE);
 
     // Validate tensors have tile layout
     TT_FATAL(
@@ -165,32 +184,19 @@ SDPABackwardKVDeviceOperation::tensor_return_value_t SDPABackwardKVDeviceOperati
     return {grad_key, grad_value};
 }
 
-ttsl::hash::hash_t SDPABackwardKVDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto hash = tt::tt_metal::operation::hash_operation<SDPABackwardKVDeviceOperation>(
-        operation_attributes,
-        operation_attributes.mask_type,
-        tensor_args.query.logical_shape(),
-        tensor_args.key.logical_shape(),
-        tensor_args.intermediates.logical_shape(),
-        tensor_args.query.dtype());
-
-    return hash;
-}
-
 }  // namespace ttml::metal::ops::sdpa_bw::device
 
 namespace ttnn::prim {
 
 ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_value_t ttml_sdpa_kv_bw(
     const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
+    const ttnn::Tensor& u_scaler,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
@@ -201,12 +207,12 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
-        .attn_output = attn_output,
         .query = query_tensor,
         .key = key_tensor,
         .value = value_tensor,
         .attn_mask = attn_mask,
         .intermediates = intermediates,
+        .u_scaler = u_scaler,
         .preallocated_grad_key = preallocated_grad_key,
         .preallocated_grad_value = preallocated_grad_value,
     };

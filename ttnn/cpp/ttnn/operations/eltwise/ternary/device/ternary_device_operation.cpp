@@ -109,7 +109,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
     const int rank_a = a_shape.rank();
     const int rank_b = b_shape.rank();
     const int largest_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(largest_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(largest_rank, 1);
 
     for (int i = -1; i >= -largest_rank; --i) {
         auto a_dim = (i >= -rank_a) ? a_shape[i] : 1;
@@ -123,11 +123,11 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
             a_dim,
             b_dim);
 
-        if (i <= -6) {
+        if (i <= -7) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
+                "Broadcasting rule violation for rank >= 7 at dimension index {} (output rank {}). "
+                "Broadcast is supported up to rank 6. dim a: {}, dim b: {}",
                 i,
                 largest_rank,
                 a_dim,
@@ -391,6 +391,72 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
                 "Ternary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
         }
     }
+
+    // SNAKE_BETA-specific validation
+    if (args.ternary_op_type == TernaryOpType::SNAKE_BETA) {
+        const auto& a = tensor_args.input_tensor_a;
+        TT_FATAL(
+            tensor_args.input_tensor_b.has_value() && tensor_args.input_tensor_c.has_value(),
+            "snake_beta requires alpha and beta tensors");
+        const auto& alpha = tensor_args.input_tensor_b.value();
+        const auto& beta = tensor_args.input_tensor_c.value();
+
+        TT_FATAL(
+            args.ternary_variant == TernaryVariant::TTT,
+            "snake_beta v1 supports only TTT variant (tensor alpha and tensor beta)");
+
+        TT_FATAL(
+            a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::FLOAT32,
+            "snake_beta supports only BFLOAT16 or FLOAT32, got {}",
+            a.dtype());
+        TT_FATAL(
+            alpha.dtype() == a.dtype() && beta.dtype() == a.dtype(),
+            "snake_beta requires alpha.dtype == beta.dtype == input.dtype");
+
+        TT_FATAL(
+            a.layout() == Layout::TILE && alpha.layout() == Layout::TILE && beta.layout() == Layout::TILE,
+            "snake_beta requires tile layout for all inputs");
+
+        TT_FATAL(
+            a.logical_shape().rank() >= 2,
+            "snake_beta requires input rank >= 2, got rank {} (shape {})",
+            a.logical_shape().rank(),
+            a.logical_shape());
+
+        TT_FATAL(
+            alpha.logical_shape() == beta.logical_shape(),
+            "snake_beta requires alpha.shape == beta.shape, got {} vs {}",
+            alpha.logical_shape(),
+            beta.logical_shape());
+
+        const auto& a_shape = a.logical_shape();
+        const auto& ab_shape = alpha.logical_shape();
+        TT_FATAL(
+            a_shape[-1] == ab_shape[-1],
+            "snake_beta requires input.W == alpha.W, got {} vs {}",
+            a_shape[-1],
+            ab_shape[-1]);
+
+        // v1: alpha/beta must match input exactly, or have non-1 size only on the last dim.
+        const bool ab_matches_input = (ab_shape == a_shape);
+        if (!ab_matches_input) {
+            for (int i = 0; i + 1 < static_cast<int>(ab_shape.rank()); ++i) {
+                TT_FATAL(
+                    ab_shape[i] == 1,
+                    "snake_beta v1 requires alpha/beta to either match input shape exactly or have non-1 size only on "
+                    "the last dim (got dim {} = {})",
+                    i,
+                    ab_shape[i]);
+            }
+        }
+
+        using BT = TernaryBroadcastType;
+        TT_FATAL(
+            args.broadcast_type == BT::NONE || args.broadcast_type == BT::ROW_BCAST ||
+                args.broadcast_type == BT::OUTER_BCAST,
+            "snake_beta v1 supports only NONE/ROW_BCAST/OUTER_BCAST, got {}",
+            static_cast<int>(args.broadcast_type));
+    }
 }
 
 TensorSpec TernaryDeviceOperation::compute_output_specs(
@@ -482,6 +548,10 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
+// Kept (not attribute_names): coarsens the input to its VOLUME (ternary is elementwise — program
+// depends on tile count, not shape). attribute_names can't express that — it only controls the attrs
+// struct, while the input shape is hashed from tensor_args. scalar_input_a/b are excluded here and
+// re-applied via get_dynamic_runtime_args.
 ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
@@ -506,8 +576,22 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         // Include true/false tensor volumes so "true broadcast, false full" and "true full, false
         // broadcast" get distinct cache keys (broadcast_type alone is the same for both).
+        // Also include H,W dimensions (last 2 dims) since they determine per-tensor broadcast
+        // configuration (SRC_BCAST_*, SRC_ROW_BCAST_*, SRC_SCALAR_*) in ROW_COL_BCAST kernels.
         const auto b_shape = input_b->padded_shape();
         const auto c_shape = input_c->padded_shape();
+
+        // Extract H,W dims (last 2 dimensions) for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const auto& c_logical = input_c->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+        const uint32_t c_h = c_logical.rank() >= 2 ? c_logical[-2] : 1;
+        const uint32_t c_w = c_logical[-1];
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
@@ -520,6 +604,12 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             a_shape.volume(),
             b_shape.volume(),
             c_shape.volume(),
+            a_h,
+            a_w,  // Predicate H,W
+            b_h,
+            b_w,  // True tensor H,W
+            c_h,
+            c_w,  // False tensor H,W
             shard_volumes);
 
     } else if (variant == TernaryVariant::TTS) {
@@ -529,6 +619,16 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
 
         const auto b_shape = input_b->padded_shape();
+
+        // Include H,W dims for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& b_logical = input_b->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t b_h = b_logical.rank() >= 2 ? b_logical[-2] : 1;
+        const uint32_t b_w = b_logical[-1];
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             input_a.dtype(),
@@ -537,6 +637,10 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_b.value().memory_config(),
             a_shape.volume(),
             b_shape.volume(),
+            a_h,
+            a_w,
+            b_h,
+            b_w,
             shard_volumes);
     } else if (variant == TernaryVariant::TST) {
         TT_FATAL(is_device_tensor(*input_c), "Unexpected Tensor type {}", input_c->storage_type());
@@ -545,6 +649,16 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));
 
         const auto c_shape = input_c->padded_shape();
+
+        // Include H,W dims for broadcast configuration differentiation
+        // Use logical_shape() since broadcast logic depends on logical dimensions, not padded
+        const auto& a_logical = input_a.logical_shape();
+        const auto& c_logical = input_c->logical_shape();
+        const uint32_t a_h = a_logical.rank() >= 2 ? a_logical[-2] : 1;
+        const uint32_t a_w = a_logical[-1];
+        const uint32_t c_h = c_logical.rank() >= 2 ? c_logical[-2] : 1;
+        const uint32_t c_w = c_logical[-1];
+
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
             input_a.dtype(),
@@ -553,6 +667,10 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             input_c.value().memory_config(),
             a_shape.volume(),
             c_shape.volume(),
+            a_h,
+            a_w,
+            c_h,
+            c_w,
             shard_volumes);
     }
 
@@ -597,7 +715,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_dtype = input_a.dtype(),
         .worker_grid = ttnn::operations::ternary::get_worker_grid(
             input_a, &input_b, &input_c, optional_output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        .dtype = output_dtype.value_or(input_b.dtype()),
+        .dtype = op_type == ttnn::operations::ternary::TernaryOpType::WHERE ? output_dtype.value_or(input_b.dtype())
+                                                                            : output_dtype.value_or(input_a.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = std::nullopt,
@@ -646,7 +765,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_dtype = input_a.dtype(),
         .worker_grid = ttnn::operations::ternary::get_worker_grid(
             input_a, &input_b, &input_c, optional_output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        .dtype = output_dtype.value_or(input_b.dtype()),
+        .dtype = op_type == ttnn::operations::ternary::TernaryOpType::WHERE ? output_dtype.value_or(input_b.dtype())
+                                                                            : output_dtype.value_or(input_a.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar,

@@ -75,9 +75,23 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py --schema ttnn_ops_v6 load 
 On load the tool:
 - Deduplicates configs by `config_hash` (same op + args + hardware + mesh = same config)
 - Rejects duplicate uploads by `trace_uid` before any data population
-- Creates a `trace_run` row capturing `trace_uid`, hardware, and tt-metal SHA
+- Creates a `trace_run` row capturing `trace_uid`, hardware, tt-metal SHA, and `pytest_args`
 - Stores canonical counts in `trace_run_configuration_model`
 - Refreshes derived aggregates in `trace_run_config`, `ttnn_configuration_model`, and `trace_run_model`
+
+`pytest_args` is the verbatim string of CLI args passed after `--` to the tracer (e.g.
+`-k "4x8sp0tp1 and encoder_device" --tb=short`). It is captured by the tracer into
+`_trace_metadata.json`, propagated per execution into the master JSON, and persisted on
+`trace_run.pytest_args`. This lets you answer "have I traced model X with these args on
+hardware Y?" purely via SQL without re-running anything.
+
+If you're upgrading an existing `ttnn_ops_v6` deployment, apply the additive migration:
+
+```bash
+psql "$TTNN_OPS_DATABASE_URL" -f model_tracer/migrate_v6_add_pytest_args.sql
+```
+
+Pre-migration `trace_run` rows simply have `pytest_args = NULL`.
 - **Auto-appends a `draft` entry** to `model_tracer/trace_selection_registry.yaml`
 
 Example output:
@@ -474,6 +488,7 @@ The global `--schema <name>` flag can appear anywhere on the command line and ap
 | `resolve-manifest [manifest] [scope]` | Dry-run: print which trace IDs and model filters would be used |
 | `reconstruct-trace <id> [output]` | Reconstruct JSON from one specific trace_run (all models) |
 | `list-traces [filter]` | List all trace_runs in DB |
+| `list-variants <pattern>` | List every (pytest_args, hardware) combination ever traced for source_files matching the pattern |
 | `reconstruct [output] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
 | `reconstruct-op <name> [output]` | Reconstruct a single operation |
 | `verify [original] [reconstructed]` | Compare two JSON files |

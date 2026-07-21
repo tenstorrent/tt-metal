@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+source "$SCRIPT_DIR/utils/host_utils.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -15,6 +20,8 @@ Optional:
     --output <directory>                Output directory for log files (default: dispatch_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file
                                         (default: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto)
+    --mpi-if <interface>                Network interface for MPI TCP transport
+                                        (auto-detected if not specified)
     --help                              Display this help message and exit
 
 Example:
@@ -28,6 +35,8 @@ HOSTS=""
 DOCKER_IMAGE=""
 OUTPUT_DIR="dispatch_test_logs"
 MESH_GRAPH_DESC_PATH="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -63,6 +72,15 @@ while [[ $# -gt 0 ]]; do
             MESH_GRAPH_DESC_PATH="$2"
             shift 2
             ;;
+        --mpi-if)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-if requires a non-empty value"
+                exit 1
+            fi
+            MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -84,11 +102,26 @@ if [[ -z "$HOSTS" ]]; then
     exit 1
 fi
 
+check_duplicate_hosts "$HOSTS" || exit 1
+
 if [[ -z "$DOCKER_IMAGE" ]]; then
     echo "Error: --image is required"
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 # Create output directory if it doesn't exist
@@ -102,6 +135,7 @@ echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
 echo "Output directory: $OUTPUT_DIR"
 echo "Mesh graph descriptor: $MESH_GRAPH_DESC_PATH"
+echo "MPI interface: $MPI_IF"
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
@@ -109,6 +143,7 @@ echo ""
 ./tools/scaleout/exabox/mpi-docker \
     --image "$DOCKER_IMAGE" \
     --empty-entrypoint \
+    --mpi-interface "$MPI_IF" \
     --host "$HOSTS" \
     -x TT_MESH_ID=0 \
     -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \

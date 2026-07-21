@@ -6,10 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -57,7 +54,7 @@ def test_reallocate_interleaved(device, mem_config, num_allocs):
     else:
         assert new_address >= initial_address
 
-    assert_with_pcc(torch_tensors[-1], ttnn.to_torch(tensors[-1]), 0.9999)
+    assert_equal(torch_tensors[-1], ttnn.to_torch(tensors[-1]))
 
 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -92,4 +89,4 @@ def test_reallocate_sharded(device, input_shape, core_grid, strategy, layout):
     output_tensor = ttnn.reallocate(input_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_input_tensor, output_tensor, 1.0)
+    assert_equal(torch_input_tensor, output_tensor)

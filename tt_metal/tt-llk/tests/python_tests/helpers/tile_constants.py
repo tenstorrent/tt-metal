@@ -95,6 +95,12 @@ SUPPORTED_TILE_SIZES = [
     (32, 16),
 ]
 
+# Supported tile dimensions for MX format for FPU ops
+MX_SUPPORTED_TILE_SIZES = [
+    (16, 16),
+    (32, 32),
+]
+
 
 def validate_tile_dimensions(tile_dimensions):
     """
@@ -219,7 +225,33 @@ def calculate_tile_size_bytes(
         total_exponents = max(actual_exponents, MIN_BFP_EXPONENTS)
         return total_exponents + (tile_elements // 2)
 
+    if data_format == DataFormat.Bfp2_b:
+        actual_exponents = tile_elements // 16
+        total_exponents = max(actual_exponents, MIN_BFP_EXPONENTS)
+        return total_exponents + (tile_elements // 4)
+
     # Use data_format.num_bytes_per_tile() for other formats
     # - MxFp8: 1 scale per 32 elements (at beginning of tile)
     # - Other formats: just element size * count
     return data_format.num_bytes_per_tile(tile_elements)
+
+
+def is_mx_unsupported_tile_dims(
+    input_format,
+    output_format,
+    tile_dimensions,
+) -> bool:
+    """
+    Checks that tile dimensions are supported for MX format input/output.
+    MX formats only support square tile dimensions (16x16, 32x32).
+
+    Args:
+        input_format/output_format: DataFormat enum value for input/output
+        tile_dimensions: List or tuple of (rows, cols)
+
+    Returns:
+        boolean: false if MX format is used and tile_dimensions is not square
+    """
+    if input_format.is_mx_format() or output_format.is_mx_format():
+        return tuple(tile_dimensions) not in MX_SUPPORTED_TILE_SIZES
+    return False

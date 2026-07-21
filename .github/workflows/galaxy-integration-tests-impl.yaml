@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       enabled-skus:
-        required: true
+        required: false
         type: string
       model:
         required: false
@@ -22,14 +22,15 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-model-filter.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_integration_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -51,7 +52,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            ALL_SKUS_IN_TESTS \
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
@@ -87,9 +88,12 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
+        # TG integration scripts use /mnt/MLPerf (HF) on functional and perf Galaxy SKUs.
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
@@ -98,7 +102,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job

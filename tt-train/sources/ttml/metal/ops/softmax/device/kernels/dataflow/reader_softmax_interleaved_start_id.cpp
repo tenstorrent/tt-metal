@@ -48,7 +48,7 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto input_args = TensorAccessorArgs<3>();
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row

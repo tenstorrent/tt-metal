@@ -2,18 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ring_distributed_sdpa_program_factory.hpp"
+#include "ring_distributed_sdpa_device_operation.hpp"
+#include "sdpa_interleaved_cb_ids.hpp"
 #include "sdpa_subblock_utils.hpp"
 
+#include <bit>
 #include <cmath>
+#include <map>
 #include <optional>
 #include <string>
-#include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
@@ -21,27 +24,80 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-// Ring-distributed SDPA program factory
-RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMeshWorkloadFactory::create_at(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& output_tensor,
-    uint32_t ring_size,
-    uint32_t ring_id,
-    std::optional<float> scale,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<operations::transformer::SDPAProgramConfig> program_config,
-    const std::optional<Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
+namespace {
+
+// Resolve ring_id either from explicit override or by inferring from the mesh coordinate.
+uint32_t resolve_ring_id(
+    const RingDistributedSDPAParams& operation_attributes,
+    const RingDistributedSDPAInputs& tensor_args,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (operation_attributes.ring_id.has_value()) {
+        // Use explicitly provided ring_id
+        return operation_attributes.ring_id.value();
+    }
+
+    // Infer ring_id directly from the mesh coordinate. ring_size constrains the ring to one
+    // of the two mesh axes, so the index along that axis IS the ring_id - no need to look up
+    // the device by coord (which uses the deprecated MeshDevice::get_device(MeshCoordinate)
+    // and is multi-host-unsafe).
+    TT_FATAL(
+        mesh_dispatch_coordinate.has_value(),
+        "mesh_dispatch_coordinate must be provided when ring_id is not explicitly set");
+    auto* mesh_device = tensor_args.q.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device must not be null when inferring ring_id");
+
+    const auto& mesh_coord = mesh_dispatch_coordinate.value();
+    const auto& mesh_view = mesh_device->get_view();
+    if (mesh_view.shape()[0] == operation_attributes.ring_size) {
+        // Ring is along axis 0 (rows of the mesh). ring_id = row index.
+        const uint32_t curr_ring_id = mesh_coord[0];
+        log_debug(tt::LogOp, "Inferred ring_id (axis 0): {}", curr_ring_id);
+        return curr_ring_id;
+    }
+    if (mesh_view.shape()[1] == operation_attributes.ring_size) {
+        // Ring is along axis 1 (columns of the mesh). ring_id = column index.
+        const uint32_t curr_ring_id = mesh_coord[1];
+        log_debug(tt::LogOp, "Inferred ring_id (axis 1): {}", curr_ring_id);
+        return curr_ring_id;
+    }
+    TT_FATAL(
+        false,
+        "Ring size {} doesn't match mesh dimensions [{}, {}]",
+        operation_attributes.ring_size,
+        mesh_view.shape()[0],
+        mesh_view.shape()[1]);
+    return 0;  // unreachable; satisfies non-void return.
+}
+
+// Ring-distributed SDPA per-coord program build. Pulled into an anonymous-namespace helper
+// so create_workload_descriptor() can loop coords and reuse this body verbatim.
+ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
+    const RingDistributedSDPAParams& operation_attributes,
+    const RingDistributedSDPAInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     /*
     Q: B x NQH x S*ring_size x DH
     K: B x NKH x DH x S
     V: B x NKH x S x DH
     */
-    Program program = CreateProgram();
+    const Tensor& input_tensor_q = tensor_args.q;
+    const Tensor& input_tensor_k = tensor_args.k;
+    const Tensor& input_tensor_v = tensor_args.v;
+    const Tensor& output_tensor = tensor_return_value;
+    const std::optional<Tensor>& page_table = tensor_args.page_table;
+
+    const uint32_t ring_size = operation_attributes.ring_size;
+    const uint32_t ring_id = resolve_ring_id(operation_attributes, tensor_args, mesh_dispatch_coordinate);
+    const std::optional<float>& scale = operation_attributes.scale;
+    const std::size_t q_chunk_size =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->q_chunk_size : 32;
+    const std::size_t k_chunk_size =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->k_chunk_size : 32;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
+    const std::optional<operations::transformer::SDPAProgramConfig>& program_config =
+        operation_attributes.program_config;
+    const std::optional<int64_t>& chunk_start_idx = operation_attributes.chunk_start_idx;
 
     IDevice* device = input_tensor_q.device();
 
@@ -61,7 +117,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
             : true;
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
@@ -111,16 +167,16 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     }
 
     // Calculate padded sequence length
-    const uint32_t padded_Sq = std::ceil((float)Sq / q_chunk_size) * q_chunk_size;
-    const uint32_t padded_Sk = std::ceil((float)Sk / k_chunk_size) * k_chunk_size;
+    const uint32_t padded_Sq = std::ceil(static_cast<float>(Sq) / q_chunk_size) * q_chunk_size;
+    const uint32_t padded_Sk = std::ceil(static_cast<float>(Sk) / k_chunk_size) * k_chunk_size;
 
     const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
     const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = DHt;
 
-    const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
-    const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
+    const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / TILE_HEIGHT);
+    const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / TILE_HEIGHT);
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
@@ -138,22 +194,31 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         chunked_q_chunk_offset_phase_2 += chunk_start_idx.value() / q_chunk_size;
     }
 
-    // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
-
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
-    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
-    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
+    // Global Q scheduling: distribute the flat B*NQH*q_num_chunks Q-chunk space evenly across cores
+    // (one linear range per core). Ring is always causal, so pair-distribute when q_num_chunks is
+    // even — that keeps the shared zigzag remap balancing light/heavy work across cores. The same
+    // (global_q_start, global_q_count) range is walked once per ring phase (num_phases=2 below).
+    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    const bool global_q_pair_distribute = (q_num_chunks % 2 == 0);
+    uint32_t global_q_base_chunks_per_core = 0;
+    uint32_t global_q_cores_doing_extra = 0;
+    uint32_t global_q_extra_chunks_per_core = 0;
+    if (global_q_pair_distribute) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        global_q_base_chunks_per_core = (total_pairs / num_cores) * 2;
+        global_q_cores_doing_extra = total_pairs % num_cores;
+        global_q_extra_chunks_per_core = 2;
+    } else {
+        global_q_base_chunks_per_core = total_q_chunks / num_cores;
+        global_q_cores_doing_extra = total_q_chunks % num_cores;
+        global_q_extra_chunks_per_core = 1;
+    }
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t mask_tiles = 2;                            // lightweight: neginf + causal diagonal
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -193,11 +258,9 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale.value_or(1.0f));
+
+    constexpr bool use_zigzag_balancing = true;
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -216,24 +279,27 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         Sk_chunk_t,
         k_num_chunks,
         num_cores,
-        true,                  //(std::uint32_t)is_causal,
-        false,                 //(std::uint32_t)use_provided_mask,
-        false,                 //(std::uint32_t)broadcast_provided_mask_batch,
-        false,                 //(std::uint32_t)broadcast_provided_mask_heads,
-        false,                 //(std::uint32_t)use_padded_mask,
-        (uint32_t)is_chunked,  //(uint32_t)is_chunked,
+        true,                               //(std::uint32_t)is_causal,
+        false,                              //(std::uint32_t)use_provided_mask,
+        false,                              //(std::uint32_t)broadcast_provided_mask_batch,
+        false,                              //(std::uint32_t)broadcast_provided_mask_heads,
+        false,                              //(std::uint32_t)use_padded_mask,
+        static_cast<uint32_t>(is_chunked),  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0,                 // use_attention_sink
-        0,                 // use_mla
-        0,                 // mla_kv_overlap
-        qk_out_subblock_h  // qk_subblock_h
+        0,                  // use_attention_sink
+        0,                  // use_mla
+        0,                  // mla_kv_overlap
+        qk_out_subblock_h,  // qk_subblock_h
+        0,                  // sliding_window_size (ring uses no sliding window)
+        0                   // use_streaming_compute (ring uses legacy compute)
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 27-30)
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 29-32)
     reader_compile_time_args.push_back(0);  // sender_semaphore_id
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
     reader_compile_time_args.push_back(0);  // mcast_enabled
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -259,16 +325,24 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         Sk_chunk_t,
         k_num_chunks,
         packed_identity_scalar,
-        scale_union.u,
+        scale_packed,
         num_cores,
         true,   //(std::uint32_t)is_causal,
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
-        0,      // arg 20: lightweight mask (unused in ring distributed)
+        1,      // arg 20: lightweight causal mask
+        0,      // arg 21: use_streaming_compute — always false for ring distributed (causal)
+        0,      // arg 22: out_subblock_h — unused when streaming is off
+        0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
+        0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
     };
+    // out accessor, then the cu_window accessor chained right after it (mirrors the regular factory so the
+    // writer's accessor offset chain stays intact). Ring is never windowed → nullptr placeholder accessor.
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs().append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -299,58 +373,35 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
-        scale_union.u,
+        scale_packed,
         0,          //(uint32_t)sliding_window_size,
         0,          //(std::uint32_t)use_attention_sink,
-        0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
+        0,          //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
+        0u,         // arg 32: k_partial_col - unused on ring's non-streaming path
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    std::map<std::string, std::string> defines_map;
+    defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
+    defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+    defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
+    defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+    defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
-    std::map<std::string, std::string> defines;
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel = (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0);
-    if (balanced_q_parallel) {
-        defines["BALANCED_Q_PARALLEL"] = "1";
-    }
+    // ---- Circular buffers ----
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
-
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
-
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
-
-    // Create circular buffers
+    ProgramDescriptor desc;
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
 
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
+    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -367,312 +418,189 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
 
-    // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    sdpa_cb::CBIds cb_ids;
+    uint32_t next_cb_index = 0;
+    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+        const uint32_t cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size_bytes * num_pages,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size_bytes,
+            }}},
+        });
+        return cb_index;
+    };
+    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format);
+    };
 
-    CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
-    // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
-
-    // attn_mask input
-    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
-                            .set_page_size(tt::CBIndex::c_3, mask_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in3_config);
-
-    // identity scalar input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in5_config);
-    // identity column input
-    auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
+    cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    // Ring is never windowed, but the writer's windowed block (gated by `if constexpr`) is still compiled
+    // in a non-template function, so get_tile_size(cb_cu_window_in) must resolve to a valid CB id rather
+    // than the `inactive` sentinel (which constexpr-faults on unpack_tile_size[-1]). Mirror the regular
+    // factory and point it at q_in.
+    cb_ids.cu_window_seqlens = cb_ids.q_in;
+    cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
+    cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    cb_ids.mask_in = allocate_tile_cb(mask_tiles, mask_tile_size, mask_df);
+    cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
     // page table circular buffer (only when using paged KV)
     if (is_chunked) {
-        auto c_in6_config = CircularBufferConfig(page_table_stick_size, {{tt::CBIndex::c_6, page_table_df}})
-                                .set_page_size(tt::CBIndex::c_6, page_table_stick_size);
-        CreateCircularBuffer(program, core_grid, c_in6_config);
+        cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
 
-    // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed0_config);
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
-    // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed1_config);
+    const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
+    const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
+    const auto compute_cb_compile_time_args = cb_ids.compute_compile_time_args();
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
+    compute_compile_time_args.insert(
+        compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
-    // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed2_config);
+    // ---- Kernels ----
 
-    // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed3_config);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = defines;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed4_config);
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.defines = defines;
+    writer_desc.config = WriterConfigDescriptor{};
 
-    // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed5_config);
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = compute_compile_time_args;
+    compute_desc.defines = defines;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
-    // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed6_config);
-
-    // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
-
-    // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-
-    CreateCircularBuffer(program, core_grid, c_out0_config);
-
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t out_addr = out0_buffer->address();
+    // page_table address must be patched on cache hit; use BufferBinding.
+    auto* page_table_buffer = page_table.has_value() ? page_table->buffer() : nullptr;
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t core_id = i;
 
         uint32_t read_offset_phase_1 = chunk_1 * Sqt;
         uint32_t read_offset_phase_2 = chunk_2 * Sqt;
         uint32_t write_offset_phase_1 = 0;
         uint32_t write_offset_phase_2 = Sqt;
 
-        uint32_t local_batch_start = (core_id / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((core_id / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (core_id % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
+        // Per-core slice of the flat B*NQH*q_num_chunks Q-chunk space (walked once per phase).
+        uint32_t global_q_start = i * global_q_base_chunks_per_core +
+                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+        uint32_t global_q_count =
+            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
+        if (global_q_start >= total_q_chunks) {
+            global_q_start = total_q_chunks;
+            global_q_count = 0;
+        } else if (global_q_start + global_q_count > total_q_chunks) {
+            global_q_count = total_q_chunks - global_q_start;
+        }
 
-        // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NQH);
-        local_nh_end = std::min(local_nh_end, NQH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
-
-        uint32_t page_table_addr = page_table.has_value() ? page_table->buffer()->address() : 0;
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
+        reader_desc.emplace_runtime_args(
             core,
-            {q_addr,
-             k_addr,
-             v_addr,
-             0,  // mask_addr,
-             page_table_addr,
-             0,  // attention_sink_addr,
-             0,  // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
+            {q_buffer,
+             k_buffer,
+             v_buffer,
+             static_cast<Buffer*>(nullptr),  // mask
+             page_table_buffer,
+             static_cast<Buffer*>(nullptr),  // attention_sink
+             static_cast<Buffer*>(nullptr),  // chunk_start_idx (ring has none)
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             2,
+             2u,
              chunked_q_chunk_offset_phase_1,
              read_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
-             read_offset_phase_2});
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
+             read_offset_phase_2,
+             global_q_start,
+             global_q_count});
+
+        writer_desc.emplace_runtime_args(
             core,
-            {out_addr,
+            {out0_buffer,
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             2,
-             0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
+             2u,
+             0u,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              write_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
-             write_offset_phase_2});
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
+             write_offset_phase_2,
+             global_q_start,
+             global_q_count,
+             0u,    // arg 10: cu_window_seqlens_addr — unused (ring is never windowed)
+             0u});  // arg 11: cu_window_seqlens_eles — unused (ring is never windowed)
+
+        compute_desc.emplace_runtime_args(
             core,
             {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             2,
-             0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
+             2u,
+             0u,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
-             chunked_q_chunk_offset_phase_2});
+             chunked_q_chunk_offset_phase_2,
+             global_q_start,
+             global_q_count});
     }
 
-    return cached_program_t(
-        std::move(program),
-        shared_variables_t{
-            .num_cores = num_cores,
-            .grid_size = grid_size,
-            .reader_kernel_id = reader_kernels_id,
-            .writer_kernel_id = writer_kernels_id,
-            .compute_kernel_id = compute_kernels_id,
-        });
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-RingDistributedSdpaMeshWorkloadFactory::cached_mesh_workload_t
-RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
+}  // namespace
+
+// Ring-distributed SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
+// ring_id is inferred from the coord, so each coord builds a distinct descriptor.
+WorkloadDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgramFactory::create_workload_descriptor(
     const RingDistributedSDPAParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RingDistributedSDPAInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    const auto& input_tensor_q = tensor_args.q;
-    const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = tensor_args.v;
-
-    const auto q_chunk_size =
-        operation_attributes.program_config.has_value() ? operation_attributes.program_config->q_chunk_size : 32;
-    const auto k_chunk_size =
-        operation_attributes.program_config.has_value() ? operation_attributes.program_config->k_chunk_size : 32;
-
-    // Determine ring_id: use provided value or infer from device coordinate
-    uint32_t curr_ring_id;
-    // Create programs for each coordinate in tensor_coords
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            if (operation_attributes.ring_id.has_value()) {
-                // Use explicitly provided ring_id
-                curr_ring_id = operation_attributes.ring_id.value();
-            } else {
-                // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
-                auto* mesh_device = input_tensor_q.device();
-                IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensor_q.device();
-
-                // Ensure mesh_device is not null before dereferencing
-                TT_FATAL(mesh_device != nullptr, "Mesh device must not be null when inferring ring_id");
-                const auto& mesh_view = mesh_device->get_view();
-                std::vector<IDevice*> devices_to_use;
-                // For simplicity, assume ring is along the first axis (adjust as needed)
-                if (mesh_view.shape()[0] == operation_attributes.ring_size) {
-                    devices_to_use = mesh_view.get_devices_on_column(mesh_coord[1]);
-                } else if (mesh_view.shape()[1] == operation_attributes.ring_size) {
-                    devices_to_use = mesh_view.get_devices_on_row(mesh_coord[0]);
-                } else {
-                    TT_FATAL(
-                        false,
-                        "Ring size {} doesn't match mesh dimensions [{}, {}]",
-                        operation_attributes.ring_size,
-                        mesh_view.shape()[0],
-                        mesh_view.shape()[1]);
-                }
-
-                // Find ring_id (device index in the ring)
-                curr_ring_id = 0;
-                for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-                    if (devices_to_use.at(i) == target_device) {
-                        curr_ring_id = i;
-                        break;
-                    }
-                }
-                log_debug(tt::LogOp, "Inferred ring_id: {} for device_id: {}", curr_ring_id, target_device->id());
-            }
-            // Create a program for this specific coordinate using the base factory
-            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-            auto cached_program = create_at(
-                input_tensor_q,
-                input_tensor_k,
-                input_tensor_v,
-                tensor_return_value,
-                operation_attributes.ring_size,
-                curr_ring_id,
-                operation_attributes.scale,
-                q_chunk_size,
-                k_chunk_size,
-                operation_attributes.compute_kernel_config,
-                operation_attributes.program_config,
-                tensor_args.page_table,
-                operation_attributes.chunk_start_idx);
-            shared_variables[single_coord_range] = cached_program.shared_variables;
-            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
-        }
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_ring_distributed_sdpa_program_descriptor(
+            operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+    return wd;
 }
 
-void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const RingDistributedSDPAParams& /*operation_attributes*/,
-    const RingDistributedSDPAInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    // Update runtime arguments for each program in the mesh workload
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        const auto& reader_kernels_id = shared_vars.reader_kernel_id;
-        const auto& writer_kernels_id = shared_vars.writer_kernel_id;
-        const auto num_cores = shared_vars.num_cores;
-        const auto& grid_size = shared_vars.grid_size;
-
-        auto* q_buffer = tensor_args.q.buffer();
-        auto* k_buffer = tensor_args.k.buffer();
-        auto* v_buffer = tensor_args.v.buffer();
-
-        auto* out0_buffer = tensor_return_value.buffer();
-        uint32_t q_addr = q_buffer->address();
-        uint32_t k_addr = k_buffer->address();
-        uint32_t v_addr = v_buffer->address();
-        uint32_t out_addr = out0_buffer->address();
-        uint32_t page_table_addr = tensor_args.page_table.has_value() ? tensor_args.page_table->buffer()->address() : 0;
-
-        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-
-            reader_args[0] = q_addr;
-            reader_args[1] = k_addr;
-            reader_args[2] = v_addr;
-            reader_args[4] = page_table_addr;  // Update page_table_addr (index 4 is after mask_addr)
-            reader_args[6] = 0;                // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
-
-            writer_args[0] = out_addr;
-        }
-    }
-}
 }  // namespace ttnn::prim

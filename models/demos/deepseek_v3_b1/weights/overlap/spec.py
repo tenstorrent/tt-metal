@@ -60,6 +60,8 @@ class OverlappedTensorSpec:
 
     logical_tensor_shape: tuple[int, int] | None = None
 
+    overlap_priority: int | None = None
+
     name: str = ""
 
     def _tile_bytes(self) -> int:
@@ -118,5 +120,56 @@ class OverlappedTensorSpec:
         return self.tiles_per_shard(mesh_shape) * self._tile_bytes()
 
 
-def max_shard_bytes(shard_specs: list[list[OverlappedTensorSpec]], mesh_shape: tuple[int, int]) -> int:
-    return max(sum(spec.shard_bytes(mesh_shape) for spec in lane) for lane in shard_specs)
+def _core_list(crs: ttnn.CoreRangeSet) -> list[tuple[int, int]]:
+    """Ordered list of (x, y) core coordinates from a CoreRangeSet."""
+    cores = []
+    for cr in crs.ranges():
+        for y in range(cr.start.y, cr.end.y + 1):
+            for x in range(cr.start.x, cr.end.x + 1):
+                cores.append((x, y))
+    return cores
+
+
+def _greedy_place(specs: list[OverlappedTensorSpec], mesh_shape: tuple[int, int]) -> list[int]:
+    """Assign byte offsets to specs via First-Fit-Decreasing placement.
+
+    Sorts by ``overlap_priority`` ascending (``None`` last), then by
+    ``shard_bytes`` descending.  For each spec, finds the earliest byte
+    offset that avoids overlapping with already-placed specs on any shared
+    core.
+
+    Returns a list of offsets in the *original* spec order.
+    """
+    n = len(specs)
+    core_sets = [set(_core_list(s.core_range_set)) for s in specs]
+    sizes = [s.shard_bytes(mesh_shape) for s in specs]
+
+    def _sort_key(i: int) -> tuple[int, int, int]:
+        p = specs[i].overlap_priority
+        if p is not None:
+            return (0, p, -sizes[i])
+        return (1, 0, -sizes[i])
+
+    order = sorted(range(n), key=_sort_key)
+
+    offsets = [0] * n
+    for idx in order:
+        blocked: list[tuple[int, int]] = []
+        for prev in order:
+            if prev == idx:
+                break
+            if core_sets[idx] & core_sets[prev]:
+                blocked.append((offsets[prev], offsets[prev] + sizes[prev]))
+        blocked.sort()
+        offset = 0
+        for start, end in blocked:
+            if offset + sizes[idx] <= start:
+                break
+            offset = max(offset, end)
+        offsets[idx] = offset
+    return offsets
+
+
+def max_shard_bytes(shard_specs: list[OverlappedTensorSpec], mesh_shape: tuple[int, int]) -> int:
+    placements = _greedy_place(shard_specs, mesh_shape)
+    return max(off + spec.shard_bytes(mesh_shape) for off, spec in zip(placements, shard_specs))

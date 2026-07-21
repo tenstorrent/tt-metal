@@ -16,6 +16,10 @@ struct metal_SocDescriptor;
 namespace ll_api {
 
 void configure_static_tlbs(
-    tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver);
+    tt::ARCH arch,
+    tt::ChipId mmio_device_id,
+    const metal_SocDescriptor& sdesc,
+    tt::umd::Cluster& device_driver,
+    bool include_dram_tlbs = true);
 
 }  // namespace ll_api

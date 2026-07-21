@@ -70,7 +70,8 @@ ttnn::Tensor composite_reduce_scatter(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool use_l1_small_for_semaphores) {
     bool is_row_major = input_tensor.layout() == ttnn::Layout::ROW_MAJOR;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -110,6 +111,20 @@ ttnn::Tensor composite_reduce_scatter(
         native_rs_output_memory_config = input_tensor.memory_config();
     }
 
+    // BFLOAT8_B + TILE inputs are unsafe through the composite split→pad→concat below: intermediate ops
+    // can leave per-chunk tensors with inconsistent dtypes, tripping ttnn::concat's dtype-equality check.
+    // Mirror composite_all_to_all: typecast BF8 → BF16 here, run in BF16, typecast back at the end.
+    // Placed AFTER the sharded→interleaved conversion above so the typecast always runs on an interleaved
+    // tensor (sharded-typecast is more expensive and less battle-tested). Guard on layout+dtype only —
+    // use_composite_reduce_scatter dispatches on per-device output, so every BF8 + TILE input reaching
+    // here is unsafe. Temporarily doubles tensor footprint for the composite path.
+    const ttnn::DataType original_input_dtype = input_tensor.dtype();
+    const bool convert_to_bfloat16_for_composite =
+        input_tensor.layout() == ttnn::Layout::TILE && original_input_dtype == ttnn::DataType::BFLOAT8_B;
+    if (convert_to_bfloat16_for_composite) {
+        input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
+    }
+
     // split the input tensor so we can insert internal padding
     std::vector<ttnn::Tensor> split_tensors =
         ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, input_tensor.memory_config());
@@ -123,7 +138,7 @@ ttnn::Tensor composite_reduce_scatter(
     // insert the internal padding (only pad on the dim we're scattering on)
     auto logical_shape = split_tensors[0].logical_shape();
     auto padded_shape = split_tensors[0].padded_shape();
-    ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+    ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
         {0, padded_shape[-2] - logical_shape[-2]}, {0, padded_shape[-1] - logical_shape[-1]}};
     for (uint32_t i = 0; i < num_devices; ++i) {
         split_tensors[i] = ttnn::pad(split_tensors[i], padding, 0, true, split_tensors[i].memory_config());
@@ -148,7 +163,8 @@ ttnn::Tensor composite_reduce_scatter(
                                                       chunks_per_sync,
                                                       num_workers_per_link,
                                                       num_buffers_per_channel,
-                                                      compute_kernel_config)
+                                                      compute_kernel_config,
+                                                      use_l1_small_for_semaphores)
                                                       .at(1);  // first is the intermediate tensor
     // remove the padding we previously inserted
     ttnn::Tensor rs_output_tensor;
@@ -161,17 +177,27 @@ ttnn::Tensor composite_reduce_scatter(
         rs_output_tensor =
             ttnn::untilize_with_unpadding(padded_native_rs_output_tensor, ends, native_rs_output_memory_config);
     } else {
-        const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
-        ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
+        const ttsl::SmallVector<int32_t> steps(output_shape.rank(), 1);
+        ttsl::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
         const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
         rs_output_tensor =
             ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
+    }
+
+    // Restore the original dtype before any (optional) sharded reshard: typecast on an interleaved
+    // BFLOAT16 tensor is cheaper than typecast on a sharded one, and the sharded-typecast path is less
+    // battle-tested.
+    if (convert_to_bfloat16_for_composite) {
+        ttnn::Tensor bfloat8_output = ttnn::typecast(rs_output_tensor, original_input_dtype);
+        rs_output_tensor.deallocate();
+        rs_output_tensor = bfloat8_output;
     }
 
     // if the output is sharded, do the conversion
     if (output_memory_config.is_sharded()) {
         rs_output_tensor = ttnn::to_memory_config(rs_output_tensor, output_memory_config);
     }
+
     return rs_output_tensor;
 }
 
@@ -255,13 +281,7 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
     return false;
 }
 
-bool use_composite_all_gather(
-    const ttnn::Tensor& input_tensor, const int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto is_true_2d_mesh = [](const ttnn::Tensor& t) {
-        const auto mesh_shape = t.device()->shape();
-        return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
-    };
-
+bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t dim) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -271,12 +291,6 @@ bool use_composite_all_gather(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    auto input_memory_config = input_tensor.memory_config();
-    auto output_memory_config = memory_config.value_or(input_memory_config);
-
-    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D && is_true_2d_mesh(input_tensor)) {
-        return true;
-    }
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
         return true;
@@ -333,7 +347,8 @@ ttnn::Tensor composite_all_gather(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -373,7 +388,13 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
-        input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
+        input_tensor,
+        cluster_axis,
+        subdevice_id,
+        input_tensor.memory_config(),
+        num_links,
+        ttnn::ccl::Topology::Linear,
+        use_l1_small_for_semaphores);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
@@ -396,12 +417,13 @@ std::vector<ttnn::Tensor> composite_all_gather(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores) {
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
-        output_tensors.push_back(
-            composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis));
+        output_tensors.push_back(composite_all_gather(
+            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis, use_l1_small_for_semaphores));
     }
     return output_tensors;
 }
@@ -412,7 +434,8 @@ ttnn::Tensor composite_all_to_all(
     int32_t out_dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -467,7 +490,8 @@ ttnn::Tensor composite_all_to_all(
         subdevice_id,
         interim_memory_config,
         num_links,
-        ttnn::ccl::Topology::Linear);
+        ttnn::ccl::Topology::Linear,
+        use_l1_small_for_semaphores);
     input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim

@@ -74,10 +74,13 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
         tt::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
 
-    auto out_mem_config = input_tensor.memory_config().with_shard_spec(ShardSpec{
-        input_tensor.memory_config().shard_spec()->grid,
-        shard_shape,
-        input_tensor.memory_config().shard_spec()->orientation});
+    auto out_mem_config = MemoryConfig(
+        input_tensor.memory_config().memory_layout(),
+        input_tensor.memory_config().buffer_type(),
+        ShardSpec{
+            input_tensor.memory_config().shard_spec()->grid,
+            shard_shape,
+            input_tensor.memory_config().shard_spec()->orientation});
     auto padded_output_shape = output_shape;
     padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
@@ -96,6 +99,7 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
 Tensor halo(
     const Tensor& input_tensor,
     const ttnn::operations::sliding_window::SlidingWindowConfig& config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
@@ -137,7 +141,8 @@ Tensor halo(
             .max_out_nsticks_per_core = max_out_nsticks_per_core,
             .in_nsticks_per_core = in_nsticks_per_core,
             .is_out_tiled = is_out_tiled,
-            .config_tensors_in_dram = config_tensors_in_dram},
+            .config_tensors_in_dram = config_tensors_in_dram,
+            .compute_kernel_config = compute_kernel_config},
         input_tensor);
 }
 }  // namespace ttnn::prim

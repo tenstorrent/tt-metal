@@ -14,7 +14,11 @@ the exported checkpoint can be loaded by the dequantized-only DeepSeek runtime.
 import argparse
 from pathlib import Path
 
-from models.demos.deepseek_v3.utils.hf_model_utils import default_dequantized_model_path, save_dequantized_hf_checkpoint
+from models.demos.deepseek_v3.utils.hf_model_utils import (
+    default_dequantized_model_path,
+    default_stacked_dequantized_model_path,
+    save_dequantized_hf_checkpoint,
+)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -24,23 +28,40 @@ def create_parser() -> argparse.ArgumentParser:
         "--output-model-path",
         type=Path,
         default=None,
-        help="Output directory for the dequantized checkpoint. Defaults to '<source>-dequantized'.",
+        help="Output directory for the dequantized checkpoint. Defaults to '<source>-dequantized-stacked'.",
     )
+    parser.set_defaults(stack_experts=True)
     parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite the output directory if it already exists.",
+    )
+    parser.add_argument(
+        "--stack-experts",
+        action="store_true",
+        help="Export per-layer stacked expert tensors under 'experts_stacked.*.weight' and omit per-expert tensors. This is the default.",
+    )
+    parser.add_argument(
+        "--no-stack-experts",
+        dest="stack_experts",
+        action="store_false",
+        help="Export the legacy non-stacked dequantized checkpoint format.",
     )
     return parser
 
 
 def main() -> None:
     args = create_parser().parse_args()
-    output_model_path = args.output_model_path or default_dequantized_model_path(args.source_model_path)
+    output_model_path = args.output_model_path or (
+        default_stacked_dequantized_model_path(args.source_model_path)
+        if args.stack_experts
+        else default_dequantized_model_path(args.source_model_path)
+    )
     saved_path = save_dequantized_hf_checkpoint(
         args.source_model_path,
         output_model_path=output_model_path,
         overwrite=args.force,
+        stack_experts=args.stack_experts,
     )
     print(f"Saved dequantized checkpoint to {saved_path}")
 

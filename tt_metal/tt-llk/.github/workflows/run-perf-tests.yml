@@ -18,6 +18,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   detect-changes:
     name: "🔍 Detect changes"
     runs-on: ubuntu-latest
@@ -71,13 +74,13 @@ jobs:
   setup-and-test-wormhole:
     name: "🌀 Performance tests (Wormhole)"
     uses: ./.github/workflows/setup-and-test.yml
-    needs: [build-images, detect-changes]
+    needs: [check-harbor, build-images, detect-changes]
     if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
             needs.detect-changes.outputs.performance == 'true' ||
             github.event_name == 'workflow_dispatch' ||
             github.event_name == 'workflow_call' }}
     with:
-      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 5
       pytest_markers: "perf"
@@ -88,13 +91,13 @@ jobs:
   setup-and-test-blackhole:
     name: "🕳️ Performance tests (Blackhole)"
     uses: ./.github/workflows/setup-and-test.yml
-    needs: [build-images, detect-changes]
+    needs: [check-harbor, build-images, detect-changes]
     if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
             needs.detect-changes.outputs.performance == 'true' ||
             github.event_name == 'workflow_dispatch' ||
             github.event_name == 'workflow_call' }}
     with:
-      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 5
       pytest_markers: "perf"

@@ -1,40 +1,39 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ckernel.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include <cstdint>
+
+#include "cmath_common.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 namespace ckernel::sfpu {
 
-// CELU: alpha * (exp(x / alpha) - 1)
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_celu(uint32_t param0, uint32_t param1) {
-    // All params are in FP16_B format
-    // param0 = alpha
-    // param1 = alpha_recip
+inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+// celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
-    // SFPU microcode
+// unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
+// partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat result = alpha * expm1_cw_clamped(alpha_recip * x);
 
-        v_if(v < sfpi::vConst0) {
-            // Compute exp(x / alpha)
-            sfpi::vFloat exp_val =
-                _sfpu_exp_21f_bf16_<true>(v * alpha_recip);  // is_fp32_dest_acc_en set to true to avoid rounding as it
-                                                             // has to be done at the end of operation
-
-            sfpi::vFloat result = alpha * (exp_val - sfpi::vConst1);
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-            }
-            sfpi::dst_reg[0] = result;
-        }
+        v_if(x >= 0.0f) { result = x; }
         v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }

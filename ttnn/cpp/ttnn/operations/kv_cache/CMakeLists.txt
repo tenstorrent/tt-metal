@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_kv_cache ${LIB_TYPE})
 add_library(TTNN::Ops::KvCache ALIAS ttnn_op_kv_cache)
 
-tt_reuse_precompile_headers(ttnn_op_kv_cache TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_kv_cache TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_kv_cache)
 set_target_properties(
     ttnn_op_kv_cache
@@ -11,23 +13,20 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
 target_sources(
     ttnn_op_kv_cache
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES kv_cache.hpp
+        FILES ${TTNN_OP_KV_CACHE_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/update_cache_device_operation.cpp
-        device/fill_cache_multi_core_program_factory.cpp
-        device/update_cache_multi_core_program_factory.cpp
-        kv_cache.cpp
+        ${TTNN_OP_KV_CACHE_SRCS}
 )
 
 target_include_directories(ttnn_op_kv_cache PRIVATE ${FixmeOpIncDirs})
@@ -46,3 +45,19 @@ install(
 )
 
 install(TARGETS ttnn_op_kv_cache LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_KV_CACHE_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_KV_CACHE_NANOBIND_SRCS})
+endif()

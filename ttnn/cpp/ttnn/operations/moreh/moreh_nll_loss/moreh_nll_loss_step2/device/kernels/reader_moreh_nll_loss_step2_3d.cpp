@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     using namespace tt::constants;
@@ -31,15 +34,10 @@ void kernel_main() {
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
-    const uint32_t input_tile_bytes = get_tile_size(cb_input);
     const auto input_data_format = get_dataformat(cb_input);
 
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
-
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     const auto weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t divisor_tile_bytes = get_tile_size(cb_divisor);
     const auto divisor_data_format = get_dataformat(cb_divisor);
 
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -49,23 +47,31 @@ void kernel_main() {
 
     uint32_t target_element_size = 4;  // sizeof(int32)
 
-    const auto addrg_input = TensorAccessor(input_args, input_addr, input_tile_bytes);
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_input = TensorAccessor(input_args, input_addr);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     constexpr uint32_t onetile = 1;
 
 #if defined(DIVISOR)
-    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr, divisor_tile_bytes);
+    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr);
 
-    read_tile(cb_divisor, addrg_divisor, 0);
+    DataflowBuffer dfb_divisor_obj(cb_divisor);
+    read_tile(dfb_divisor_obj, addrg_divisor, 0);
 #endif
 
     uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
-    // iterate from start_id to end_id
+    DataflowBuffer dfb_input_obj(cb_input);
+    DataflowBuffer dfb_target_obj(cb_target);
+    DataflowBuffer dfb_tmp_input_obj(cb_tmp_input);
+#if defined(WEIGHT)
+    DataflowBuffer dfb_weight_obj(cb_weight);
+    DataflowBuffer dfb_tmp_weight_obj(cb_tmp_weight);
+#endif
+
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t n = i / Wf;
@@ -73,74 +79,63 @@ void kernel_main() {
         auto nt = n / TILE_HEIGHT;
         auto wt = w / TILE_WIDTH;
 
-        // taret shape (N, d1)
-        // noc_id = nt * Wt + wt
         uint32_t traget_noc_id = nt * Wt + wt;
         uint32_t target_offset;
         get_noc_offset(n, w, target_element_size, target_offset);
         read_tile(
-            cb_target,
+            dfb_target_obj,
             addrg_target,
             traget_noc_id,
             NOC_MINIMUM_READ_SIZE / element_size * target_element_size,
             target_offset);
 
 #if defined(WEIGHT)
-        cb_reserve_back(cb_tmp_weight, onetile);
-
-        auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
+        dfb_tmp_weight_obj.reserve_back(onetile);
+        CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_weight_l1_ptr(dfb_tmp_weight_obj.get_write_ptr());
 #endif
 
-        cb_reserve_back(cb_tmp_input, onetile);
-        cb_wait_front(cb_target, onetile);
+        dfb_tmp_input_obj.reserve_back(onetile);
+        dfb_target_obj.wait_front(onetile);
 
-        auto tmp_input_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_input);
-        auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
+        CoreLocalMem<volatile FP32_DEST_ACC_FTYPE> tmp_input_l1_ptr(dfb_tmp_input_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(dfb_target_obj.get_read_ptr());
 
         uint32_t idx_max = std::min(w + FACE_WIDTH, W);
         for (uint32_t idx = 0; idx < idx_max; idx++) {
             int32_t target_val = target_l1_ptr[idx];
 
             if (target_val != ignore_index && (0 <= target_val && target_val < static_cast<int32_t>(C))) {
-                // read input
-                // input: (N, C, d1)
-                // noc_id: n * Ct * Wt + c * Wt + d1
-                //         n * Ct * Wt + target_val / TILE_HEIGHT * Wt + w / TILE_WIDTH
                 uint32_t noc_id = (n * Ct * Wt) + (target_val / TILE_HEIGHT) * Wt + (w / TILE_WIDTH);
                 uint32_t tilized_idx = get_tilized_idx(target_val, w + idx);
-                read_value(cb_input, addrg_input, noc_id, tilized_idx);
+                read_value(dfb_input_obj, addrg_input, noc_id, tilized_idx);
 
-                cb_wait_front(cb_input, onetile);
-                auto input_l1_ptr = get_read_ptr<uint16_t>(cb_input);
+                dfb_input_obj.wait_front(onetile);
+                CoreLocalMem<volatile uint16_t> input_l1_ptr(dfb_input_obj.get_read_ptr());
 
                 tmp_input_l1_ptr[idx] = fp32_dest_acc_cast(input_l1_ptr[tilized_idx]);
 
-                cb_pop_front(cb_input, onetile);
+                dfb_input_obj.pop_front(onetile);
 #if defined(WEIGHT)
-                // read weight
-                // weight: (1, C)
-                // noc_id: target_val / TILE_WIDTH
                 {
                     uint32_t noc_id = target_val / TILE_WIDTH;
                     uint32_t tilized_idx = get_tilized_idx(0, target_val);
-                    read_value(cb_weight, addrg_weight, noc_id, tilized_idx);
+                    read_value(dfb_weight_obj, addrg_weight, noc_id, tilized_idx);
 
-                    cb_wait_front(cb_weight, onetile);
-                    auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
+                    dfb_weight_obj.wait_front(onetile);
+                    CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
 
                     tmp_weight_l1_ptr[idx] = fp32_dest_acc_cast(weight_l1_ptr[tilized_idx]);
-                    cb_pop_front(cb_weight, onetile);
+                    dfb_weight_obj.pop_front(onetile);
                 }
 #endif
             } else {
-                // set zero
                 tmp_input_l1_ptr[idx] = fp32_dest_acc_cast(0.0f);
             }
         }
-        cb_push_back(cb_tmp_input, onetile);
+        dfb_tmp_input_obj.push_back(onetile);
 #if defined(WEIGHT)
-        cb_push_back(cb_tmp_weight, onetile);
+        dfb_tmp_weight_obj.push_back(onetile);
 #endif
-        cb_pop_front(cb_target, onetile);
+        dfb_target_obj.pop_front(onetile);
     }
 }

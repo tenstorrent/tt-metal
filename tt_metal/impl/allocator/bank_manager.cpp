@@ -6,7 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/allocator_state.hpp>
+#include "allocator_state.hpp"
 #include <limits>
 #include <string_view>
 #include <utility>

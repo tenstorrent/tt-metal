@@ -214,18 +214,22 @@ def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.Core
 # group norm helper function
 
 
-def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw):
+def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw, num_batches=1):
     """Determine a valid core grid for DRAM interleaved (non-sharded) group norm.
 
     Delegates to the C++ implementation which finds the largest grid (x then y)
     within the device compute grid that satisfies the DRAM group-norm constraints.
+
+    Args:
+        num_batches: Number of batches (N dimension). Used to ensure uniform
+            multicast group sizes for correct kernel synchronization.
 
     Returns: CoreGrid
     """
     assert num_channels % num_groups == 0
     assert num_channels % ttnn.TILE_SIZE == 0
     compute_grid = device.compute_with_storage_grid_size()
-    return _find_expected_dram_grid(compute_grid.x, compute_grid.y, num_channels, num_groups, input_nhw)
+    return _find_expected_dram_grid(compute_grid.x, compute_grid.y, num_channels, num_groups, input_nhw, num_batches)
 
 
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):

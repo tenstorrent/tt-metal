@@ -21,6 +21,7 @@
 
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
+#include <impl/debug/watcher_server.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
@@ -288,29 +289,82 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
-    if (get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+    if (!hal.get_supports_eth_debug_regs() ||
+        get_core_type(device_id, virtual_core) != tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
         return;
     }
-    const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
-    const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
-    const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
-    uint32_t port_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, port_status_addr, sizeof(uint32_t))[0];
-    uint32_t retrain_count = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
-    uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const tt_cxy_pair target(device_id, virtual_core);
+    auto read_u32 = [&](uint32_t addr) {
+        uint32_t v = 0;
+        cluster.read_reg(&v, target, addr);
+        return v;
+    };
+
+    // Bracket all reads with heartbeat samples to detect whether base FW is alive during the dump
+    const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::HEARTBEAT);
+    const uint32_t heartbeat_start = read_u32(heartbeat_addr);
+
+    const uint32_t port_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::PORT_STATUS));
+    const uint32_t retrain_count = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RETRAIN_COUNT));
+    const uint32_t rx_link_up = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::RX_LINK_UP));
+    const uint32_t train_status = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS));
+    const uint32_t serdes_reset_status =
+        read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::SERDES_RESET_STATUS));
+    const uint32_t postcode = read_u32(hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::POSTCODE));
+    const uint32_t pcs_status = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::PCS_STATUS));
+    const uint32_t aerisc_reset_pc = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC0_RESET_PC));
+    const uint32_t subordinate_aerisc_reset_pc =
+        read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::ERISC1_RESET_PC));
+    const uint32_t risc_soft_reset = read_u32(hal.get_eth_debug_reg_addr(tt_metal::EthDebugReg::RISC_SOFT_RESET));
+
+    const uint32_t heartbeat_end = read_u32(heartbeat_addr);
+
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}, "
+        "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}, Postcode: {:#x}, "
+        "ERISC0 reset PC: {:#x}, ERISC1 reset PC: {:#x}, RISC soft reset: {:#x}, "
+        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}",
         device_id,
         virtual_core.str(),
         port_status,
         retrain_count,
-        rx_link_up);
+        rx_link_up,
+        train_status,
+        pcs_status,
+        serdes_reset_status,
+        postcode,
+        aerisc_reset_pc,
+        subordinate_aerisc_reset_pc,
+        risc_soft_reset,
+        heartbeat_start,
+        heartbeat_end,
+        heartbeat_start != heartbeat_end);
 }
 
 }  // namespace
+
+std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id) {
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled() &&
+        tt::tt_metal::MetalContext::instance().watcher_server()) {
+        auto& watcher = *tt::tt_metal::MetalContext::instance().watcher_server();
+        if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
+            return fmt::format(
+                "Device {}: Aborting wait due to watcher error: {}",
+                device_id,
+                watcher.exception_message());
+        }
+    }
+    return std::nullopt;
+}
+
+void throw_if_watcher_tripped_in_test_mode(ChipId device_id) {
+    if (auto error_message = get_watcher_error_message_in_test_mode(device_id)) {
+        TT_THROW("{}", *error_message);
+    }
+}
 
 void wait_until_cores_done(
     tt::ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
@@ -319,16 +373,16 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
-    // timeout means: use the configured timeout for operations.
-    if (is_simulator) {
-        timeout_ms = 0;
-    } else if (timeout_ms == 0) {
+    // timeout_ms == 0 means infinite wait on sim; on silicon it means use configured operation timeout.
+    // Callers that need a bounded wait on sim (e.g. dispatch-core teardown) pass an explicit timeout_ms > 0.
+    if (timeout_ms == 0 && !is_simulator) {
         timeout_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();
     }
     while (!not_done_phys_cores.empty()) {
+        throw_if_watcher_tripped_in_test_mode(device_id);
+
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
@@ -422,14 +476,15 @@ void send_msg_to_eth_mailbox(
     const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
 
     // Check mailbox is empty/ready
-    uint32_t msg_status = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                              device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] &
-                          status_mask;
+    tt_cxy_pair target(device_id, virtual_core);
+    uint32_t initial_mailbox_val = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&initial_mailbox_val, target, mailbox_addr);
+    uint32_t msg_status = initial_mailbox_val & status_mask;
     {
         const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
-            uint32_t mailbox_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
+            uint32_t mailbox_val = 0;
+            tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
@@ -471,7 +526,6 @@ void send_msg_to_eth_mailbox(
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
-    tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {

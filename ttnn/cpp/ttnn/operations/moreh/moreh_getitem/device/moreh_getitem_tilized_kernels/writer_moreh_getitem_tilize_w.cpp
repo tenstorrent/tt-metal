@@ -5,6 +5,10 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -34,12 +38,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_out1 = tt::CBIndex::c_17;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, 1024 * element_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
 #define NOC_MINIMUM_READ_SIZE 32
 
-    uint32_t l1_read_addr0 = get_read_ptr(cb_id_out0);
-    uint32_t l1_read_addr1 = get_read_ptr(cb_id_out1);
+    Noc noc;
+    DataflowBuffer dfb_out0_obj(cb_id_out0);
+    DataflowBuffer dfb_out1_obj(cb_id_out1);
+
+    uint32_t l1_read_addr0 = dfb_out0_obj.get_read_ptr();
+    uint32_t l1_read_addr1 = dfb_out1_obj.get_read_ptr();
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -72,7 +80,7 @@ void kernel_main() {
 
         uint32_t j = 0;
         for (uint32_t w = w_start; w < w_end; w++, j++) {
-            cb_wait_front(cb_id_out0, 1);
+            dfb_out0_obj.wait_front(1);
 
             if (element_size == 4) {
                 volatile tt_l1_ptr uint32_t* index_l1_ptr0 =
@@ -90,11 +98,15 @@ void kernel_main() {
                 index_l1_ptr1[j] = index_l1_ptr0[0];
             }
 
-            cb_pop_front(cb_id_out0, 1);
+            dfb_out0_obj.pop_front(1);
         }
 
-        uint64_t dst_noc_addr = get_noc_addr(noc_id, s0, noc_offset);
-        noc_async_write(l1_read_addr1, dst_noc_addr, NOC_MINIMUM_READ_SIZE);
-        noc_async_write_barrier();
+        noc.async_write(
+            dfb_out1_obj,
+            s0,
+            NOC_MINIMUM_READ_SIZE,
+            {.offset_bytes = 0},
+            {.page_id = noc_id, .offset_bytes = noc_offset});
+        noc.async_write_barrier();
     }
 }

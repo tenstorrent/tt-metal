@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
 inline uint32_t get_output_grad_tile(
@@ -75,20 +78,22 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 0.0f;
-    fill_cb_with_value(cb_id_in1, scaler.u);
+    DataflowBuffer dfb_in1_obj(cb_id_in1);
+    fill_cb_with_value(dfb_in1_obj, scaler.u);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t output_grad_tile_bytes = get_tile_size(cb_id_in0);
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
+
+    Noc noc;
+    DataflowBuffer dfb_in0_obj(cb_id_in0);
+    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = get_output_grad_tile(
             i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(read_tile_id, output_grad_addrg, l1_write_addr_in0);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        dfb_in0_obj.reserve_back(onetile);
+        noc.async_read(output_grad_addrg, dfb_in0_obj, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in0_obj.push_back(onetile);
     }
 }

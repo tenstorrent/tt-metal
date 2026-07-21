@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -24,10 +24,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_in0);
+    Noc noc;
+    DataflowBuffer dfb(cb_id_in0);
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {
@@ -40,11 +40,11 @@ void kernel_main() {
             for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
                 uint32_t tile = start_id + dim * num_tiles_per_2d + c * total_tiles_per_row + r;
 #endif
-                cb.reserve_back(onetile);
-                noc.async_read(s, cb, tile_bytes, {.page_id = tile}, {.offset_bytes = 0});
+                dfb.reserve_back(onetile);
+                noc.async_read(s, dfb, tile_bytes, {.page_id = tile}, {.offset_bytes = 0});
 
                 noc.async_read_barrier();
-                cb.push_back(onetile);
+                dfb.push_back(onetile);
             }
         }
     }

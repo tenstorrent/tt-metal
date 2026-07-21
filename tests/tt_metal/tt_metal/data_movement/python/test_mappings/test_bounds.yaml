@@ -1,4 +1,8 @@
 # DIRECTED IDEAL TESTS
+# NOTE: Quasar bandwidth bounds are not yet populated. The RTL emulator does not produce
+# representative performance numbers. Quasar entries should be added once silicon is available.
+# Tracking: tests 913, 915, 917, 919, 924, 925, 926 (Loopback, OneToOne, OneFromOne,
+# OneFromAll, DRAMSharded, DRAMUnary, OneToAllUnicast Directed Ideal).
 
 "DRAM Directed Ideal":
   wormhole_b0:

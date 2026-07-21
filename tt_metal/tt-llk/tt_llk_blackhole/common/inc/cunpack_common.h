@@ -196,13 +196,6 @@ inline void wait_for_idle()
     }
 }
 
-inline void enable_int8_fpu_math()
-{
-    alu_config_u alu_payload                     = {.val = 0};
-    alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = 1;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
-}
-
 /**
  * \brief Returns true if unpacker I/O uses 32-bit formats (Int32 or Float32).
  *
@@ -218,6 +211,70 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
     const DataFormat input_df  = static_cast<DataFormat>(masked_data_format(unpack_src_format));
     const DataFormat output_df = static_cast<DataFormat>(masked_data_format(unpack_dst_format));
     return (input_df == DataFormat::Int32 || input_df == DataFormat::Float32) && (output_df == DataFormat::Int32 || output_df == DataFormat::Float32);
+}
+
+// Canonical srcA channel-1 X stride in bytes, derived from the unpacker dst format.
+// Used to compute the canonical Y/Z strides programmed into UNP0_ADDR_CTRL_*.
+inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpack_dst_format)
+{
+    return (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
+}
+
+// Canonical srcA channel-1 Y stride: face row step (one face row = FACE_R_DIM datums).
+//
+// This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
+// so it serves as the documented baseline that operations which mutate Y-stride
+// (e.g. tilizeA_B) must restore on uninit. It does not depend on the operand's face_r_dim;
+// FACE_R_DIM is the constant face row count (matches set_packer_strides and unpack_untilize).
+inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format)
+{
+    return FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
+}
+
+/*
+ * Single source of truth for whether _llk_unpack_A_ takes the "unpack to dest" (SrcA -> DEST) path.
+ * It is only taken for genuinely 32-bit input; otherwise the MOP falls through to the normal/broadcast
+ * path. Both _llk_unpack_A_init_ (which programs the X counter) and _llk_unpack_A_mop_config_ (which
+ * programs the MOP) gate on this, so they cannot diverge if the policy ever changes.
+ *
+ * \param unpack_to_dest    Whether the caller requested unpack-to-dest.
+ * \param unpack_src_format Unpacker input (L1) data format.
+ * \param unpack_dst_format Unpacker output (register) data format.
+ */
+inline constexpr bool should_unpack_to_dest(const bool unpack_to_dest, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
+{
+    return unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format);
+}
+
+// Canonical srcA channel-1 Z stride: face-sized row step.
+//
+// Programmed by configure_unpack_AB and the srca data-format reconfig, and re-asserted by
+// unpack-to-dest brackets. Z-stride does not depend on operand face_r_dim; FACE_R_DIM is
+// the constant face row count because data is not stored densely in src/dest registers
+// (matches the explicit comment in _llk_unpack_reconfig_data_format_srca_impl_).
+inline constexpr std::uint32_t canonical_unpA_z_stride(const std::uint32_t unpack_dst_format)
+{
+    return FACE_C_DIM * FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
+}
+
+// Canonical srcA tile-descriptor baseline programmed by configure_unpack_AB.
+// Per-op uninits restore the tile descriptor to this state.
+//
+// Y-dim (lower 16 bits of TileDescriptor word 1): always 1.
+// X-dim (upper 16 bits of TileDescriptor word 0): 0 for srcA because Tile_x_dim_cntx0 overrides it.
+// Z-dim (upper 16 bits of TileDescriptor word 1): equals the operand's num_faces (used directly at call sites).
+constexpr std::uint32_t CANONICAL_UNPA_TILE_Y_DIM = 1;
+constexpr std::uint32_t CANONICAL_UNPA_TILE_X_DIM = 0;
+
+// Mask for the upper halfword of a TileDescriptor config word, where the X/Y/Z dim fields live.
+constexpr std::uint32_t TILE_DESC_UPPER_HALFWORD_MASK = 0xffff0000;
+
+// Canonical Tile_x_dim_cntx0 word: face_dim packed into both cntx0 (low 16) and cntx1 (high 16),
+// where face_dim = face_r_dim * FACE_C_DIM. configure_unpack_AB programs this value.
+inline constexpr std::uint32_t canonical_unpA_tile_x_dim_cntx(const std::uint32_t face_r_dim)
+{
+    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
+    return face_dim | (face_dim << 16);
 }
 
 /**
@@ -706,7 +763,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_co
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
 inline void configure_unpack_AB(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
@@ -744,12 +801,8 @@ inline void configure_unpack_AB(
     // Get pointer to registers for current state ID
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    std::uint32_t unpA_ch1_x_stride = (unpA_dst_format_masked & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpA_dst_format_masked & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                             : 1;
-    std::uint32_t unpB_ch1_x_stride = (unpB_dst_format_masked & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpB_dst_format_masked & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                             : 1;
+    std::uint32_t unpA_ch1_x_stride = datum_size_in_bytes(unpA_dst_format_masked);
+    std::uint32_t unpB_ch1_x_stride = datum_size_in_bytes(unpB_dst_format_masked);
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
     std::uint32_t exp_width         = (static_cast<std::uint32_t>(unpA_dst_format_masked) >> 2) & 0x1; // 0=5-bit, 1=8-bit
@@ -762,6 +815,12 @@ inline void configure_unpack_AB(
     cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
         (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+
+    // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits that
+    // mutate Y-stride (e.g. tilizeA_B) can deterministically restore this baseline on uninit
+    // rather than snapshotting the previous register value into a GPR.
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
+        canonical_unpA_y_stride(unpA_dst_format_masked));
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);
@@ -796,11 +855,6 @@ inline void configure_unpack_AB(
     constexpr std::uint32_t alu_mask = alu_format_mask | alu_stoch_rnd_mask;
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
-
-    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<std::uint32_t>(unpA_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16)) ||
-                                     (static_cast<std::uint32_t>(unpB_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16));
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
@@ -862,10 +916,6 @@ inline void configure_unpack_AB(
     {
         cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
-
-    std::uint32_t unpA_x_end = (unpA_face_r_dim == 0) ? 1 : (unpA_face_r_dim << 4) - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
 
     // Program base address for all 2 sections (each section address is loaded to corresponding context)
     // Load dummy data to unused location if face height is 0
@@ -929,10 +979,15 @@ inline void wait_for_dest_available()
     t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
 }
 
-inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
+// Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.
+// This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
+// snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
+// restore is deterministic and order-independent.
+inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
-    TTI_WRCFG(p_gpr_unpack::UNPACK_STRIDE, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Restore unpack stride
+    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Restore canonical Z-stride
     // Restore config context
     if (context_id == 0)
     {
@@ -949,15 +1004,12 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
 {
-    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));  // Apply fixed offset of 4*16 to dest address
-    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                          // Disable address bit swizzle
-    TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-    std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                                      : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                                        : 1;
-    std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
-    TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
-    TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride
+    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
+    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
+    // Set unpacker Z-stride to the canonical baseline for unpack_dst_format. Paired with
+    // unpack_to_dest_tile_done's canonical restore; no GPR snapshot of the prior value.
+    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     if (context_id == 0)
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
@@ -1037,22 +1089,23 @@ enum class UnpackerProgramType
 };
 
 /**
- * Checks whether unpacker A tile descriptor and config match the expected formats and dimensions.
+ * Checks whether the selected single-unpacker tile descriptor and config match the expected formats and dimensions.
+ * On any mismatch the function fires an `LLK_ASSERT` for the offending field with a descriptive
+ * message; otherwise it returns normally.
  *
- * @param unpA_src_format   Expected input data format for unpacker A (context 0)
- * @param unpA_dst_format   Expected output data format for unpacker A (context 0)
- * @param unpA_face_r_dim   Expected face row dimension for unpacker A (default FACE_R_DIM)
- * @param unpA_num_faces    Expected number of faces for unpacker A (default TILE_NUM_FACES)
- * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
- * @return true if unpacker A configuration matches all expected values, false otherwise
+ * @param expected_src_format Expected input data format for the selected unpacker
+ * @param expected_dst_format Expected output data format for the selected unpacker
+ * @param expected_face_r_dim Expected face row dimension for the selected unpacker (default FACE_R_DIM)
+ * @param expected_num_faces  Expected number of faces for the selected unpacker (default TILE_NUM_FACES)
+ * @param nop_count           Number of nop operations to ensure configuration writes complete (default 10)
  */
-template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
-__attribute__((noinline)) bool is_unpacker_A_configured_correctly(
-    const std::uint32_t unpA_src_format,
-    const std::uint32_t unpA_dst_format,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces  = TILE_NUM_FACES,
-    const std::uint32_t nop_count       = 10)
+template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile, bool check_unpacker_b = false>
+__attribute__((noinline)) void is_unpacker_A_configured_correctly(
+    const std::uint32_t expected_src_format,
+    const std::uint32_t expected_dst_format,
+    const std::uint32_t expected_face_r_dim = FACE_R_DIM,
+    const std::uint32_t expected_num_faces  = TILE_NUM_FACES,
+    const std::uint32_t nop_count           = 10)
 {
     // Ensure configuration writes complete before subsequent operations
     tensix_sync();
@@ -1063,33 +1116,97 @@ __attribute__((noinline)) bool is_unpacker_A_configured_correctly(
 
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    // tile_descriptor[0] word 0: in_data_format at bits [3:0]
-    const std::uint32_t td_word0 = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32];
-    // unpack_config[0] word 0: out_data_format at bits [3:0]
-    const std::uint32_t cfg_word0 = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
+    constexpr std::uint32_t tile_descriptor_addr = check_unpacker_b ? THCON_SEC1_REG0_TileDescriptor_ADDR32 : THCON_SEC0_REG0_TileDescriptor_ADDR32;
+    constexpr std::uint32_t unpack_config_addr   = check_unpacker_b ? THCON_SEC1_REG2_Out_data_format_ADDR32 : THCON_SEC0_REG2_Out_data_format_ADDR32;
 
-    if ((td_word0 & DATA_FORMAT_CONFIG_MASK) != (unpA_src_format & DATA_FORMAT_CONFIG_MASK) ||
-        (cfg_word0 & DATA_FORMAT_CONFIG_MASK) != (unpA_dst_format & DATA_FORMAT_CONFIG_MASK))
+    // tile_descriptor word 0: in_data_format at bits [3:0]
+    const std::uint32_t td_word0 = cfg[tile_descriptor_addr];
+    // unpack_config word 0: out_data_format at bits [3:0]
+    const std::uint32_t cfg_word0 = cfg[unpack_config_addr];
+
+    const std::uint32_t expected_unpack_src_format = masked_data_format(expected_src_format);
+    const std::uint32_t actual_unpack_src_format   = masked_data_format(td_word0);
+    if (expected_unpack_src_format != actual_unpack_src_format)
     {
-        return false;
+        if constexpr (check_unpacker_b)
+        {
+            // DEVICE_PRINT("#1013 unp_B_src_format mismatch. expected: {}, actual: {}\n", expected_unpack_src_format, actual_unpack_src_format);
+            LLK_ASSERT(
+                expected_unpack_src_format == actual_unpack_src_format, "unp_B_src_format mismatch. Uncomment DEVICE_PRINT #1013 to inspect expected/actual.");
+        }
+        else
+        {
+            // DEVICE_PRINT("#1001 unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpack_src_format, actual_unpack_src_format);
+            LLK_ASSERT(
+                expected_unpack_src_format == actual_unpack_src_format, "unp_A_src_format mismatch. Uncomment DEVICE_PRINT #1001 to inspect expected/actual.");
+        }
+    }
+
+    const std::uint32_t expected_unpack_dst_format = masked_data_format(expected_dst_format);
+    const std::uint32_t actual_unpack_dst_format   = masked_data_format(cfg_word0);
+    if (expected_unpack_dst_format != actual_unpack_dst_format)
+    {
+        if constexpr (check_unpacker_b)
+        {
+            // DEVICE_PRINT("#1014 unp_B_dst_format mismatch. expected: {}, actual: {}\n", expected_unpack_dst_format, actual_unpack_dst_format);
+            LLK_ASSERT(
+                expected_unpack_dst_format == actual_unpack_dst_format, "unp_B_dst_format mismatch. Uncomment DEVICE_PRINT #1014 to inspect expected/actual.");
+        }
+        else
+        {
+            // DEVICE_PRINT("#1002 unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpack_dst_format, actual_unpack_dst_format);
+            LLK_ASSERT(
+                expected_unpack_dst_format == actual_unpack_dst_format, "unp_A_dst_format mismatch. Uncomment DEVICE_PRINT #1002 to inspect expected/actual.");
+        }
     }
 
     if constexpr (program_type == UnpackerProgramType::ProgramByTile)
     {
-        const std::uint32_t face_dim               = unpA_face_r_dim * FACE_C_DIM;
-        const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
-        return tile_x_dim_cntx0_value == (face_dim | (face_dim << 16));
+        const std::uint32_t face_dim = expected_face_r_dim * FACE_C_DIM;
+        if constexpr (check_unpacker_b)
+        {
+            if ((td_word0 >> 16) != face_dim)
+            {
+                // DEVICE_PRINT("#1015 unp_B_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, (td_word0 >> 16));
+                LLK_ASSERT((td_word0 >> 16) == face_dim, "unp_B_face_r_dim mismatch. Uncomment DEVICE_PRINT #1015 to inspect expected/actual.");
+            }
+        }
+        else
+        {
+            const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+            if (tile_x_dim_cntx0_value != (face_dim | (face_dim << 16)))
+            {
+                // DEVICE_PRINT("#1003 unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim, tile_x_dim_cntx0_value);
+                LLK_ASSERT(
+                    (tile_x_dim_cntx0_value == (face_dim | (face_dim << 16))),
+                    "unp_A_face_r_dim mismatch. Uncomment DEVICE_PRINT #1003 to inspect expected/actual.");
+            }
+        }
     }
     else
     {
-        // tile_descriptor[0] word 1: z_dim at bits [31:16]
-        const std::uint32_t td_word1 = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-        return (td_word1 >> 16) == unpA_num_faces;
+        // tile_descriptor word 1: z_dim at bits [31:16]
+        const std::uint32_t td_word1 = (cfg[tile_descriptor_addr + 1]) >> 16;
+        if (td_word1 != expected_num_faces)
+        {
+            if constexpr (check_unpacker_b)
+            {
+                // DEVICE_PRINT("#1016 unp_B_num_faces mismatch. expected: {}, actual: {}\n", expected_num_faces, td_word1);
+                LLK_ASSERT((td_word1 == expected_num_faces), "unp_B_num_faces mismatch. Uncomment DEVICE_PRINT #1016 to inspect expected/actual.");
+            }
+            else
+            {
+                // DEVICE_PRINT("#1004 unp_A_num_faces mismatch. expected: {}, actual: {}\n", expected_num_faces, td_word1);
+                LLK_ASSERT((td_word1 == expected_num_faces), "unp_A_num_faces mismatch. Uncomment DEVICE_PRINT #1004 to inspect expected/actual.");
+            }
+        }
     }
 }
 
 /**
- * Checks whether the unpacker tile descriptor and config match the expected formats and dimensions.
+ * Checks whether the unpacker A and B tile descriptors and configs match the expected formats and
+ * dimensions. On any mismatch the function fires an `LLK_ASSERT` for the offending field/unpacker
+ * with a descriptive message; otherwise it returns normally.
  *
  * @param unpA_src_format   Expected input data format for unpacker A (context 0)
  * @param unpA_dst_format   Expected output data format for unpacker A (context 0)
@@ -1100,10 +1217,9 @@ __attribute__((noinline)) bool is_unpacker_A_configured_correctly(
  * @param unpA_num_faces    Expected number of faces for unpacker A (default TILE_NUM_FACES)
  * @param unpB_num_faces    Expected number of faces for unpacker B (default TILE_NUM_FACES)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 80)
- * @return true if the current unpacker configuration matches all expected values, false otherwise
  */
 template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
-__attribute__((noinline)) bool are_unpackers_AB_configured_correctly(
+__attribute__((noinline)) void are_unpackers_AB_configured_correctly(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpA_dst_format,
     const std::uint32_t unpB_src_format,
@@ -1130,26 +1246,71 @@ __attribute__((noinline)) bool are_unpackers_AB_configured_correctly(
     const std::uint32_t cfg0_word0 = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
     const std::uint32_t cfg1_word0 = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
 
-    if ((td0_word0 & DATA_FORMAT_CONFIG_MASK) != (unpA_src_format & DATA_FORMAT_CONFIG_MASK) ||
-        (cfg0_word0 & DATA_FORMAT_CONFIG_MASK) != (unpA_dst_format & DATA_FORMAT_CONFIG_MASK) ||
-        (td1_word0 & DATA_FORMAT_CONFIG_MASK) != (unpB_src_format & DATA_FORMAT_CONFIG_MASK) ||
-        (cfg1_word0 & DATA_FORMAT_CONFIG_MASK) != (unpB_dst_format & DATA_FORMAT_CONFIG_MASK))
+    const std::uint32_t expected_unpA_src_format = masked_data_format(unpA_src_format);
+    const std::uint32_t actual_unpA_src_format   = masked_data_format(td0_word0);
+    if (expected_unpA_src_format != actual_unpA_src_format)
     {
-        return false;
+        // DEVICE_PRINT("#1005 unp_A_src_format mismatch. expected: {}, actual: {}\n", expected_unpA_src_format, actual_unpA_src_format);
+        LLK_ASSERT((expected_unpA_src_format == actual_unpA_src_format), "unp_A_src_format mismatch. Uncomment DEVICE_PRINT #1005 to inspect expected/actual.");
+    }
+
+    const std::uint32_t expected_unpA_dst_format = masked_data_format(unpA_dst_format);
+    const std::uint32_t actual_unpA_dst_format   = masked_data_format(cfg0_word0);
+    if (expected_unpA_dst_format != actual_unpA_dst_format)
+    {
+        // DEVICE_PRINT("#1006 unp_A_dst_format mismatch. expected: {}, actual: {}\n", expected_unpA_dst_format, actual_unpA_dst_format);
+        LLK_ASSERT(expected_unpA_dst_format == actual_unpA_dst_format, "unp_A_dst_format mismatch. Uncomment DEVICE_PRINT #1006 to inspect expected/actual.");
+    }
+
+    const std::uint32_t expected_unpB_src_format = masked_data_format(unpB_src_format);
+    const std::uint32_t actual_unpB_src_format   = masked_data_format(td1_word0);
+    if (expected_unpB_src_format != actual_unpB_src_format)
+    {
+        // DEVICE_PRINT("#1007 unp_B_src_format mismatch. expected: {}, actual: {}\n", expected_unpB_src_format, actual_unpB_src_format);
+        LLK_ASSERT(expected_unpB_src_format == actual_unpB_src_format, "unp_B_src_format mismatch. Uncomment DEVICE_PRINT #1007 to inspect expected/actual.");
+    }
+
+    const std::uint32_t expected_unpB_dst_format = masked_data_format(unpB_dst_format);
+    const std::uint32_t actual_unpB_dst_format   = masked_data_format(cfg1_word0);
+    if (expected_unpB_dst_format != actual_unpB_dst_format)
+    {
+        // DEVICE_PRINT("#1008 unp_B_dst_format mismatch. expected: {}, actual: {}\n", expected_unpB_dst_format, actual_unpB_dst_format);
+        LLK_ASSERT(expected_unpB_dst_format == actual_unpB_dst_format, "unp_B_dst_format mismatch. Uncomment DEVICE_PRINT #1008 to inspect expected/actual.");
     }
 
     if constexpr (program_type == UnpackerProgramType::ProgramByTile)
     {
         const std::uint32_t face_dim_a             = unpA_face_r_dim * FACE_C_DIM;
         const std::uint32_t tile_x_dim_cntx0_value = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
-        return tile_x_dim_cntx0_value == (face_dim_a | (face_dim_a << 16)) && (td1_word0 >> 16) == unpB_face_r_dim * FACE_C_DIM;
+        if (tile_x_dim_cntx0_value != (face_dim_a | (face_dim_a << 16)))
+        {
+            // DEVICE_PRINT("#1009 unp_A_face_r_dim mismatch. expected: {}, actual: {}\n", face_dim_a, tile_x_dim_cntx0_value);
+            LLK_ASSERT(
+                (tile_x_dim_cntx0_value == (face_dim_a | (face_dim_a << 16))),
+                "unp_A_face_r_dim mismatch. Uncomment DEVICE_PRINT #1009 to inspect expected/actual.");
+        }
+        if ((td1_word0 >> 16) != unpB_face_r_dim * FACE_C_DIM)
+        {
+            // DEVICE_PRINT("#1010 unp_B_face_r_dim mismatch. expected: {}, actual: {}\n", unpB_face_r_dim * FACE_C_DIM, (td1_word0 >> 16));
+            LLK_ASSERT(
+                (td1_word0 >> 16) == (unpB_face_r_dim * FACE_C_DIM), "unp_B_face_r_dim mismatch. Uncomment DEVICE_PRINT #1010 to inspect expected/actual.");
+        }
     }
     else
     {
         // tile_descriptor word 1: z_dim at bits [31:16]
         const std::uint32_t td0_word1 = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
         const std::uint32_t td1_word1 = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
-        return (td0_word1 >> 16) == unpA_num_faces && (td1_word1 >> 16) == unpB_num_faces;
+        if ((td0_word1 >> 16) != unpA_num_faces)
+        {
+            // DEVICE_PRINT("#1011 unp_A_num_faces mismatch. expected: {}, actual: {}\n", unpA_num_faces, (td0_word1 >> 16));
+            LLK_ASSERT((td0_word1 >> 16) == unpA_num_faces, "unp_A_num_faces mismatch. Uncomment DEVICE_PRINT #1011 to inspect expected/actual.");
+        }
+        if ((td1_word1 >> 16) != unpB_num_faces)
+        {
+            // DEVICE_PRINT("#1012 unp_B_num_faces mismatch. expected: {}, actual: {}\n", unpB_num_faces, (td1_word1 >> 16));
+            LLK_ASSERT((td1_word1 >> 16) == unpB_num_faces, "unp_B_num_faces mismatch. Uncomment DEVICE_PRINT #1012 to inspect expected/actual.");
+        }
     }
 }
 

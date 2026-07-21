@@ -28,6 +28,9 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (!input_tensor.shard_spec().has_value()) {
         return false;
     }
+    if (!input_tensor.memory_config().is_l1()) {
+        return false;
+    }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         return false;
     }
@@ -227,6 +230,22 @@ Tensor PadDeviceOperation::create_output_tensors(
     }
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> PadDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Height-sharded RM factory is CB-bound (addresses ride on the sharded CBs; no Buffer* rt-arg). Re-apply
+    // writer arg0 (= output shard height, unchanged) on the first core to trip the fast-path, so the
+    // framework re-patches the sharded CB base addresses instead of rebuilding create_descriptor. (#48928)
+    if (!std::holds_alternative<PadRmShardedHeightOnlyProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        return {};
+    }
+    const auto shard = tensor_return_value.shard_spec().value();  // writer kernel is index 1
+    return {tt::tt_metal::DynamicRuntimeArg{1, shard.grid.bounding_box().start_coord, 0, shard.shape[0]}};
 }
 
 PadDeviceOperation::tensor_return_value_t pad(

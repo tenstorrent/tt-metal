@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
@@ -19,6 +20,7 @@ size_t rm_element_size_bytes(DataType dtype) {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
@@ -145,7 +147,10 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
+RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {
+    TT_FATAL(
+        tile == Tile{}, "Configuring a ROW MAJOR page config with a custom tile configuration is not supported.");
+}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
@@ -209,7 +214,12 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+const Tile& RowMajorPageConfig::get_tile() const {
+    TT_FATAL(
+        tile_ == Tile{},
+        "Attempting to extract tile information out of a ROW MAJOR layout is not supported.");
+    return tile_;
+}
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 

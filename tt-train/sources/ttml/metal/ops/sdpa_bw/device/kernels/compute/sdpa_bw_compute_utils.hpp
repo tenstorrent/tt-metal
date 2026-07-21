@@ -4,14 +4,15 @@
 
 #pragma once
 
-#include <api/debug/dprint.h>
 #include <api/compute/reg_api.h>
+#include <api/debug/dprint.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -19,8 +20,9 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
@@ -67,37 +69,25 @@ void apply_mask_on_reg(
     add_binary_tile(register_idx, mask_register, register_idx);
 }
 
-// Recomputes attention weights from pre-softmax scores using stored statistics.
-// Given raw attention scores and intermediates (max_val at [0], recip_sum_exp at [1]),
-// computes: softmax(x) = exp(x - max) * recip_sum_exp
-// This is used in backward pass to reconstruct P from stored forward pass statistics.
-void apply_statistics_inplace(
-    const uint32_t cb_attention_weights, const uint32_t cb_intermediates, const uint32_t num_of_interm_tiles) {
+// Recomputes attention weights from pre-softmax scores using stored logsumexp.
+// Given raw attention scores S and intermediates[0] = lse (logsumexp),
+// computes: P = exp(S - lse)
+void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_t cb_intermediates) {
     cb_wait_front(cb_attention_weights, onetile);
-    cb_wait_front(cb_intermediates, num_of_interm_tiles);
+    cb_wait_front(cb_intermediates, onetile);
 
     const uint32_t working_reg = 0;
-    const uint32_t intermediates_reg = 1U;
 
-    init_bcast<ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_intermediates, cb_attention_weights);
+    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+        cb_attention_weights, cb_intermediates, cb_attention_weights);
 
     reconfig_data_format(cb_attention_weights, cb_intermediates);
     tile_regs_acquire();
-    // apply statistics: subtract per row max value stored in intermediates[0]
     sub_bcast_cols_init_short(cb_attention_weights, cb_intermediates);
     sub_tiles_bcast_cols(cb_attention_weights, cb_intermediates, /* tile_idx */ 0, /* tile_idx */ 0, working_reg);
 
-    // exp(x - max(x))
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(working_reg);
-
-    reconfig_data_format(cb_intermediates, cb_intermediates);
-    // bcast 1/sum(exp(x - max(x))) stored in intermediates[1]
-    unary_bcast_init<BroadcastType::COL>(cb_intermediates, cb_intermediates);
-    unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile idx */ 1U, /* reg tile idx */ intermediates_reg);
-
-    mul_binary_tile_init();
-    mul_binary_tile(working_reg, intermediates_reg, working_reg);  // multiply by 1/sum(exp(x - max(x)))
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(working_reg);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -109,19 +99,49 @@ void apply_statistics_inplace(
     cb_push_back(cb_attention_weights, onetile);
 }
 
-// Transposes a single tile by swapping width and height dimensions.
-// Used for computing A^T @ B matmuls in backward pass (e.g., dV = P^T @ dO).
-inline void transpose_tile(const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh) {
+// Applies softmax statistics (exp(S - lse)) directly on DST registers.
+// Scores must already be in DST[scores_reg] from the matmul + mask/scale.
+// Loads lse from cb_intermediates via column-broadcast and computes in-place using SFPU.
+// Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
+// Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
+void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
+    const uint32_t lse_reg = scores_reg + 1U;
+
+    // Reconfigure only SrcB for the B2D broadcast (Float32 intermediates).
+    // SrcA is left as-is from the preceding matmul to preserve its format.
+    reconfig_data_format_srcb(cb_intermediates);
+
+    // Lightweight MOP reinit for unary_bcast<COL> with B2D path.
+    // Only reprograms UNPACK and MATH MOPs — does NOT reset MATH-PACK sync or PACK dest,
+    // so it is safe inside an acquire block (unlike the full unary_bcast_init).
+    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, cb_intermediates)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
+        cb_intermediates)));
+
+    unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile_idx */ 0, lse_reg);
+
+    sub_binary_tile_init();
+    sub_binary_tile(scores_reg, lse_reg, scores_reg);
+
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(scores_reg);
+}
+
+// Transposes a single tile using the FPU transpose_wh path (reads via SrcA).
+inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh) {
     cb_wait_front(cb_input, onetile);
-    // transpose attention weights
-    reconfig_data_format(cb_input, cb_input);
+
     tile_regs_acquire();
-    transpose_wh_init(cb_input, cb_transpose_wh);
-    transpose_wh_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
+    reconfig_data_format_srca(cb_input);
+    transpose_init(cb_input);
+    transpose_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
     tile_regs_commit();
 
     cb_reserve_back(cb_transpose_wh, onetile);
-    pack_reconfig_data_format(cb_transpose_wh);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    // In both callers (update_grad_value, update_grad_key) the previous PACK target equals cb_input.
+    pack_reconfig_data_format(cb_input, cb_transpose_wh);
     tile_regs_wait();
     pack_tile(0, cb_transpose_wh);
     tile_regs_release();
@@ -132,18 +152,23 @@ inline void transpose_tile(const uint32_t cb_input, /*output cb*/ const uint32_t
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
 // The reduction is done via matmul with a column of ones (cb_mat_mul_reduction).
+// Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
+// When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
+// to the KV kernel). Both packs happen directly from DST at full FP32 precision,
+// avoiding a separate copy-pack cycle.
 void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
     /*output result*/ const uint32_t cb_u_scalar_row,
     /*mutmul reduction*/ const uint32_t cb_mat_mul_reduction,
     const uint32_t tiles_per_row,
-    const uint32_t scaler_bits) {
+    const uint32_t scaler_bits,
+    const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
     // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
     // accumulation to dest regs
     reconfig_data_format(cb_grad_output, cb_attn_output);
-    binary_tiles_init<true, ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         mul_tiles(
@@ -167,7 +192,7 @@ void compute_u_scalar_row(
     reconfig_data_format(cb_u_scalar_row, cb_mat_mul_reduction);
 
     // This call is required to set up the matmul correctly
-    mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
+    matmul_init(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
     matmul_tiles(
         cb_u_scalar_row,
         cb_mat_mul_reduction,
@@ -181,6 +206,12 @@ void compute_u_scalar_row(
     cb_reserve_back(cb_u_scalar_row, onetile);
     pack_reconfig_data_format(cb_u_scalar_row);
     pack_tile(accum_register, cb_u_scalar_row);
+
+    cb_reserve_back(cb_u_scaler_output, onetile);
+    pack_reconfig_data_format(cb_u_scalar_row, cb_u_scaler_output);
+    pack_tile(accum_register, cb_u_scaler_output);
+    cb_push_back(cb_u_scaler_output, onetile);
+
     tile_regs_release();
     cb_push_back(cb_u_scalar_row, onetile);
 }
@@ -193,10 +224,11 @@ void compute_grad_attn_weights(
     const uint32_t cb_value,
     const uint32_t tiles_per_row,
     const uint32_t cb_grad_attn_weights,
+    const uint32_t cb_prev_pack,
     const uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
     // This call is required to set up the matmul correctly
-    mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
+    matmul_init(cb_grad_output, cb_value, /* transpose */ 1);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         matmul_tiles(
@@ -210,7 +242,8 @@ void compute_grad_attn_weights(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_attn_weights, onetile);
-    pack_reconfig_data_format(cb_grad_attn_weights);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_prev_pack, cb_grad_attn_weights);
     pack_tile(0, cb_grad_attn_weights);
     tile_regs_release();
 
@@ -234,9 +267,7 @@ void compute_grad_scores(
 
     const uint32_t grad_reg = 0;
     const uint32_t attn_weights_reg = 1U;
-    const uint32_t u_scalar_reg = 2U;
 
-    // compute: grad_scores = (grad_attn_weights - u_scalar_row) * attention_weights
     tile_regs_acquire();
     reconfig_data_format(cb_grad_attn_weights, cb_u_scalar_row);
     sub_bcast_cols_init_short(cb_grad_attn_weights, cb_u_scalar_row);
@@ -245,25 +276,23 @@ void compute_grad_scores(
         cb_u_scalar_row,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        grad_reg);  // result in grad_reg
+        grad_reg);
 
-    // copy attention_weights to reg 1
-    reconfig_data_format(cb_attention_weights, cb_attention_weights);
-    copy_tile_init(cb_attention_weights);
+    copy_tile_to_dst_init_short_with_dt(cb_grad_attn_weights, cb_attention_weights, /*transpose=*/0);
     copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
 
     mul_binary_tile_init();
-    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);  // result in grad_reg
+    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);
 
-    // We apply scaling here to improve numerical stability of upcoming matmuls for grad Q and grad K
     binop_with_scalar_tile_init();
-    mul_unary_tile(/* dst_reg_idx*/ grad_reg, scaler_bits);  // multiply by scaler factor
+    mul_unary_tile(grad_reg, scaler_bits);
 
     tile_regs_commit();
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores, onetile);
-    pack_reconfig_data_format(cb_grad_scores);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
     pack_tile(grad_reg, cb_grad_scores);
     tile_regs_release();
     cb_push_back(cb_grad_scores, onetile);
@@ -281,7 +310,8 @@ void update_grad_query(
     const bool do_accumulate = false) {
     cb_wait_front(cb_grad_scores, onetile);
 
-    pack_reconfig_data_format(cb_grad_query_accum);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_scores, cb_grad_query_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -294,7 +324,8 @@ void update_grad_query(
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
         tile_regs_acquire();
-        mm_init_short_with_dt(cb_grad_scores, cb_key, cb_grad_query_accum, /*transpose*/ 0);
+        reconfig_data_format_srca(cb_grad_query_accum, cb_key);
+        matmul_init(cb_grad_scores, cb_key, /*transpose*/ 0);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             matmul_tiles(
                 cb_grad_scores,
@@ -332,12 +363,12 @@ void update_grad_value(
     const uint32_t tiles_per_row,
     const uint32_t block_size,
     const bool do_accumulate = false) {
-    transpose_tile(cb_attention_weights, cb_transpose_wh);
+    transpose_tile_fpu(cb_attention_weights, cb_transpose_wh);
 
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_value_accum);
+    pack_reconfig_data_format(cb_transpose_wh, cb_grad_value_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -348,7 +379,8 @@ void update_grad_value(
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
         tile_regs_acquire();
-        mm_init_short_with_dt(cb_transpose_wh, cb_grad_output, cb_grad_value_accum, /*transpose*/ 0);
+        reconfig_data_format_srca(cb_grad_value_accum, cb_grad_output);
+        matmul_init(cb_transpose_wh, cb_grad_output, /*transpose*/ 0);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             matmul_tiles(
                 cb_transpose_wh,
@@ -386,12 +418,10 @@ void update_grad_key(
     const uint32_t tiles_per_row,
     const uint32_t block_size,
     const bool do_accumulate = false) {
-    transpose_tile(cb_grad_scores, cb_transpose_wh);
+    transpose_tile_fpu(cb_grad_scores, cb_transpose_wh);
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_key_accum);
-    // First iteration: reserve space for result
-    // Subsequent iterations: enable L1 accumulation to add to existing values
+    pack_reconfig_data_format(cb_transpose_wh, cb_grad_key_accum);
     if (!do_accumulate) {
         cb_reserve_back(cb_grad_key_accum, tiles_per_row);
     } else {
@@ -400,7 +430,8 @@ void update_grad_key(
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
         tile_regs_acquire();
-        mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_grad_key_accum, /*transpose*/ 0);
+        reconfig_data_format_srca(cb_grad_key_accum, cb_query);
+        matmul_init(cb_transpose_wh, cb_query, /*transpose*/ 0);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             matmul_tiles(
                 cb_transpose_wh,

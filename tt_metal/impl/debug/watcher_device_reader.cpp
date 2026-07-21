@@ -418,9 +418,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
         bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
         if (has_dram_fw) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
-                    .Dump();
+            // get_metal_dram_cores omits the syseng-owned NOC0 endpoints (no Metal DRISC firmware),
+            // whose launch message / debug mailbox is never initialized and would read as garbage.
+            for (const auto& logical_dram_core : soc_d.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+                Core::Create(logical_dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
             }
         }
     }
@@ -753,9 +754,6 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
-        case dev_msgs::DebugSanitizeWriteInProgress:
-            // Quasar: DM is atomically writing error metadata; ignore until complete
-            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -779,8 +777,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    if (assert_status.tripped() == dev_msgs::DebugAssertOK ||
-        assert_status.tripped() == dev_msgs::DebugAssertWriteInProgress) {
+    if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
@@ -907,6 +904,10 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'D';
     } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
         code = 'R';
+    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+        code = 'H';
+    } else if (state == dev_msgs::RUN_MSG_REPLAY_TRACE) {
+        code = 'T';
     } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
         code = 'L';
     } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
@@ -917,14 +918,19 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
+            "{})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
             dev_msgs::RUN_MSG_GO,
             dev_msgs::RUN_MSG_DONE,
+            dev_msgs::RUN_MSG_RESET_READ_PTR,
+            dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST,
+            dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
-            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
+            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
     } else {
         fprintf(reader_.f, "%c", code);
     }
@@ -1172,7 +1178,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
     auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
-        uint32_t neo_id = client_id % NEO_0;
+        uint32_t neo_id = client_id % overlay::NEO_0;
         uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
         auto capacity_data = reader_.env.get_cluster().read_core(
             reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
@@ -1192,8 +1198,8 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
         auto clientR_data =
             reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientR_addr, sizeof(uint32_t));
 
-        tClientL_Config_Reg_u clientL;
-        tClientR_Config_Reg_u clientR;
+        overlay::tClientL_Config_Reg_u clientL;
+        overlay::tClientR_Config_Reg_u clientR;
         clientL.val = clientL_data[0];
         clientR.val = clientR_data[0];
 

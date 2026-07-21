@@ -13,7 +13,9 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
@@ -49,11 +51,11 @@ std::vector<Tensor> fold_with_transpose_(
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
     auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
 
-    log_info(tt::LogOp, "padded_c: {}", padded_c);
-    log_info(tt::LogOp, "padded_h: {}", padded_h);
-    log_info(tt::LogOp, "padded_w: {}", padded_w);
-    log_info(tt::LogOp, "padded_h32: {}", padded_h32);
-    log_info(tt::LogOp, "padded_w32: {}", padded_w32);
+    log_debug(tt::LogOp, "padded_c: {}", padded_c);
+    log_debug(tt::LogOp, "padded_h: {}", padded_h);
+    log_debug(tt::LogOp, "padded_w: {}", padded_w);
+    log_debug(tt::LogOp, "padded_h32: {}", padded_h32);
+    log_debug(tt::LogOp, "padded_w32: {}", padded_w32);
 
     auto L1_mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
@@ -67,7 +69,7 @@ std::vector<Tensor> fold_with_transpose_(
     log_debug(tt::LogOp, "pad_output: {}", pad_output.logical_shape());
 
     auto transpose_hc_output = ttnn::prim::permute(
-        pad_output, ttnn::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
+        pad_output, ttsl::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", transpose_hc_output.logical_shape());
 
@@ -325,7 +327,15 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);
+    const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        std::nullopt,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
+    auto halo_output =
+        ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
 
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(
@@ -364,7 +374,8 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
         new_shard_spec.grid = new_core_range;
 
-        auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        auto new_mem_config =
+            MemoryConfig(input.memory_config().memory_layout(), input.memory_config().buffer_type(), new_shard_spec);
         // need to reshard
         return ttnn::reshard(input, new_mem_config, std::nullopt);
     }
@@ -459,7 +470,7 @@ Tensor fold(
 
     // Apply padding if needed
     if (has_hw_padding || has_c_padding) {
-        ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+        ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
         padding_spec.push_back({0, 0});                     // N dimension
         padding_spec.push_back({pad_top, pad_bottom});      // H dimension
         padding_spec.push_back({pad_left, pad_right});      // W dimension

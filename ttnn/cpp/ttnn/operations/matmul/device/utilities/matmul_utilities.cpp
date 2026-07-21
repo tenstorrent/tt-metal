@@ -8,6 +8,9 @@
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/work_split.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::matmul::utilities {
@@ -139,7 +142,7 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the vector matmul case: if a_rank == 1, remove the second-to-last dimension
     if (a_rank == 1 && output_shape.rank() > 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         // Copy all elements except the second-to-last dimension
         size_t dst_idx = 0;
         for (size_t src_idx = 0; src_idx < output_shape.rank(); ++src_idx) {
@@ -152,22 +155,47 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the case where b_rank == 1, remove the last dimension
     if (b_rank == 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         for (auto index = 0; index < output_shape.rank() - 1; ++index) {
             new_shape[index] = output_shape[index];
         }
         output_shape = ttnn::Shape(new_shape);
     }
 
-    // Optimization: Reuse input A (in0) across batches when A's batch dimension is 1
-    // and B's batch dimension is > 1. For matmul shapes BxHaxMxK / BxHbxKxN where Ha=1 and Hb>1,
-    // the same A tensor can be reused for each batch element of B rather than reading A repeatedly.
-    // Restrict to rank-4 tensors to ensure dim 1 is correctly identified as the batch dimension
-    // and to prevent out-of-bounds indexing with lower-rank shapes.
-    if (a_rank == 4 && b_rank == 4 && input_shape_a[1] == 1 && input_shape_b[1] > 1) {
-        output_shape[1] = input_shape_b[1];
+    // Optimization: Reuse input A (in0) across batches when A's batch dimensions are all 1
+    // and B's corresponding batch dimensions are > 1. The same A tensor is reused for each
+    // batch element of B rather than reading A repeatedly. Supported for rank >= 3 tensors
+    // with matching ranks and interleaved (non-sharded) memory layout.
+    if (a_rank >= 3 && b_rank == a_rank) {
+        for (int i = 0; i < static_cast<int>(a_rank) - 2; i++) {
+            if (input_shape_a[i] == 1 && input_shape_b[i] > 1) {
+                output_shape[i] = input_shape_b[i];
+            }
+        }
     }
     return output_shape;
+}
+
+ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape) {
+    int rank_a = static_cast<int>(matmul_shape.rank());
+    int rank_b = static_cast<int>(bias_shape.rank());
+    int max_rank = std::max(rank_a, rank_b);
+
+    std::vector<uint32_t> result_shape(max_rank);
+
+    for (int i = 0; i < max_rank; ++i) {
+        int idx_a = rank_a - max_rank + i;
+        int idx_b = rank_b - max_rank + i;
+
+        uint32_t dim_a = (idx_a >= 0) ? matmul_shape[idx_a] : 1;
+        uint32_t dim_b = (idx_b >= 0) ? bias_shape[idx_b] : 1;
+
+        TT_FATAL(dim_a == dim_b || dim_a == 1 || dim_b == 1, "Broadcast error: Invalid dimension");
+
+        result_shape[i] = std::max(dim_a, dim_b);
+    }
+
+    return ttnn::Shape(result_shape);
 }
 
 tt::tt_metal::Tile get_output_tile(
@@ -237,6 +265,68 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
         curr_tile.get_transpose_within_face(),
         curr_tile.get_transpose_of_faces());
     return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
+}
+
+void validate_matmul_reuse_work_split(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const MatmulMultiCoreReuseProgramConfig& program_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set) {
+    const uint32_t B = ttnn::get_batch_size(a_shape_padded);
+    const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, false);
+    const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
+    const uint32_t per_core_M = program_config.per_core_M;
+    const uint32_t per_core_N = program_config.per_core_N;
+    TT_FATAL((B * Mt) % per_core_M == 0, "B * Mt ({}) must be divisible by per_core_M ({})", B * Mt, per_core_M);
+    TT_FATAL(Nt % per_core_N == 0, "Nt ({}) must be divisible by per_core_N ({})", Nt, per_core_N);
+    const uint32_t num_output_blocks_total = (B * Mt / per_core_M) * (Nt / per_core_N);
+    TT_FATAL(
+        num_output_blocks_total > 0,
+        "matmul reuse produced zero output blocks (B={}, Mt={}, Nt={}, per_core_M={}, per_core_N={})",
+        B,
+        Mt,
+        Nt,
+        per_core_M,
+        per_core_N);
+
+    std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
+    if (input_tensor_a.is_sharded()) {
+        shard_spec = input_tensor_a.shard_spec().value();
+    } else if (input_tensor_b.is_sharded()) {
+        shard_spec = input_tensor_b.shard_spec().value();
+    } else if (
+        output_mem_config.is_sharded() && output_mem_config.buffer_type() != tt::tt_metal::BufferType::DRAM &&
+        output_mem_config.shard_spec().has_value()) {
+        shard_spec = output_mem_config.shard_spec().value();
+    }
+
+    uint32_t num_cores = 0;
+    if (shard_spec.has_value()) {
+        num_cores = shard_spec->grid.num_cores();
+    } else if (core_range_set.has_value()) {
+        std::tie(num_cores, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore) =
+            tt::tt_metal::split_work_to_cores(core_range_set.value(), num_output_blocks_total);
+    } else {
+        const tt::tt_metal::CoreCoord grid = program_config.compute_with_storage_grid_size;
+        std::tie(num_cores, std::ignore, std::ignore, std::ignore, std::ignore, std::ignore) =
+            tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+    }
+
+    TT_FATAL(
+        num_cores > 0,
+        "matmul reuse requires at least one active core, got 0 (num_output_blocks_total={})",
+        num_output_blocks_total);
+    const uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
+    TT_FATAL(
+        num_evenly_divided_output_blocks > 0,
+        "num_output_blocks_total ({}) must be >= num_cores ({}); some cores would have no work",
+        num_output_blocks_total,
+        num_cores);
 }
 
 }  // namespace ttnn::operations::matmul::utilities

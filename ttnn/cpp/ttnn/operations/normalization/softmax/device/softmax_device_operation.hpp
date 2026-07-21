@@ -5,16 +5,10 @@
 #pragma once
 
 #include "softmax_operation_types.hpp"
-#include "softmax_program_factory_general.hpp"
-#include "softmax_program_factory_general_w_small.hpp"
-#include "softmax_program_factory_general_w_large.hpp"
-#include "softmax_program_factory_general_h_small.hpp"
-#include "softmax_program_factory_general_h_large.hpp"
-#include "softmax_program_factory_general_c_large.hpp"
-#include "softmax_program_factory_attention_optimized.hpp"
-#include "softmax_program_factory_attention_optimized_sharded.hpp"
 
 #include <optional>
+#include <variant>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 
@@ -24,6 +18,43 @@ struct SoftmaxDeviceOperation {
     using tensor_args_t = SoftmaxInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    //
+    // General-purpose softmax with arbitrary dimension support
+    //
+    struct SoftmaxProgramFactoryGeneralWSmall {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+    struct SoftmaxProgramFactoryGeneralWLarge {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+    struct SoftmaxProgramFactoryGeneralHSmall {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+    struct SoftmaxProgramFactoryGeneralHLarge {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+    struct SoftmaxProgramFactoryGeneralCLarge {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+    //
+    // Optimized for transformer attention patterns
+    //
+    // Sharded memory
+    struct SoftmaxShardedProgramFactoryAttentionOptimized {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+    // Interleaved memory
+    struct SoftmaxProgramFactoryAttentionOptimized {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
 
     using program_factory_t = std::variant<
         SoftmaxProgramFactoryGeneralWSmall,
@@ -41,7 +72,6 @@ struct SoftmaxDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };

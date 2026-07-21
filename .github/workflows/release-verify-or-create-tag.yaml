@@ -34,13 +34,14 @@ on:
 
 jobs:
   verify-create-new-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       version: ${{ steps.calculate-version.outputs.final_version }}
     env:
       GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
@@ -125,3 +126,17 @@ jobs:
                 });
               }
             }
+
+      # Kick off upstream-tests on the freshly created tag so it builds,
+      # tests, and publishes the :release-<version> image. For normal releases this also
+      # moves :release-latest; rc/dev tags get only the version-specific tag (see upstream-tests.yaml).
+      # Non-blocking: failures here must not fail the release.
+      - name: Dispatch upstream-tests on the release tag
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.calculate-version.outputs.final_version }}
+        run: |
+          echo "Dispatching upstream-tests.yaml on tag ${VERSION}"
+          gh workflow run upstream-tests.yaml --repo "${{ github.repository }}" --ref "${VERSION}" || true

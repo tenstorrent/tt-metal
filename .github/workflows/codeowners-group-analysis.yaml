@@ -38,7 +38,7 @@ permissions:
 jobs:
   parse-comment:
     if: github.event_name == 'issue_comment' && github.event.issue.pull_request
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       should-run: ${{ steps.parse.outputs.should-run }}
       branch: ${{ steps.parse.outputs.branch }}
@@ -248,7 +248,7 @@ jobs:
   find-pr:
     needs: [parse-comment]
     if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && needs.parse-comment.outputs.should-run == 'true'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       pr-number: ${{ steps.find-pr.outputs.pr-number }}
       pr-exists: ${{ steps.find-pr.outputs.pr-exists }}
@@ -296,7 +296,7 @@ jobs:
   bypass-approval:
     needs: [parse-comment, find-pr]
     if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'true' && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Approve PR
         run: |
@@ -304,6 +304,54 @@ jobs:
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
           echo "Approving PR #$PR_NUMBER as requested by authorized user: $COMMENT_AUTHOR"
+
+          # Pre-flight: detect self-approval (GitHub rejects reviews where the
+          # authenticated user is also the PR author).
+          # PR author is available from the event payload (issue_comment trigger),
+          # avoiding an extra API call.
+          PR_AUTHOR="${{ github.event.issue.user.login }}"
+
+          PAT_USER=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/user" \
+            | jq -r '.login // empty')
+
+          if [ -n "$PAT_USER" ] && [ "$PAT_USER" = "$PR_AUTHOR" ]; then
+            echo "❌ Self-approval detected: PAT belongs to '$PAT_USER' who is also the PR author."
+            echo "GitHub does not allow a user to approve their own pull request."
+
+            SELF_APPROVE_MSG=$(cat <<'EOFMSG'
+          ❌ **Bypass Approval Failed — Self-Approval Not Allowed**
+
+          The bypass PAT (`CODEOWNERS_GROUP_ANALYSIS_PAT`) is authenticated as **@PATUSER**, who is also the author of this PR. GitHub does not permit a user to approve their own pull request.
+
+          **To fix:** A different team member with bypass authority must run `/codeowners bypass`, or the infra team must configure a second PAT belonging to a different account for bypass approvals.
+          EOFMSG
+          )
+            SELF_APPROVE_MSG="${SELF_APPROVE_MSG//PATUSER/$PAT_USER}"
+
+            TEMP_FILE=$(mktemp)
+            jq -n --arg body "$SELF_APPROVE_MSG" '{"body": $body}' > "$TEMP_FILE"
+
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d @"$TEMP_FILE" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
+            rm -f "$TEMP_FILE"
+
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d '{"content": "-1"}' \
+              "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
+
+            exit 1
+          fi
 
           # Create approval
           REVIEW_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
@@ -324,6 +372,7 @@ jobs:
             "$REVIEW_API")
 
           REVIEW_ID=$(echo "$REVIEW_RESPONSE" | jq -r '.id // empty')
+          ERROR_MSG=$(echo "$REVIEW_RESPONSE" | jq -r '.message // empty')
 
           if [ -n "$REVIEW_ID" ] && [ "$REVIEW_ID" != "null" ]; then
             echo "✅ Successfully approved PR #$PR_NUMBER (Review ID: $REVIEW_ID)"
@@ -339,13 +388,27 @@ jobs:
             echo "❌ Failed to approve PR #$PR_NUMBER"
             echo "Response: $REVIEW_RESPONSE"
 
-            # Post failure comment with explanation
+            # Build a diagnostic error message
+            if echo "$ERROR_MSG" | grep -qi "can not approve your own"; then
+              FAIL_DETAIL="The PAT user ($PAT_USER) is the PR author — GitHub blocks self-approval. Use a different account's PAT or have another team member run the bypass."
+            elif echo "$ERROR_MSG" | grep -qi "validation failed"; then
+              FAIL_DETAIL="GitHub rejected the review: $ERROR_MSG"
+            else
+              FAIL_DETAIL="GitHub API error: $ERROR_MSG. This might be a temporary issue — try again or contact the infra team."
+            fi
+
+            FAIL_BODY=$(printf '❌ **Bypass Approval Failed**\n\n%s' "$FAIL_DETAIL")
+            TEMP_FILE=$(mktemp)
+            jq -n --arg body "$FAIL_BODY" '{"body": $body}' > "$TEMP_FILE"
+
             curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"❌ **Bypass Approval Failed**\\n\\nFailed to approve PR #$PR_NUMBER. This might be a temporary issue with the GitHub API.\\n\\nPlease try again or contact the infra team if the problem persists.\"}" \
+              -d @"$TEMP_FILE" \
               "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
+            rm -f "$TEMP_FILE"
 
             # Add failure reaction
             curl -s -X POST \
@@ -364,7 +427,7 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
-          CONFIRMATION="✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @$COMMENT_AUTHOR (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked."
+          CONFIRMATION=$'✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @'"$COMMENT_AUTHOR"$' (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked.'
 
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$CONFIRMATION" '{"body": $body}' > "$TEMP_JSON_FILE"
@@ -382,14 +445,14 @@ jobs:
   bypass-unauthorized:
     needs: [parse-comment, find-pr]
     if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'false' && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Post unauthorized message
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
-          UNAUTHORIZED_MSG="❌ **Access Denied**: The \`/codeowners bypass\` command can only be used by members of the \`@tenstorrent/metalium-developers-infra\` team.\n\nUser @$COMMENT_AUTHOR is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team."
+          UNAUTHORIZED_MSG=$'❌ **Access Denied**: The `/codeowners bypass` command can only be used by members of the `@tenstorrent/metalium-developers-infra` team.\n\nUser @'"$COMMENT_AUTHOR"$' is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team.'
 
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$UNAUTHORIZED_MSG" '{"body": $body}' > "$TEMP_JSON_FILE"
@@ -414,7 +477,7 @@ jobs:
   get-reviews:
     needs: [find-pr]
     if: always() && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       approved-reviewers: ${{ steps.get-reviews.outputs.approved-reviewers }}
     steps:
@@ -497,7 +560,7 @@ jobs:
   analyze-codeowners:
     needs: [find-pr, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       codeowners-groups: ${{ steps.analyze.outputs.codeowners-groups }}
       codeowners-teams: ${{ steps.analyze.outputs.codeowners-teams }}
@@ -509,7 +572,8 @@ jobs:
       changed-files-count: ${{ steps.get-files.outputs.changed-files-count }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
           sparse-checkout: .github/CODEOWNERS
@@ -2156,10 +2220,36 @@ jobs:
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-              # Check combined approval for this file set
-              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
-              if [ "$has_approval" = "true" ]; then
-                echo "Team $team already approved (combined check), skipping"
+              # Per-file approval check (matches comment/summary logic):
+              # For each file this team owns, gather ALL owners of that file
+              # (from any team/individual) and check if any approved.
+              # Only skip the team if ALL its files are individually covered.
+              all_team_files_approved=true
+              IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
+              for tfile in "${TEAM_FILES_ARRAY[@]}"; do
+                [ -z "$tfile" ] && continue
+                file_approved=false
+                # Check all file sets in FILES_TO_MEMBERS for this individual file
+                for fset in "${!FILES_TO_MEMBERS[@]}"; do
+                  if echo "$fset" | tr ',' '\n' | grep -Fqx -- "$tfile"; then
+                    # This file set contains our file — check its members
+                    IFS=',' read -ra FSET_MEMBERS <<< "${FILES_TO_MEMBERS[$fset]}"
+                    for member in "${FSET_MEMBERS[@]}"; do
+                      [ -z "$member" ] && continue
+                      if echo "$APPROVED_REVIEWERS" | tr ',' '\n' | grep -qx "$member"; then
+                        file_approved=true
+                        break 2
+                      fi
+                    done
+                  fi
+                done
+                if [ "$file_approved" = false ]; then
+                  all_team_files_approved=false
+                  break
+                fi
+              done
+              if [ "$all_team_files_approved" = true ]; then
+                echo "Team $team: all files have at least one approved owner, skipping"
                 continue
               fi
 

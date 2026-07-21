@@ -24,16 +24,33 @@ inline void cb_wait_front_pack(int operand, std::int32_t num_tiles) {
 #endif
 
 #include "api/compute/common.h"
-#include "api/compute/untilize.h"
-ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
+#include "api/compute/pack_untilize.h"
+
+// Largest pack_untilize block width (<= DEST tile capacity) dividing full_ct_dim.
+constexpr uint32_t untilize_pack_block_ct(uint32_t full_ct_dim) {
+    const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
+    for (uint32_t bct = max_bct; bct >= 1; --bct) {
+        if (full_ct_dim % bct == 0) {
+            return bct;
+        }
+    }
+    return 1;
+}
+
+template <uint32_t num_tiles>
+ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb) {
+    constexpr uint32_t block_ct = untilize_pack_block_ct(num_tiles);
+    constexpr uint32_t num_blocks = num_tiles / block_ct;
     compute_kernel_hw_startup(in0_cb, out_cb);
-    untilize_init(in0_cb);
+    pack_untilize_init<block_ct, num_tiles>(in0_cb, out_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
-    untilize_block(in0_cb, num_tiles, out_cb);
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+        pack_untilize_block<block_ct, num_tiles>(in0_cb, 1, out_cb, b);
+        cb_pop_front(in0_cb, block_ct);
+    }
     cb_push_back(out_cb, num_tiles);
-    cb_pop_front(in0_cb, num_tiles);
-    untilize_uninit(in0_cb);
+    pack_untilize_uninit(out_cb);
 }
 void kernel_main() {
     // Read out the tile we want to print using BRISC, put it in c_in0
@@ -50,7 +67,7 @@ void kernel_main() {
 
     // For tilized formats, also test untilizing them on device and make sure we can print.
     if (is_tilized) {
-        UNTILIZE_TILES(cb_id, cb_intermed, 1);
+        UNTILIZE_TILES<1>(cb_id, cb_intermed);
     }
     // Print the tile from each RISC, one after another
     DEVICE_PRINT_UNPACK("Print tile from Unpack:\n{}\n", TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized));

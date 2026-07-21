@@ -44,9 +44,3 @@ class TestTargetConfig:
         self.reset_simulator_per_test = config.getoption(
             "--reset-simulator-per-test", default=False
         )
-
-
-def initialize_test_target_from_pytest(config):
-    """Initialize the global test configuration from pytest command line options."""
-    test_target = TestTargetConfig()
-    test_target.update_from_pytest_config(config)

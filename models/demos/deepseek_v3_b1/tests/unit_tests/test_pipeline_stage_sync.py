@@ -121,7 +121,7 @@ from models.demos.deepseek_v3_b1.micro_ops.pipeline_stage_sync.op import Pipelin
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X})],
     indirect=["device_params"],
 )
 def test_pipeline_stage_sync_2d(

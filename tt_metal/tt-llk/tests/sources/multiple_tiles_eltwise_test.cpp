@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -79,26 +79,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
     for (int i = 0; i < params.TILE_CNT; i++)
     {
         LLK_ASSERT(
             (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

@@ -5,6 +5,9 @@
 #include "topk_dataflow_common.hpp"
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <cstdint>
 
@@ -27,27 +30,33 @@ void kernel_main() {
     // Precomputed indices tensor accessor
     constexpr auto indices_args = TensorAccessorArgs<inout_tensor_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(3);
-    constexpr uint32_t indices_tile_bytes = get_tile_size(cb_intermed_index);
-    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr, indices_tile_bytes);
+    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
 #endif  // not GENERATE_INDICES
 
     // Constants
     constexpr uint32_t onetile = 1;
 
     // Tensor accessor
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr, tile_bytes);
+    const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr);
+
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_index(cb_intermed_index);
+    const uint32_t tile_bytes_in0 = cb_in0.get_tile_size();
+#if not GENERATE_INDICES
+    const uint32_t tile_bytes_index = cb_index.get_tile_size();
+#endif
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
         const uint32_t row = id + core_loop * total_number_of_cores;
         for (uint32_t w = 0; w < Wt; ++w) {
-            cb_reserve_back(cb_id_in0, onetile);
-            const uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(row * Wt + w, inout_tensor_accessor, l1_write_addr);
-            noc_async_read_barrier();
+            cb_in0.reserve_back(onetile);
+            noc.async_read(
+                inout_tensor_accessor, cb_in0, tile_bytes_in0, {.page_id = row * Wt + w}, {.offset_bytes = 0});
+            noc.async_read_barrier();
 
-            cb_push_back(cb_id_in0, onetile);
+            cb_in0.push_back(onetile);
 #if GENERATE_INDICES
             if (uint16_output) {
                 generate_index_tile<uint16_t>(cb_intermed_index, w);
@@ -56,11 +65,11 @@ void kernel_main() {
             }
 #else
             // Read precomputed indices to circular buffer
-            cb_reserve_back(cb_intermed_index, onetile);
-            const uint32_t l1_write_addr_ind = get_write_ptr(cb_intermed_index);
-            noc_async_read_tile(row * Wt + w, indices_accessor, l1_write_addr_ind);
-            noc_async_read_barrier();
-            cb_push_back(cb_intermed_index, onetile);
+            cb_index.reserve_back(onetile);
+            noc.async_read(
+                indices_accessor, cb_index, tile_bytes_index, {.page_id = row * Wt + w}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_index.push_back(onetile);
 #endif  // GENERATE_INDICES
         }  // w loop
     }  // core_loop loop

@@ -6,16 +6,13 @@
 
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
-
-#if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#endif
+#include "risc_common.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
-//  - for Quasar, multiple DMs share assert_status area and we're fine of just getiting info for one of the asserts.
-//    To be multi-thread safe, CAS is used; address is remapped from uncached to
-//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
+//  - for Quasar, multiple DMs and TRISCs share assert_status; only the first to assert records its
+//    metadata via a dedicated claim field atomically claimed (amoswap on the cached L1 alias).
+//    Writes are flushed to make them visible to host.
 inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
     // Write the line number into the memory mailbox for host to read.
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
@@ -25,16 +22,16 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     if (addr >= MEM_L1_UNCACHED_BASE) {
         v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
     }
-    uint16_t expected = DebugAssertOK;
-    if (__atomic_compare_exchange_n(
-            &v->tripped, &expected, DebugAssertWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+    uint32_t old = __atomic_exchange_n(&v->claim, 0xDEADBEEF, __ATOMIC_ACQ_REL);
+    if (!old)
 #else
     if (v->tripped == DebugAssertOK)
 #endif
     {
         v->line_num = line_num;
         v->which = internal_::get_hw_thread_idx();
-        if (assert_type == DebugAssertHwFault) {  // only vslid on Quasar
+        if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
+#ifndef COMPILE_FOR_TRISC
             uint64_t mcause;
             uint64_t mtval;
             uint64_t mepc;
@@ -43,14 +40,24 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             asm volatile("csrr %0, mtval" : "=r"(mtval));
             v->line_num = mepc;  // mepc is the instruction address that caused the fault
             v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+            uint32_t error_code =
+                RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+            v->hw_fault_info =
+                (static_cast<uint64_t>(RISCV_DEBUG_REGS->ERR_DATA) << 32) |
+                static_cast<uint64_t>(RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX]);
+            // use error code to get the TRISC ID for errors 0-3 and 32-35.
+            // NOTE: for errors 32-35, the TRISC order is reversed, so we need to subtract the error code from 35.
+            uint32_t trisc_id = error_code < 4 ? error_code : error_code > 32 ? 35 - error_code : 0;
+            v->which = (RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 30) *
+                           NUM_TRISC_CORES +
+                       trisc_id + NUM_DM_CORES;
+#endif
         }
         v->tripped = assert_type;
-#if defined(ARCH_QUASAR)
-        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        // TODO: Replace with flush_l2_cache_line() once available
-        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-        *flush_reg = reinterpret_cast<uintptr_t>(v);
-        asm volatile("fence" ::: "memory");
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Flush the cache range covering debug_assert_msg_t to L1 so host sees all fields via NOC; may span multiple cache lines
+        flush_l2_cache_range(reinterpret_cast<uintptr_t>(v), sizeof(debug_assert_msg_t));
 #endif
     }
 
@@ -74,13 +81,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     }
 }
 
-// The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
-// without {}s.
-#define ASSERT(condition, ...)                        \
-    do {                                              \
-        if (not(condition))                           \
-            assert_and_hang(__LINE__, ##__VA_ARGS__); \
-    } while (0)
+#define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))
 
 #define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1
@@ -90,32 +91,21 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-#define ASSERT(condition, ...) \
-    do {                       \
-        if (!(condition))      \
-            while (true);      \
-    } while (0)
+#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
 
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 0
 
-#elif defined(ENABLE_LLK_ASSERT)
+#else
 
-#define ASSERT(condition, ...)
+// Avoid unused variable warnings here.
+#define ASSERT(condition, ...) (void(sizeof(not(condition))))
 
 #define ASSERT_ENABLED 0
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
 #define WATCHER_ASSERT_ENABLED 0
 
-#else  // No asserts enabled
-
-#define ASSERT(condition, ...)
-
-#define ASSERT_ENABLED 0
-#define WATCHER_ASSERT_ENABLED 0
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-
-#endif  // LIGHTWEIGHT_KERNEL_ASSERTS / ENABLE_LLK_ASSERT
+#endif  // LIGHTWEIGHT_KERNEL_ASSERTS
 
 #endif  // WATCHER_ENABLED

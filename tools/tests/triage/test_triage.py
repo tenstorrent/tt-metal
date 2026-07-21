@@ -34,6 +34,9 @@ triage.progress_disabled = True  # Disable progress bars for tests
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_TTNN_ADD_INTEGERS = (
+    "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
+)
 HANG_APP_EXPECTED_RESULTS = {
     HANG_APP_ADD_2_INTEGERS: {
         "lightweight_asserts": {
@@ -59,6 +62,36 @@ HANG_APP_EXPECTED_RESULTS = {
                     "line": 40,
                 },
             },
+        },
+    },
+    HANG_APP_TTNN_ADD_INTEGERS: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "risc_names": {"trisc0", "trisc1", "trisc2"},
+            "first_callstack_file": "add_2_tiles_hang.cpp",
+            "first_callstack_line": 40,
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+            },
+        },
+        "running_operations": {
+            "expected_op_name_contains": "AddIntegersHang",
+            "assert_no_na": True,
         },
     },
 }
@@ -140,7 +173,7 @@ def cause_hang_with_app(request):
             10,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -154,7 +187,7 @@ def cause_hang_with_app(request):
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -165,6 +198,35 @@ def cause_hang_with_app(request):
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+            },
+            60,
+        ),
+        (
+            # TTNN-dispatched hang: auto detection, fast dispatch
+            HANG_APP_TTNN_ADD_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
+            },
+            60,
+        ),
+        (
+            # TTNN-dispatched hang: auto detection, slow dispatch
+            HANG_APP_TTNN_ADD_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
             60,
         ),
@@ -213,11 +275,11 @@ class TestTriage:
         )
         assert len(result.stderr) == 0
 
-    def test_triage_initialize_with_noc1(self):
+    def test_triage_with_noc_0(self):
         global triage_script
 
         result = subprocess.run(
-            [triage_script, "--initialize-with-noc1", "--run=test_output"],
+            [triage_script, "--noc-id=0", "--run=test_output"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -294,6 +356,9 @@ class TestTriage:
     def test_check_core_magic(self):
         self.run_triage_script("check_core_magic.py")
 
+    def test_check_l1_status(self):
+        self.run_triage_script("check_l1_status.py")
+
     def test_check_eth_status(self):
         self.run_triage_script("check_eth_status.py")
 
@@ -349,16 +414,21 @@ class TestTriage:
             # Verify first callstack entry if specified
             first_entry = callstack[0]
             expected_file = expected.get("first_callstack_file")
-            if expected_file:
-                assert first_entry.file.endswith(
-                    expected_file
-                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file}'"
-
             expected_line = expected.get("first_callstack_line")
+            if expected_file or expected_line:
+                assert (
+                    first_entry.file_info is not None
+                ), f"{check.risc_name}: Expected file_info on first callstack entry, got None"
+
+            if expected_file:
+                assert first_entry.file_info.file.endswith(
+                    expected_file
+                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file_info.file}'"
+
             if expected_line:
                 assert (
-                    first_entry.line == expected_line
-                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.line}"
+                    first_entry.file_info.line == expected_line
+                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
 
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
@@ -366,7 +436,40 @@ class TestTriage:
         assert len(result) > 0, "Expected at least one configuration entry"
 
     def test_dump_running_operations(self):
-        self.run_triage_script("dump_running_operations.py")
+        result = self.run_triage_script("dump_running_operations.py")
+
+        expected = self.expected_results.get("running_operations")
+        if not expected:
+            return
+
+        assert result is not None, "Expected non-None result from dump_running_operations.py"
+        assert len(result) > 0, "Expected at least one running operation in dump_running_operations output"
+
+        live_ops = [op for op in result if op.host_assigned_id]
+        assert len(live_ops) > 0, (
+            "Expected at least one running op with a non-zero host_assigned_id; "
+            "got only background entries (op_id == 0)"
+        )
+
+        if expected.get("assert_no_na"):
+            for op in live_ops:
+                assert op.operation_name != "N/A", (
+                    f"Op id {op.host_assigned_id}: operation_name resolved to N/A. "
+                    f"Dispatcher host_assigned_id failed to lookup against "
+                    f"Inspector getMeshWorkloadRuntimeEntries()."
+                )
+                assert op.operation_parameters != "N/A", (
+                    f"Op id {op.host_assigned_id}: operation_parameters resolved to N/A. "
+                    f"Op was named '{op.operation_name}' but params were empty in Inspector."
+                )
+
+        expected_name = expected.get("expected_op_name_contains")
+        if expected_name:
+            matching = [op for op in live_ops if expected_name in op.operation_name]
+            assert len(matching) > 0, (
+                f"No running op with name containing '{expected_name}'. "
+                f"Got: {[op.operation_name for op in live_ops]}"
+            )
 
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")
@@ -404,10 +507,13 @@ class TestTriage:
                         if expected_file and row.callstack:
                             callstack = row.callstack.callstack
                             assert len(callstack) > 0, "Expected non-empty callstack in aggregated row"
-                            matching_entries = [e for e in callstack if e.file and e.file.endswith(expected_file)]
-                            assert (
-                                len(matching_entries) > 0
-                            ), f"Expected file '{expected_file}' not found in aggregated callstack. Callstack files: {[e.file for e in callstack]}"
+                            matching_entries = [
+                                e for e in callstack if e.file_info and e.file_info.file.endswith(expected_file)
+                            ]
+                            assert len(matching_entries) > 0, (
+                                f"Expected file '{expected_file}' not found in aggregated callstack. "
+                                f"Callstack files: {[e.file_info.file if e.file_info else None for e in callstack]}"
+                            )
 
         finally:
             os.environ.pop("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS", None)
@@ -463,18 +569,22 @@ class TestTriage:
             expected_line = expected_data.get("line")
             if expected_file:
                 # Search through callstack to find the expected file/line
-                matching_entries = [entry for entry in callstack if entry.file.endswith(expected_file)]
+                matching_entries = [
+                    entry for entry in callstack if entry.file_info and entry.file_info.file.endswith(expected_file)
+                ]
                 assert len(matching_entries) > 0, (
                     f"{risc_name}: Expected file '{expected_file}' not found in callstack. "
-                    f"Callstack files: {[entry.file for entry in callstack]}"
+                    f"Callstack files: {[entry.file_info.file if entry.file_info else None for entry in callstack]}"
                 )
 
                 if expected_line is not None:
                     # Find entry with matching file and line
-                    matching_entry = next((entry for entry in matching_entries if entry.line == expected_line), None)
+                    matching_entry = next(
+                        (entry for entry in matching_entries if entry.file_info.line == expected_line), None
+                    )
                     assert matching_entry is not None, (
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
-                        f"Found {expected_file} at lines: {[entry.line for entry in matching_entries]}"
+                        f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
 
     def run_triage_script(

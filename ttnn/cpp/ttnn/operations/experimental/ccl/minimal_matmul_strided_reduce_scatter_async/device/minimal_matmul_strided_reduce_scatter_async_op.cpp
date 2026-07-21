@@ -197,43 +197,6 @@ MinimalMatmulStridedReduceScatterAsync::create_output_tensors(
     return {mm_output_tensor, rs_intermediate_tensor, rs_output_tensor};
 }
 
-tt::tt_metal::operation::Hash MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "MinimalMatmulStridedReduceScatterAsync::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<MinimalMatmulStridedReduceScatterAsync>(
-        // RS params
-        attributes.dim,
-        attributes.num_links,
-        attributes.ring_size,
-        attributes.rs_output_mem_config,
-        attributes.rs_intermediate_mem_config,
-        attributes.topology,
-        attributes.barrier_semaphore.has_value(),
-        attributes.using_persistent_buffers,
-        attributes.sub_device_id.has_value(),
-        attributes.cluster_axis,
-        attributes.num_workers_per_link,
-        attributes.num_buffers_per_channel,
-        attributes.chunk_width_in_mm_blocks,
-        attributes.reduce_scatter_core_grid_offset,
-        // MM params
-        attributes.matmul_struct,
-        // Tensor info
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.padded_shape(),
-        tensor_args.input_tensor.tensor_spec().page_config(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.layout(),
-        tensor_args.input_tensor.memory_config(),
-        tensor_args.weight_tensor.logical_shape(),
-        tensor_args.weight_tensor.padded_shape(),
-        tensor_args.weight_tensor.memory_config(),
-        program_factory.index());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
@@ -264,7 +227,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<Tensor>& optional_rs_output_tensor,
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
-    const std::optional<const Tensor>& addcmul_input_tensor2) {
+    const std::optional<const Tensor>& addcmul_input_tensor2,
+    std::optional<tt::tt_metal::DataType> dtype) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -280,6 +244,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
             .config = config,
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config_mm,
+            .output_dtype = dtype,
             .compute_kernel_config = compute_kernel_config};
 
     auto operation_attributes = OperationType::operation_attributes_t{

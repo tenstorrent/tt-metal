@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -33,64 +36,91 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
 
 #ifdef GAMMA_HAS_VALUE
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamm_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+    const auto gamm_addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 
 #ifdef BETA_HAS_VALUE
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_addrg = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
+    const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 #endif
 
-    fill_cb_with_value(cb_id_scaler, scaler);
-    fill_cb_with_value(cb_id_eps, eps);
+    DataflowBuffer dfb_scaler(cb_id_scaler);
+    DataflowBuffer dfb_eps(cb_id_eps);
+    fill_cb_with_value(dfb_scaler, scaler);
+    fill_cb_with_value(dfb_eps, eps);
 
 #ifdef DO_MASK_H
-    generate_mask_h(cb_id_mask_h, mask_h);
+    {
+        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+        generate_mask_h(dfb_mask_h, mask_h);
+    }
 #endif
 
 #ifdef DO_MASK_W
-    generate_mask_w(cb_id_mask_w, mask_w);
+    {
+        DataflowBuffer dfb_mask_w(cb_id_mask_w);
+        generate_mask_w(dfb_mask_w, mask_w);
+    }
 #endif
 
-    uint32_t offs = 0;
     constexpr uint32_t onetile = 1;
+    uint32_t offs = 0;
 
-    const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
+    Noc noc;
+    DataflowBuffer dfb_input(cb_id_input);
+#ifdef GAMMA_HAS_VALUE
+    DataflowBuffer dfb_gamma(cb_id_gamma);
+#endif
+#ifdef BETA_HAS_VALUE
+    DataflowBuffer dfb_beta(cb_id_beta);
+#endif
+
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
-        cb_reserve_back(cb_id_input, num_inner);
+        dfb_input.reserve_back(num_inner);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             input_tile_idx = tile_offset + outer_idx * num_inner + inner_idx;
-            noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + inner_idx * input_tile_bytes);
+            noc.async_read(
+                input_addrg,
+                dfb_input,
+                input_tile_bytes,
+                {.page_id = input_tile_idx},
+                {.offset_bytes = inner_idx * input_tile_bytes});
         }  // num_inner loop
-        noc_async_read_barrier();
-        cb_push_back(cb_id_input, num_inner);
+        noc.async_read_barrier();
+        dfb_input.push_back(num_inner);
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
 #ifdef GAMMA_HAS_VALUE
-            cb_reserve_back(cb_id_gamma, block_size);
-            auto gamma_l1_write_addr = get_write_ptr(cb_id_gamma);
+            dfb_gamma.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
-                noc_async_read_tile(inner_idx + r, gamm_addrg, gamma_l1_write_addr);
-                gamma_l1_write_addr += gamma_tile_bytes;
+                noc.async_read(
+                    gamm_addrg,
+                    dfb_gamma,
+                    gamma_tile_bytes,
+                    {.page_id = inner_idx + r},
+                    {.offset_bytes = r * gamma_tile_bytes});
             }  // block_size loop
-            noc_async_read_barrier();
-            cb_push_back(cb_id_gamma, block_size);
+            noc.async_read_barrier();
+            dfb_gamma.push_back(block_size);
 #endif
 
 #ifdef BETA_HAS_VALUE
-            cb_reserve_back(cb_id_beta, block_size);
-            auto beta_l1_write_addr = get_write_ptr(cb_id_beta);
+            dfb_beta.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
-                noc_async_read_tile(inner_idx + r, beta_addrg, beta_l1_write_addr);
-                beta_l1_write_addr += beta_tile_bytes;
+                noc.async_read(
+                    beta_addrg,
+                    dfb_beta,
+                    beta_tile_bytes,
+                    {.page_id = inner_idx + r},
+                    {.offset_bytes = r * beta_tile_bytes});
             }  // block_size loop
-            noc_async_read_barrier();
-            cb_push_back(cb_id_beta, block_size);
+            noc.async_read_barrier();
+            dfb_beta.push_back(block_size);
 #endif
         }  // num_inner loop
         offs += num_inner;

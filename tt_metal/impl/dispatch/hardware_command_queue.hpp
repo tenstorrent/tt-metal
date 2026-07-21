@@ -36,7 +36,9 @@ public:
     const CoreCoord& virtual_enqueue_program_dispatch_core() const;
 
     void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data);
+        uint32_t num_dispatch_sems,
+        const vector_aligned<uint32_t>& noc_mcast_unicast_data,
+        ttsl::Span<const uint32_t> workers_per_sub_device);
 
     uint32_t id() const;
 

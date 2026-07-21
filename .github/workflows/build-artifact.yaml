@@ -1,8 +1,7 @@
 name: "Build tt-metal artifacts"
-
 permissions:
+  contents: read
   packages: write
-
 on:
   workflow_call:
     inputs:
@@ -10,6 +9,11 @@ on:
         required: false
         type: string
         default: "Release"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for the build-artifact job"
       tracy:
         required: false
         type: boolean
@@ -44,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      build-ttnn-import-artifact:
+        required: false
+        type: boolean
+        default: false
+        description: "Upload a lean artifact (build/lib *.so + runtime) so consumers can import ttnn in-place via TT_FROM_PRECOMPILED_DIR"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
         #        Fow now enabling an opt-out. But this should get removed.
@@ -79,11 +88,23 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       ref:
         required: false
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       use-artifacts-from-run:
         required: false
         type: string
@@ -120,6 +141,11 @@ on:
         type: string
         default: ""
         description: "Pre-built ManyLinux Docker image tag"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
     outputs:
       ci-build-docker-image:
         description: >-
@@ -162,7 +188,11 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
-
+      ttnn-import-artifact-id:
+        description: "ID of the lean artifact (build/lib *.so + runtime) for importing ttnn in-place without a wheel"
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.ttnn_import_artifact_id || '' }}
   workflow_dispatch:
     inputs:
       tracy:
@@ -211,11 +241,21 @@ on:
         required: false
         type: string
         default: "Release"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for the build-artifact job"
       enable-lto:
         required: false
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
       fetch-depth:
         required: false
         type: number
@@ -223,6 +263,18 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
+      wheel-ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref used only for wheel checkout/versioning"
       publish-artifact:
         required: false
         type: boolean
@@ -244,14 +296,16 @@ jobs:
 
   # Parse platform dropdown to extract distro/version/toolchain
   parse-platform:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
+      python-version: ${{ steps.parse.outputs.python-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -260,7 +314,6 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
           enable-lto: ${{ inputs.enable-lto || false }}
-
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
   # =============================================================================
@@ -284,7 +337,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
       ref: ${{ inputs.ref }}
-
+      harbor-prefix: ${{ inputs.harbor-prefix }}
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
@@ -294,11 +347,11 @@ jobs:
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
-
       - name: Download artifacts from workflow run
         id: download
         env:
@@ -308,7 +361,6 @@ jobs:
           workflow_run_id: ${{ inputs.use-artifacts-from-run }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
-
       - name: Upload build artifact for downstream jobs
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -316,7 +368,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
           if-no-files-found: error
           retention-days: 1
-
       - name: Upload wheel artifact
         if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -325,7 +376,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.whl
           if-no-files-found: ignore
           retention-days: 1
-
       - name: Upload packages artifact
         if: ${{ steps.download.outputs.packages-artifact-name != '' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -334,7 +384,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.deb
           if-no-files-found: ignore
           retention-days: 1
-
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
@@ -343,26 +392,60 @@ jobs:
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
+    # Cross-workflow compile mutex: if two workflows (e.g. pr-gate + merge-gate) trigger
+    # builds for the same commit + config simultaneously, queue them so the second run
+    # gets a fully warm ccache instead of both racing with cold caches.
+    # Keyed purely on SHA + compile inputs — no branch/PR special-casing.
+    concurrency:
+      group: >-
+        cmake-build-
+        ${{ github.sha }}-
+        ${{ inputs.platform }}-
+        ${{ inputs.build-type }}-
+        ${{ inputs.toolchain }}-
+        ${{ inputs.architecture }}-
+        tracy:${{ inputs.tracy }}-
+        dist:${{ inputs.distributed }}-
+        lto:${{ inputs.enable-lto }}
+      queue: max
     timeout-minutes: 100
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ${{ inputs['runs-on'] }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      ttnn_import_artifact_id: ${{ steps.upload_ttnn_import.outputs.artifact-id }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
       VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
+      CCACHE_S3_BUCKET: ccache
+      CCACHE_S3_PREFIX: tt-metal
+      CCACHE_S3_READONLY: "false"
+      CCACHE_S3_DEBUG: "false"
     container:
+      # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
+      # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
+      # from check-harbor. Either way format(prefix, tag) produces the right ref.
       image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!' }}
+        ${{
+          (inputs.ci-build-docker-image != '' &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image)) ||
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
+        }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        CCACHE_COMPRESS: "true"
+        CCACHE_COMPRESSLEVEL: "3"
+        # Log ccache operations to a file so remote storage errors are visible in CI.
+        # Errors (storage helper failures, S3 timeouts) would otherwise be silent.
+        CCACHE_LOGFILE: /tmp/ccache.log
+        # Strip the working directory prefix from hashed paths so cache entries
+        # are reusable across machines even if the checkout path differs.
+        CCACHE_BASEDIR: /work
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -381,30 +464,61 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
 
     steps:
-      - name: Check Redis credentials
+      - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+            echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
+          CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
+          if [ "${CCACHE_S3_READONLY}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          if [ "${CCACHE_S3_DEBUG}" = "true" ]; then
+            echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          fi
+          echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
+
+      - name: Verify S3 connectivity (write / read-back / delete)
+        # NOTE: this probe is intentionally NON-FATAL. ccache treats the remote
+        # cache as a soft dependency (remote errors degrade to local misses), so a
+        # transient Garage hiccup must not turn into a hard build failure. We warn
+        # and continue rather than `exit 1`. The probe is purely diagnostic.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          # Use a per-job unique key so concurrent jobs (this is a reusable workflow
+          # invoked by many pipelines against the same bucket/prefix) don't clobber
+          # each other's PUT/GET/DELETE windows and cause spurious 404 read-backs.
+          KEY=".s3-connectivity-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${RANDOM}"
+          BASE="http://garage.garage.svc.cluster.local:3900/${CCACHE_S3_BUCKET}/${CCACHE_S3_PREFIX}/${KEY}"
+          PAYLOAD="ccache-s3-connectivity-ok"
+          SIGV4="aws:amz:garage:s3"
+          CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
+          probe() {
+            # PUT
+            echo "${PAYLOAD}" | curl -fsS -X PUT --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+              "${BASE}" --data-binary @- -o /dev/null || return 1
+            # GET and verify
+            local result
+            result=$(curl -fsS --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}") || return 1
+            [ "${result}" = "${PAYLOAD}" ] || { echo "Read-back mismatch: got '${result}'"; return 1; }
+            # DELETE (best effort cleanup)
+            curl -fsS -X DELETE --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}" -o /dev/null || true
+            return 0
+          }
+          if probe; then
+            echo "S3 connectivity verified: write/read-back/delete all OK"
+          else
+            echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
+          fi
 
       - name: Set artifact name
         id: set-artifact-name
@@ -437,12 +551,14 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: Create ccache tmpdir
         run: |
@@ -463,10 +579,14 @@ jobs:
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
-          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          key: >-
+            cpm-z22-${{ hashFiles(
+              'third_party/CMakeLists.txt',
+              'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+              'tt-train/cmake/dependencies.cmake') }}
           restore-keys: cpm-z22-
 
       - name: 📦 Unpack CPM cache
@@ -521,7 +641,7 @@ jobs:
 
       - name: 📦 Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
@@ -530,7 +650,11 @@ jobs:
         timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
-          cmake --build build --target install
+          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+            --interval 1 \
+            --label "cmake build (install target)" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- cmake --build build --target install
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
@@ -552,10 +676,35 @@ jobs:
 
       - name: Publish ccache summary
         run: |
+          CCACHE_STATS=$(ccache -sv)
+          echo "$CCACHE_STATS"
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo "$CCACHE_STATS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
+          if [ -f /tmp/ccache-storage-s3.log ]; then
+            echo "=== ccache-storage-s3 log (first 30 lines) ==="
+            head -30 /tmp/ccache-storage-s3.log
+            echo "=== ccache-storage-s3 log (last 80 lines) ==="
+            tail -80 /tmp/ccache-storage-s3.log
+            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -30 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
+            echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
+            tail -200 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
@@ -569,10 +718,36 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: 'Tar files'
+      - name: Stage ttnn-import libs
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        run: |
+          # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime). strip --strip-unneeded
+          # drops the symbol table + debug, keeping the dynamic symbols needed to import ttnn.
+          mkdir -p /work/ttnn-import/build/lib
+          cp -a /work/build/lib/*.so* /work/ttnn-import/build/lib/
+          find /work/ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-unneeded {} +
+          cp -a /work/runtime /work/ttnn-import/runtime
+          echo "Lean ttnn-import tree size:"; du -sh /work/ttnn-import /work/ttnn-import/build/lib
+
+      - name: ☁️ Upload ttnn-import artifact
+        id: upload_ttnn_import
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        timeout-minutes: 10
+        with:
+          name: ttnn-import-${{ inputs.build-type }}
+          path: /work/ttnn-import
+          compression-level: 1
+          if-no-files-found: error
+
+      - name: "Tar files"
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
+          WASM_ROOT="build/profiler/build_wasm"
+          mkdir -p "${WASM_ROOT}/traces"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples"
+          ARTIFACT_PATHS+=" build/test build/tools runtime tt_metal/pre-compiled ${WASM_ROOT}"
+
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
@@ -588,6 +763,7 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           RUN_ID="${{ github.run_id }}"
@@ -595,7 +771,7 @@ jobs:
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}_${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )
@@ -613,42 +789,25 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  # Determine Python version based on platform
-  determine-python-version:
-    needs: parse-platform
-    runs-on: ubuntu-latest
-    outputs:
-      python-version: ${{ steps.set-python-version.outputs.version }}
-    steps:
-      - id: set-python-version
-        run: |
-          # Get distro and version from parse-platform outputs (which handles both workflow_dispatch and workflow_call)
-          DISTRO="${{ needs.parse-platform.outputs.distro }}"
-          VERSION="${{ needs.parse-platform.outputs.version }}"
-
-          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
-          if [ "$VERSION" = "24.04" ]; then
-            PYTHON_VERSION="3.12"
-          else
-            PYTHON_VERSION="3.10"
-          fi
-
-          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Determined Python version: $PYTHON_VERSION for distro=$DISTRO, version=$VERSION"
-
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
+    name: 🐍 Build wheel (Python ${{ needs.parse-platform.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
-    needs: [parse-platform, build-docker-image, determine-python-version]
+    needs: [parse-platform, build-docker-image]
     secrets: inherit
     with:
-      python-version: ${{ needs.determine-python-version.outputs.python-version }}
+      python-version: ${{ needs.parse-platform.outputs.python-version }}
       docker-image: >-
-        ${{ inputs.manylinux-docker-image ||
-            needs.build-docker-image.outputs.manylinux-tag ||
-            'docker-image-unresolved!' }}
-      ref: ${{ inputs.ref || '' }}
+        ${{
+          (inputs.manylinux-docker-image != '' &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image)) ||
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
+        }}
+      ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      runs-on: ${{ inputs['runs-on'] }}
+      checkout-filter: ${{ inputs.checkout-filter }}

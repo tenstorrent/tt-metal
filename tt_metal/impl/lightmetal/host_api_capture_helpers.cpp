@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/fmt.hpp>
 #include <circular_buffer_config.hpp>
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/device.hpp>
@@ -27,27 +28,27 @@ namespace {
 // This can be useful for debug. Not all data types are currently supported, can use this during developmenmt.
 [[maybe_unused]] void PrintHostDataType(const HostDataType& data) {
     std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
             },
             [](const std::shared_ptr<std::vector<uint16_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
             },
             [](const std::shared_ptr<std::vector<int32_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
             },
             [](const std::shared_ptr<std::vector<uint32_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
             },
             [](const std::shared_ptr<std::vector<float>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
             },
             [](const std::shared_ptr<std::vector<bfloat16>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
+                log_debug(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
             },
-            [](const void* /*value*/) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
-            [](auto&&) { log_info(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
+            [](const void* /*value*/) { log_debug(tt::LogMetalTrace, "HostDataType contains: const void*"); },
+            [](auto&&) { log_debug(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
         data);
 }
 }  // namespace
@@ -262,7 +263,7 @@ void CaptureEnqueueReadBuffer(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueReadBufferCommand, cmd.Union());
 }
 
-void CaptureFinish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void CaptureFinish(HWCommandQueue& cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
 
@@ -325,7 +326,7 @@ void CaptureSetRuntimeArgsUint32(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    tt::stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     auto& ctx = LightMetalCaptureContext::get();
 
     std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);

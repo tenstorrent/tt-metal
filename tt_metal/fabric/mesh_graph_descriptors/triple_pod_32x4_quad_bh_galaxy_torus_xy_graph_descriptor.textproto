@@ -1,0 +1,36 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 4, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "TriplePod32x4QuadBHGalaxyTorusXY"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "TriplePod32x4QuadBHGalaxyTorusXY" graph_id: 0 } }

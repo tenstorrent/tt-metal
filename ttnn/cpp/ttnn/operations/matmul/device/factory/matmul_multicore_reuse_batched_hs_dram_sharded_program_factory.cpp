@@ -15,45 +15,58 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
 using namespace tt;
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::ComputeConfigDescriptor;
+using tt::tt_metal::DataMovementConfigDescriptor;
+using tt::tt_metal::KernelDescriptor;
+using tt::tt_metal::ProgramDescriptor;
+
 namespace ttnn::prim {
 namespace reuse_batched_hs_dram_sharded_optimized_helpers {
 
-using dram_sharded_helpers::get_device_for_dram_banks;
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
 using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 
 // Batch-sharded DRAM matmul
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
-std::pair<tt::tt_metal::Program, MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::shared_variables_t>
-create_program_batch_sharded(
+// ProgramDescriptor variant: translates the same logic as create_program_batch_sharded
+// into a lightweight ProgramDescriptor (no Program object created).
+static ProgramDescriptor create_program_batch_sharded_descriptor(
     tt::tt_metal::IDevice* device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    tt::tt_metal::MathFidelity math_fidelity,
+    MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
-    uint32_t B,            // Total batch size
-    uint32_t M,            // M dimension (rows of A, rows of output)
-    uint32_t K,            // K dimension (cols of A, rows of B - contracted dimension)
-    uint32_t N,            // N dimension (cols of B, cols of output)
-    uint32_t in0_block_w,  // Block width for inner loop over K
-    uint32_t per_core_M,   // M tiles per core (should equal M for batch sharding)
-    uint32_t per_core_N,   // N tiles per core (should equal N for batch sharding)
+    bool dst_full_sync_en,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    uint32_t B,
+    uint32_t /* M */,
+    uint32_t K,
+    uint32_t /* N */,
+    uint32_t in0_block_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
     std::optional<UnaryWithParam> fused_activation,
-    tt_metal::Buffer* in0_buffer,
-    tt_metal::Buffer* in1_buffer,
-    tt_metal::Buffer* bias_buffer,
-    tt_metal::Buffer* out_buffer,
+    const tt_metal::MeshTensor& in0_tensor,
+    const tt_metal::MeshTensor& in1_tensor,
+    ttsl::optional_reference<const tt_metal::MeshTensor> bias_tensor,
+    const tt_metal::MeshTensor& out_tensor,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const tt::tt_metal::Tile& bias_tile,
@@ -65,117 +78,41 @@ create_program_batch_sharded(
     bool untilize_out,
     bool skip_compute,
     bool skip_write_back) {
-    log_debug(tt::LogOp, "Batch-sharded DRAM matmul");
-    log_debug(tt::LogOp, "B: {}, M: {}, K: {}, N: {}", B, M, K, N);
-    log_debug(tt::LogOp, "per_core_M: {}, per_core_N: {}, in0_block_w: {}", per_core_M, per_core_N, in0_block_w);
-
-    tt_metal::Program program{};
-
-    // Get the optimal DRAM bank to worker core assignment
-    // Workers MUST be on these cores for efficient DRAM reads
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
     get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in1_noc);
 
-    log_debug(tt::LogOp, "=== Worker cores (optimal DRAM readers) ===");
-    for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
-        log_debug(
-            tt::LogOp,
-            "  Worker/DRAM bank {} -> core ({}, {})",
-            i,
-            all_worker_cores_ordered[i].x,
-            all_worker_cores_ordered[i].y);
-    }
-
-    // Input storage cores - where in0 L1 shards physically reside
+    // Input / output storage core ordering
     std::vector<CoreCoord> input_storage_cores_ordered =
         corerange_to_cores(input_all_storage_cores, std::nullopt, true);
-    log_debug(tt::LogOp, "=== Input storage cores (in0 L1 shards) ===");
-    for (uint32_t i = 0; i < input_storage_cores_ordered.size(); ++i) {
-        log_debug(
-            tt::LogOp,
-            "  Input shard {} -> core ({}, {})",
-            i,
-            input_storage_cores_ordered[i].x,
-            input_storage_cores_ordered[i].y);
-    }
-
-    // Output storage cores - where output L1 shards need to go
     std::vector<CoreCoord> output_storage_cores_ordered =
         corerange_to_cores(output_all_storage_cores, std::nullopt, true);
-    log_debug(tt::LogOp, "=== Output storage cores (output L1 shards) ===");
-    for (uint32_t i = 0; i < output_storage_cores_ordered.size(); ++i) {
-        log_debug(
-            tt::LogOp,
-            "  Output shard {} -> core ({}, {})",
-            i,
-            output_storage_cores_ordered[i].x,
-            output_storage_cores_ordered[i].y);
-    }
 
-    // Validate core counts
     uint32_t num_workers = all_worker_cores_ordered.size();
-    uint32_t num_input_storage_cores = input_storage_cores_ordered.size();
-    uint32_t num_output_storage_cores = output_storage_cores_ordered.size();
-
-    log_debug(tt::LogOp, "num_workers (DRAM banks): {}", num_workers);
-    log_debug(tt::LogOp, "num_input_storage_cores: {}", num_input_storage_cores);
-    log_debug(tt::LogOp, "num_output_storage_cores: {}", num_output_storage_cores);
-
-    // Currently, both input and output storage cores must match the number of workers (DRAM banks).
-    // This is because the factory uses a 1:1 mapping: worker[i] reads from input_storage[i] and
-    // writes to output_storage[i]. Supporting different numbers would require more complex mapping, where multiple
-    // workers read from the same storage core.
     TT_FATAL(
-        num_input_storage_cores == num_workers,
-        "Input storage cores ({}) must match number of workers/DRAM banks ({}). "
-        "Use an L1 shard grid with {} cores.",
-        num_input_storage_cores,
-        num_workers,
+        input_storage_cores_ordered.size() == num_workers,
+        "Input storage cores ({}) must match number of workers/DRAM banks ({})",
+        input_storage_cores_ordered.size(),
         num_workers);
-
     TT_FATAL(
-        num_output_storage_cores == num_workers,
-        "Output storage cores ({}) must match number of workers/DRAM banks ({}). "
-        "Use an L1 shard grid with {} cores.",
-        num_output_storage_cores,
-        num_workers,
+        output_storage_cores_ordered.size() == num_workers,
+        "Output storage cores ({}) must match number of workers/DRAM banks ({})",
+        output_storage_cores_ordered.size(),
         num_workers);
-
-    // Verify that storage cores match worker cores in the same order.
-    // The factory maps worker[i] -> input_storage[i] -> output_storage[i].
-    // If the orderings don't match, data gets misrouted to the wrong cores/batches
     for (uint32_t i = 0; i < num_workers; ++i) {
         TT_FATAL(
             input_storage_cores_ordered[i] == all_worker_cores_ordered[i],
-            "Input storage core ordering mismatch at index {}! "
-            "Storage core ({}, {}) != Worker core ({}, {}). "
-            "The L1 shard grid must use the same core ordering as "
-            "device.get_optimal_dram_bank_to_logical_worker_assignment(). "
-            "Using e.g. a simple rectangular CoreRange will cause data misrouting.",
-            i,
-            input_storage_cores_ordered[i].x,
-            input_storage_cores_ordered[i].y,
-            all_worker_cores_ordered[i].x,
-            all_worker_cores_ordered[i].y);
-
+            "Input storage core ordering mismatch at index {}",
+            i);
         TT_FATAL(
             output_storage_cores_ordered[i] == all_worker_cores_ordered[i],
-            "Output storage core ordering mismatch at index {}! "
-            "Storage core ({}, {}) != Worker core ({}, {}). "
-            "The L1 shard grid must use the same core ordering as "
-            "device.get_optimal_dram_bank_to_logical_worker_assignment(). "
-            "Using e.g. a simple rectangular CoreRange will cause data misrouting.",
-            i,
-            output_storage_cores_ordered[i].x,
-            output_storage_cores_ordered[i].y,
-            all_worker_cores_ordered[i].x,
-            all_worker_cores_ordered[i].y);
+            "Output storage core ordering mismatch at index {}",
+            i);
     }
 
-    // Build NOC coordinate vectors for input and output storage cores
+    // NOC coordinate vectors for storage cores
     std::vector<uint32_t> input_storage_noc_x, input_storage_noc_y;
     std::vector<uint32_t> output_storage_noc_x, output_storage_noc_y;
     for (const auto& core : input_storage_cores_ordered) {
@@ -189,7 +126,7 @@ create_program_batch_sharded(
         output_storage_noc_y.push_back(phys_core.y);
     }
 
-    // Compute the bounding box of all cores (workers + storage) for CB creation
+    // Bounding box of all cores (workers + storage)
     std::set<CoreRange> all_cores_set;
     for (const auto& core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(core));
@@ -203,13 +140,6 @@ create_program_batch_sharded(
     CoreRangeSet all_cores(all_cores_set);
     CoreRange bounding_box = all_cores.bounding_box();
     CoreRangeSet all_cores_in_rect_grid({bounding_box});
-    log_debug(
-        tt::LogOp,
-        "Bounding box: ({}, {}) to ({}, {})",
-        bounding_box.start_coord.x,
-        bounding_box.start_coord.y,
-        bounding_box.end_coord.x,
-        bounding_box.end_coord.y);
 
     uint32_t num_cores = num_workers;
     uint32_t num_dram_banks = device->num_dram_channels();
@@ -221,20 +151,13 @@ create_program_batch_sharded(
         num_cores,
         num_dram_banks);
 
-    log_debug(
-        tt::LogOp,
-        "num_cores: {}, num_dram_banks: {}, batches_per_core: {}",
-        num_cores,
-        num_dram_banks,
-        batches_per_core);
-
     // Subblock parameters
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
         per_core_M, per_core_N, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
-    uint32_t num_blocks = K / in0_block_w;  // Number of inner loop iterations
+    uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -249,32 +172,26 @@ create_program_batch_sharded(
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     // CB sizes
-    // in0: M x in0_block_w tiles per block
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
+    uint32_t in0_CB_tiles = in0_block_tiles * 2;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    // in1: in0_block_w x N tiles per block
     uint32_t in1_block_tiles = in0_block_w * per_core_N;
-    uint32_t in1_CB_tiles = in1_block_tiles * 3;  // triple buffer
+    uint32_t in1_CB_tiles = in1_block_tiles * 3;
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
-    // output: M x N tiles
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
 
-    // Sharded input buffer (in0 in L1)
-    uint32_t in0_shard_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0] *
-                               in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    uint32_t in0_shard_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_tile_shape()[0] *
+                               in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
     uint32_t in2_CB_size = in0_shard_tiles * in0_single_tile_size;
 
-    // Bias CB
     uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_size = in3_block_tiles * bias_single_tile_size;
 
-    // Output reshard buffer
-    uint32_t out_shard_tiles = out_buffer->shard_spec().shape()[0] / output_tile.get_tile_shape()[0] *
-                               out_buffer->shard_spec().shape()[1] / output_tile.get_tile_shape()[1];
+    uint32_t out_shard_tiles = out_tensor.shard_spec()->shape[0] / output_tile.get_tile_shape()[0] *
+                               out_tensor.shard_spec()->shape[1] / output_tile.get_tile_shape()[1];
     uint32_t out_reshard_CB_size = out_shard_tiles * output_single_tile_size;
 
     // Page sizes for DRAM reads
@@ -286,106 +203,141 @@ create_program_batch_sharded(
     get_max_page_size_and_num_pages(
         device, in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
-    // Tensor stride calculations (bytes per batch)
-    // M, K, N are already in tiles, so stride = num_tiles * tile_size
+    // Tensor stride calculations
     uint32_t in0_batch_stride_bytes = per_core_M * K * in0_single_tile_size;
     uint32_t in1_batch_stride_bytes = K * per_core_N * in1_single_tile_size;
     uint32_t out_batch_stride_bytes = per_core_M * per_core_N * output_single_tile_size;
 
-    log_debug(
-        tt::LogOp,
-        "in0_batch_stride_bytes: {}, in1_batch_stride_bytes: {}, out_batch_stride_bytes: {}",
-        in0_batch_stride_bytes,
-        in1_batch_stride_bytes,
-        out_batch_stride_bytes);
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build CBDescriptors
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor desc;
 
-    // Create CBs on different core sets:
-    // - CB0, CB1, CB3 (compute buffers): on all cores in bounding box
-    // - CB2 (in0 sharded): backed by in0_buffer, on INPUT storage cores only
-    // - CB4/5 (output/intermediate): on worker cores (not backed by buffer)
-    // - CB6 (output reshard): backed by out_buffer, on OUTPUT storage cores only
+    tt::tt_metal::TileDescriptor in0_tile_desc{in0_tile};
+    tt::tt_metal::TileDescriptor in1_tile_desc{in1_tile};
+    tt::tt_metal::TileDescriptor bias_tile_desc{bias_tile};
+    tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
 
     // CB 0: in0 (activations) - on all cores in bounding box
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
-            .set_tile_dims(src0_cb_index, in0_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src0_cb_config);
-
-    // CB 1: in1 (weights) - on all cores in bounding box
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src1_cb_config);
-
-    // CB 2: sharded in0 buffer - on INPUT storage cores, backed by in0_buffer
-    uint32_t src2_cb_index = tt::CBIndex::c_2;
-    tt_metal::CircularBufferConfig src2_cb_config =
-        tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
-            .set_page_size(src2_cb_index, in0_single_tile_size)
-            .set_tile_dims(src2_cb_index, in0_tile)
-            .set_globally_allocated_address(*in0_buffer);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, input_all_storage_cores, src2_cb_config);
-
-    // CB 3: bias (if fused) - on all cores in bounding box
-    if (bias_buffer != nullptr) {
-        uint32_t src3_cb_index = tt::CBIndex::c_3;
-        tt_metal::CircularBufferConfig cb_src3_config =
-            tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
-                .set_tile_dims(src3_cb_index, bias_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, cb_src3_config);
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in0_CB_size;
+        cb_desc.core_ranges = all_cores_in_rect_grid;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0,
+            .data_format = in0_data_format,
+            .page_size = in0_single_tile_size,
+            .tile = in0_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
     }
 
-    // CB 4 & 5: output and intermediate - on worker cores (NOT backed by buffer)
-    // Workers compute locally, then NOC write to output storage cores
+    // CB 1: in1 (weights) - on all cores in bounding box
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in1_CB_size;
+        cb_desc.core_ranges = all_cores_in_rect_grid;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1,
+            .data_format = in1_data_format,
+            .page_size = in1_single_tile_size,
+            .tile = in1_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 2: sharded in0 buffer - on INPUT storage cores, backed by in0_buffer
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in2_CB_size;
+        cb_desc.core_ranges = input_all_storage_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_2,
+            .data_format = in0_data_format,
+            .page_size = in0_single_tile_size,
+            .tile = in0_tile_desc});
+        cb_desc.tensor = &in0_tensor;
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 3: bias (if fused) - on all cores in bounding box
+    if (bias_tensor.has_value()) {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = in3_CB_size;
+        cb_desc.core_ranges = all_cores_in_rect_grid;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_3,
+            .data_format = bias_data_format,
+            .page_size = bias_single_tile_size,
+            .tile = bias_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 4 & 5: output and intermediate - on worker cores
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
     if (interm0_data_format != output_data_format) {
-        // Need separate CBs for output and intermediate
-        tt_metal::CircularBufferConfig output_cb_config =
-            tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_cb_index, output_data_format}})
-                .set_page_size(output_cb_index, output_single_tile_size)
-                .set_tile_dims(output_cb_index, output_tile);
-        tt_metal::CreateCircularBuffer(program, all_worker_cores, output_cb_config);
-
-        tt_metal::CircularBufferConfig interm0_cb_config =
-            tt_metal::CircularBufferConfig(interm0_CB_size, {{interm0_cb_index, interm0_data_format}})
-                .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                .set_tile_dims(interm0_cb_index, output_tile);
-        tt_metal::CreateCircularBuffer(program, all_worker_cores, interm0_cb_config);
+        // Separate CBs for output and intermediate
+        {
+            CBDescriptor cb_desc;
+            cb_desc.total_size = out_reshard_CB_size;
+            cb_desc.core_ranges = all_worker_cores;
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = output_cb_index,
+                .data_format = output_data_format,
+                .page_size = output_single_tile_size,
+                .tile = output_tile_desc});
+            desc.cbs.push_back(std::move(cb_desc));
+        }
+        {
+            CBDescriptor cb_desc;
+            cb_desc.total_size = interm0_CB_size;
+            cb_desc.core_ranges = all_worker_cores;
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = interm0_cb_index,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+            desc.cbs.push_back(std::move(cb_desc));
+        }
     } else {
         // Output and intermediate share the same buffer
-        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-            {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
-        tt_metal::CircularBufferConfig output_cb_config =
-            tt_metal::CircularBufferConfig(out_reshard_CB_size, output_cb_data_format_spec)
-                .set_page_size(output_cb_index, output_single_tile_size)
-                .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                .set_tile_dims(output_cb_index, output_tile)
-                .set_tile_dims(interm0_cb_index, output_tile);
-        tt_metal::CreateCircularBuffer(program, all_worker_cores, output_cb_config);
+        CBDescriptor cb_desc;
+        cb_desc.total_size = out_reshard_CB_size;
+        cb_desc.core_ranges = all_worker_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+            .tile = output_tile_desc});
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = interm0_cb_index,
+            .data_format = interm0_data_format,
+            .page_size = interm0_single_tile_size,
+            .tile = output_tile_desc});
+        desc.cbs.push_back(std::move(cb_desc));
     }
 
     // CB 6: output reshard buffer - on OUTPUT storage cores, backed by out_buffer
-    uint32_t output_reshard_cb_index = tt::CBIndex::c_6;
-    tt_metal::CircularBufferConfig output_reshard_cb_config =
-        tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, output_data_format}})
-            .set_page_size(output_reshard_cb_index, output_single_tile_size)
-            .set_tile_dims(output_reshard_cb_index, output_tile)
-            .set_globally_allocated_address(*out_buffer);
-    auto cb_output_reshard =
-        tt_metal::CreateCircularBuffer(program, output_all_storage_cores, output_reshard_cb_config);
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = out_reshard_CB_size;
+        cb_desc.core_ranges = output_all_storage_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_6,
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+            .tile = output_tile_desc});
+        cb_desc.tensor = &out_tensor;
+        desc.cbs.push_back(std::move(cb_desc));
+    }
 
-    // Kernel defines
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernel defines
+    ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
-    if (bias_buffer != nullptr) {
+    if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         writer_defines["FUSE_BIAS"] = "1";
     }
@@ -393,13 +345,7 @@ create_program_batch_sharded(
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type,
-                fused_activation.value().params,
-                "ACTIVATION",
-                "i",
-                tt_metal::dataformat_to_datatype_converter(output_data_format)));
+            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
     }
     if (packer_l1_acc_en) {
@@ -414,162 +360,190 @@ create_program_batch_sharded(
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
-    // MATMUL_DRAM_SHARDED enables the is_worker_core check in compute kernel
-    // so that idle cores in the bounding box return early instead of waiting for CB data
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
 
-    // in0 reader compile time args
-    // Now includes info for NOC read from remote input storage cores
-    std::vector<uint32_t> in0_reader_compile_args = {
-        (uint32_t)in0_block_tiles,                         // in0_block_num_tiles
-        (uint32_t)in0_block_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        (uint32_t)num_blocks,                              // num_blocks (K / in0_block_w)
-        (uint32_t)batches_per_core,                        // num_batches_per_core
-        (uint32_t)in0_batch_stride_bytes,                  // in0_tensor_stride_batch_bytes
-        (uint32_t)in2_CB_size,                             // in0_shard_size_bytes (full shard)
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+
+    // Helper to convert std::map defines to KernelDescriptor::Defines
+    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
+        KernelDescriptor::Defines result;
+        result.reserve(m.size());
+        for (const auto& [k, v] : m) {
+            result.emplace_back(k, v);
+        }
+        return result;
     };
 
-    // in1 reader/writer compile time args
-    // Now includes info for NOC write to remote output storage cores
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile-time args
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<uint32_t> in0_reader_compile_args = {
+        (uint32_t)in0_block_tiles,
+        (uint32_t)in0_block_tiles * in0_single_tile_size,
+        (uint32_t)num_blocks,
+        (uint32_t)batches_per_core,
+        (uint32_t)in0_batch_stride_bytes,
+        (uint32_t)in2_CB_size,
+    };
+
     std::vector<uint32_t> in1_writer_compile_args = {
         (uint32_t)in1_buffer_page_size,
         (uint32_t)in1_buffer_num_pages,
-        (uint32_t)per_core_N,              // in1_block_w (N tiles)
-        (uint32_t)in1_block_tiles,         // in1_block_num_tiles
-        (uint32_t)num_blocks,              // num_blocks (K / in0_block_w)
-        (uint32_t)out_block_tiles,         // out_block_num_tiles
-        (uint32_t)batches_per_core,        // num_batches_per_core
-        (uint32_t)in1_batch_stride_bytes,  // in1_tensor_stride_batch_bytes
-        (uint32_t)out_batch_stride_bytes,  // out_tensor_stride_batch_bytes (for NOC write)
-        (uint32_t)out_reshard_CB_size,     // out_shard_size_bytes (full shard)
+        (uint32_t)per_core_N,
+        (uint32_t)in1_block_tiles,
+        (uint32_t)num_blocks,
+        (uint32_t)out_block_tiles,
+        (uint32_t)batches_per_core,
+        (uint32_t)in1_batch_stride_bytes,
+        (uint32_t)out_batch_stride_bytes,
+        (uint32_t)out_reshard_CB_size,
     };
-    if (bias_buffer != nullptr) {
+    if (bias_tensor.has_value()) {
         in1_writer_compile_args.push_back(bias_buffer_page_size);
         in1_writer_compile_args.push_back(bias_buffer_num_pages);
         in1_writer_compile_args.push_back(in3_block_tiles);
     }
 
-    // Compute kernel compile time args
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_tiles,         // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
-        in1_num_subblocks,       // in1_num_subblocks
-        in1_block_tiles,         // in1_block_num_tiles
-        per_core_N,              // in1_per_core_w
-        num_blocks,              // num_blocks
-        1,                       // out_num_blocks_x
-        1,                       // out_num_blocks_y
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        batches_per_core,        // batch (batches per core)
-        out_block_tiles,         // out_block_num_tiles
-        untilize_out ? 1u : 0u,  // untilize_out
-        0u,                      // get_batch_from_reader
-        0u,                      // in0_transpose_tile
+        in0_block_w,
+        in0_num_subblocks,
+        in0_block_tiles,
+        in0_subblock_num_tiles,
+        in1_num_subblocks,
+        in1_block_tiles,
+        per_core_N,
+        num_blocks,
+        1,
+        1,
+        out_subblock_h,
+        out_subblock_w,
+        out_subblock_num_tiles,
+        batches_per_core,
+        out_block_tiles,
+        untilize_out ? 1u : 0u,
+        0u,
+        0u,
     };
+    if (bias_tensor.has_value()) {
+        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
+    }
 
-    // Create kernels on all cores in bounding box
-    // Runtime args control which cores are active workers vs idle
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Build Kernel Descriptors
+    ////////////////////////////////////////////////////////////////////////////
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
-    // Add define to indicate we need remote NOC reads/writes
-    writer_defines["OUT_SHARDED"] = "1";  // Output goes to sharded buffer on storage cores
+    writer_defines["OUT_SHARDED"] = "1";
 
-    auto mm_kernel_in0_reader_id = tt_metal::CreateKernel(
-        program,
+    // in0 reader kernel
+    KernelDescriptor in0_reader_kernel_desc;
+    in0_reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in0_sender_dram_sharded_height.cpp",
-        all_cores_in_rect_grid,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = in0_noc,
-            .compile_args = in0_reader_compile_args,
-            .defines = reader_defines,
-            .named_compile_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-            }});
+        "reader_bmm_tile_layout_in0_sender_dram_sharded_height.cpp";
+    in0_reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    in0_reader_kernel_desc.core_ranges = all_cores_in_rect_grid;
+    in0_reader_kernel_desc.compile_time_args = in0_reader_compile_args;
+    in0_reader_kernel_desc.defines = map_to_defines(reader_defines);
+    in0_reader_kernel_desc.named_compile_time_args = {
+        {"cb_in0", tt::CBIndex::c_0},
+    };
+    in0_reader_kernel_desc.config =
+        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
 
-    auto mm_kernel_in1_writer_id = tt_metal::CreateKernel(
-        program,
+    // in1 writer kernel
+    KernelDescriptor in1_writer_kernel_desc;
+    in1_writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in1_sender_dram_sharded_height.cpp",
-        all_cores_in_rect_grid,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = in1_noc,
-            .compile_args = in1_writer_compile_args,
-            .defines = writer_defines,
-            .named_compile_args = {
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-            }});
+        "reader_bmm_tile_layout_in1_sender_dram_sharded_height.cpp";
+    in1_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    in1_writer_kernel_desc.core_ranges = all_cores_in_rect_grid;
+    in1_writer_kernel_desc.compile_time_args = in1_writer_compile_args;
+    in1_writer_kernel_desc.defines = map_to_defines(writer_defines);
+    in1_writer_kernel_desc.named_compile_time_args = {
+        {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
+        {"cb_out", tt::CBIndex::c_4},
+    };
+    in1_writer_kernel_desc.config =
+        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
 
-    auto mm_kernel_compute_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        all_cores_in_rect_grid,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines,
-            .named_compile_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-                {"cb_intermed0", tt::CBIndex::c_5},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
-                {"cb_in0_transposed", tt::CBIndex::c_10},
-            }});
+    // compute kernel
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores_in_rect_grid;
+    compute_kernel_desc.compile_time_args = compute_kernel_args;
+    compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
+    {
+        KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
+            {"cb_in0", tt::CBIndex::c_0},
+            {"cb_in1", tt::CBIndex::c_1},
+            {"cb_bias", tt::CBIndex::c_3},
+            {"cb_out", tt::CBIndex::c_4},
+            {"cb_intermed0", tt::CBIndex::c_5},
+            {"cb_in0_intermediate", tt::CBIndex::c_8},
+            {"cb_in1_intermediate", tt::CBIndex::c_9},
+            {"cb_in0_transposed", tt::CBIndex::c_10},
+            {"bias_ntiles", per_core_N},
+            // This factory does not pad per_core_N_compute beyond per_core_N_in1_sender, so the
+            // last subblock is always fully valid. Pass out_subblock_w so the compute kernel takes
+            // its original full-width path (last_subblock_padded == false).
+            {"last_subblock_w_valid", out_subblock_w},
+        };
+        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+            using ttnn::operations::matmul::utilities::get_activation_params;
+            const auto params = get_activation_params(fused_activation.value());
+            named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
+            named_compile_args.push_back({"activation_param0", params.param0});
+            named_compile_args.push_back({"activation_param1", params.param1});
+            named_compile_args.push_back({"activation_param2", params.param2});
+        }
+        compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
+    }
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 
-    // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
-    // Following the pattern from the mcast DRAM sharded factory
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime Args (per-core loop)
+    ////////////////////////////////////////////////////////////////////////////
     std::vector<CoreCoord> all_cores_in_rect_grid_vec = corerange_to_cores(all_cores_in_rect_grid);
-
-    // Build a set of worker cores for fast lookup
     std::set<CoreCoord> worker_cores_set(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end());
 
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    std::vector<uint32_t> bank_ids;  // Track bank_ids for vc calculation
+    std::vector<uint32_t> bank_ids;
 
-    // First, set idle args for non-worker cores in the bounding box
+    // Idle cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {
         bool is_worker = worker_cores_set.contains(core);
 
         if (!is_worker) {
-            // Idle core - set minimal args (1 arg each)
-            std::vector<uint32_t> in0_idle_args = {0u};  // worker_core_type = 0
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, in0_idle_args);
+            std::vector<uint32_t> in0_idle_args = {0u};
+            in0_reader_kernel_desc.runtime_args.emplace_back(core, in0_idle_args);
 
-            std::vector<uint32_t> in1_idle_args = {0u};  // is_worker_core = 0
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_writer_id, core, in1_idle_args);
+            std::vector<uint32_t> in1_idle_args = {0u};
+            in1_writer_kernel_desc.runtime_args.emplace_back(core, in1_idle_args);
 
-            std::vector<uint32_t> compute_idle_args = {0u};  // is_worker_core = 0
-            tt_metal::SetRuntimeArgs(program, mm_kernel_compute_id, core, compute_idle_args);
+            std::vector<uint32_t> compute_idle_args = {0u};
+            compute_kernel_desc.runtime_args.emplace_back(core, compute_idle_args);
         }
     }
 
-    // Then, iterate over workers in all_worker_cores_ordered order (like mcast factory)
-    // This ensures bank_ids[i] corresponds to all_worker_cores_ordered[i]
+    // Worker cores
     for (uint32_t worker_idx = 0; worker_idx < all_worker_cores_ordered.size(); ++worker_idx) {
         auto core = all_worker_cores_ordered[worker_idx];
 
-        uint32_t bank_id = worker_idx;  // Worker i reads from DRAM bank i (optimal assignment)
-
-        // Calculate VC (virtual channel) to avoid conflicts
+        uint32_t bank_id = worker_idx;
         uint32_t vc = bank_id & 0x3;
         bank_ids.push_back(bank_id);
         for (uint32_t j = 0; j < worker_idx; ++j) {
@@ -580,71 +554,60 @@ create_program_batch_sharded(
             }
         }
 
-        log_debug(
-            tt::LogOp,
-            "Worker {} at core ({}, {}): in0 from storage ({}, {}), DRAM bank {}, out to storage ({}, {})",
-            worker_idx,
-            core.x,
-            core.y,
-            input_storage_cores_ordered[worker_idx].x,
-            input_storage_cores_ordered[worker_idx].y,
-            bank_id,
-            output_storage_cores_ordered[worker_idx].x,
-            output_storage_cores_ordered[worker_idx].y);
-
         // in0 reader runtime args
-        std::vector<uint32_t> in0_reader_runtime_args = {
-            1u,                               // worker_core_type (1 = active worker)
-            input_storage_noc_x[worker_idx],  // input storage core NOC x
-            input_storage_noc_y[worker_idx],  // input storage core NOC y
-            in0_buffer->address(),            // L1 address of in0 shard on storage core
-        };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, in0_reader_runtime_args);
-        reader_kernel_ids.push_back(mm_kernel_in0_reader_id);
+        KernelDescriptor::RTArgList in0_reader_args;
+        in0_reader_args.push_back(uint32_t{1u});
+        in0_reader_args.push_back(uint32_t{input_storage_noc_x[worker_idx]});
+        in0_reader_args.push_back(uint32_t{input_storage_noc_y[worker_idx]});
+        in0_reader_args.push_back(in0_tensor);
+        in0_reader_kernel_desc.emplace_runtime_args(core, in0_reader_args);
 
         // in1 writer runtime args
-        std::vector<uint32_t> in1_writer_runtime_args = {
-            1u,  // is_worker_core
-            in1_buffer->address(),
-            bias_buffer != nullptr ? bias_buffer->address() : 0u,
-            bank_id,
-            vc,
-            output_storage_noc_x[worker_idx],  // output storage core NOC x
-            output_storage_noc_y[worker_idx],  // output storage core NOC y
-            out_buffer->address(),             // L1 address of output shard on storage core
-        };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_writer_id, core, in1_writer_runtime_args);
-        writer_kernel_ids.push_back(mm_kernel_in1_writer_id);
+        KernelDescriptor::RTArgList in1_writer_args;
+        in1_writer_args.push_back(uint32_t{1u});
+        in1_writer_args.push_back(in1_tensor);
+        if (bias_tensor.has_value()) {
+            in1_writer_args.push_back(*bias_tensor);
+        } else {
+            in1_writer_args.push_back(uint32_t{0u});
+        }
+        in1_writer_args.push_back(uint32_t{bank_id});
+        in1_writer_args.push_back(uint32_t{vc});
+        in1_writer_args.push_back(uint32_t{output_storage_noc_x[worker_idx]});
+        in1_writer_args.push_back(uint32_t{output_storage_noc_y[worker_idx]});
+        in1_writer_args.push_back(out_tensor);
+        in1_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
 
         // Compute runtime args
         std::vector<uint32_t> compute_runtime_args = {
-            1u,  // is_worker_core
+            1u,
         };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_compute_id, core, compute_runtime_args);
+        compute_kernel_desc.runtime_args.emplace_back(core, compute_runtime_args);
     }
 
-    return {
-        std::move(program),
-        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::shared_variables_t{
-            reader_kernel_ids, writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard}};
+    // Push all kernel descriptors
+    desc.kernels.push_back(std::move(in0_reader_kernel_desc));
+    desc.kernels.push_back(std::move(in1_writer_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
+
+    return desc;
 }
 
 }  // namespace reuse_batched_hs_dram_sharded_optimized_helpers
 
-std::pair<tt::tt_metal::Program, MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::shared_variables_t>
-matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
-    const ttnn::MeshCoordinate& mesh_coord,
+ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
+    const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
-    const ttnn::prim::MatmulParams& operation_attributes) {
+    const std::optional<CoreRangeSet>& /*core_range_set*/) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
 
-    const auto& a = input_tensors.at(0);
-    const auto& b = input_tensors.at(1);
-    const auto& bias = optional_input_tensors.at(0);
-    const auto& output = output_tensors.at(0);
+    const auto& a = input_tensors.at(0).mesh_tensor();
+    const auto& b = input_tensors.at(1).mesh_tensor();
+    auto bias = tt::tt_metal::as_optional_mesh_tensor(optional_input_tensors.at(0));
+    const auto& output = output_tensors.at(0).mesh_tensor();
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
@@ -658,71 +621,43 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;
     if (bias.has_value()) {
         const auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
-        TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-        bias_buffer = c.buffer();
+        TT_FATAL(&a.device() == &c.device(), "Operands to matmul need to be on the same device!");
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device =
-        reuse_batched_hs_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
+    tt::tt_metal::IDevice* device = &a.mutable_device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
     CoreRangeSet input_all_cores_storage = a.shard_spec().value().grid;
     CoreRangeSet output_all_cores_storage = output.shard_spec().value().grid;
 
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    tt_metal::Buffer* in1_buffer = b.buffer();
-    tt_metal::Buffer* out_buffer = output.buffer();
-
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(a.dtype()));
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(b.dtype()));
 
-    // Buffer size validation
     TT_FATAL(
-        in0_buffer->size() % in0_single_tile_size == 0,
+        a.mesh_buffer().device_local_size() % in0_single_tile_size == 0,
         "Input A buffer size ({}) must be divisible by single tile size ({})",
-        in0_buffer->size(),
+        a.mesh_buffer().device_local_size(),
         in0_single_tile_size);
     TT_FATAL(
-        in1_buffer->size() % in1_single_tile_size == 0,
+        b.mesh_buffer().device_local_size() % in1_single_tile_size == 0,
         "Input B buffer size ({}) must be divisible by single tile size ({})",
-        in1_buffer->size(),
+        b.mesh_buffer().device_local_size(),
         in1_single_tile_size);
-    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // Shape compatibility checks
     TT_FATAL(
         ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] = {}, B.shape[-2] = {}) must match for matmul",
         ashape[-1],
         bshape[-2]);
-    TT_FATAL(
-        ashape[-2] % in0_tile_shape[0] == 0,
-        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
-        ashape[-2],
-        in0_tile_shape[0]);
-    TT_FATAL(
-        ashape[-1] % in0_tile_shape[1] == 0,
-        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
-        ashape[-1],
-        in0_tile_shape[1]);
-    TT_FATAL(
-        bshape[-2] % in1_tile_shape[0] == 0,
-        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
-        bshape[-2],
-        in1_tile_shape[0]);
-    TT_FATAL(
-        bshape[-1] % in1_tile_shape[1] == 0,
-        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
-        bshape[-1],
-        in1_tile_shape[1]);
+    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "A.shape[-2] must be divisible by tile shape[0]");
+    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "A.shape[-1] must be divisible by tile shape[1]");
+    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "B.shape[-2] must be divisible by tile shape[0]");
+    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "B.shape[-1] must be divisible by tile shape[1]");
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
     const auto& program_config =
@@ -737,29 +672,16 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // For batch sharding: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
-    // ashape = [1, B, M, K], bshape = [1, B, K, N]
     uint32_t B = ashape[1];
-    uint32_t M = ashape[-2] / in0_tile_shape[0];  // M in tiles
-    uint32_t K = ashape[-1] / in0_tile_shape[1];  // K in tiles (contracted dimension)
-    uint32_t N = bshape[-1] / in1_tile_shape[1];  // N in tiles
+    uint32_t M = ashape[-2] / in0_tile_shape[0];
+    uint32_t K = ashape[-1] / in0_tile_shape[1];
+    uint32_t N = bshape[-1] / in1_tile_shape[1];
 
-    // Batch sharding validation: per_core_M and per_core_N should equal M and N respectively
-    // because each core handles complete matmuls, not partial tiles
-    TT_FATAL(
-        per_core_M == M,
-        "For batch sharding, per_core_M ({}) must equal M ({}) - each core handles complete matmuls",
-        per_core_M,
-        M);
-    TT_FATAL(
-        per_core_N == N,
-        "For batch sharding, per_core_N ({}) must equal N ({}) - each core handles complete matmuls",
-        per_core_N,
-        N);
-
+    TT_FATAL(per_core_M == M, "For batch sharding, per_core_M ({}) must equal M ({})", per_core_M, M);
+    TT_FATAL(per_core_N == N, "For batch sharding, per_core_N ({}) must equal N ({})", per_core_N, N);
     TT_FATAL(K % in0_block_w == 0, "K ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
 
-    return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded(
+    return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded_descriptor(
         device,
         input_all_cores_storage,
         output_all_cores_storage,
@@ -767,6 +689,8 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
+        dst_full_sync_en,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
         B,
         M,
         K,
@@ -775,10 +699,10 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         per_core_M,
         per_core_N,
         fused_activation,
-        in0_buffer,
-        in1_buffer,
-        bias_buffer,
-        out_buffer,
+        a,
+        b,
+        bias,
+        output,
         in0_tile,
         in1_tile,
         bias.has_value() ? bias->tensor_spec().tile() : output_tile,
@@ -790,71 +714,6 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         untilize_out,
         false,   // skip_compute
         false);  // skip_write_back
-}
-
-MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::cached_mesh_workload_t
-MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_mesh_workload(
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-            auto [program, shared_variable] = matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
-                mesh_coord, tensor_args, tensor_return_value, operation_attributes);
-            shared_variables[single_coord_range] = shared_variable;
-            workload.add_program(single_coord_range, std::move(program));
-        }
-    }
-    return {std::move(workload), std::move(shared_variables)};
-}
-
-void MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ttnn::prim::MatmulParams& /*operation_attributes*/,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
-    const auto& output_tensors = tensor_return_value;
-
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto* src_buffer_a = input_tensors.at(0).buffer();
-        auto* src_buffer_b = input_tensors.at(1).buffer();
-        const auto& bias_tensor = optional_input_tensors.at(0);
-        auto* dst_buffer = output_tensors.at(0).buffer();
-        auto shared_variables = cached_workload.shared_variables.at(mesh_coord_range);
-
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output_reshard, *dst_buffer);
-
-        const auto& all_worker_cores_ordered = shared_variables.all_worker_cores_ordered;
-        const auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
-        const auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
-
-        for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
-            auto core = all_worker_cores_ordered[i];
-
-            // Update reader kernel runtime args - arg[3] is the L1 address of in0 shard
-            auto reader_kernel_id = reader_kernel_ids[i];
-            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            reader_runtime_args[3] = src_buffer_a->address();
-
-            // Update writer kernel runtime args
-            auto writer_kernel_id = writer_kernel_ids[i];
-            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            writer_runtime_args[1] = src_buffer_b->address();
-            if (bias_tensor.has_value()) {
-                writer_runtime_args[2] = bias_tensor.value().buffer()->address();
-            } else {
-                writer_runtime_args[2] = 0;
-            }
-            writer_runtime_args[7] = dst_buffer->address();  // L1 address of output shard on storage core
-        }
-    }
 }
 
 }  // namespace ttnn::prim

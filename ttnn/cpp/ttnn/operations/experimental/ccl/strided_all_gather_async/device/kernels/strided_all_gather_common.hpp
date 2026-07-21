@@ -5,6 +5,8 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -136,12 +138,14 @@ FORCE_INLINE uint32_t read_chunk(
         chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
     }
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
-        cb_reserve_back(cb_output_id, max_tiles_per_packet);
-        size_t l1_write_addr = get_write_ptr(cb_output_id);
+        cb_output.reserve_back(max_tiles_per_packet);
+        size_t l1_write_addr = cb_output.get_write_ptr();
         for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
             int32_t tile_id = get_chunk_tile(
                 worker_chunk_row,
@@ -156,6 +160,8 @@ FORCE_INLINE uint32_t read_chunk(
                 read_output ? output_tensor_Wt : input_tensor_Wt,
                 input_tensor_Ht);
             if (tile_id >= 0) {
+                // Device 2.0 migration: legacy primitive retained, precomposed uint64_t address
+                // from get_noc_addr(tile_id, accessor).
                 uint64_t noc_read_addr =
                     get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
                 noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
@@ -165,8 +171,8 @@ FORCE_INLINE uint32_t read_chunk(
             chunk_tile_iter++;
         }
 
-        noc_async_read_barrier();
-        cb_push_back(cb_output_id, max_tiles_per_packet);
+        noc_obj.async_read_barrier();
+        cb_output.push_back(max_tiles_per_packet);
     }
 
     uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
@@ -233,12 +239,14 @@ FORCE_INLINE uint32_t write_chunk(
     chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
-        cb_wait_front(cb_output_id, max_tiles_per_packet);
-        size_t l1_read_addr = get_read_ptr(cb_output_id);
+        cb_output.wait_front(max_tiles_per_packet);
+        size_t l1_read_addr = cb_output.get_read_ptr();
 
         uint32_t padded_tiles = 0;
         int32_t tile_one_id = get_chunk_tile(
@@ -294,13 +302,14 @@ FORCE_INLINE uint32_t write_chunk(
                         NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {0}));
                 }
                 if (direction == 1 && write_local) {
-                    uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
-                    uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
+                    uint64_t local_noc0_dest_noc_addr_tile_one = output_addrgen.get_noc_addr(tile_one_id);
+                    uint64_t local_noc0_dest_noc_addr_tile_two = output_addrgen.get_noc_addr(tile_two_id);
 
+                    // Legacy primitive retained: precomposed uint64_t dst addrs.
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
                     noc_async_write(
                         l1_read_addr + output_page_size, local_noc0_dest_noc_addr_tile_two, output_page_size);
-                    noc_async_write_barrier();
+                    noc_obj.async_write_barrier();
                 }
                 break;
             }
@@ -313,9 +322,11 @@ FORCE_INLINE uint32_t write_chunk(
                         &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
                 }
                 if (direction == 1 && write_local) {
-                    uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_one_id, output_addrgen);
+                    uint64_t local_noc0_dest_noc_addr = output_addrgen.get_noc_addr(tile_one_id);
+
+                    // Legacy primitive retained: precomposed uint64_t dst addr.
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
-                    noc_async_write_barrier();
+                    noc_obj.async_write_barrier();
                 }
                 break;
             }
@@ -324,8 +335,8 @@ FORCE_INLINE uint32_t write_chunk(
                 break;
             }
         }
-        noc_async_writes_flushed();
-        cb_pop_front(cb_output_id, max_tiles_per_packet);
+        noc_obj.async_writes_flushed();
+        cb_output.pop_front(max_tiles_per_packet);
     }
     // Write the semaphore packet
     if ((direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction)) {

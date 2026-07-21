@@ -263,39 +263,6 @@ def torch_to_tt_tensor(py_tensor, device):
     return tt_tensor
 
 
-### Padding / Unpadding ###
-def pad_by_zero(
-    x: torch.Tensor,
-    device=None,
-    tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
-    tt_dtype=ttnn.bfloat16,
-):
-    initial_shape = x.shape
-    pad_shape = list(x.shape)
-    while len(pad_shape) < 4:
-        pad_shape.insert(0, 1)
-    if pad_shape[-1] % 32 != 0 or pad_shape[-2] % 32 != 0:
-        # Pad in torch before creating TT tensor.
-        # Certain datatypes like BFP8_B requires inputs to already be a specific size when creating the tensor, so we need to pad first
-        x = torch.nn.functional.pad(
-            x.reshape(pad_shape),
-            (
-                0,
-                _nearest_32(pad_shape[-1]) - pad_shape[-1],
-                0,
-                _nearest_32(pad_shape[-2]) - pad_shape[-2],
-            ),
-        )
-        x = ttnn.Tensor(x, tt_dtype)
-        x = x.to(ttnn.TILE_LAYOUT)
-        if device is not None:
-            x = x.to(device, tt_memory_config)
-
-    else:
-        x = torch2tt_tensor(x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype)
-    return x, initial_shape
-
-
 def unpad_from_zero(x, desired_shape):
     if x.padded_shape[-1] == desired_shape[-1] and x.padded_shape[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
@@ -545,38 +512,48 @@ def comp_pcc(golden, calculated, pcc=0.99):
         logger.error("One tensor is all zero")
         return False, 0.0
 
-    # For now, mask all infs and nans so that we check the rest... TODO
-    # Skip this for integer types which don't have NaN/Inf values
+    golden = torch.squeeze(golden).flatten()
+    calculated = torch.squeeze(calculated).flatten()
+
+    # For now, mask all infs and nans (to zero) so that we check the rest... TODO
+    # Skip this for integer types which don't have NaN/Inf values.
     if golden.dtype.is_floating_point:
-        golden = golden.clone()
-        golden[
-            torch.logical_or(
-                torch.isnan(golden),
-                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-            )
-        ] = 0
-        calculated = calculated.clone()
-        calculated[
-            torch.logical_or(
-                torch.isnan(calculated),
-                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-            )
-        ] = 0
+        # FP8 doesn't support isfinite/nan_to_num and bfloat16 products lose precision,
+        # so correlate these in float32.
+        if golden.dtype in (torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16):
+            golden = golden.to(torch.float32)
+            calculated = calculated.to(torch.float32)
+
+        # Zero out NaN/Inf, preserving the historical PCC values. nan_to_num allocates a
+        # full-size copy of each tensor, so only do it when invalid values are actually
+        # present; on the common all-finite path the tensors stay as views and no copy is
+        # made (this short-circuit is what keeps peak memory near 1x of one input).
+        if not bool((torch.isfinite(golden) & torch.isfinite(calculated)).all()):
+            golden = torch.nan_to_num(golden, nan=0.0, posinf=0.0, neginf=0.0)
+            calculated = torch.nan_to_num(calculated, nan=0.0, posinf=0.0, neginf=0.0)
 
     if torch.equal(golden, calculated):
         return True, 1.0
 
-    if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float32)
-        calculated = calculated.type(torch.float32)
-    cal_pcc = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-        )
-    )
+    # Integer tensors must be correlated in floating point (centering/products would
+    # otherwise truncate/overflow). float32 keeps the working set small.
+    if not golden.dtype.is_floating_point:
+        golden = golden.to(torch.float32)
+        calculated = calculated.to(torch.float32)
 
-    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+    # Pearson r with float64 *accumulation* (dtype= on the reductions) over the float32
+    # data: no float64 copy of either tensor is materialized, so peak memory stays near
+    # 1x of one input on large tensors while matching a full-float64 correlation to
+    # |Δ|<1e-9 across the high-PCC (>=0.999) range.
+    n = golden.numel()
+    g_centered = golden - (golden.sum(dtype=torch.float64) / n).to(golden.dtype)
+    c_centered = calculated - (calculated.sum(dtype=torch.float64) / n).to(calculated.dtype)
+    cov = (g_centered * c_centered).sum(dtype=torch.float64)
+    denom = torch.sqrt(g_centered.pow(2).sum(dtype=torch.float64) * c_centered.pow(2).sum(dtype=torch.float64))
+    cal_pcc = (cov / denom).item()
+
+    # Zero variance -> denom == 0 -> cal_pcc is nan: treat as a perfect match.
+    if math.isnan(cal_pcc):
         return True, 1.0
 
     return cal_pcc >= pcc, cal_pcc
@@ -659,7 +636,11 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     if not within_threshold:
         ulp_index = torch.argmax(ulp_tensor)
         ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))
-        message += f" @ {list(ulp_index_tuple)} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
+        message += (
+            f" @ {list(ulp_index_tuple)} = "
+            f"|calculated {calculated[ulp_index_tuple]} - golden {golden[ulp_index_tuple]}| "
+            f"/ ULP(golden) {ulp_value[ulp_index_tuple]}"
+        )
     return (within_threshold, message)
 
 
@@ -775,6 +756,11 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
 def comp_equal(golden, calculated):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
+
+    # If either tensor is zero-volume, broadcasting can still yield an empty delta and
+    # crash torch.max(); defer entirely to torch.equal (False on shape mismatch).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
 
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
@@ -1041,6 +1027,11 @@ def is_single_chip():
     return ttnn.GetNumAvailableDevices() == 1
 
 
+def is_quasar():
+    ARCH_NAME = ttnn.get_arch_name()
+    return "quasar" in ARCH_NAME
+
+
 def is_blackhole():
     ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME
@@ -1110,6 +1101,10 @@ def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
 
 
+def run_for_wormhole_b0_or_blackhole(reason_str="only runs for Wormhole B0 or Blackhole"):
+    return ti_skip(not (is_wormhole_b0() or is_blackhole()), reason=reason_str)
+
+
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
     return ti_skip(ttnn.get_num_devices() != n, reason=reason_str)
 
@@ -1138,12 +1133,17 @@ def ttl_complex_2_torch_complex(tt_tensor):
     return result
 
 
-def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w):
+def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w, align_c=4):
     assert stride_h == stride_w
     assert filter_pyt_nchw_tensor.shape[2] == filter_pyt_nchw_tensor.shape[3]
+    assert isinstance(align_c, int) and align_c > 0
     # Fold activation for unity stride
-    # Pad channel size to 4. This is to make sure L1 read addresses are 16 bit aligned
-    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], 4)
+    # Pad channel size to align_c. This keeps L1 read addresses aligned; extra channels become
+    # zero-valued weights that contribute nothing to the convolution. align_c=4 is the WH/BH default
+    # (16B alignment for bf16 gives C a multiple of 4 with a tiled conv reader). Quasar's row-major
+    # fold needs align_c=8 (bf16 row-major shard width must be a multiple of 8) so the first conv
+    # folds to groups*8 input channels and consumes the aligned output without per-group padding strip.
+    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], align_c)
     # Pad filter to nearest stride
     Padded_filter_height = _nearest_y(filter_pyt_nchw_tensor.shape[2], stride_h)
     Padded_filter_width = _nearest_y(filter_pyt_nchw_tensor.shape[3], stride_w)
@@ -1198,3 +1198,52 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
+
+
+# ── transformers 5.x Cache API compatibility ────────────────────────────────
+# transformers 5.x removed the legacy Cache API: DynamicCache no longer exposes
+# from_legacy_cache / to_legacy_cache / key_cache / value_cache (per-layer KV now
+# lives at cache.layers[i].keys/.values). These helpers work on both 4.x and 5.x.
+def hf_cache_layer_kv(cache, layer_idx):
+    """Return (key, value) tensors for a layer of a transformers Cache.
+
+    Handles the legacy tuple-of-tuples past_key_values, transformers <5 Cache
+    (key_cache/value_cache), and transformers >=5 Cache (layers[i].keys/.values).
+    """
+    if isinstance(cache, (tuple, list)):  # legacy tuple-of-tuples past_key_values
+        return cache[layer_idx][0], cache[layer_idx][1]
+    if hasattr(cache, "key_cache"):  # transformers < 5.x Cache
+        return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
+    layer = cache.layers[layer_idx]  # transformers >= 5.x Cache
+    return layer.keys, layer.values
+
+
+def hf_cache_to_legacy(cache):
+    """Export a transformers Cache to the legacy tuple-of-(key, value) format."""
+    if hasattr(cache, "to_legacy_cache"):  # transformers < 5.x
+        return cache.to_legacy_cache()
+    return tuple((layer.keys, layer.values) for layer in cache.layers)  # transformers >= 5.x
+
+
+def hf_dynamic_cache_from_legacy(layer_kvs):
+    """Build a transformers DynamicCache from per-layer (key, value) tuples."""
+    from transformers import DynamicCache
+
+    layer_kvs = tuple(layer_kvs)
+    if hasattr(DynamicCache, "from_legacy_cache"):  # transformers < 5.x
+        return DynamicCache.from_legacy_cache(layer_kvs)
+    return DynamicCache(layer_kvs)  # transformers >= 5.x
+
+
+def hf_cache_num_layers(cache):
+    """Number of populated layers in a transformers Cache (version-tolerant)."""
+    return len(cache.key_cache) if hasattr(cache, "key_cache") else len(cache.layers)
+
+
+def hf_empty_encoder_decoder_cache():
+    """Create an empty transformers EncoderDecoderCache (version-tolerant)."""
+    from transformers import DynamicCache, EncoderDecoderCache
+
+    if hasattr(EncoderDecoderCache, "from_legacy_cache"):  # transformers < 5.x
+        return EncoderDecoderCache.from_legacy_cache(None)
+    return EncoderDecoderCache(DynamicCache(), DynamicCache())  # transformers >= 5.x

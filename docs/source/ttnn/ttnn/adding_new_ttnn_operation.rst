@@ -51,7 +51,139 @@ In order to add a new device operation, follow the directory structure shown bel
 .. note::
  Add as many program factories as needed. But the minimum requirement is one program factory.
 
+.. note::
+ **All new operations must use the ProgramDescriptor pattern** (see below).
+ The old ``CachedProgram`` / ``shared_variables_t`` pattern is legacy and should not
+ be used for new operations.
+
 A concrete example of a device operation can be found in `ttnn/cpp/ttnn/operations/examples/example/device`
+
+ProgramDescriptor Pattern (Recommended)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The **ProgramDescriptor** pattern is the recommended way to write program factories.
+Instead of imperatively constructing a ``Program`` object and returning a ``CachedProgram``,
+you declaratively describe the program using a ``ProgramDescriptor`` struct. The framework
+then handles program construction, caching, and buffer address patching on cache hits.
+
+**Key benefits:**
+
+- **No ``shared_variables_t``** — you don't need to store kernel handles or core lists.
+- **No manual buffer address patching** — the framework auto-patches buffer addresses on cache hits.
+- **Cleaner code** — the declarative style is easier to read and less error-prone.
+
+**Single-descriptor operations (recommended):**
+
+Place ``create_descriptor`` directly on the operation struct. No wrapper struct,
+``program_factory_t``, or ``select_program_factory`` needed:
+
+.. code-block:: cpp
+
+   struct MyDeviceOperation {
+       // ... operation_attributes_t, tensor_args_t, etc. ...
+
+       static tt::tt_metal::ProgramDescriptor create_descriptor(
+           const operation_attributes_t& operation_attributes,
+           const tensor_args_t& tensor_args,
+           tensor_return_value_t& tensor_return_value);
+   };
+
+**Multi-variant programs (advanced):**
+
+When an operation needs different program strategies, define named factory structs
+with ``create_descriptor`` and put them in a variant:
+
+.. code-block:: cpp
+
+   struct SmallInput {
+       static tt::tt_metal::ProgramDescriptor create_descriptor(
+           const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+   };
+   struct LargeInput {
+       static tt::tt_metal::ProgramDescriptor create_descriptor(
+           const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+   };
+   using program_factory_t = std::variant<SmallInput, LargeInput>;
+   static program_factory_t select_program_factory(
+       const operation_attributes_t&, const tensor_args_t&);
+
+**Building a ProgramDescriptor:**
+
+.. code-block:: cpp
+
+   ProgramDescriptor desc;
+
+   // 1. Declare circular buffers
+   desc.cbs.push_back(CBDescriptor{
+       .total_size = num_tiles * tile_size,
+       .core_ranges = all_cores,
+       .format_descriptors = {{CBFormatDescriptor{
+           .buffer_index = cb_id,
+           .data_format = data_format,
+           .page_size = tile_size,
+       }}},
+   });
+
+   // 2. Declare kernels with compile-time args and config
+   //    Use ReaderConfigDescriptor{} for reader, WriterConfigDescriptor{} for writer,
+   //    and ComputeConfigDescriptor{...} for compute kernels.
+   //
+   //    IMPORTANT: Kernels are identified by their index in desc.kernels (0, 1, 2, ...).
+   //    The framework uses these indices as kernel handles when applying runtime
+   //    arguments to a cached Program.  Push kernels in a fixed, deterministic
+   //    order so that indices are stable across create_descriptor calls.
+   KernelDescriptor reader_desc;
+   reader_desc.kernel_source = "path/to/reader_kernel.cpp";
+   reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+   reader_desc.core_ranges = all_cores;
+   reader_desc.compile_time_args = {cb_id};
+   // If the kernel uses get_named_compile_time_arg_val(), set named args:
+   reader_desc.named_compile_time_args = {{"cb_in0", tt::CBIndex::c_0}};
+   reader_desc.config = ReaderConfigDescriptor{};
+
+   KernelDescriptor compute_desc;
+   compute_desc.kernel_source = "path/to/compute_kernel.cpp";
+   compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+   compute_desc.core_ranges = all_cores;
+   compute_desc.compile_time_args = {cb_id};
+   compute_desc.named_compile_time_args = {
+       {"cb_in0", tt::CBIndex::c_0},
+       {"cb_out", tt::CBIndex::c_4},
+       {"cb_intermed0", tt::CBIndex::c_5},
+   };
+   compute_desc.config = ComputeConfigDescriptor{
+       .math_fidelity = MathFidelity::HiFi4,
+       .fp32_dest_acc_en = false,
+       .math_approx_mode = false,
+   };
+
+   // 3. Add runtime args per core
+   reader_desc.runtime_args.emplace_back(
+       core, KernelDescriptor::CoreRuntimeArgs{buffer_addr, tiles_per_core, offset});
+
+   // 4. Push kernels in a fixed order (reader=0, compute=1 here).
+   desc.kernels.push_back(std::move(reader_desc));
+   desc.kernels.push_back(std::move(compute_desc));
+   return desc;
+
+.. warning::
+
+   If a kernel source uses ``get_named_compile_time_arg_val()`` to retrieve
+   compile-time arguments by name, you **must** set ``named_compile_time_args``
+   on the corresponding ``KernelDescriptor``. This field maps string names to
+   ``tt::CBIndex`` values and causes the ``KERNEL_COMPILE_TIME_ARG_MAP`` macro
+   to be defined during JIT compilation. Without it, the kernel will fail to
+   compile with a ``'get_named_compile_time_arg_val' was not declared in this
+   scope`` error. This applies to all kernel types (reader, writer, and
+   compute).
+
+.. note::
+   **Always use** ``named_compile_time_args`` **to map CB indices by name** in every
+   kernel descriptor, even when the kernel only uses positional compile-time args.
+   This enables automated tooling to introspect which circular buffers each kernel
+   references without parsing the kernel source.
+
+Full example files:
 
 .. literalinclude::  examples/example/device/example_device_operation.hpp
    :language: cpp

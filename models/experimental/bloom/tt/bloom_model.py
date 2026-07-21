@@ -11,7 +11,7 @@ import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
 from typing import Optional, Tuple
-from models.common.utility_functions import pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 
 def _make_causal_mask(
@@ -316,12 +316,12 @@ class TtBloomModel(torch.nn.Module):
         self.word_embeddings = torch.nn.Embedding(config.vocab_size, self.embed_dim)
         self.word_embeddings.weight = torch.nn.Parameter(state_dict[f"{base_address}.word_embeddings.weight"])
 
-        self.word_embeddings_layernorm_bias = pad_by_zero(
+        self.word_embeddings_layernorm_bias = torch2tt_tensor(
             state_dict[f"{base_address}.word_embeddings_layernorm.bias"], device
-        )[0]
-        self.word_embeddings_layernorm_weight = pad_by_zero(
+        )
+        self.word_embeddings_layernorm_weight = torch2tt_tensor(
             state_dict[f"{base_address}.word_embeddings_layernorm.weight"], device
-        )[0]
+        )
 
         self.word_embeddings_layernorm = partial(
             ttnn.layer_norm,
@@ -339,8 +339,8 @@ class TtBloomModel(torch.nn.Module):
 
         self.h = torch.nn.ModuleList(blocks)
 
-        self.ln_f_bias = pad_by_zero(state_dict[f"{base_address}.ln_f.bias"], device)[0]
-        self.ln_f_weight = pad_by_zero(state_dict[f"{base_address}.ln_f.weight"], device)[0]
+        self.ln_f_bias = torch2tt_tensor(state_dict[f"{base_address}.ln_f.bias"], device)
+        self.ln_f_weight = torch2tt_tensor(state_dict[f"{base_address}.ln_f.weight"], device)
 
         # Final Layer Norm
         self.ln_f = partial(

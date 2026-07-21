@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // run-time args
@@ -19,37 +21,30 @@ void kernel_main() {
 
     // compile-time args
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(1),   // Memory layout
-        get_compile_time_arg_val(2),   // The number of sharding cores
-        get_compile_time_arg_val(3),   // The page size we offset each write to
-        get_compile_time_arg_val(4),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(5),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(6),   // pages_per_shard_x
-        get_compile_time_arg_val(7)>;  // pages_per_shard_y
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(8));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+    Noc noc;
+    DataflowBuffer dfb_out(cb_id_out);
 
     uint32_t row_start_tile_id = start_id_base + start_id_offset;
-    cb_wait_front(cb_id_out, block_width_padded_num_tiles);
-    uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+    dfb_out.wait_front(block_width_padded_num_tiles);
+    uint32_t l1_read_offset = 0;
     for (uint32_t h = 0; h < block_height_tiles; h++) {
         uint32_t tile_id = row_start_tile_id;
         for (uint32_t w = 0; w < block_width_tiles; w++) {
-            uint64_t dst_noc_addr = get_noc_addr(tile_id, s);
-            noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+            noc.async_write(
+                dfb_out, s, tile_bytes, {.offset_bytes = l1_read_offset}, {.page_id = tile_id, .offset_bytes = 0});
             tile_id++;
-            l1_read_addr += tile_bytes;
+            l1_read_offset += tile_bytes;
         }
-        l1_read_addr += padded_offset;
+        l1_read_offset += padded_offset;
         row_start_tile_id += output_width_tiles;
     }
-    noc_async_write_barrier();
-    cb_pop_front(cb_id_out, block_width_padded_num_tiles);
+    noc.async_write_barrier();
+    dfb_out.pop_front(block_width_padded_num_tiles);
 }

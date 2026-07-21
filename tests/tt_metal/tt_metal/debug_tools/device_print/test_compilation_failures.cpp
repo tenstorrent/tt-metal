@@ -62,3 +62,9 @@ TEST_F(DevicePrintFailuresFixture, NotEnoughArguments) {
         "tests/tt_metal/tt_metal/test_kernels/device_print/failures/not_enough_arguments.cpp",
         "Number of {} placeholders must match number of arguments");
 }
+
+TEST_F(DevicePrintFailuresFixture, OldStyleDprint) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/old_style_dprint.cpp",
+        "Old style DPRINT is deprecated. Use DPRINT(format, ...) instead.");
+}

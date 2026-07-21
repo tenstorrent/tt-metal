@@ -122,7 +122,7 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(
                 compute,
                 root,
-                is_where_op ? "eltwise_where_sfpu_scalar"
+                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
                             : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
@@ -148,7 +148,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, [[maybe_unused]] std::optional<DataType> dtype) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -176,41 +177,47 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::LTZ;
-            } else {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LT;
+            } else {
+                postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::GTZ;
-            } else {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GT;
+            } else {
+                postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::GEZ;
-            } else {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::GE;
+            } else {
+                postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if (dtype != DataType::INT32) {
-                postprocess = unary::UnaryOpType::LEZ;
-            } else {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LE;
+            } else {
+                postprocess = unary::UnaryOpType::LEZ;
             }
             break;
         case BinaryOpType::EQ:
-            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::EQ;
             } else {
                 postprocess = unary::UnaryOpType::EQZ;
             }
             break;
-        case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
+        case BinaryOpType::NE:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::NE;
+            } else {
+                postprocess = unary::UnaryOpType::NEZ;
+            }
+            break;
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
@@ -387,6 +394,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             binary_op = EnumT::ADD;
             postprocess = unary::UnaryOpType::SQRT;
             break;
+        case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -425,10 +433,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER:
-            if (dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8) {
-                TT_THROW("Unsupported data type for remainder {}", dtype);
-            } else if (dtype == DataType::INT32) {
+            if (dtype == DataType::INT32) {
                 return {"remainder_int32_tile_init();", "remainder_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"remainder_uint32_tile_init();", "remainder_uint32_tile"};
             } else {
                 return {"remainder_binary_tile_init();", "remainder_binary_tile"};
             }
@@ -493,11 +501,48 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
-        case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
-        case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
-        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
-        case LE: return {"le_int32_tile_init();", "le_int32_tile"};
-        case EQ: return {"eq_binary_tile_init();", "eq_binary_tile"};
+        case LT:
+            if (int_data_format) {
+                return {
+                    fmt::format("lt_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("lt_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            return {"lt_binary_tile_init();", "lt_binary_tile"};
+        case GT:
+            if (int_data_format) {
+                return {
+                    fmt::format("gt_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("gt_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            return {"gt_binary_tile_init();", "gt_binary_tile"};
+        case GE:
+            if (int_data_format) {
+                return {
+                    fmt::format("ge_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("ge_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            return {"ge_binary_tile_init();", "ge_binary_tile"};
+        case LE:
+            if (int_data_format) {
+                return {
+                    fmt::format("le_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("le_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            return {"le_binary_tile_init();", "le_binary_tile"};
+        case EQ:
+            if (int_data_format) {
+                return {
+                    fmt::format("eq_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("eq_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            return {"eq_binary_tile_init();", "eq_binary_tile"};
+        case NE:
+            if (int_data_format) {
+                return {
+                    fmt::format("ne_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            return {"ne_binary_tile_init();", "ne_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"
                                       : (dtype == DataType::UINT32)  ? "UInt32"
@@ -505,6 +550,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                                                                      : "Float16_b";
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
+        case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -627,9 +673,6 @@ std::map<std::string, std::string> make_dataflow_defines(
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
 uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
-    // std::visit([&](auto v) {
-    //     std::cout << "pack_scalar_runtime_arg: " << v << std::endl;
-    // }, scalar);
     return std::visit(
         [&](auto v) -> uint32_t {
             // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
@@ -642,8 +685,11 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
             if (dtype == DataType::UINT32) {
                 return static_cast<uint32_t>(v);
             }
-            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-            auto scalar_bf16 = bfloat16::truncate(static_cast<float>(v));
+            if (dtype == DataType::UINT16) {
+                auto val = static_cast<uint16_t>(static_cast<float>(v));
+                return (static_cast<uint32_t>(val) << 16) | val;
+            }
+            auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
         },
         scalar);
@@ -725,7 +771,6 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     }
 
     // enable a few more conditions for faster performance
-    // in order to achieve performance parity with legacy binary
     auto output_shape = compute_broadcasted_output(a.logical_shape(), b->logical_shape());
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
@@ -812,7 +857,7 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     const int rank_a = shape_a.rank();
     const int rank_b = shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(larger_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(larger_rank, 1);
     for (int i = -1; i >= -larger_rank; --i) {
         auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
         auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;

@@ -7,54 +7,173 @@
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   sp_config: Single pod configuration (sp1, sp4, sp5) to run this test on.
+#   sp_config: Supercluster configuration (sc1, sc4, sc16) to run this test on.
 
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
 # ============================================================================
-# BH SP1 Multihost Pipeline Tests
+# BH Single Galaxy Tests
 # ============================================================================
 
-- name: "Physical Discovery Test"
-  cmd: |
-    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
-  skus:
-    bh_sp1:
-      timeout: 10
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp1
+# todo)) proven to work by itself but mess up SC4 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+# - name: "Single Galaxy - Host I/O Loopback (DeepSeek V3 B1)"
+#   cmd: |
+#     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy"
+#     cp "${SCALEOUT_CONFIG_DIR}/rank_bindings_mapping.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank0_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank1_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank2_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank3_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/mesh_graph_descriptor.textproto" .
+#     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 
-- name: "System Health Check"
-  cmd: |
-    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
-  skus:
-    bh_sp1:
-      timeout: 10
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp1
+#     TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --tcp-interface ens5f0np0 \
+#       --rank-bindings-mapping rank_bindings_mapping.yaml \
+#       --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
+#       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
+#       --timeout=1200
+#   skus:
+#     bh_sc1:
+#       timeout: 20
+#   owner_id: U0ALAR9B78T # Brayden Zhang
+#   team: scaleout
+#   sp_config: sc1
 
-- name: "Pipeline Test (DeepSeek V3 B1)"
+# ============================================================================
+# BH SC4 Multihost Pipeline Tests (4 connected galaxies)
+# ============================================================================
+
+- name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-    PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
-    mkdir -p $PIPELINE_DIR
-    python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-      --mpi-user user \
-      --hostfile /ci/ttrun/hostfile \
-      --worker-tt-metal-home /home/user/tt-metal \
-      --output-dir $PIPELINE_DIR \
-      models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
-    tt-run --skip-executable-check \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
-      --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
-      /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+    TTRUN_DIR=/etc/ttop
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 4096 \
+        --no-stop-at-eos \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp1:
+    bh_sc4-blitz:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp1
+  sp_config: sc4-blitz
+
+- name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
+  cmd: |
+    TTRUN_DIR=/etc/ttop
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 128000 \
+        --repeat-generations 2 \
+        --no-stop-at-eos \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+  skus:
+    bh_sc4-blitz:
+      timeout: 60
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sc4-blitz
+
+# ============================================================================
+# BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
+# ============================================================================
+
+- name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
+  cmd: |
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding rev_c_rank_binding_superpod.yaml \
+      python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --reference-file /mnt/models/ref_data/output1_reference.txt \
+        --output-file output1_teacher_forcing_results.json \
+        --chunk-accuracy 256
+  skus:
+    bh_sc16:
+      timeout: 30
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sc16
+
+- name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
+  cmd: |
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding rev_c_rank_binding_superpod.yaml \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 4096 \
+        --no-stop-at-eos \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+  skus:
+    bh_sc16:
+      timeout: 60
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sc16
+
+- name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
+  cmd: |
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding rev_c_rank_binding_superpod.yaml \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 128000 \
+        --repeat-generations 2 \
+        --no-stop-at-eos \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+  skus:
+    bh_sc16:
+      timeout: 60
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sc16

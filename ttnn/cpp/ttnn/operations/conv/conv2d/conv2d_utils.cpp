@@ -36,6 +36,21 @@ using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 using ttnn::prim::conv_op_l1_usage;
 
+namespace {
+
+uint32_t get_conv_noc_max_burst_size(tt::ARCH arch) {
+    // Mirrors device NOC_MAX_BURST_WORDS * NOC_WORD_BYTES. The public host HAL exposes the arch,
+    // but not this device constant, so unknown archs conservatively disable coalescing.
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return 256 * 32;
+        case tt::ARCH::BLACKHOLE: return 256 * 64;
+        case tt::ARCH::QUASAR: return 256 * 256;
+        default: return 0;
+    }
+}
+
+}  // namespace
+
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
     while (num % divisor != 0) {
@@ -425,7 +440,8 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool full_inner_dim,
     bool enable_activation_reuse,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool coalesce_1d_depthwise_kw_reads) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -439,20 +455,15 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
         if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
             act_block_h_ntiles = act_block_h_override_ntiles;
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / tt::constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                act_block_h_ntiles =
-                    find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_warning(
-                    tt::LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
-                    "instead {} was selected as closest valid option!",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles_per_core,
-                    act_block_h_ntiles);
-            }
+            act_block_h_ntiles =
+                find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
+            log_info(
+                tt::LogOp,
+                "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
+                "instead {} was selected as closest valid option!",
+                act_block_h_override,
+                padded_output_height_ntiles_per_core,
+                act_block_h_ntiles * tt::constants::TILE_HEIGHT);
         }
     }
 
@@ -470,10 +481,9 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        // For 1D depthwise conv, each channel is processed independently, so activation
-        // block width doesn't need to be multiplied by the kernel window size
         if (is_1d_depthwise_conv) {
-            act_block_w = tt::round_up(padded_in_channels, tt::constants::TILE_WIDTH);
+            const uint32_t depthwise_window_scaler = coalesce_1d_depthwise_kw_reads ? window_w : 1;
+            act_block_w = tt::round_up(padded_in_channels * depthwise_window_scaler, tt::constants::TILE_WIDTH);
         } else {
             act_block_w = enable_activation_reuse
                               ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
@@ -527,13 +537,38 @@ bool is_1d_depthwise_conv(
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_height,
-    uint32_t kernel_width,
     uint32_t image_height,
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    // Only use 1D depthwise path when kernel is truly pointwise (1x1)
-    // is_1d_conv checks height=1, we also need kernel_width=1 to ensure no spatial computation
-    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && kernel_width == 1 && !has_bias;
+    // 1D depthwise path supports kernel_height == 1 (and any kernel_width >= 1). The kw>1 case
+    // accumulates across kernel taps via per-tap blocks in the depthwise factory.
+    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && !has_bias;
+}
+
+bool should_coalesce_1d_depthwise_conv_reads(
+    bool is_1d_depthwise_conv,
+    TensorMemoryLayout input_tensor_memory_layout,
+    uint32_t input_channels_padded,
+    uint32_t kernel_width,
+    uint32_t dilation_w,
+    DataType input_datatype) {
+    if (!is_1d_depthwise_conv || input_tensor_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED ||
+        kernel_width <= 1 || dilation_w != 1) {
+        return false;
+    }
+
+    // Coalesced depthwise reads lay out all kernel-width channel sticks as one contiguous activation block. The
+    // coalesced compute kernel then indexes that block as kernel_width groups of channel tiles, so each stick must
+    // contain an integral number of tiles.
+    if (input_channels_padded % tt::constants::TILE_WIDTH != 0) {
+        return false;
+    }
+
+    // Halo output consumed by conv is row-major FLOAT32 only for FLOAT32 input, BFLOAT16 otherwise.
+    const uint32_t conv_input_datum_size = input_datatype == DataType::FLOAT32 ? 4 : 2;
+    const uint64_t coalesced_read_bytes =
+        static_cast<uint64_t>(input_channels_padded) * conv_input_datum_size * kernel_width;
+    return coalesced_read_bytes <= get_conv_noc_max_burst_size(tt::tt_metal::hal::get_arch());
 }
 
 SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
@@ -807,16 +842,6 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
-        if (!input_tensor_on_device) {
-            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
-                input_tensor = ttnn::pad(
-                    input_tensor,
-                    tt::tt_metal::Array4D(
-                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    0);
-            }
-        }
 
         // In case we are in auto sharded codepath and convolution maps to matmul
         // Skip sharding of the input tensor and run the matmul out of interleaved tensor.
@@ -839,9 +864,10 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                     // In case we need to run Interleaved2Sharded, adjust the shard spec,
                     // in order to get smaller allocation size of sharded buffer.
                     const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
-                    input_tensor_sharded_memory_config_to_layout =
-                        input_tensor_sharded_memory_config_to_layout.with_shard_spec(
-                            tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                    input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
+                        input_tensor_sharded_memory_config_to_layout.memory_layout(),
+                        input_tensor_sharded_memory_config_to_layout.buffer_type(),
+                        tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                     alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
                 Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
@@ -862,10 +888,79 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
-            input_tensor = ttnn::to_device(
-                input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            auto pad_tensor = [&]() {
+                if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
+                    input_tensor = ttnn::pad(
+                        input_tensor,
+                        tt::tt_metal::Array4D(
+                            {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                        tt::tt_metal::Array4D({0, 0, 0, 0}),
+                        0);
+                }
+            };
+
+            // if the input is row-major and the shard configuration is width/block sharded AND the physical shape of
+            // the tensor is not aligned with the shard shape, it is necessary to create an on-device tensor with the
+            // target alignment on-device. This edge case is required because
+            //
+            // - Using `ttnn::pad` changes the alignment on the tensor to its physical size, and the tensor spec
+            //   validation requires that `physical_shard_width % width_alignment == 0`
+            // - `physical_size.width() % page_shape.width() == 0`
+            if (input_tensor.logical_shape()[-1] % input_tensor_sharded_memory_config.shard_spec()->shape[1] != 0 &&
+                input_tensor.layout() == Layout::ROW_MAJOR &&
+                input_tensor_sharded_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
+                ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
+                tt::tt_metal::Alignment alignment{shard_spec.shape[0], shard_spec.shape[1]};
+
+                input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
+                    input_tensor_sharded_memory_config_to_layout.memory_layout(),
+                    input_tensor_sharded_memory_config_to_layout.buffer_type(),
+                    tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
+
+                Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
+                    TensorSpec(
+                        input_tensor.logical_shape(),
+                        tt::tt_metal::TensorLayout(
+                            input_tensor.dtype(),
+                            tt::tt_metal::PageConfig(input_tensor.layout()),
+                            input_tensor_sharded_memory_config_to_layout,
+                            alignment)),
+                    device);
+
+                input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+
+                ttnn::to_memory_config(
+                    input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt, resharded_input_tensor);
+                input_tensor = resharded_input_tensor;
+            } else {
+                // if the result is height-sharded it is safe to perform the padding before the
+                // sharding operation
+                //
+                // if the result is width/block-sharded, the padding operation must be performed after --
+                // otherwise the padding might change alignment for row-major tensors, which would've caused
+                // the sharding failure, due to assertion in `RowMajorPageConfig::validate_alignment`
+                const bool can_pre_pad =
+                    input_tensor_sharded_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    input_tensor.layout() == Layout::TILE;
+
+                if (can_pre_pad) {
+                    pad_tensor();
+                }
+
+                input_tensor = ttnn::to_device(
+                    input_tensor,
+                    device,
+                    (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+
+                if (!can_pre_pad) {
+                    pad_tensor();
+                }
+            }
         }
     }
+
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
@@ -944,8 +1039,8 @@ core_count_and_size calculate_L1_usage_for_conv_op(
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
 
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -998,7 +1093,14 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         output_width,
         kernel_size,
         compute_grid_size,
-        conv_is_1d_depthwise);
+        conv_is_1d_depthwise,
+        should_coalesce_1d_depthwise_conv_reads(
+            conv_is_1d_depthwise,
+            input_parallel_config.shard_scheme,
+            in_channels_padded,
+            kernel_size[1],
+            dilation[1],
+            input_datatype));
 
     SlidingWindowConfig sliding_window_config{
         .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
@@ -1111,8 +1213,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
         return calculate_L1_usage_for_conv_op(
@@ -1178,7 +1280,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& /*compute_grid*/,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool coalesce_1d_depthwise_kw_reads) {
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
     uint32_t nhw_out = batch_size * output_height * output_width;
     uint32_t out_channels_padded = tt::round_up(
@@ -1209,7 +1312,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
-        is_1d_depthwise_conv);
+        is_1d_depthwise_conv,
+        coalesce_1d_depthwise_kw_reads);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
@@ -1233,7 +1337,8 @@ conv_op_l1_usage calculate_L1_usage(
     const bool enable_bias,
     bool is_1d_depthwise_conv,
     uint32_t input_channels_padded,
-    bool skip_act_cb_create) {
+    bool skip_act_cb_create,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
     std::vector<CBInfo> cb_info = get_cb_info(
@@ -1252,7 +1357,8 @@ conv_op_l1_usage calculate_L1_usage(
         enable_bias,
         is_1d_depthwise_conv,
         skip_act_cb_create,
-        input_channels_padded);
+        input_channels_padded,
+        reader_indices_actual_page_size);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {

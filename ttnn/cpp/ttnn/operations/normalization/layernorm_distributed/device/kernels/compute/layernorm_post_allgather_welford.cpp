@@ -12,9 +12,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -26,14 +23,14 @@
 #include "chain_llk.hpp"
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+constexpr uint32_t cb_stats_id = tt::CBIndex::c_1;
 
-constexpr uint32_t cb_eps = tt::CBIndex::c_4;
+constexpr uint32_t cb_eps_id = tt::CBIndex::c_4;
 
 constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_6;    // [E(x**2), E(x)]
-constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
+constexpr uint32_t cb_stats_reduced_id = tt::CBIndex::c_6;    // [E(x**2), E(x)]
+constexpr uint32_t cb_recip_sqrt_var_id = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
 constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;        // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
 // Layernorm-specific CBs
@@ -47,7 +44,7 @@ struct x_minus_mean_node {
         .llk_init = sub_bcast_cols_init_short,
         .llk = FN_compute(sub_tiles_bcast_cols),
         .CB_A = cb_inp,
-        .CB_B = cb_stats_reduced,
+        .CB_B = cb_stats_reduced_id,
         .CB_OUT = cb_x_minus_mean,
         .fixed_CB_B_index = 0,
         .fixed_dest_reg = 0xFFFF,
@@ -63,7 +60,7 @@ struct normed_output_node {
         .llk_init = mul_bcast_cols_init_short,
         .llk = FN_compute(mul_tiles_bcast_cols),
         .CB_A = cb_norm_x_input,
-        .CB_B = cb_recip_sqrt_var,
+        .CB_B = cb_recip_sqrt_var_id,
         .CB_OUT = normed_output_cb,
         .fixed_CB_B_index = 0,
         .fixed_dest_reg = 0xFFFF,
@@ -112,9 +109,14 @@ void kernel_main() {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
+    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced_id);
 
-    cb_wait_front(cb_eps, 1);  // comes from the reader
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_stats(cb_stats_id);
+    CircularBuffer cb_stats_reduced(cb_stats_reduced_id);
+    CircularBuffer cb_recip_sqrt_var(cb_recip_sqrt_var_id);
+
+    cb_eps.wait_front(1);  // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
@@ -124,29 +126,29 @@ void kernel_main() {
             cb_stats,
             cb_stats_reduced,
             stats_tiles_cols,
-            [&](uint32_t b) { return (static_cast<float>(W)); },
+            [W](uint32_t b) { return (static_cast<float>(W)); },
             norm::kernel_util::compute::RSqrtPolicy{false, 0});
-        cb_push_back(cb_stats_reduced, 2);
-        cb_wait_front(cb_stats_reduced, 2);
+        cb_stats_reduced.push_back(2);
+        cb_stats_reduced.wait_front(2);
         /*
          * 1/sqrt(var + eps)
          */
 
-        cb_wait_front(cb_stats_reduced, 2);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
+        cb_stats_reduced.wait_front(2);
+        cb_recip_sqrt_var.reserve_back(1);
+        reconfig_data_format(cb_stats_reduced_id, cb_eps_id);
+        pack_reconfig_data_format(cb_recip_sqrt_var_id);
 
-        add_tiles_init(cb_stats_reduced, cb_eps);
+        add_tiles_init(cb_stats_reduced_id, cb_eps_id);
         tile_regs_acquire();
         tile_regs_wait();
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
+        add_tiles(cb_stats_reduced_id, cb_eps_id, 1, 0, 0);
         rsqrt_tile_init<true>();
         rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
+        pack_tile(0, cb_recip_sqrt_var_id);
         tile_regs_commit();
         tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        cb_recip_sqrt_var.push_back(1);
 
         if constexpr (do_gamma && do_beta) {
             /*
@@ -164,9 +166,9 @@ void kernel_main() {
         }
 
         // free up CBs
-        cb_pop_front(cb_stats_reduced, stats_tile_stride);
-        cb_pop_front(cb_recip_sqrt_var, 1);
+        cb_stats_reduced.pop_front(stats_tile_stride);
+        cb_recip_sqrt_var.pop_front(1);
     }
 
-    cb_pop_front(cb_eps, 1);
+    cb_eps.pop_front(1);
 }

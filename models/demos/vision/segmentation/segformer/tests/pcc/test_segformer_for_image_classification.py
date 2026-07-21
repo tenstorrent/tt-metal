@@ -44,7 +44,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
                 mesh_mapper=mesh_mapper,
             )
             parameters["classifier"]["bias"] = ttnn.from_torch(
-                model.classifier.bias.reshape(1, 1, 1, model.classifier.bias.shape[-1]),
+                model.classifier.bias.reshape(1, model.classifier.bias.shape[-1]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -58,7 +58,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, model_location_generator):
     dataset = load_dataset("huggingface/cats-image")
-    image = dataset["train"]["image"][0]
+    image = dataset["test"]["image"][0]
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     inputs = image_processor(image, return_tensors="pt")

@@ -5,6 +5,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -70,54 +72,54 @@ void kernel_main() {
     constexpr auto intermediate_slice_0_tensor_args = TensorAccessorArgs<intermediate_slice_0_ct_val>();
     constexpr uint32_t intermediate_slice_0_ct_offset = intermediate_slice_0_tensor_args.num_compile_time_args();
     const auto intermediate_slice_0_tensor_accesor =
-        TensorAccessor(intermediate_slice_0_tensor_args, intermediate_slice_0_address, page_size);
+        TensorAccessor(intermediate_slice_0_tensor_args, intermediate_slice_0_address);
 
     constexpr uint32_t intermediate_slice_1_ct_val = intermediate_slice_0_ct_val + intermediate_slice_0_ct_offset;
     constexpr auto intermediate_slice_1_tensor_args = TensorAccessorArgs<intermediate_slice_1_ct_val>();
     constexpr uint32_t intermediate_slice_1_ct_offset = intermediate_slice_1_tensor_args.num_compile_time_args();
     const auto intermediate_slice_1_tensor_accesor =
-        TensorAccessor(intermediate_slice_1_tensor_args, intermediate_slice_1_address, page_size);
+        TensorAccessor(intermediate_slice_1_tensor_args, intermediate_slice_1_address);
 
     constexpr uint32_t intermediate_slice_2_ct_val = intermediate_slice_1_ct_val + intermediate_slice_1_ct_offset;
     constexpr auto intermediate_slice_2_tensor_args = TensorAccessorArgs<intermediate_slice_2_ct_val>();
     constexpr uint32_t intermediate_slice_2_ct_offset = intermediate_slice_2_tensor_args.num_compile_time_args();
     const auto intermediate_slice_2_tensor_accesor =
-        TensorAccessor(intermediate_slice_2_tensor_args, intermediate_slice_2_address, page_size);
+        TensorAccessor(intermediate_slice_2_tensor_args, intermediate_slice_2_address);
 
     constexpr uint32_t intermediate_slice_3_ct_val = intermediate_slice_2_ct_val + intermediate_slice_2_ct_offset;
     constexpr auto intermediate_slice_3_tensor_args = TensorAccessorArgs<intermediate_slice_3_ct_val>();
     constexpr uint32_t intermediate_slice_3_ct_offset = intermediate_slice_3_tensor_args.num_compile_time_args();
     const auto intermediate_slice_3_tensor_accesor =
-        TensorAccessor(intermediate_slice_3_tensor_args, intermediate_slice_3_address, page_size);
+        TensorAccessor(intermediate_slice_3_tensor_args, intermediate_slice_3_address);
 
     constexpr uint32_t intermediate_slice_4_ct_val = intermediate_slice_3_ct_val + intermediate_slice_3_ct_offset;
     constexpr auto intermediate_slice_4_tensor_args = TensorAccessorArgs<intermediate_slice_4_ct_val>();
     constexpr uint32_t intermediate_slice_4_ct_offset = intermediate_slice_4_tensor_args.num_compile_time_args();
     const auto intermediate_slice_4_tensor_accesor =
-        TensorAccessor(intermediate_slice_4_tensor_args, intermediate_slice_4_address, page_size);
+        TensorAccessor(intermediate_slice_4_tensor_args, intermediate_slice_4_address);
 
     constexpr uint32_t intermediate_slice_5_ct_val = intermediate_slice_4_ct_val + intermediate_slice_4_ct_offset;
     constexpr auto intermediate_slice_5_tensor_args = TensorAccessorArgs<intermediate_slice_5_ct_val>();
     constexpr uint32_t intermediate_slice_5_ct_offset = intermediate_slice_5_tensor_args.num_compile_time_args();
     const auto intermediate_slice_5_tensor_accesor =
-        TensorAccessor(intermediate_slice_5_tensor_args, intermediate_slice_5_address, page_size);
+        TensorAccessor(intermediate_slice_5_tensor_args, intermediate_slice_5_address);
 
     constexpr uint32_t intermediate_slice_6_ct_val = intermediate_slice_5_ct_val + intermediate_slice_5_ct_offset;
     constexpr auto intermediate_slice_6_tensor_args = TensorAccessorArgs<intermediate_slice_6_ct_val>();
     constexpr uint32_t intermediate_slice_6_ct_offset = intermediate_slice_6_tensor_args.num_compile_time_args();
     const auto intermediate_slice_6_tensor_accesor =
-        TensorAccessor(intermediate_slice_6_tensor_args, intermediate_slice_6_address, page_size);
+        TensorAccessor(intermediate_slice_6_tensor_args, intermediate_slice_6_address);
 
     constexpr uint32_t intermediate_slice_7_ct_val = intermediate_slice_6_ct_val + intermediate_slice_6_ct_offset;
     constexpr auto intermediate_slice_7_tensor_args = TensorAccessorArgs<intermediate_slice_7_ct_val>();
     constexpr uint32_t intermediate_slice_7_ct_offset = intermediate_slice_7_tensor_args.num_compile_time_args();
     const auto intermediate_slice_7_tensor_accesor =
-        TensorAccessor(intermediate_slice_7_tensor_args, intermediate_slice_7_address, page_size);
+        TensorAccessor(intermediate_slice_7_tensor_args, intermediate_slice_7_address);
 
     // output TensorAccessor
     constexpr uint32_t output_ct_val = intermediate_slice_7_ct_val + intermediate_slice_7_ct_offset;
     constexpr auto output_tensor_args = TensorAccessorArgs<output_ct_val>();
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address, page_size);
+    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address);
 
     // connect to fabric
     size_t arg_for_fab = arg_idx;
@@ -140,26 +142,22 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_address, 1, false},
         unicast_num_hops);
 
-    // set state for op semaphore
+    // set state for scatter write and op semaphore
     uint64_t op_semaphore_noc_address = safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
-    fabric_unicast_noc_unicast_atomic_inc_set_state<UnicastAtomicIncUpdateMask::All>(
-        fabric_connection,
-        unicast_sem_inc_route_id,
-        unicast_num_hops,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
-
-    // set state for scatter write
-    fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::All>(
+    fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<UnicastFusedScatterWriteAtomicIncUpdateMask::All>(
         fabric_connection,
         unicast_scatter_write_route_id,
         unicast_num_hops,
-        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
+        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
+            {0, 0}, op_semaphore_noc_address, {static_cast<uint16_t>(page_size)}, 1, true),
         page_size * 2);
 
     // execute pre op barrier wait phase
+    // Device 2.0 migration: legacy primitives retained, pre_op_barrier_semaphore is a GlobalSemaphore address.
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
+    Noc noc_obj;
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         uint32_t actual_slice_idx;
@@ -170,6 +168,7 @@ void kernel_main() {
         }
 
         uint32_t reduced_cb_id = i == 0 ? input_slice_cb_ids[actual_slice_idx] : compute_cb_id;
+        CircularBuffer cb_reduced(reduced_cb_id);
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
@@ -229,37 +228,37 @@ void kernel_main() {
                 }
 
                 // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
-                cb_wait_front(reduced_cb_id, tile_granularity);
-                size_t intermediate_slice_l1_read_addr = get_read_ptr(reduced_cb_id);
-                fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                cb_reduced.wait_front(tile_granularity);
+                uint32_t intermediate_slice_l1_read_addr = cb_reduced.get_read_ptr();
+                fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs>(
                     fabric_connection,
                     unicast_scatter_write_route_id,
                     intermediate_slice_l1_read_addr,
-                    NocUnicastScatterCommandHeader(
+                    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
                         {intermediate_slice_noc_address_one, intermediate_slice_noc_address_two},
-                        {static_cast<uint16_t>(page_size)}));
+                        op_semaphore_noc_address,
+                        {static_cast<uint16_t>(page_size)},
+                        1,
+                        true));
 
-                noc_async_writes_flushed();
-                cb_pop_front(reduced_cb_id, tile_granularity);
-
-                // TODO: #35925 fuse with data packet after support is added by fabric team
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
-                    fabric_connection,
-                    unicast_sem_inc_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
+                noc_obj.async_writes_flushed();
+                cb_reduced.pop_front(tile_granularity);
             }
         } else {
             while (tiles_read < tiles_to_read) {
-                cb_wait_front(reduced_cb_id, tile_granularity);
-                size_t output_l1_read_addr = get_read_ptr(reduced_cb_id);
+                cb_reduced.wait_front(tile_granularity);
+                uint32_t output_l1_read_addr = cb_reduced.get_read_ptr();
                 for (uint32_t j = 0; j < tile_granularity; ++j) {
+                    // Device 2.0 migration: legacy primitive retained — no endpoint today for "raw local L1
+                    // address as NoC write source." TODO(#45845): migrate to a LocalL1 endpoint once available.
                     noc_async_write_page(tiles_read, output_tensor_accessor, output_l1_read_addr);
                     output_l1_read_addr += page_size;
                     tiles_read++;
                 }
 
-                noc_async_writes_flushed();
-                cb_pop_front(reduced_cb_id, tile_granularity);
+                noc_obj.async_writes_flushed();
+                cb_reduced.pop_front(tile_granularity);
             }
         }
 
@@ -273,6 +272,6 @@ void kernel_main() {
 
     close_connections(fabric_connection);
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

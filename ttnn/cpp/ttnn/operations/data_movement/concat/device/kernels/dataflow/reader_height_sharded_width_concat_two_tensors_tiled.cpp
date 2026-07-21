@@ -3,15 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t input0_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t input1_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t input0_transpose_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t input1_transpose_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t concat_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t output_transpose_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t input0_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input1_dfb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t input0_transpose_dfb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t input1_transpose_dfb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t concat_dfb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t output_transpose_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t output_cb_id = get_compile_time_arg_val(6);
 
     constexpr uint32_t input0_num_tiles_height = get_compile_time_arg_val(7);
     constexpr uint32_t input0_num_tiles_width = get_compile_time_arg_val(8);
@@ -32,72 +38,112 @@ void kernel_main() {
     constexpr uint32_t input1_stride = tile_size * input1_num_tiles_width / groups;
 #endif
     constexpr uint32_t group_stride = input0_stride + input1_stride;
-    const uint32_t base_l1_read_addr_0 = get_read_ptr(input0_transpose_cb);
-    const uint32_t base_l1_read_addr_1 = get_read_ptr(input1_transpose_cb);
-    const uint32_t base_l1_write_addr = get_write_ptr(concat_cb);
 
-#ifdef USE_SINGLE_PACKET_READ
-    // Pre-compute NOC addresses for single-packet reads
-    const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
-    const uint64_t noc_addr_1 = get_noc_addr(base_l1_read_addr_1);
-#endif
+    Noc noc;
+    DataflowBuffer input0_dfb(input0_dfb_id);
+    DataflowBuffer input1_dfb(input1_dfb_id);
+    DataflowBuffer input0_transpose_dfb(input0_transpose_dfb_id);
+    DataflowBuffer input1_transpose_dfb(input1_transpose_dfb_id);
+    DataflowBuffer concat_dfb(concat_dfb_id);
 
-    cb_push_back(input0_cb, input0_num_tiles_height * input0_num_tiles_width);
-    cb_push_back(input1_cb, input1_num_tiles_height * input1_num_tiles_width);
+    const uint32_t base_l1_read_addr_0 = input0_transpose_dfb.get_read_ptr();
+    const uint32_t base_l1_read_addr_1 = input1_transpose_dfb.get_read_ptr();
+    const uint32_t base_l1_write_addr = concat_dfb.get_write_ptr();
+
+    input0_dfb.push_back(input0_num_tiles_height * input0_num_tiles_width);
+    input1_dfb.push_back(input1_num_tiles_height * input1_num_tiles_width);
 
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
-        cb_reserve_back(concat_cb, output_num_tiles_width);
+        concat_dfb.reserve_back(output_num_tiles_width);
 
-        cb_wait_front(input0_transpose_cb, input0_num_tiles_width);
+        input0_transpose_dfb.wait_front(input0_num_tiles_width);
 
         uint32_t l1_read_addr = base_l1_read_addr_0;
         uint32_t l1_write_addr = base_l1_write_addr;
 
 #ifdef USE_SINGLE_PACKET_READ
-        // Use stateful single-packet API for better performance when stride <= NOC_MAX_BURST_SIZE
-        noc_async_read_one_packet_set_state(noc_addr_0, input0_stride);
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            input0_stride,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = base_l1_read_addr_0});
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                dst,
+                input0_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input0_stride;
             l1_write_addr += group_stride;
         }
 #else
-        // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read(get_noc_addr(l1_read_addr), l1_write_addr, input0_stride);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                input0_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input0_stride;
             l1_write_addr += group_stride;
         }
 #endif
 
-        noc_async_read_barrier();
-        cb_pop_front(input0_transpose_cb, input0_num_tiles_width);
+        noc.async_read_barrier();
+        input0_transpose_dfb.pop_front(input0_num_tiles_width);
 
-        cb_wait_front(input1_transpose_cb, input1_num_tiles_width);
+        input1_transpose_dfb.wait_front(input1_num_tiles_width);
 
         l1_read_addr = base_l1_read_addr_1;
         l1_write_addr = base_l1_write_addr + input0_stride;
 
 #ifdef USE_SINGLE_PACKET_READ
-        // Use stateful single-packet API for better performance when stride <= NOC_MAX_BURST_SIZE
-        noc_async_read_one_packet_set_state(noc_addr_1, input1_stride);
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            input1_stride,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = base_l1_read_addr_1});
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                dst,
+                input1_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input1_stride;
             l1_write_addr += group_stride;
         }
 #else
-        // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read(get_noc_addr(l1_read_addr), l1_write_addr, input1_stride);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                input1_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input1_stride;
             l1_write_addr += group_stride;
         }
 #endif
 
-        noc_async_read_barrier();
-        cb_pop_front(input1_transpose_cb, input1_num_tiles_width);
+        noc.async_read_barrier();
+        input1_transpose_dfb.pop_front(input1_num_tiles_width);
 
-        cb_push_back(concat_cb, output_num_tiles_width);
+        concat_dfb.push_back(output_num_tiles_width);
     }
 }

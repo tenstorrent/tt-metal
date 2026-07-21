@@ -312,6 +312,72 @@ def test_sdpa_chunked(
     )
 
 
+def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
+    """
+    Legacy scalar chunk_start_idx changes chunked SDPA's compile-time effective
+    K length, so different scalar offsets must not share one program cache entry.
+    """
+    b, nh, nkv, q_chunk_size, k_chunk_size, page_block_size, d = 1, 1, 1, 128, 128, 128, 128
+    num_pages = 2
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    torch.manual_seed(0)
+    tt_q = ttnn.from_torch(
+        torch.randn(b, nh, q_chunk_size, d),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_k = ttnn.from_torch(
+        torch.randn(num_pages, nkv, page_block_size, d),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_v = ttnn.from_torch(
+        torch.randn(num_pages, nkv, page_block_size, d),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    page_table = ttnn.Tensor(torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages), ttnn.int32).to(device)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        for chunk_start_idx in (0, q_chunk_size):
+            ttnn.transformer.chunked_scaled_dot_product_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                page_table,
+                chunk_start_idx,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+            ttnn.synchronize_device(device)
+
+        assert device.num_program_cache_entries() == 2, (
+            "Legacy scalar chunk_start_idx changes chunked SDPA program geometry and must be part of "
+            f"the cache key, got {device.num_program_cache_entries()} entries"
+        )
+    finally:
+        device.disable_and_clear_program_cache()
+        device.enable_program_cache()
+
+
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
@@ -361,7 +427,161 @@ def test_sdpa_chunked_iterate_batch(
             grid_size=(1, 1),
         )
 
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
+    expected_entries = s // prefill_chunk_size
+    assert (
+        device.num_program_cache_entries() == expected_entries
+    ), "Program cache should have {} entry/entries but has {}".format(
+        expected_entries, device.num_program_cache_entries()
     )
+
+
+@pytest.mark.timeout(60)
+def _permute_view_general(t_alloc, view_kv, view_block_size, view_head_dim):
+    """Reinterpret paged-cache tiles under a different (kv, block, head_dim) view.
+
+    Same helper as the decode / paged-cache flexible-geometry tests: kernels address by
+    linear tile index within a block, so a plain torch reshape of untilized data does
+    not match TILE_LAYOUT storage when alloc and view geometries differ.
+    """
+    N, alloc_kv, alloc_block_size, alloc_head_dim = t_alloc.shape
+    TILE = 32
+    alloc_BR_t = alloc_block_size // TILE
+    alloc_Wt = alloc_head_dim // TILE
+    view_BR_t = view_block_size // TILE
+    view_Wt = view_head_dim // TILE
+    alloc_total_tiles = alloc_kv * alloc_BR_t * alloc_Wt
+    view_total_tiles = view_kv * view_BR_t * view_Wt
+    assert alloc_total_tiles == view_total_tiles
+
+    t = t_alloc.view(N, alloc_kv, alloc_BR_t, TILE, alloc_Wt, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    t = t.reshape(N, alloc_total_tiles, TILE, TILE)
+    t = t.reshape(N, view_kv, view_BR_t, view_Wt, TILE, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    return t.reshape(N, view_kv, view_block_size, view_head_dim)
+
+
+def test_chunked_sdpa_geometry_override_hma_shared_buffer(device):
+    """HMA-shared cache: declared (nkv, block, head_dim) differs from the call view.
+
+    Cache allocated as nkv=2 / block=64 / head_dim=128; call view is nkv=1 /
+    block=64 / head_dim=256 (same elems/block). Overrides must address the buffer
+    correctly so chunked SDPA matches the torch reference for the view geometry.
+
+    Physical tiles are filled in the *declared* tile-grid (as from_torch on the
+    alloc shape does); the reference reinterprets those same tiles through the
+    view grid via ``_permute_view_general`` — matching how the kernel reads with
+    PagedCacheGeometryOverride.
+    """
+    torch.manual_seed(7)
+    b, nh, nkv_view, s, d_view = 1, 4, 1, 512, 256
+    nkv_cache, block_size, d_cache = 2, 64, 128
+    assert nkv_view * block_size * d_view == nkv_cache * block_size * d_cache
+    q_chunk_size = 128
+    prefill_chunk_size = 256
+    assert s % prefill_chunk_size == 0
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=128,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    num_pages = s // block_size
+    page_table = torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages)
+
+    # Fill the shared buffer in the *declared* tile-grid (peer-layer allocation).
+    K_alloc = fa_rand(num_pages, nkv_cache, block_size, d_cache)
+    V_alloc = fa_rand(num_pages, nkv_cache, block_size, d_cache)
+    tt_k = ttnn.from_torch(K_alloc, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(V_alloc, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # Same DRAM bytes as the kernel sees under the view override.
+    K_view_pages = _permute_view_general(K_alloc, nkv_view, block_size, d_view)
+    V_view_pages = _permute_view_general(V_alloc, nkv_view, block_size, d_view)
+    K = K_view_pages.reshape(b, nkv_view, s, d_view)
+    V = V_view_pages.reshape(b, nkv_view, s, d_view)
+
+    Q = fa_rand(b, nh, s, d_view)
+    K_rep = K.repeat_interleave(nh // nkv_view, dim=1)
+    V_rep = V.repeat_interleave(nh // nkv_view, dim=1)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, is_causal=True)
+
+    for chunk_idx in range(s // prefill_chunk_size):
+        start = chunk_idx * prefill_chunk_size
+        end = start + prefill_chunk_size
+        tt_q = ttnn.from_torch(Q[:, :, start:end], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_out = ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            page_table_tt,
+            start,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            block_size=block_size,
+            num_kv_heads=nkv_view,
+        )
+        out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        ok, msg = comp_pcc(gt[:, :, start:end], out, 0.998)
+        assert ok, f"HMA geometry override chunk {chunk_idx} PCC fail: {msg}"
+
+
+@pytest.mark.timeout(30)
+def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device, expect_error):
+    """Overrides that break the elems/block invariant must fail validation."""
+    b, nh, nkv_cache, block_size, d_cache = 1, 4, 2, 64, 128
+    num_pages = 4
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    tt_q = ttnn.from_torch(
+        torch.randn(b, nh, 128, 256),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_k = ttnn.from_torch(
+        torch.randn(num_pages, nkv_cache, block_size, d_cache),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_v = ttnn.from_torch(
+        torch.randn(num_pages, nkv_cache, block_size, d_cache),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    page_table = ttnn.Tensor(torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages), ttnn.int32).to(device)
+
+    with expect_error(RuntimeError, "geometry mismatch|elems/block"):
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            page_table,
+            0,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            # 1*32*256 != 2*64*128
+            block_size=32,
+            num_kv_heads=1,
+        )

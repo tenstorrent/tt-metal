@@ -23,14 +23,13 @@ on:
         options:
           - disabled
           - all
-          - falcon7b
-          - falcon40b
+          - t3k_ttmetal_tests
+          - t3k_ttnn_tests
           - llama3-small
           - llama3.2-11b
           - llama3.2-11b-vision
           - n300 mesh llama3.2-11b-vision
           - llama3.2-90b-vision
-          # - llama3.1-70b
           - llama3.2-90b
           - mistral
           - mixtral
@@ -45,8 +44,6 @@ on:
         options:
           - disabled
           - all
-          - falcon7b
-          - falcon40b
           - llama3
           - llama3_vision
           - llama3_90b_vision
@@ -72,8 +69,6 @@ on:
         options:
           - disabled
           - all
-          - falcon7b
-          - falcon40b
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large
@@ -81,7 +76,6 @@ on:
           - wan22
           - flux1-dev
           - motif
-          - gemma-3-27b-it
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
         type: choice
@@ -92,21 +86,10 @@ on:
           - tteager
           - ethernet
           - trace stress
-          - falcon40b
-          # - llama3.2-vision #Tier 3 models
-          # - n300 mesh llama3.2-vision #Tier 3 models
-          # - llama3.2-90b-vision #Tier 3 model
-          - llama3
-          - llama3 accuracy
-          - llama3_70n90b accuracy
-          - llama3_90b
-          # - llama3_70b # disabled in -impl file
-          # - mixtral # disabled in -impl file
           - resnet
           - sd35_large
           - flux1
           - motif
-          - mistral
           - wan2.2
           - mochi
           - deepseek-modules
@@ -145,9 +128,11 @@ on:
 
 run-name: T3000 ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-unit: ${{ steps.logic.outputs.run-unit }}
       run-demo: ${{ steps.logic.outputs.run-demo }}
@@ -186,12 +171,14 @@ jobs:
               ;;
           esac
   build-artifact:
+    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
-    needs: determine-tests
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -255,11 +242,8 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/profiler-tests-impl.yaml
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      topology: config-t3000
-      test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh

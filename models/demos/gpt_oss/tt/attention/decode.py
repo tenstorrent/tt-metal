@@ -51,10 +51,17 @@ def decode_forward(
     if seq_len != 1:
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
-    # QKV projection
-    xqkv_fused = ttnn.matmul(
-        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-    )
+    # QKV projection. With TP>1 the per-device QKV is small enough to fit in
+    # an L1 width-sharded layout that nlp_create_qkv_heads_decode consumes
+    # directly. With TP=1 (e.g. single Blackhole card) the per-device QKV is
+    # TP× larger and overflows the per-core CB if width-sharded, so we use
+    # DRAM interleaved instead. The kernel-side aligned-read fix in
+    # nlp_create_qkv_heads_decode (PR #43292) handles the BH NOC alignment
+    # constraint for DRAM-interleaved inputs; before that fix this path
+    # produced silent corruption (every odd Q/K/V head returned the previous
+    # user's row).
+    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
+    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
     ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
@@ -134,6 +141,9 @@ def decode_forward(
         )
         tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:
+        # GQA (num_kv_heads > 1) rejects sharded output in the SDPA decode
+        # device op — match the paged path: write to DRAM, then to_memory_config
+        # into the height-sharded layout that downstream concat_heads needs.
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -144,12 +154,12 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=height_sharded_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
-
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 

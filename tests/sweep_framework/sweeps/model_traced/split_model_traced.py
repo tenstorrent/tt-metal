@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -46,25 +46,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -82,10 +68,10 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"split_size", "dim"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"dim"}, output_memory_config=output_memory_config)
 
-    # Extract split_size and dim from kwargs (from traced config) or use defaults
-    split_size = kwargs.get("split_size", 32)
+    # Extract split_size from op_kwargs (from traced config) or use default
+    split_size = op_kwargs.get("split_size", 32)
     dim = kwargs.get("dim", 3)
 
     # Handle tuple input_a_shape for sample suite
@@ -122,7 +108,21 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **op_kwargs)
+    # Pop split_size from op_kwargs since ttnn.split takes it as a positional argument
+    op_kwargs.pop("split_size", None)
+    try:
+        output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **op_kwargs)
+    except Exception as e:
+        # Splitting a very wide tensor (e.g. a 128256/32064 vocab projection) with
+        # a traced sharded/L1 output config overflows L1 — the op's static CBs
+        # clash with the output buffers. Retry with a DRAM-interleaved output so
+        # the op sizes its footprint to DRAM (the result is layout-independent).
+        _m = str(e).lower()
+        if not any(s in _m for s in ("clash", "circular buffer", "out of memory", "l1 buffer")):
+            raise
+        _kw = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+        _kw["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **_kw)
     output_tensors = [mesh_tensor_to_torch(t, device if is_mesh_device else None) for t in output_tensors]
     e2e_perf = stop_measuring_time(start_time)
 

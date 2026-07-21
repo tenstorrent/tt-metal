@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime args
@@ -22,31 +25,35 @@ void kernel_main() {
 
     // Memory transfer configuration
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
 
     // Initialize DRAM tensor accessors for interleaved output format
-    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0, tile_bytes_values);
-    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1, tile_bytes_ind);
+    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0);
+    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1);
+
+    Noc noc;
+    CircularBuffer values_cb(values_cb_index);
+    CircularBuffer indices_cb(output_ind_cb_index);
+    const uint32_t tile_bytes_val = values_cb.get_tile_size();
+    const uint32_t tile_bytes_idx = indices_cb.get_tile_size();
 
     // Process each height row sequentially, writing Kt tiles of TopK results
     for (uint32_t j = 0; j < Ht; ++j) {
         // Write the final globally optimal TopK values for this height row
         for (uint32_t i = 0; i < Kt; ++i) {
-            cb_wait_front(values_cb_index, onetile);
-            const uint32_t l1_read_addr = get_read_ptr(values_cb_index);
-            noc_async_write_tile(j * Kt + i, interleaved_accessor0, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(values_cb_index, onetile);
+            values_cb.wait_front(onetile);
+            noc.async_write(
+                values_cb, interleaved_accessor0, tile_bytes_val, {.offset_bytes = 0}, {.page_id = j * Kt + i});
+            noc.async_write_barrier();
+            values_cb.pop_front(onetile);
         }  // i loop
 
         // Write the corresponding original indices for the TopK values
         for (uint32_t i = 0; i < Kt; ++i) {
-            cb_wait_front(output_ind_cb_index, onetile);
-            const uint32_t l1_read_addr = get_read_ptr(output_ind_cb_index);
-            noc_async_write_tile(j * Kt + i, interleaved_accessor1, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(output_ind_cb_index, onetile);
+            indices_cb.wait_front(onetile);
+            noc.async_write(
+                indices_cb, interleaved_accessor1, tile_bytes_idx, {.offset_bytes = 0}, {.page_id = j * Kt + i});
+            noc.async_write_barrier();
+            indices_cb.pop_front(onetile);
         }  // i loop
     }  // j loop
 }

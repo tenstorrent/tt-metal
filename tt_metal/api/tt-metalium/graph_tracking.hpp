@@ -50,6 +50,10 @@ public:
 
     IGraphProcessor() = default;
 
+    // Returns false for background processors that are always
+    // registered but should not make GraphTracker::is_enabled() return true.
+    virtual bool is_capture_processor() const { return true; }
+
     virtual void track_allocate(const tt::tt_metal::Buffer* /*buffer*/) {};
 
     virtual void track_deallocate(tt::tt_metal::Buffer* /*buffer*/) {};
@@ -98,6 +102,18 @@ public:
     virtual ~IGraphHooks() = default;
 };
 
+// Process-wide singleton that fans out op-dispatch events to registered
+// processors and consults an optional hook to intercept buffer / program
+// operations.
+//
+// Threading contract:
+//   * The processor stack (`processors`) and `hook` are *per-thread*. A
+//     `push_processor` / capture / `pop_processor` sequence is scoped to the
+//     calling thread; ops dispatched on other threads are not observed by
+//     that capture.
+//   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
+//     This is the only piece of GraphTracker state that is shared across
+//     threads.
 class GraphTracker {
 public:
     GraphTracker(const GraphTracker&) = delete;
@@ -187,9 +203,9 @@ private:
     GraphTracker() = default;
     ~GraphTracker() = default;
 
-    std::vector<std::shared_ptr<IGraphProcessor>> processors;
-
-    std::shared_ptr<IGraphHooks> hook;
+    // Per-thread state. See the class-level threading contract above.
+    static thread_local std::vector<std::shared_ptr<IGraphProcessor>> processors;
+    static thread_local std::shared_ptr<IGraphHooks> hook;
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;

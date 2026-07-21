@@ -5,10 +5,12 @@
 #pragma once
 
 #include "gather_device_operation_types.hpp"
-#include "gather_program_factory.hpp"
 
 #include <optional>
+#include <variant>
+
 #include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
@@ -18,8 +20,30 @@ struct GatherDeviceOperation {
     using tensor_args_t = GatherInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    struct SingleRowSingleCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
+    struct SingleRowMultiCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
+    // ROW_MAJOR variants: row/column split at stick granularity; noc_async_*_sharded with per-shard page size.
+    struct RmSingleRowSingleCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
+    struct RmSingleRowMultiCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
     using program_factory_t =
-        std::variant<GatherProgramFactorySingleRowSingleCore, GatherProgramFactorySingleRowMultiCore>;
+        std::variant<SingleRowSingleCore, SingleRowMultiCore, RmSingleRowSingleCore, RmSingleRowMultiCore>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

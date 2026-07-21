@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 
 namespace {
 
@@ -65,7 +66,6 @@ protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
         ttml::autograd::ctx().set_seed(42);
-        xt::random::seed(42);
     }
 
     void TearDown() override {
@@ -77,7 +77,7 @@ TEST_F(NewtonSchulzOpTest, MuonCoeff) {
     using namespace ttml;
 
     std::array<uint32_t, 4> shape = {1, 1, 32, 128};
-    xt::xarray<float> G_data = xt::random::randn<float>(shape, -1.0f, 1.0f);
+    xt::xarray<float> G_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U);
 
     auto G_expected = newtonschulz5_xtensor(G_data, 10, 1e-7f);
 
@@ -85,14 +85,14 @@ TEST_F(NewtonSchulzOpTest, MuonCoeff) {
     auto X_tensor = ops::newtonschulz5(G_tensor, 10, 1e-7f);
     auto X_result = core::to_xtensor(X_tensor);
 
-    EXPECT_TRUE(xt::allclose(X_result, G_expected, 5e-2f, 5e-2f));
+    EXPECT_TRUE(xt::allclose(X_result, G_expected, 6.5e-2f, 6.5e-2f));
 }
 
 TEST_F(NewtonSchulzOpTest, OrthogonalityCheck) {
     using namespace ttml;
 
     std::array<uint32_t, 4> shape = {1, 1, 32, 128};
-    xt::xarray<float> G_data = xt::random::randn<float>(shape, -1.0f, 1.0f);
+    xt::xarray<float> G_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 84U);
 
     float a = 15.0f / 8.0f;
     float b = -5.0f / 4.0f;

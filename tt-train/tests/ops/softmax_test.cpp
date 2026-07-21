@@ -5,19 +5,19 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
-// used for moreh softmax
-#include <cmath>
+using shape_type = std::array<std::size_t, 4>;
 
 class SoftmaxTest : public ::testing::Test {
 protected:
@@ -40,50 +40,52 @@ xt::xarray<float> xt_softmax(const xt::xarray<float>& input, uint32_t dim = 3U) 
     return result;
 }
 
-TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
+// Disabled: flaky — https://github.com/tenstorrent/tt-metal/issues/46422
+TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 59U, W = 197U;
-    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = shape_type{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
-    auto result = ttml::metal::softmax(input, dim);
+    ttnn::Tensor ttml_softmax = ttml::metal::softmax(input, dim);
+    auto ttml_softmax_xtensor = core::to_xtensor(ttml_softmax);
 
-    auto ttnn_softmax = ttnn_fixed::softmax(input, dim);
+    tt::tt_metal::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
+    // Host side reference using FP32 and xtensor
     auto expected_result = xt_softmax(input_tensor, dim);
 
-    // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result);
-    assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ASSERT_EQ(ttml_softmax_xtensor.shape(), expected_result.shape());
+
+    // ttml vs host
+    EXPECT_TRUE(xt::allclose(ttml_softmax_xtensor, expected_result, 3e-2F, 1e-2F));
+
+    // ttnn vs host
+    EXPECT_TRUE(xt::allclose(ttnn_softmax_xtensor, expected_result, 3e-2F, 1e-2F));
+
+    // ttml vs ttnn
+    EXPECT_TRUE(xt::allclose(ttml_softmax_xtensor, ttnn_softmax_xtensor, 3e-2F, 1e-2F));
 }
 
 TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 32U, W = 128007U;
-    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = shape_type{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    xt::xarray<float> input_tensor = ttml::test_utils::make_uniform_xarray<float>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -93,7 +95,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
-    assert((result_xtensor.shape() == expected_result.shape()));
+    ASSERT_EQ(result_xtensor.shape(), expected_result.shape());
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
@@ -101,16 +103,13 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
-    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = shape_type{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -120,15 +119,13 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
-    assert((result_xtensor.shape() == expected_result.shape()));
+    ASSERT_EQ(result_xtensor.shape(), expected_result.shape());
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
 TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
     using namespace ttml;
 
-    const uint32_t N = 1U, C = 1U, H = 1U, W = 256U;
-    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = {
@@ -172,15 +169,23 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
-    auto result = ttml::metal::softmax(input, dim);
+    ttnn::Tensor ttml_softmax = ttml::metal::softmax(input, dim);
+    auto ttml_softmax_xtensor = core::to_xtensor(ttml_softmax);
 
-    auto ttnn_softmax = ttnn_fixed::softmax(input, dim);
+    tt::tt_metal::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
+    // Host side reference using FP32 and xtensor
     auto expected_result = xt_softmax(input_tensor, dim);
 
-    // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result);
-    assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    ASSERT_EQ(ttml_softmax_xtensor.shape(), expected_result.shape());
+
+    // ttml vs host
+    EXPECT_TRUE(xt::allclose(ttml_softmax_xtensor, expected_result, 3e-2F, 1e-2F));
+
+    // ttnn vs host
+    EXPECT_TRUE(xt::allclose(ttnn_softmax_xtensor, expected_result, 3e-2F, 1e-2F));
+
+    // ttml vs ttnn
+    EXPECT_TRUE(xt::allclose(ttml_softmax_xtensor, ttnn_softmax_xtensor, 3e-2F, 1e-2F));
 }

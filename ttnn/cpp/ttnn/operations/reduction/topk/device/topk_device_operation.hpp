@@ -7,18 +7,34 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
 
 #include <optional>
 #include <variant>
 
 namespace ttnn::prim {
+
 struct TopKDeviceOperation {
     using operation_attributes_t = TopkParams;
     using tensor_args_t = TopkInputs;
     using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
+
+    struct TopKSingleCoreProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    struct TopKMultiCoreProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
     using program_factory_t = std::variant<TopKSingleCoreProgramFactory, TopKMultiCoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

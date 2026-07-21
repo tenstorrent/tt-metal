@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -64,11 +66,10 @@ void kernel_main() {
 
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
+    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    const auto output_tensor_addrgen =
-        TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
+    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {

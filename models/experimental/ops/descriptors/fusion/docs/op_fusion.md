@@ -5,58 +5,52 @@ This document details the implementation of `Sequential` and `Parallel`, two bui
 
 <img src="images/overview.png" style="width:1000px;"/>
 
-The above dependency graph is expressed in Python as (using concrete descriptors):
+The framework supports two usage modes. Both start by creating descriptors:
+
+### Create Descriptors
+
+Each descriptor wraps a device op with its input/output tensors. Predecessor outputs wire to successor inputs via `output_tensors[0]`. Activation tensors may be omitted for persistent mode.
 
 ```python
 import models.experimental.ops.descriptors as descriptors
 from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-# Compute config — all fused phases must agree on fp32, approx mode, and fidelity
-compute_cfg = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
-    fp32_dest_acc_en=True,
-)
+mm  = descriptors.matmul(act, weights, core_range_set=full_cores, compute_kernel_config=cc)
+sl  = descriptors.slice(mm.output_tensors[0], [0,0,0,0], [1,1,H,W//2], core_range_set=left_cores)
+sr  = descriptors.slice(mm.output_tensors[0], [0,0,0,W//2], [1,1,H,W], core_range_set=right_cores)
+mm2 = descriptors.matmul(sl.output_tensors[0], proj, core_range_set=left_top, compute_kernel_config=cc)
+ln  = descriptors.layer_norm(sl.output_tensors[0], core_range_set=left_bot,
+                             weight=ln_w, bias=ln_b, epsilon=1e-5, compute_kernel_config=cc)
+rms = descriptors.rms_norm(sr.output_tensors[0], core_range_set=right_cores,
+                           weight=rms_w, epsilon=1e-5, compute_kernel_config=cc)
+```
 
-# Core grids — full 8x8 grid (64 cores), split left/right then top/bottom
-full_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})  # 8x8 = 64 cores
-left_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})  # 4x8 = 32 cores (cols 0-3)
-right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))})  # 4x8 = 32 cores (cols 4-7)
-left_top    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})  # 4x4 = 16 cores (left, rows 0-3)
-left_bot    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(3, 7))})  # 4x4 = 16 cores (left, rows 4-7)
+### Inline Mode (Simple)
 
-# Each descriptor function returns an OpDescriptor — a thin wrapper
-# around ProgramDescriptor with input/output tensors.
-op1 = descriptors.matmul(act, weights, core_range_set=full_cores,
-                         compute_kernel_config=compute_cfg)
-op2 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, H, W // 2],
-                        core_range_set=left_cores)
-op3 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, W // 2], [1, 1, H, W],
-                        core_range_set=right_cores)
-op4 = descriptors.matmul(op2.output_tensors[0], proj, core_range_set=left_top,
-                         compute_kernel_config=compute_cfg)
-op5 = descriptors.layer_norm(op2.output_tensors[0], core_range_set=left_bot,
-                             weight=ln_w, bias=ln_b, epsilon=1e-5,
-                             compute_kernel_config=compute_cfg)
-op6 = descriptors.rms_norm(op3.output_tensors[0], core_range_set=right_cores,
-                           weight=rms_w, epsilon=1e-5,
-                           compute_kernel_config=compute_cfg)
+Compose the topology and run. Fresh descriptors each call. Has some Python overhead — appropriate when surrounding ops hide the cost.
 
-out4, out5, out6 = Sequential(
-    op1,                          # matmul on all 64 cores
-    Parallel(
-        Sequential(               # left half (32 cores)
-            op2,                  # slice left
-            Parallel(op4, op5),   # matmul (top 16) + LN (bottom 16)
-        ),
-        Sequential(op3, op6),     # right half: slice → RMS (32 cores)
+```python
+out_mm2, out_ln, out_rms = Sequential(
+    mm=mm,
+    branches=Parallel(
+        left=Sequential(sl=sl, leaves=Parallel(mm2=mm2, ln=ln)),
+        right=Sequential(sr=sr, rms=rms),
     ),
-).run(results=[op4, op5, op6])
-ttnn.synchronize_device(device)
+).run(results=[mm2, ln, rms])
+```
 
-result_op4 = ttnn.to_torch(out4)
-result_op5 = ttnn.to_torch(out5)
-result_op6 = ttnn.to_torch(out6)
+### Persistent Mode (Fast)
+
+Create the topology once and reuse it across calls. Only the changing input tensors are swapped via `update()` before each `run()`. This avoids the per-call overhead of descriptor creation and other fusion overhead, making it suitable for latency-sensitive hot loops. For Sequential chains, connections between ops are detected automatically — only external inputs need updating.
+
+```python
+# Setup (once):
+fused = Parallel(q=q_norm, kv=kv_norm)
+
+# Each call:
+fused.q.update(input_tensor=tt_q)
+fused.kv.update(input_tensor=tt_kv)
+tt_q, tt_kv = fused.run()
 ```
 
 The compositional framework both encourages op genericity and reuse and reduces the need to write single-use custom fused ops for cases where the performance of existing ops is satisfactory.
@@ -87,7 +81,7 @@ The rest of this document provides implementation details for the various compon
 - [Argument Concatenation](#argument-concatenation)
   - [Runtime Args](#runtime-args) | [Compile-Time Args](#compile-time-args)
 - [Build Cache](#build-cache)
-  - [Deferred OpDescriptor](#deferred-opdescriptor) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: patchable_generic_op](#dispatch-patchable_generic_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
+  - [OpDescriptor Construction Modes](#opdescriptor-construction-modes) | [Program Key Cache](#program-key-cache) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: fusion_dispatch_op](#dispatch-fusion_dispatch_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation) | [LRU Eviction](#lru-eviction)
 - [Constraints and Limitations](#constraints-and-limitations)
 - [File Map](#file-map)
 
@@ -114,57 +108,156 @@ subsets. A linear chain is a tree with branching factor 1.
 Chains ops in temporal order. Items can be `OpDescriptor`, `Sequential`, or
 `Parallel` objects. Nested `Sequential` items are flattened.
 
-`run()` builds the fused program (cached after the first call) and dispatches
-it. Pass `results=[desc1, desc2, ...]` to select which descriptors' outputs
-are returned. When `results` is omitted, returns `None`.
+Both positional and named (keyword) items are supported. Named items become
+attributes on the container for persistent-mode `update()` access. Names are
+flattened across nesting depth — `fused.leaf` works even if the leaf is deeply
+nested.
 
 ```python
-# Linear chain — run and get last op's output
+tt_x = ttnn.from_torch(...)
+op0 = descriptors.layer_norm(input_tensor=tt_x, ...)
+op1 = descriptors.rms_norm(input_tensor=op0.output_tensors[0], ...)
+op2 = descriptors.matmul(input_tensor=op1.output_tensors[0], ...)
+
+# Inline (positional args)
 [out] = Sequential(op0, op1, op2).run(results=[op2])
 
-# Incremental construction
-s = Sequential(op0)
-s.add(op1).add(op2)
-[out] = s.run(results=[op2])
+# Inline (named kwargs — enables fused.proj access for persistent mode)
+[out] = Sequential(stem=op0, norm=op1, proj=op2).run(results=[op2])
 
 # Composition via nesting (flattened automatically)
 stem = Sequential(op0, op1)
 [out] = Sequential(stem, op2).run(results=[op2])  # equivalent to op0 -> op1 -> op2
 ```
 
-For advanced use, `build()` returns a `FusedOp` with a `launch()` method
-for direct dispatch control (e.g. benchmarking).
+#### Selecting outputs: `run(results=...)`
+
+`results` is a list of `OpDescriptor` references picking which outputs `run()`
+should return, in the order you want them. Only descriptors actually present
+in the tree may appear — passing a descriptor that isn't in the container
+raises an error.
+
+```python
+tt_x = ttnn.from_torch(...)
+ln   = descriptors.layer_norm(input_tensor=tt_x, ...)
+rms  = descriptors.rms_norm(input_tensor=ln.output_tensors[0], ...)
+mm   = descriptors.matmul(input_tensor=rms.output_tensors[0], ...)
+[norm_out, mm_out] = Sequential(ln, rms, mm).run(results=[rms, mm])
+```
+
+When `results` is omitted, a default list is returned:
+
+- **`Sequential`**: the last item's outputs. If the last item is a
+  `Parallel` / nested container, its default outputs are used recursively —
+  so `Sequential(stem, Parallel(a, b)).run()` returns `(a_out, b_out)`.
+- **`Parallel`**: one output per top-level branch. If a branch is itself a
+  `Sequential`, the same `Sequential` rule above applies to that branch
+  (i.e. recurse into its last item).
 
 ### `Parallel`
 
 Groups items that run concurrently on disjoint core subsets. Requires at least
 2 items. Items can be `OpDescriptor`, `Sequential`, or `Parallel`.
 
-The fusion build cache key includes per-op hashes in branch order, so
-swapping branch order is a different cache entry (and may produce a
-different merged program).
-
 ```python
-# Branching tree: stem runs first, then two branches in parallel
-a_out, b_out = Sequential(
-    stem_op, Parallel(branch_a, branch_b)
-).run(results=[branch_a, branch_b])
-
 # Standalone: independent ops merged into one dispatch
-q_out, kv_out = Parallel(q_rms, kv_rms).run(results=[q_rms, kv_rms])
+tt_q, tt_kv = ttnn.from_torch(...), ttnn.from_torch(...)
+q_rms  = descriptors.rms_norm(input_tensor=tt_q, ...)
+kv_rms = descriptors.rms_norm(input_tensor=tt_kv, ...)
+tt_q, tt_kv = Parallel(q=q_rms, kv=kv_rms).run()
 
-# Nested: Parallel items can contain Sequential chains with further splits
-a1_out, a2_out, b_out = Sequential(
-    stem,
-    Parallel(
-        Sequential(op_a, Parallel(op_a1, op_a2)),
-        op_b,
+# Branching tree (positional): stem runs first, then two branches in parallel.
+# Each branch's input is the stem's deferred output tensor, which wires the
+# internal edge. In persistent mode, call update() directly on the refs you
+# already hold — e.g. stem_op.update(new_x).
+tt_x = ttnn.from_torch(...)
+stem_op  = descriptors.rms_norm(input_tensor=tt_x, ...)
+branch_a = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+branch_b = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+a_out, b_out = Sequential(
+    stem_op,
+    Parallel(branch_a, branch_b),
+).run()
+
+# Branching tree (named): same topology, but each name is hoisted as an
+# attribute on the container, so you can reach any descriptor through `fused`
+# without holding individual refs. `fused.stem is stem_op` — the container
+# stores the same object — so either form works for persistent-mode updates.
+stem_op = descriptors.rms_norm(input_tensor=tt_x, ...)
+fused = Sequential(
+    stem=stem_op,
+    branches=Parallel(
+        a=descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...),
+        b=descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...),
     ),
-).run(results=[op_a1, op_a2, op_b])
+)
+new_x = ttnn.from_torch(...)
+fused.stem.update(new_x)     # equivalent to stem_op.update(new_x)
+a_out, b_out = fused.run()
+
+# Nested: Parallel items can contain Sequential chains with further splits.
+# Names from every level flatten onto `fused`, so deeply nested descriptors
+# are reachable both directly (`fused.op_a`) and by explicit path
+# (`fused.branches.left.op_a`) — duplicates across levels are rejected at
+# construction time, so the flat form is always unambiguous.
+stem_op = descriptors.rms_norm(input_tensor=tt_x, ...)
+op_a    = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+op_a1   = descriptors.matmul(input_tensor=op_a.output_tensors[0], ...)
+op_a2   = descriptors.matmul(input_tensor=op_a.output_tensors[0], ...)
+op_b    = descriptors.matmul(input_tensor=stem_op.output_tensors[0], ...)
+fused = Sequential(
+    stem=stem_op,
+    branches=Parallel(
+        left=Sequential(op_a=op_a, leaves=Parallel(a1=op_a1, a2=op_a2)),
+        right=op_b,
+    ),
+)
+new_x = ttnn.from_torch(...)
+fused.stem.update(new_x)                        # update the root input
+assert fused.op_a is fused.branches.left.op_a   # both paths reach the same descriptor
+a1_out, a2_out, b_out = fused.run(results=[op_a1, op_a2, op_b])
 ```
 
 Items after a `Parallel` in a `Sequential` are not allowed — the tree
 diverges and cannot rejoin. Place trailing items inside each branch instead.
+
+### `OpDescriptor.update()`
+
+Replaces input tensors on a descriptor, by position or by name. Given a
+descriptor produced by any factory:
+
+```python
+weight = ttnn.from_torch(...)
+desc = descriptors.rms_norm(input_tensor=None, weight=weight, ...)
+
+new_t, new_w = ttnn.from_torch(...), ttnn.from_torch(...)
+desc.update(new_t)                               # positional (replaces index 0)
+desc.update(input_tensor=new_t, weight=new_w)    # keyword (by name)
+```
+
+For persistent-mode descriptors (created with omitted activation), the first
+`update()` that fills all pending slots triggers lazy materialization —
+computing the program hash and setting up the factory closure.
+
+### `@OpDescriptor.create` Decorator
+
+Wraps a descriptor factory function to support both inline and persistent
+modes automatically. The factory body always receives real tensors; the
+decorator intercepts calls where required parameters are missing and returns
+a deferred descriptor.
+
+```python
+@OpDescriptor.create(name="rms_norm")
+def rms_norm(input_tensor, weight=None, epsilon=1e-12, ...):
+    # Body only runs when input_tensor is a real tensor.
+    inputs = {"input_tensor": input_tensor}
+    if weight is not None: inputs["weight"] = weight
+    ...
+    return OpDescriptor(factory_fn=..., input_tensors=inputs, ...)
+```
+
+Tensor inputs for `update()` naming are inferred from the function signature
+and actual argument values — no explicit tensor list needed.
 
 
 ## Opt-In Requirements
@@ -2523,29 +2616,48 @@ and C++ source generation are orders of magnitude slower than simply patching
 tensor addresses.  An **in-memory build cache** avoids repeating this work
 when the same fusion topology is built again with different tensor buffers.
 
-Fused dispatch uses a **three-level caching architecture**:
+Fused dispatch uses a **four-level caching architecture**:
 
-| Level | Key | Stores | Avoids |
-|-------|-----|--------|--------|
-| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup |
-| **Device Program** (`ProgramCache`) | `type_hash` + descriptor hash | `MeshWorkload` + slot indices | `Program` creation from descriptor |
-| **Slot Patching** (per-launch) | per-slot address comparison | `prev_io_addresses` | Patching unchanged address slots |
+| Level | Key | Stores | Avoids | Eviction |
+|-------|-----|--------|--------|----------|
+| **Program Key** (per-factory `_program_key_cache`) | cheap arg fingerprint (`id()` / `hash(spec)`) | `(program_cache_key, input_name_map, input_names)` | Full factory body on repeated inline calls | LRU (default 128, `TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES`) |
+| **Fusion Build** (`_BUILD_CACHE`) | topology + branch hashes + mesh id | Fused `ProgramDescriptor` + metadata (no tensors) | Codegen, CB allocation, barrier setup | LRU (default 256, `TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES`) |
+| **Device Program** (`ProgramCache`) | `type_hash` + descriptor hash | `MeshWorkload` + slot indices | `Program` creation from descriptor | — |
+| **Slot Patching** (per-launch) | per-slot address comparison | `prev_io_addresses` | Patching unchanged address slots | — |
 
-The fusion build cache lives in a process-global dict and does not persist to
-disk — it is lost on process exit.  The device program cache and slot
-patching are handled by `patchable_generic_op` on the C++ side.
+Both Python-side caches (program key and fusion build) use **LRU eviction**
+via `OrderedDict` to bound memory growth.  Cache sizes are tunable via
+environment variables.  The device program cache and slot patching are
+handled by `fusion_dispatch_op` on the C++ side and are not bounded by
+Python.
+
+A **generation counter** (`_BUILD_CACHE_GEN`) protects persistent containers
+from using stale `_cached_entry` pointers after `clear_build_cache()`.
+Each call to `clear_build_cache()` increments the counter and also clears
+all registered program key caches.  The persistent hot path in
+`_container_run` checks `container._cached_entry_gen == _BUILD_CACHE_GEN`
+before using the cached entry.
 
 
-### Deferred OpDescriptor
+### OpDescriptor Construction Modes
 
-`OpDescriptor` supports both eager and deferred construction.  Deferred
-descriptors carry a `program_cache_key` (stable integer hash, computable
-without calling the C++ factory) and a `factory_fn`.  The
-`ProgramDescriptor` is materialized only when `.descriptor` is first accessed:
+`OpDescriptor` supports three construction patterns:
+
+1. **Eager** (e.g. matmul, slice): `descriptor=` passed directly,
+   `program_cache_key` auto-computed.
+2. **Deferred** (e.g. rms_norm, layer_norm in inline mode): `factory_fn=`
+   and explicit `program_cache_key`.  The `ProgramDescriptor` materializes
+   on first `.descriptor` access.
+3. **Persistent** (created by `@OpDescriptor.create` decorator when required
+   tensors are omitted): `complete_fn=` set, `program_cache_key=None`.
+   Materializes on first `update()` that fills all pending slots.
+
+`input_tensors` may be a `dict` — auto-converted to a list with
+`_input_names` for named `update()` support.
 
 ```python
 class OpDescriptor:
-    program_cache_key: int  # Always available — no .descriptor access needed
+    program_cache_key: int | None  # None for persistent until first update()
 
     @property
     def descriptor(self):
@@ -2554,10 +2666,6 @@ class OpDescriptor:
         return self._descriptor
 ```
 
-Eager descriptors (e.g. matmul, slice) pass `descriptor=` directly and
-`program_cache_key` is auto-computed from it.  Deferred descriptors (e.g.
-rms_norm, layer_norm) pass `factory_fn=` and an explicit `program_cache_key`.
-
 This is the key enabler of the build cache: a cache **hit** never touches
 `.descriptor`, so the expensive C++ factory call is skipped entirely on
 steady state.  The `program_cache_key` is typically the device op's
@@ -2565,6 +2673,41 @@ steady state.  The `program_cache_key` is typically the device op's
 `extend_branch_program_cache_key(device_hash, *extras)` when the factory
 takes side-channel arguments (e.g. `core_range_set` for interleaved
 layernorm) not covered by the device hash.
+
+For persistent mode, `_DeferredOutput` sentinels in `output_tensors` enable
+identity-based edge detection: `child.input_tensors[i] is parent.output_tensors[j]`
+tells `Sequential` which inputs are internal edges (auto-connected on first `run()`)
+vs external (provided by the user via `update()`).
+
+
+### Program Key Cache
+
+The `@OpDescriptor.create` decorator creates a **per-factory program key
+cache** (`_program_key_cache`) — an `OrderedDict` with LRU eviction that
+maps a cheap argument fingerprint to a previously computed
+`(program_cache_key, input_name_map, input_names)` tuple.
+
+On the **inline path** (all required tensor args present), the wrapper
+computes a fingerprint from the call arguments and checks the cache:
+
+- **Hit**: Returns a deferred `OpDescriptor` with the cached
+  `program_cache_key` and a lazy factory that only runs `.descriptor` if
+  needed.  The full factory body is skipped entirely.
+- **Miss**: Runs the full factory, then stores the result in the cache for
+  next time.
+
+The fingerprint uses three keying strategies depending on argument type
+(see [`id()` keying](#program-key-cache-id-keying-and-strong-references)):
+
+| Arg type | Key | Pinned? |
+|----------|-----|---------|
+| `Tensor` | `hash(tensor.spec)` | No |
+| Hashable (int, float, str, etc.) | `hash(obj)` | No |
+| id()-only (C++ bindings without `__hash__`) | `id(obj)` | Yes (strong ref) |
+
+Each factory's cache is registered in `_PROGRAM_KEY_CACHE_REGISTRY` so that
+`clear_build_cache()` can clear them all.  The LRU cap is controlled by
+`TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES` (default 128).
 
 
 ### Cache Key
@@ -2591,7 +2734,7 @@ def _fusion_cache_key_from_ops(items, container_prefix, ops, device_id):
 3. **Mesh device id**: `MeshDevice.id()` when available (monotonic Metal mesh
    id), else Python `id(device)`, else `0` when no device is known.  This
    prevents cross-mesh cache collisions — the device program cache behind
-   `patchable_generic_op` is tied to a specific mesh.
+   `fusion_dispatch_op` is tied to a specific mesh.
 
 Two builds with the same key have identical fused kernel source, CB layout,
 barrier configuration, and semaphore structure.  Only runtime args (tensor
@@ -2606,45 +2749,72 @@ hit without re-running codegen:
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `cached_descriptor` | `ProgramDescriptor` | The fused descriptor — dispatched via `patchable_generic_op` on every launch |
+| `cached_descriptor` | `ProgramDescriptor` | The fused descriptor — dispatched via `fusion_dispatch_op` on every launch |
 | `semaphores` | `tuple` | Keeps `GlobalSemaphore` objects alive (pinning their L1 addresses) |
 | `kernel_labels` | `tuple` | Op name labels for `_apply_kernel_dir` file naming |
 | `output_sources` | `tuple((op_idx, tensor_idx), ...)` or `None` | Maps each merged output to its source branch op and tensor index |
 | `merged_input_len` | `int` or `None` | Length of deduped input list; enables preallocated list on cache hit |
+| `address_slots` | `AddressSlots` (opaque C++) | Maps every descriptor position (CB buffer pointers, runtime args) to an IO tensor index for address patching |
+| `output_specs` | `list[TensorSpec]` or `None` | Cached output tensor metadata (output_sources order) for ephemeral allocation on the hot path |
+| `shared_output_map` | `list[int]` | Maps shared outputs to their canonical index (empty = all unique) |
+| `result_reorder` | `tuple[int, ...]` or `None` | Reorders outputs from output_sources order to default_results order |
 
-**No IO tensors are stored.**  The cache holds only the descriptor and
-metadata — never references to `Tensor` objects.  This avoids pinning device
-buffers in the cache and prevents stale-buffer bugs when activations are
-reallocated between forward passes.
+**No IO tensors are stored.**  The cache holds only the descriptor,
+`TensorSpec` metadata, and index mappings — never references to `Tensor`
+objects.  Output tensors are **ephemeral**: allocated fresh each hot-path
+call from the cached `TensorSpec` list and returned to the caller.  This
+avoids pinning device buffers in the cache and prevents stale-buffer bugs
+when activations are reallocated between forward passes.
 
 
-### Cache Hit: Fast Path
+### Cache Hit: Two Fast Paths
 
-On a cache hit, `_fused_op_from_cache_entry` constructs a **new** `FusedOp`
-from the cached descriptor and the caller's current branch ops' tensor lists:
+On a `_BUILD_CACHE` hit, `_container_run` takes one of two fast paths
+depending on whether the container has been called before.  Neither path
+constructs a `FusedOp`, and the `.descriptor` property of deferred branch
+`OpDescriptor` objects is **never accessed** — only their `input_tensors`
+(which the caller populated before `run()`) are read.
+
+#### Warm path (first call on a container instance)
+
+Used by inline containers (new each call) and on the first `run()` of a
+persistent container.  Dispatches via the 3-arg `fusion_dispatch_op`
+overload with the branch ops' pre-existing output tensors:
 
 ```python
-cache_id, ops = _fusion_cache_id_and_ops(self._items, "S", cache_device)
-entry = _BUILD_CACHE.get(cache_id)
+entry = _build_cache_get(cache_key)     # promotes key to MRU on hit
 if entry is not None:
-    result = _fused_op_from_cache_entry(entry, ops)
-    return result
+    inputs = <identity-deduplicated branch input_tensors>
+    outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+    io_tensors = inputs + outputs
+    fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
 ```
 
-The hit path:
+After dispatch, `_container_run` creates a `FusionDispatchState` on the
+shared `_CacheEntry` (if not already present) and sets `_cached_entry` on
+the container so subsequent calls take the hot path.
 
-1. **Collect merged inputs**: Identity-deduplicate branch `input_tensors` in
-   flatten order.  The preallocated list size (`merged_input_len`) avoids
-   dynamic resizing.
-2. **Recover merged outputs**: The `output_sources` map `(op_idx, tensor_idx)`
-   indexes into the current branch ops' `output_tensors` — no descriptor
-   access needed.
-3. **Wrap**: A new `FusedOp` is returned with the cached `ProgramDescriptor`,
-   the fresh IO lists, and the pinned semaphore/label metadata.
+#### Persistent hot path (call 2+ on the same container)
 
-The `.descriptor` property of deferred branch `OpDescriptor` objects is **never
-accessed** on a cache hit.  Only their `input_tensors` / `output_tensors`
-(which the caller populated before `build()`) are read.
+Bypasses cache-key computation entirely.  `FusionDispatchState.dispatch`
+allocates ephemeral output tensors from cached `TensorSpec` metadata, patches
+the descriptor, and dispatches — all in a single C++ call:
+
+```python
+entry = container._cached_entry          # set on the previous call
+if getattr(container, "_cached_entry_gen", -1) != _BUILD_CACHE_GEN:
+    # Stale — fall through to cache lookup / cold path
+    ...
+inputs = <identity-deduplicated from container._cached_ops>
+outputs = entry.dispatch_state.dispatch(inputs)
+```
+
+The generation guard prevents a persistent container from using a stale
+`_cached_entry` after `clear_build_cache()` has been called.
+
+Updated activation slots are cleared after dispatch (zero L1 pinning between
+forward passes).  The returned outputs (in `output_sources` order) are
+reordered to `default_results` order via `result_reorder`.
 
 
 ### Cache Miss: Full Build
@@ -2657,14 +2827,17 @@ building, the result is stored:
 r = self._build_internal(device)                # slow: full codegen pipeline
 fused = FusedOp(op=..., semaphores=r.semaphores, kernel_labels=r.kernel_labels, ...)
 
-_BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
+_build_cache_put(cache_id, _cache_build_result(fused, ops, r.output_source_map))
 ```
+
+`_build_cache_put` inserts the entry and evicts the least-recently-used
+entry if the cache exceeds `_BUILD_CACHE_MAX`.
 
 `_cache_build_result` performs two optimizations before storing:
 
 1. **Memoize descriptor hash**: Sets `desc.custom_program_hash` to the
    pre-computed `compute_program_descriptor_hash(desc)`.  This turns every
-   subsequent device program cache lookup (inside `patchable_generic_op`) into
+   subsequent device program cache lookup (inside `fusion_dispatch_op`) into
    an O(1) integer read instead of an O(descriptor) walk over all kernels, CBs,
    and semaphores.
 
@@ -2674,28 +2847,48 @@ _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
    different op object instances.
 
 
-### Dispatch: patchable_generic_op
+### Dispatch: fusion_dispatch_op
 
-`FusedOp.launch()` dispatches via `patchable_generic_op` — a C++ device
-operation designed for address-slot patching:
+`fusion_dispatch_op` has three overloads, each used by a different dispatch
+path.  All patch the cached descriptor's stale addresses via `AddressSlots`
+before dispatching.
+
+**3-arg (warm path):** Takes a flat `io_tensors` list (inputs + outputs
+concatenated).  Used by `_container_run` on a build-cache hit when the
+container has pre-existing output tensors from the branch ops:
 
 ```python
-def launch(self, *branch_ops_override):
-    if branch_ops_override:
-        self.refresh_merged_io(list(branch_ops_override))
-    elif self._branch_ops is not None:
-        self.refresh_merged_io(list(self._branch_ops))
-    io_tensors = list(self.input_tensors) + list(self.output_tensors)
-    ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor)
-    return self.output_tensors  # results written in-place to pre-allocated output tensors
+fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
 ```
 
-Before dispatch, `refresh_merged_io` copies the current branch ops' tensor
-lists into the fused op's merged IO lists in place — so in-place updates to
-branch tensor lists (e.g. activation buffer swaps between forward passes) are
-visible to the dispatch.
+**4-arg (cold path):** Dispatches into pre-allocated output tensors passed
+as a separate vector.  Used by `FusedOp.launch()` on the cold path where
+outputs already exist from `build()`:
 
-On the C++ side, `PatchableGenericMeshProgramFactory` implements a two-phase
+```python
+fusion_dispatch_op(
+    list(self.input_tensors), list(self.output_tensors),
+    self.descriptor, self._address_slots,
+)
+```
+
+**`FusionDispatchState` (persistent hot path):** A C++ class that caches
+output `TensorSpec` metadata, `shared_output_map`, `result_reorder`, and
+the `MeshProgramDescriptor`.  Its `dispatch(inputs)` method allocates
+ephemeral output tensors, patches the descriptor, dispatches, and applies
+result reordering — all in one C++ call with no round-trip to Python.
+Created once per `_CacheEntry` and shared across all containers with the
+same cache key:
+
+```python
+entry.dispatch_state = FusionDispatchState(
+    output_specs, shared_output_map, result_reorder,
+    descriptor, address_slots, mesh_device,
+)
+outputs = entry.dispatch_state.dispatch(inputs)   # persistent hot path
+```
+
+On the C++ side, `FusionDispatchMeshProgramFactory` implements a two-phase
 protocol:
 
 **First dispatch (device program cache miss):** `create_mesh_workload` builds
@@ -2725,50 +2918,34 @@ The three slot types:
 ### Steady-State Pattern: run()
 
 `Sequential.run()` and `Parallel.run()` combine `build()` + `launch()` into
-a single call optimized for the training-loop pattern where the same fusion
-graph is dispatched repeatedly with in-place tensor swaps.
+a single call via the shared `_container_run` implementation.  The dispatch
+path depends on the container's lifetime and the build-cache state:
 
-Pass `results=[desc1, desc2, ...]` to select which descriptors' first output
-tensors are returned.  When `results` is omitted, returns `None` (outputs
-are still written in-place to the descriptor objects' pre-allocated tensors).
+| Path | When | Dispatch mechanism | Overhead |
+|------|------|--------------------|----------|
+| **Cold** | First call ever for this topology | Full codegen → `FusedOp.launch()` (4-arg) | ~seconds (codegen + JIT) |
+| **Warm** | `_BUILD_CACHE` hit, first call on this container | 3-arg `fusion_dispatch_op` with branch ops' output tensors | ~100s of µs |
+| **Persistent hot** | Call 2+ on the same container | `FusionDispatchState.dispatch` (C++, single call) | ~tens of µs |
 
-```python
-# Explicit result selection
-q_out, kv_out = Parallel(q_rms, kv_rms).run(results=[q_rms, kv_rms])
+**Inline containers** (new each call) always take the warm path — `_cached_entry`
+is `None` on each new container, but `_BUILD_CACHE` hits from the first call
+onward.  This is the natural pattern for inline `Sequential(…).run()` or
+`Parallel(…).run()`.
 
-# Fire-and-forget (read from descriptors later if needed)
-Sequential(op0, op1, op2).run()
-```
+**Persistent containers** (reused across calls) take the warm path on the
+first call, which creates the `FusionDispatchState` and sets `_cached_entry`
+alongside `_cached_entry_gen`.  All subsequent calls check
+`_cached_entry_gen == _BUILD_CACHE_GEN` before using the cached entry —
+if `clear_build_cache()` was called in between, the generation mismatch
+forces a fall-through to the warm/cold path.  Otherwise, cache-key
+computation is bypassed entirely and dispatch goes through the C++ hot path.
 
-The implementation caches the `FusedOp` on the container object:
+No `FusedOp` is retained on the container between calls.  Output tensors are
+ephemeral (allocated fresh each hot-path call from cached `TensorSpec`
+metadata) — zero L1 retention between forward passes.
 
-```python
-def _container_run(container, surface_prefix, results, device=None, kernel_dir=None):
-    cache_id, ops = _fusion_cache_id_and_ops(container._items, surface_prefix, cache_device)
-    sig = (cache_id, tuple(id(op) for op in ops), kernel_dir)
-    if container._run_fused is None or container._run_signature != sig:
-        container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
-        container._run_signature = sig
-    container._run_fused.launch()
-    if results is not None:
-        return [desc.output_tensors[0] for desc in results]
-    return None
-```
-
-The signature includes both the fusion cache id and the Python `id()` of each
-branch op object.  This means:
-
-- **Same ops, new tensors** (typical forward pass): signature matches, skip
-  `build()`, go straight to `launch()` which calls `refresh_merged_io` to
-  copy the current branch tensor lists into the fused op's IO.
-- **Different op objects** (reconfiguration): signature misses, `build()` is
-  called (which itself hits the fusion build cache if the structure is
-  unchanged), and a new `FusedOp` is stored.
-
-The steady-state hot path is: `run()` → signature match → `launch()`
-→ `refresh_merged_io` (Python list copy) → `patchable_generic_op` → device
-program cache hit → slot patching (skip unchanged) → enqueue → extract
-`results`.
+See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
+at the top of this document for usage examples.
 
 
 ### Cache Invalidation
@@ -2778,13 +2955,66 @@ The fusion build cache key incorporates the topology fingerprint, all branch
 — different op structure, different kernel config, different device — the
 hash changes and a full rebuild occurs.
 
-`clear_build_cache()` manually clears all entries.  This is useful during
-development or when switching between device configurations.
+`clear_build_cache()` performs three operations:
 
-The `run()` cache (the stored `FusedOp` on the container) is invalidated
-separately via `invalidate_run()`, which is called automatically by `.add()`.
-Replacing `_items` entries in place requires calling `invalidate_run()`
-manually.
+1. **Clears `_BUILD_CACHE`** — removes all fusion build cache entries.
+2. **Increments `_BUILD_CACHE_GEN`** — invalidates every persistent
+   container's `_cached_entry` pointer.  On the next `run()`, the
+   generation check fails and the container falls through to the cache
+   lookup / cold path, rebuilding as needed.
+3. **Clears all program key caches** — calls `_clear_all_program_key_caches()`
+   to empty every per-factory `_program_key_cache` registered in
+   `_PROGRAM_KEY_CACHE_REGISTRY`.
+
+The generation counter approach avoids the need to track every live
+container — invalidation is O(1) regardless of how many persistent
+containers exist.
+
+The per-container `_cached_entry` pointer (which enables the persistent hot
+path) is also reset by `invalidate_run()`, which is called automatically by
+`.add()`.  Replacing `_items` entries in place requires calling
+`invalidate_run()` manually.
+
+#### LRU eviction
+
+Both the build cache and program key caches use LRU eviction to prevent
+unbounded memory growth:
+
+| Cache | Default max | Environment variable |
+|-------|-------------|----------------------|
+| Build cache (`_BUILD_CACHE`) | 256 | `TT_METAL_FUSION_BUILD_CACHE_MAX_ENTRIES` |
+| Program key cache (per factory) | 128 | `TT_METAL_FUSION_PROGRAM_KEY_CACHE_MAX_ENTRIES` |
+
+When a `put` operation causes the cache to exceed its max, the
+least-recently-used entry is evicted.  Both `get` and `put` promote the
+accessed key to the most-recently-used position.
+
+For a typical decoder pipeline with ~60 layers and several fused ops per
+layer, the default sizes provide ample headroom.  Multi-bucket inference
+deployments (where input shapes are grouped into fixed categories) multiply
+the effective working set; the environment variables allow tuning without
+code changes.
+
+#### Program key cache `id()` keying and strong references
+
+The program key cache uses a three-tier keying strategy for arguments:
+
+1. **Tensors** → `hash(tensor.spec)` — content-based, no pinning needed.
+2. **Hashable non-tensors** (int, float, str, tuple, etc.) → `hash(obj)` —
+   content-based, no pinning needed.  Detected via
+   `type(obj).__hash__ is not object.__hash__`.
+3. **id()-only non-tensors** (C++ binding types without custom `__hash__`) →
+   `id(obj)` — requires pinning to prevent address reuse.
+
+For category 3, the cache entry holds **strong references** (`_arg_refs`)
+to the keyed objects.  This pins them in memory for the lifetime of the
+cache entry, guaranteeing their addresses cannot be reused by CPython's
+allocator.  When the entry is LRU-evicted, the references are dropped.
+
+Only C++ binding config objects (lightweight structs with a few fields)
+fall into category 3.  Python builtins and any type with a content-based
+`__hash__` are never pinned.  At most `_PROGRAM_KEY_CACHE_MAX` entries
+(default 128) exist per factory, bounding the total pinned set.
 
 
 ## Constraints and Limitations
@@ -2822,7 +3052,8 @@ manually.
 | `models/experimental/ops/descriptors/fusion/codegen/source_gen.py` | Source utils, transforms, phase NS, fused source gen |
 | `models/experimental/ops/descriptors/fusion/codegen/args.py` | RT/CT/named arg merging + define handling + fp32 validation |
 | `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
-| `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor` namedtuple |
+| `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor`, `_DeferredOutput`, `@OpDescriptor.create` decorator, `update()`, `LazyOutputList` |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py` | Device tests (require hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_fusion_cache.py` | Build cache, program key cache, LRU eviction, generation counter, update API, deferred descriptor, named kwargs tests |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests (no hardware) |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_global_cb.py` | GlobalCircularBuffer fusion tests (require hardware) |

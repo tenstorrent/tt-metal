@@ -47,7 +47,7 @@ namespace compute_kernel_lib {
  * For data movement kernels: Uses ENABLE_FP32_DEST_ACC macro define.
  */
 constexpr bool get_fp32_dest_acc_enabled() {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK)
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
     // Compute kernel (TRISC) - DST_ACCUM_MODE is a constexpr bool from JIT header
     return DST_ACCUM_MODE;
 #elif defined(ENABLE_FP32_DEST_ACC)
@@ -55,6 +55,7 @@ constexpr bool get_fp32_dest_acc_enabled() {
     return (ENABLE_FP32_DEST_ACC == 1);
 #else
     static_assert(false, "ENABLE_FP32_DEST_ACC must be defined for data movement kernels");
+    return false;  // Unreachable; suppresses 'no return statement' diagnostic on some toolchains.
 #endif
 }
 

@@ -8,7 +8,7 @@
 #include <iostream>
 #include <algorithm>
 
-namespace tt::tt_metal::noc_estimator::offline {
+namespace tt::tt_metal::experimental::noc_estimator::offline {
 
 static std::string to_lower(const std::string& str) {
     std::string result = str;
@@ -136,7 +136,7 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
         if (it != column_map_.end() && it->second < tokens.size()) {
             std::string arch_lower = to_lower(tokens[it->second]);
             if (arch_lower == "blackhole") {
-                point.arch = common::Architecture::BLACKHOLE;
+                point.arch = Architecture::BLACKHOLE;
             }
         }
 
@@ -144,9 +144,9 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
         if (it != column_map_.end() && it->second < tokens.size()) {
             std::string mech_lower = to_lower(tokens[it->second]);
             if (mech_lower == "multicast") {
-                point.mechanism = common::NocMechanism::MULTICAST;
+                point.mechanism = NocMechanism::MULTICAST;
             } else if (mech_lower == "multicast_linked") {
-                point.mechanism = common::NocMechanism::MULTICAST_LINKED;
+                point.mechanism = NocMechanism::MULTICAST_LINKED;
             }
         }
 
@@ -155,9 +155,9 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
             std::string mem_lower = to_lower(tokens[it->second]);
             // Handle both "dram_interleaved" and "dram interleaved" formats
             if (mem_lower == "dram_interleaved" || mem_lower == "dram interleaved") {
-                point.memory = common::MemoryType::DRAM_INTERLEAVED;
+                point.memory = MemoryType::DRAM_INTERLEAVED;
             } else if (mem_lower == "dram_sharded" || mem_lower == "dram sharded") {
-                point.memory = common::MemoryType::DRAM_SHARDED;
+                point.memory = MemoryType::DRAM_SHARDED;
             }
         }
 
@@ -165,25 +165,25 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
         if (it != column_map_.end() && it->second < tokens.size()) {
             std::string pattern_lower = to_lower(tokens[it->second]);
             if (pattern_lower == "one_from_one") {
-                point.pattern = common::NocPattern::ONE_FROM_ONE;
+                point.pattern = NocPattern::ONE_FROM_ONE;
             } else if (pattern_lower == "one_to_one") {
-                point.pattern = common::NocPattern::ONE_TO_ONE;
+                point.pattern = NocPattern::ONE_TO_ONE;
             } else if (pattern_lower == "one_to_all") {
-                point.pattern = common::NocPattern::ONE_TO_ALL;
+                point.pattern = NocPattern::ONE_TO_ALL;
             } else if (pattern_lower == "one_from_all") {
-                point.pattern = common::NocPattern::ONE_FROM_ALL;
+                point.pattern = NocPattern::ONE_FROM_ALL;
             } else if (pattern_lower == "all_to_all") {
-                point.pattern = common::NocPattern::ALL_TO_ALL;
+                point.pattern = NocPattern::ALL_TO_ALL;
             } else if (pattern_lower == "all_from_all") {
-                point.pattern = common::NocPattern::ALL_FROM_ALL;
+                point.pattern = NocPattern::ALL_FROM_ALL;
             } else if (pattern_lower == "one_to_row") {
-                point.pattern = common::NocPattern::ONE_TO_ROW;
+                point.pattern = NocPattern::ONE_TO_ROW;
             } else if (pattern_lower == "row_to_row") {
-                point.pattern = common::NocPattern::ROW_TO_ROW;
+                point.pattern = NocPattern::ROW_TO_ROW;
             } else if (pattern_lower == "one_to_column") {
-                point.pattern = common::NocPattern::ONE_TO_COLUMN;
+                point.pattern = NocPattern::ONE_TO_COLUMN;
             } else if (pattern_lower == "column_to_column") {
-                point.pattern = common::NocPattern::COLUMN_TO_COLUMN;
+                point.pattern = NocPattern::COLUMN_TO_COLUMN;
             }
         }
 
@@ -194,4 +194,4 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
     }
 }
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline

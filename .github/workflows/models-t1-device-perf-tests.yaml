@@ -1,6 +1,9 @@
-name: "[Tier 1] Models Device Perf Tests"
+name: "(Tier 1) Models Device Perf Tests"
 
 on:
+  schedule:
+    # Once a day at 07:00 UTC — all models, all SKUs
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -11,6 +14,7 @@ on:
         options:
           - all
           - llama3.1-8b
+          - sdxl
       sku:
         description: "Select SKU to test"
         required: false
@@ -19,8 +23,15 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
+          - "wh_n300 (N300)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
           - "bh_p150 (P150)"
           - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
       platform:
         required: false
         type: choice
@@ -51,15 +62,17 @@ permissions:
   contents: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
     steps:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,bh_p150,bh_p300"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
@@ -69,18 +82,21 @@ jobs:
             echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
           fi
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-device-perf-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-device-perf-tests-impl.yaml
     with:

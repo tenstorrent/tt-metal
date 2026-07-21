@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -25,49 +28,45 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t onetile = 1;
 
-    // single-tile ublocks
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    Noc noc;
+    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in1(cb_id_in1);
+    const uint32_t tile_bytes_0 = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 #else
-    cb_reserve_back(cb_id_in0, num_tiles);
-    cb_push_back(cb_id_in0, num_tiles);
+    dfb_in0.reserve_back(num_tiles);
+    dfb_in0.push_back(num_tiles);
 #endif
 
-    const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
 #ifdef BCAST_SCALAR
-    cb_reserve_back(cb_id_in1, onetile);
-    l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-    noc_async_read_tile(bcast_id, s1, l1_write_addr_in1);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in1, onetile);
+    dfb_in1.reserve_back(onetile);
+    noc.async_read(s1, dfb_in1, tile_bytes_1, {.page_id = bcast_id, .offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    dfb_in1.push_back(onetile);
 #endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         uint32_t curr_id = base_start_id_HtWt + curr_id_from_base;
 
 #ifndef IN0_SHARDED
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(curr_id, s0, l1_write_addr_in0);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(s0, dfb_in0, tile_bytes_0, {.page_id = curr_id, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in0.push_back(onetile);
 #endif
 
         curr_id_from_base++;
 
 #ifndef BCAST_SCALAR
-        cb_reserve_back(cb_id_in1, onetile);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        noc_async_read_tile(bcast_id, s1, l1_write_addr_in1);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in1, onetile);
+        dfb_in1.reserve_back(onetile);
+        noc.async_read(s1, dfb_in1, tile_bytes_1, {.page_id = bcast_id, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in1.push_back(onetile);
 
         if (curr_id_from_base == HtWt) {
             bcast_id++;

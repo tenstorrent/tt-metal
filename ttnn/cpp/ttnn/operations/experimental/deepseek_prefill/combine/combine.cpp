@@ -16,6 +16,7 @@ ttnn::Tensor combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
@@ -25,7 +26,9 @@ ttnn::Tensor combine(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    bool init_zeros) {
+    bool init_zeros,
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_combine) {
     // Get device and subdevice info
     auto* mesh_device = dispatched_buffer.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -58,6 +61,7 @@ ttnn::Tensor combine(
         dispatched_buffer,
         dispatched_metadata,
         expert_token_counts,
+        expert_region_offsets,
         dispatch_group_size,
         experts_per_chip,
         num_experts_per_tok,
@@ -67,7 +71,9 @@ ttnn::Tensor combine(
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
-        init_zeros);
+        init_zeros,
+        use_l1_small_for_semaphores,
+        use_fp8_combine);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

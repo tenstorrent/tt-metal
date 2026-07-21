@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1U;
     constexpr uint32_t operand0 = 0U;
     constexpr auto src_args = TensorAccessorArgs<1U>();
-    const auto s0 = TensorAccessor(src_args, src0_addr, tile_size_bytes);
+    const auto s0 = TensorAccessor(src_args, src0_addr);
 
     // The original tensor shape is [N, C, H, W]
     // It is laid out in memory as addr = W + ShapeW * H + ShapeW * ShapeH * C + ShapeW * ShapeH * ShapeC * N
@@ -62,9 +62,7 @@ void kernel_main() {
                     // what is the source address for the current tile?
                     // c32 = intra-C-tile loop
                     // every 32 C's acquire a new output tile address
-                    //    DPRINT << "8B h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 <<
-                    //    ENDL();
-                    //    DEVICE_PRINT("8B h={} ct={} wt={} W={} HW2={}\n", h, ct, wt, W, HW2);
+                    //    DPRINT("8B h={} ct={} wt={} W={} HW2={}\n", h, ct, wt, W, HW2);
 
                     cb_reserve_back(operand0, onetile);
 

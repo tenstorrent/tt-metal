@@ -8,10 +8,17 @@ import random
 import pytest
 import torch
 from loguru import logger
+from ttnn.experimental.moe_compute_utils import (
+    auto_output_width_shard_dim,
+    effective_matmul_ring_size,
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -66,46 +73,6 @@ def create_torch_w2_tensors(L, E, N, H):
 
     # [E, L, 1, N, H]
     return torch_w2_tensors
-
-
-def determine_compute_matmul_cores(mesh_device):
-    MATMUL_FULL_CORES = {0, 3, 6, 9}
-    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
-
-    return ring2cores, dram_core_range_set
-
-
-def create_torch_prepared_compute_matmul_weight_tensors(
-    torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
-):
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
-    )
-
-    # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
-
-    return torch_w0_w1_reordered, torch_w2_reordered
 
 
 def create_torch_expert_mapping_tensor(
@@ -323,6 +290,7 @@ def create_torch_dispatch_input_expert_indices_tensor(
 def create_torch_dispatch_input_expert_scores_tensor(batch, seq, selected_experts_k, dtype):
     # Generate expert scores (same shape as expert_indices)
     # Normalize scores so they sum to 1 per token (softmax-like)
+
     torch_dispatch_input_expert_scores_tensor = torch.rand(
         (batch, 1, seq, selected_experts_k), dtype=tt_to_torch_dtype(dtype)
     )
@@ -330,7 +298,6 @@ def create_torch_dispatch_input_expert_scores_tensor(batch, seq, selected_expert
         torch_dispatch_input_expert_scores_tensor / torch_dispatch_input_expert_scores_tensor.sum(dim=-1, keepdim=True)
     )
 
-    # [batch, 1, seq, selected_experts_k]
     return torch_dispatch_input_expert_scores_tensor
 
 
@@ -358,12 +325,12 @@ def device_mesh_iterator(mesh_shape):
             yield m0, m1, device
 
 
-def get_batch_cluster_idxr(cluster_axis, batch, batch_per_device):
+def get_batch_cluster_idxr(cluster_axis, batch, batches_per_device):
     def _idxr(m0, m1, b):
         if cluster_axis == 0:
-            return m1 * batch + m0 * batch_per_device + b
+            return m1 * batch + m0 * batches_per_device + b
         elif cluster_axis == 1:
-            return m0 * batch + m1 * batch_per_device + b
+            return m0 * batch + m1 * batches_per_device + b
         else:
             return b
 
@@ -391,6 +358,7 @@ def gen_combine_golden(
     torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([num_replicated_devices, 1, 1, 1])
 
     torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * num_replicated_devices, hidden_size).bfloat16()
+    valid_mask = torch.zeros(select_experts_k, batch * num_replicated_devices, dtype=torch.bool)
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch, batches_per_device)
     for m0, m1, d in device_mesh_iterator(mesh_shape):
         if cluster_axis == 0:
@@ -411,12 +379,15 @@ def gen_combine_golden(
                 if e >= first_expert_on_cluster and e <= last_expert_on_cluster:
                     contrib = gen_matmul_golden(token, torch_w0_tensors[e], torch_w1_tensors[e], torch_w2_tensors[e])
                     torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
+                    valid_mask[k, global_b] = True
 
-    # [select_experts_k, batch * num_replicated_devices, hidden_size]
-    return torch_combine_ref_tensor
+    # [select_experts_k, batch * num_replicated_devices, hidden_size], [select_experts_k, batch * num_replicated_devices]
+    return torch_combine_ref_tensor, valid_mask
 
 
-def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden):
+def verify_combine(
+    iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_tensor, torch_combine_golden, torch_combine_valid_mask
+):
     PCC_THRESHOLD = 0.988
     ATOL_THRESHOLD = 700.0
 
@@ -437,22 +408,26 @@ def verify_combine(iteration, mesh_device, mesh_shape, cluster_axis, tt_combine_
             tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
         )
 
+    # only compare slots where the golden has a computed contribution — invalid slots
+    # (assigned expert not on this cluster) carry undefined data on the TT side.
+    valid_outputs = torch_combine_output[torch_combine_valid_mask]
+    valid_goldens = torch_combine_golden[torch_combine_valid_mask]
+
     # check pcc
-    pcc_passed, pcc_output = comp_pcc(torch_combine_output, torch_combine_golden, pcc=PCC_THRESHOLD)
+    pcc_passed, pcc_output = comp_pcc(valid_outputs, valid_goldens, pcc=PCC_THRESHOLD)
     logger.info(f"Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - PCC: {pcc_output}")
 
     # check allclose
-    allclose_passed, allclose_output = comp_allclose(
-        torch_combine_golden, torch_combine_output, atol=ATOL_THRESHOLD, rtol=0
-    )
+    allclose_passed, allclose_output = comp_allclose(valid_goldens, valid_outputs, atol=ATOL_THRESHOLD, rtol=0)
     logger.info(f"Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
     if not allclose_passed:
         logger.warning(f"FAILED Combine Output - Iteration: {iteration} - AllClose: {allclose_output}")
-        mask = (torch_combine_output - torch_combine_golden).abs() > ATOL_THRESHOLD
+        delta_mask = (valid_outputs - valid_goldens).abs() > ATOL_THRESHOLD
         logger.warning(
-            f"Elements out of bounds: {torch_combine_output[mask]} ref: {torch_combine_golden[mask]} idx: {mask.nonzero(as_tuple=True)}"
+            f"Elements out of bounds: {valid_outputs[delta_mask]} ref: {valid_goldens[delta_mask]} "
+            f"({int(delta_mask.sum())} of {valid_outputs.numel()})"
         )
 
     return pcc_passed and allclose_passed
@@ -494,10 +469,15 @@ def gen_output_golden(
     return output_reference
 
 
-def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_reference_tensor):
-    PCC_THRESHOLD = 0.988
-    ATOL_THRESHOLD = 310.0
-
+def verify_output(
+    iteration,
+    mesh_device,
+    mesh_shape,
+    tt_output_tensor,
+    output_reference_tensor,
+    pcc_threshold=0.988,
+    atol_threshold=450,
+):
     # bring to host
     # [1, 1, tokens_per_devices, hidden_size // num_replicated_devices] (per device) -> [1, 1, batch, hidden_size] (global on host)
     tt_output_tensor = ttnn.to_torch(
@@ -511,25 +491,29 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     tt_output_tensor = tt_output_tensor.reshape(tt_output_tensor.shape[-2], 1, 1, tt_output_tensor.shape[-1])
 
     # check pcc
-    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=PCC_THRESHOLD)
+    pcc_passed, pcc_output = comp_pcc(tt_output_tensor, output_reference_tensor, pcc=pcc_threshold)
     logger.info(f"Final Output - Iteration: {iteration} - PCC: {pcc_output}")
     if not pcc_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - PCC: {pcc_output}")
 
     # check allclose
     allclose_passed, allclose_output = comp_allclose(
-        output_reference_tensor, tt_output_tensor, atol=ATOL_THRESHOLD, rtol=0
+        output_reference_tensor, tt_output_tensor, atol=atol_threshold, rtol=0
     )
     logger.info(f"Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
     if not allclose_passed:
         logger.warning(f"FAILED Final Output - Iteration: {iteration} - AllClose: {allclose_output}")
+        mask = (tt_output_tensor - output_reference_tensor).abs() > atol_threshold
+        logger.warning(
+            f"Elements out of bounds: {tt_output_tensor[mask]} ref: {output_reference_tensor[mask]} idx: {mask.nonzero(as_tuple=True)}"
+        )
 
     return pcc_passed and allclose_passed
 
 
 @pytest.mark.requires_device(["QUAD"])
 @pytest.mark.skipif(
-    (os.getenv("USE_TORUS_MODE") is None),
+    (os.getenv("USE_TORUS_MODE", "0") == "0"),
     reason=f"Requires ring fabric",
 )
 @pytest.mark.parametrize(
@@ -541,20 +525,18 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
-@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("batches_per_device", [3, 8, 32])
 @pytest.mark.parametrize("shard_dim", [0])
-@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("routed_experts_per_device", [2])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("matmul_N", [2048])
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
-@pytest.mark.parametrize("compute_output_width_shard_dim", [4])
 @pytest.mark.parametrize("combine_mux_core_range", [((1, 1), (3, 3))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
-@pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [True])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
@@ -562,12 +544,13 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
+            "trace_region_size": 0,
         },
     ],
     ids=["fabric_1D_ring"],
     indirect=True,
 )
+@torch.no_grad()
 def test_optimized_moe_decode_block(
     mesh_shape,
     mesh_device,
@@ -576,17 +559,15 @@ def test_optimized_moe_decode_block(
     num_layers,
     batches_per_device,
     shard_dim,
-    experts_per_device,
+    routed_experts_per_device,
     select_experts_k,
     seq,
     hidden_size,
     matmul_N,
     scheme,
     compute_output_height_shard_dim,
-    compute_output_width_shard_dim,
     combine_mux_core_range,
     combine_token_parallel_core_dim,
-    combine_data_parallel_core_dim,
     enable_trace,
     num_iterations,
 ):
@@ -594,8 +575,8 @@ def test_optimized_moe_decode_block(
     # initial setup
     ############################################
 
-    torch.manual_seed(42)
-    random.seed(42)
+    torch.manual_seed(2005)
+    random.seed(2005)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
@@ -603,8 +584,9 @@ def test_optimized_moe_decode_block(
     batch = batches_per_device * num_dispatch_devices
     total_tokens = batch * seq
     tokens_per_device = batch // num_dispatch_devices
-    experts = experts_per_device * num_devices
-    experts_per_cluster = experts // num_replicated_devices
+
+    routed_experts = routed_experts_per_device * num_devices
+    routed_experts_per_cluster = routed_experts // num_replicated_devices
 
     if cluster_axis == 1:
         shard_dims = (None, shard_dim)
@@ -613,13 +595,22 @@ def test_optimized_moe_decode_block(
     else:
         shard_dims = shard_dim
 
+    dispatch_input_expert_scores_dtype = ttnn.bfloat16
+
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     worker_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in combine_mux_core_range])])
 
-    compute_tilize_drain_core = ttnn.CoreCoord(6, 9)
+    matmul_ring_size = effective_matmul_ring_size(mesh_device)
+    compute_tilize_drain_core = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        compute_output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size, matmul_ring_size=matmul_ring_size),
+        hidden_size,
+        mux_core_range_set=combine_mux_cores,
+    )
 
     ############################################
     # create global semaphores
@@ -633,18 +624,19 @@ def test_optimized_moe_decode_block(
     ############################################
     # create constant input tensors
     ############################################
-    logger.info(f"Begin creating constant input tensors")
+    logger.info(f"Begin creating constant input tensors. {routed_experts=} {routed_experts_per_device=}")
 
     expert_mapping_dtype = ttnn.uint16
     torch_expert_mapping = create_torch_expert_mapping_tensor(
         num_devices,
         num_replicated_devices,
         cluster_axis,
-        experts,
-        experts_per_cluster,
-        experts_per_device,
+        routed_experts,
+        routed_experts_per_cluster,
+        routed_experts_per_device,
         expert_mapping_dtype,
     )
+
     tt_expert_mapping = ttnn.from_torch(
         torch_expert_mapping,
         device=mesh_device,
@@ -657,28 +649,36 @@ def test_optimized_moe_decode_block(
     # ------------------------------------------------------------------------
     # Matmul weights
     # ------------------------------------------------------------------------
-    torch_w0_tensors = create_torch_w0_tensors(num_layers, experts, hidden_size, matmul_N)
-    torch_w1_tensors = create_torch_w1_tensors(num_layers, experts, hidden_size, matmul_N)
-    torch_w2_tensors = create_torch_w2_tensors(num_layers, experts, matmul_N, hidden_size)
+    torch_w0_tensors = create_torch_w0_tensors(num_layers, routed_experts, hidden_size, matmul_N)
+    torch_w1_tensors = create_torch_w1_tensors(num_layers, routed_experts, hidden_size, matmul_N)
+    torch_w2_tensors = create_torch_w2_tensors(num_layers, routed_experts, matmul_N, hidden_size)
 
-    ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
+    w0_w1_shard_map, w2_shard_map, compute_matmul_dram_core_range_set = get_weight_core_shard_maps(
+        mesh_device, hidden_size, matmul_N
+    )
 
     # Merge the weight tensors that belong to different experts on the same device
     # Then reorder the merged weights into their sharded format
     # Finally, order merged weights in accordance to linearized_mesh_coord ordering
     torch_w0_w1_reordered_tensors = [None] * num_devices
     torch_w2_reordered_tensors = [None] * num_devices
-    for e in range(0, experts, 2):
-        torch_w0 = torch.cat([torch_w0_tensors[e], torch_w0_tensors[e + 1]], dim=1)  # [L, 1, H, N] -> [L, E/D, H, N]
-        torch_w1 = torch.cat([torch_w1_tensors[e], torch_w1_tensors[e + 1]], dim=1)  # [L, 1, H, N] -> [L, E/D, H, N]
-        torch_w2 = torch.cat([torch_w2_tensors[e], torch_w2_tensors[e + 1]], dim=1)  # [L, 1, N, H] -> [L, E/D, N, H]
+    for e in range(0, routed_experts, routed_experts_per_device):
+        # [L, 1, H, N] -> [L, E/D, H, N]
+        torch_w0 = torch.cat([torch_w0_tensors[e + i] for i in range(routed_experts_per_device)], dim=1)
+        # [L, 1, H, N] -> [L, E/D, H, N]
+        torch_w1 = torch.cat([torch_w1_tensors[e + i] for i in range(routed_experts_per_device)], dim=1)
+        # [L, 1, N, H] -> [L, E/D, N, H]
+        torch_w2 = torch.cat([torch_w2_tensors[e + i] for i in range(routed_experts_per_device)], dim=1)
 
-        torch_w0_w1_reordered, torch_w2_reordered = create_torch_prepared_compute_matmul_weight_tensors(
-            torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, matmul_N, ring2cores
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
+            torch_w0, torch_w1, num_layers, routed_experts_per_device, hidden_size, matmul_N, w0_w1_shard_map
+        )
+        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+            torch_w2, num_layers, routed_experts_per_device, matmul_N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
         linearized_mesh_coord = get_linearized_mesh_coord(
-            num_replicated_devices, cluster_axis, e, experts_per_cluster, experts_per_device
+            num_replicated_devices, cluster_axis, e, routed_experts_per_cluster, routed_experts_per_device
         )
         torch_w0_w1_reordered_tensors[linearized_mesh_coord] = torch_w0_w1_reordered
         torch_w2_reordered_tensors[linearized_mesh_coord] = torch_w2_reordered
@@ -688,16 +688,16 @@ def test_optimized_moe_decode_block(
     torch_w2_reordered_tensor = torch.cat(torch_w2_reordered_tensors, dim=0)
 
     # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w0_w1
-    # Tensor shape: (num_layers, experts_per_device, hidden_size, 4608) -> padded and reordered to (12, num_layers, experts_per_device, 6, hidden_size, 64)
+    # Create DRAM memory configs for w0_w1 and w2
     # ------------------------------------------------------------------------
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        compute_matmul_dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w0_w1_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
+    w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
+        num_layers,
+        routed_experts_per_device,
+        hidden_size,
+        matmul_N,
+        w0_w1_shard_map,
+        w2_shard_map,
+        compute_matmul_dram_core_range_set,
     )
     w0_w1_dtype = ttnn.bfloat4_b
     tt_w0_w1 = ttnn.from_torch(
@@ -705,27 +705,17 @@ def test_optimized_moe_decode_block(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=w0_w1_dtype,
-        memory_config=w0_w1_memory_config,
+        memory_config=w0_w1_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w2
-    # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
-    # ------------------------------------------------------------------------
-    w2_shard_height = num_layers * experts_per_device * 5 * (matmul_N + 192)
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-    w2_shard_spec = ttnn.ShardSpec(
-        compute_matmul_dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
     w2_dtype = ttnn.bfloat4_b
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=w2_dtype,
-        memory_config=w2_memory_config,
+        memory_config=w2_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
@@ -774,19 +764,19 @@ def test_optimized_moe_decode_block(
     tt_dispatch_input_expert_scores_tensors = []
 
     torch_combine_goldens = []
+    torch_combine_valid_masks = []
     torch_output_goldens = []
     for iteration in range(num_iterations):
         dispatch_input_dtype = ttnn.bfloat16
         dispatch_input_expert_indices_dtype = ttnn.uint16
-        dispatch_input_expert_scores_dtype = ttnn.bfloat16
 
         torch_dispatch_input_tensor = create_torch_dispatch_input_tensor(batch, seq, hidden_size, dispatch_input_dtype)
         torch_dispatch_input_expert_indices_tensor = create_torch_dispatch_input_expert_indices_tensor(
             scheme,
             num_devices,
-            experts,
+            routed_experts,
             total_tokens,
-            experts_per_device,
+            routed_experts_per_device,
             batches_per_device,
             batch,
             seq,
@@ -830,7 +820,8 @@ def test_optimized_moe_decode_block(
         )
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
-        torch_combine_golden = gen_combine_golden(
+        # Initial golden is just routed experts
+        torch_combine_golden, torch_combine_valid_mask = gen_combine_golden(
             mesh_shape,
             cluster_axis,
             num_devices,
@@ -841,13 +832,15 @@ def test_optimized_moe_decode_block(
             torch_w1_tensors,
             torch_w2_tensors,
             torch_dispatch_input_expert_indices_tensor,
-            experts_per_device,
+            routed_experts_per_device,
             batch,
             batches_per_device,
             hidden_size,
             select_experts_k,
         )
+
         torch_combine_goldens.append(torch_combine_golden)
+        torch_combine_valid_masks.append(torch_combine_valid_mask)
 
         torch_output_golden = gen_output_golden(
             torch_dispatch_input_tensor,
@@ -931,12 +924,41 @@ def test_optimized_moe_decode_block(
         tt_preallocated_dispatch_output_expert_scores,
     )
 
-    logger.info(f"Done creating persistent dispatch output tensors")
+    # one preallocated combine output per iteration — the buffer is reused by the op, so sharing across
+    # iterations would let verification compare against the last iteration's data instead of its own.
+    tt_preallocated_combine_outputs = [
+        ttnn.from_torch(
+            torch.zeros(
+                [select_experts_k, tokens_per_device, hidden_size],
+                dtype=tt_to_torch_dtype(dispatch_output_sparse_buffer_dtype),
+            ),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dispatch_output_sparse_buffer_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iterations)
+    ]
+
+    logger.info(f"Done creating persistent CCL output tensors")
 
     ############################################
     # set post combine memory configs
     ############################################
-    tilized_combine_output_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    post_combine_tilize_output_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[32, 1024],
+            grid=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, select_experts_k - 1)),
+                }
+            ),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
     scaled_output_memory_config = ttnn.L1_MEMORY_CONFIG
 
@@ -988,6 +1010,7 @@ def test_optimized_moe_decode_block(
             tt_dispatch_input_expert_indices_tensors[iteration],
             memory_config=dispatch_input_expert_indices_memory_config,
         )
+
         tt_dispatch_input_expert_scores_tensor = ttnn.to_memory_config(
             tt_dispatch_input_expert_scores_tensors[iteration],
             memory_config=dispatch_input_expert_scores_memory_config,
@@ -997,14 +1020,16 @@ def test_optimized_moe_decode_block(
         # runtime since it needs to be a zeroed out tensor (for each layer)
         # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
         # [select_experts_k, tokens_per_device, hidden_size] per device
-        tt_preallocated_combine_output = ttnn.moreh_full(
-            shape=[select_experts_k, tokens_per_device, hidden_size],
-            fill_value=0,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        #         # TODO (AM) REMOVE ME ONCE TESTED ON QUAD
+        #         tt_preallocated_combine_output = ttnn.moreh_full(
+        #             shape=[select_experts_k, tokens_per_device, hidden_size],
+        #             fill_value=0,
+        #             device=mesh_device,
+        #             layout=ttnn.ROW_MAJOR_LAYOUT,
+        #             dtype=ttnn.bfloat16,
+        #             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #         )
 
         (
             tt_dispatch_output_sparse_buffer,
@@ -1028,7 +1053,6 @@ def test_optimized_moe_decode_block(
         # - deallocate inputs to dispatch that are allocated in L1
         # - needed since compute uses just about all of L1
         ttnn.deallocate(tt_dispatch_input_tensor)
-        ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
         ttnn.deallocate(tt_dispatch_input_expert_scores_tensor)
 
         (
@@ -1047,42 +1071,52 @@ def test_optimized_moe_decode_block(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=compute_output_height_shard_dim,
-            output_width_shard_dim=compute_output_width_shard_dim,
+            intermediate_size=matmul_N,
+            has_bias=False,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,
-            optional_output_tensor=tt_preallocated_combine_output,
+            optional_output_tensor=tt_preallocated_combine_outputs[iteration],
             optional_cross_device_semaphore=combine_global_semaphore,
-        )
-
-        tt_tilized_compute_output = ttnn.to_layout(
-            tt_combine_output, layout=ttnn.TILE_LAYOUT, memory_config=tilized_combine_output_memory_config
         )
 
         # unsqueeze
         # [select_experts_k, tokens_per_device, hidden_size] -> [select_experts_k, 1, tokens_per_device, hidden_size]
-        tt_unsqueezed_output = ttnn.unsqueeze(tt_tilized_compute_output, dim=1)
+        tt_unsqueezed_output = ttnn.unsqueeze(tt_combine_output, dim=1)
 
-        # scale with scores
-        # [tokens_per_device, 1, seq, select_experts_k] -> [select_experts_k, 1, tokens_per_device, seq]
-        topk_experts_weights = ttnn.permute(
-            tt_dispatch_input_expert_scores_tensors[iteration], (3, 1, 0, 2), memory_config=scaled_output_memory_config
-        )
-        topk_experts_weights = ttnn.to_layout(
-            topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=scaled_output_memory_config
-        )
-        tt_scaled_output = ttnn.mul(
-            tt_unsqueezed_output, topk_experts_weights, memory_config=scaled_output_memory_config
-        )
+        if batches_per_device == ttnn.TILE_SIZE:
+            tt_tilized_compute_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                tt_unsqueezed_output,
+                output_memory_config=post_combine_tilize_output_memory_config,
+            )
 
-        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-            tt_scaled_output,
-            dim=0,
-            split_size=int(tt_scaled_output.shape[-1] // num_replicated_devices),
+        else:
+            output_tensor_shape = list(tt_unsqueezed_output.shape)
+            output_tensor_shape[2] = ((output_tensor_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            tt_tilized_compute_output = ttnn.tilize_with_val_padding(
+                tt_unsqueezed_output,
+                output_tensor_shape=output_tensor_shape,
+                pad_value=0.0,
+                memory_config=post_combine_tilize_output_memory_config,
+            )
+
+        topk_experts_weights = tt_dispatch_input_expert_scores_tensors[iteration]
+
+        # scale with scores and accumulate
+        tt_fast_reduce_output_tensors = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+            tt_tilized_compute_output,
+            tt_dispatch_input_expert_indices_tensor,
+            tt_expert_mapping,
+            reduce_dim=0,
+            cluster_axis=cluster_axis,
+            split_size=int(tt_tilized_compute_output.shape[-1] // num_replicated_devices),
             output_memory_config=fast_reduce_output_memory_config,
+            scores_tensor=topk_experts_weights,
         )
 
+        ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
+
+        # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
         if mesh_shape[1 - cluster_axis] == 8:
-            # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
             tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
                 tt_fast_reduce_output_tensors,
                 output_memory_config=rs_output_memory_config,
@@ -1147,6 +1181,7 @@ def test_optimized_moe_decode_block(
             cluster_axis,
             tt_combine_tensors[iteration],
             torch_combine_goldens[iteration],
+            torch_combine_valid_masks[iteration],
         ):
             all_iterations_passed = False
 

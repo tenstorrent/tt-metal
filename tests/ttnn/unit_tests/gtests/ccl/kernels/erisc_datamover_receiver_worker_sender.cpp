@@ -13,7 +13,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    const auto dest_addr_generator = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto dest_addr_generator = TensorAccessor(dst_args, dst_addr);
 
     for (uint32_t p = 0; p < num_pages_total; p += pages_per_edm_buffer) {
         uint32_t num_pages_to_send = std::min<uint32_t>(pages_per_edm_buffer, num_pages_total - p);

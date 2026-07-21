@@ -4,55 +4,51 @@
 
 #pragma once
 
+#include <cstdint>
+#include <type_traits>
+
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include <type_traits>
 
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
-inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_rsub_int(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
-    constexpr int sfpload_instr_mod = static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
 
-    // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    // Reverse subtract in 2's complement: out = in1 - in0 (B - A). `b - a` lowers to the same single
+    // SFPIADD (2's-complement of A) the raw path used, but leaves the loads/store and dst walk to the
+    // compiler. Pick the DataLayout whose load/store format byte matches the original
+    // InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32; on Blackhole INT32_2S_COMP is raw int32).
+    constexpr sfpi::DataLayout layout =
+        (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
+    using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
+
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // operand A - int32/uint32/uint16
-        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
-
-        // operand B - int32/uint32/uint16 (offset by dst_offset * dest tile size)
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
-
-        // Reverse subtraction is performed using 2's complement by adding B to the negation of A: LREG1 + (-LREG0)
-        // Uses 6 as imod. Performs integer addition between LREG specified in lreg_c and the 2's complement (4) of LREG
-        // specified in lreg_dest. The condition code register is not modified (2).
-        TTI_SFPIADD(
-            0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-
-        // Store result from LREG_0 to dest
-        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_7, dst_index_out * dst_tile_size);
-
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
+        vType b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = b - a;
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-void calculate_rsub_scalar_int32(uint32_t scalar) {
-    int int_scalar = scalar;
-    // Load scalar value param to lreg2
-    _sfpu_load_imm32_(p_sfpu::LREG1, int_scalar);
+void calculate_rsub_scalar_int32(std::uint32_t scalar) {
+    // out = scalar - dst. The scalar is materialized into a vInt once before the loop (as the raw
+    // _sfpu_load_imm32_ path also did), and `s - a` lowers to the same single SFPIADD (2's-complement
+    // of dst) per iteration, leaving the load/store and dst walk to the compiler.
+    const sfpi::vInt s = static_cast<int>(scalar);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
-        // Uses 6 as imod. Performs integer addition between LREG specified in lreg_c and the 2's complement (4) of LREG
-        // specified in lreg_dest. The condition code register is not modified (2).
-        TTI_SFPIADD(
-            0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
+        sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = s - a;
         sfpi::dst_reg++;
     }
 }

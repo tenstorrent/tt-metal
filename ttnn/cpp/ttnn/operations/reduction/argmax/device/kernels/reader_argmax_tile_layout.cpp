@@ -6,6 +6,9 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include <stdint.h>
 
@@ -16,7 +19,6 @@ void kernel_main() {
     constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
 
     constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
 
     constexpr uint32_t tile_height = get_compile_time_arg_val(4);
     constexpr uint32_t tile_width = get_compile_time_arg_val(5);
@@ -47,17 +49,21 @@ void kernel_main() {
     constexpr auto s_src_args = TensorAccessorArgs<num_c_time_args>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
-    auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
-    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
+    auto s_src = TensorAccessor(s_src_args, src_base_addr);
+    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
     using dst_accessor_type = decltype(s_dst);
 
+    Noc noc;
+    CircularBuffer src_cb(src_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
+
     // CB for input data.
-    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
+    const uint32_t src_cb_addr = src_cb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
 
     // CB for output data.
-    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
+    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
     // C++ type representation of the src/dst data formats
@@ -102,7 +108,7 @@ void kernel_main() {
         src_data_format,
         src_cb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements, keepdim);
+    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -124,12 +130,11 @@ void kernel_main() {
             for (uint32_t j = 0; j < input_width; j++) {
                 // Number of input tiles in the last two dimensions.
                 constexpr uint32_t inner_size = input_height * input_width;
-                const int src_tile_id = outer_index * inner_size + i * input_width + j;
+                const uint32_t src_tile_id = outer_index * inner_size + i * input_width + j;
 
                 // Fetch the next tile
-                const uint64_t src_noc_addr = get_noc_addr(src_tile_id, s_src);
-                noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
-                noc_async_read_barrier();
+                noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
 
                 uint32_t tile_rows_processed = 0;
                 process_input_tile<src_element_type, src_data_format>(
@@ -143,69 +148,7 @@ void kernel_main() {
             collect_row_major_output<keepdim>(arg_max, units_generated, output_ctx);
 
             if (output_ctx.collected_count >= output_page_elements) {
-                write_to_output<dst_accessor_type, keepdim>(s_dst, output_ctx);
-            }
-        }
-    }
-}
-
-void get_face_data_range(
-    uint32_t& data_rows,
-    uint32_t& data_cols,
-    uint32_t tile_x,
-    uint32_t tile_y,
-    uint32_t face_id,
-    const InputContext& ctx) {
-    const bool is_bottom_tile = tile_y == (ctx.input_height - 1);
-    const bool is_right_most_tile = tile_x == (ctx.input_width - 1);
-
-    // Initialize the range as full face
-    data_rows = face_height;
-    data_cols = face_width;
-
-    if (!ctx.has_padding) {
-        return;
-    }
-
-    if (!is_bottom_tile && !is_right_most_tile) {
-        // Only marginal tiles may contain the padding
-        return;
-    }
-
-    const bool is_right_face = (face_id == 1 || face_id == 3);
-    const bool is_bottom_face = (face_id == 2 || face_id == 3);
-
-    const uint32_t height_rem = ctx.tile_h_rem;
-    if (is_bottom_tile && height_rem != 0) {
-        if (is_bottom_face) {
-            const bool skip_bottom_face = height_rem < face_height;
-            if (skip_bottom_face) {
-                data_rows = 0;
-                data_cols = 0;
-                return;
-            }
-            data_rows = ctx.face_h_rem;
-        } else {
-            // One of the upper faces
-            if (height_rem < face_height) {
-                data_rows = height_rem;
-            }
-        }
-    }
-
-    const uint32_t width_rem = ctx.tile_w_rem;
-    if (is_right_most_tile && width_rem != 0) {
-        if (is_right_face) {
-            const bool skip_right_face = width_rem < face_width;
-            if (skip_right_face) {
-                data_rows = 0;
-                data_cols = 0;
-                return;
-            }
-            data_cols = ctx.face_w_rem;
-        } else {
-            if (width_rem < face_width) {
-                data_cols = width_rem;
+                write_to_output<dst_accessor_type, keepdim>(noc, s_dst, output_ctx);
             }
         }
     }

@@ -36,7 +36,8 @@ void py_module(nb::module_& mod) {
         },
         nb::arg("mesh_device"),
         nb::kw_only(),
-        nb::arg("cq_id") = nb::none());
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "end_trace_capture",
@@ -46,7 +47,8 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("trace_id"),
         nb::kw_only(),
-        nb::arg("cq_id") = nb::none());
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "execute_trace",
@@ -57,13 +59,15 @@ void py_module(nb::module_& mod) {
         nb::arg("trace_id"),
         nb::kw_only(),
         nb::arg("cq_id") = nb::none(),
-        nb::arg("blocking") = true);
+        nb::arg("blocking") = true,
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "release_trace",
         [](MeshDevice* device, MeshTraceId trace_id) { ttnn::operations::trace::release_trace(device, trace_id); },
         nb::arg("mesh_device"),
-        nb::arg("trace_id"));
+        nb::arg("trace_id"),
+        nb::call_guard<nb::gil_scoped_release>());
 }
 
 } // namespace ttnn::operations::trace

@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);        // batch_mean
@@ -42,31 +42,31 @@ void kernel_main() {
     constexpr bool batch_stat_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset()) == 1;
     constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_dst(cb_id_dst);
+    CircularBuffer cb_batch_var(cb_id_batch_var);
+    CircularBuffer cb_weight(cb_id_weight);
+    CircularBuffer cb_bias(cb_id_bias);
+
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const auto src = TensorAccessor(src_args, src_addr);
 
     // output
-    const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     // batch_var
-    const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
-    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr, batch_var_tile_bytes);
+    const uint32_t batch_var_tile_bytes = cb_batch_var.get_tile_size();
+    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr);
 
     // weight
-    const uint32_t weight_tile_bytes = get_tile_size(cb_id_weight);
-    const auto weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const uint32_t weight_tile_bytes = cb_weight.get_tile_size();
+    const auto weight = TensorAccessor(weight_args, weight_addr);
 
     // bias
-    const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
-    const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
-
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
-    experimental::CircularBuffer cb_id_dst_obj(cb_id_dst);
-    experimental::CircularBuffer cb_id_batch_var_obj(cb_id_batch_var);
-    experimental::CircularBuffer cb_id_weight_obj(cb_id_weight);
-    experimental::CircularBuffer cb_id_bias_obj(cb_id_bias);
+    const uint32_t bias_tile_bytes = cb_bias.get_tile_size();
+    const auto bias = TensorAccessor(bias_args, bias_addr);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -82,64 +82,59 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
             // read a tile from src
-            cb_id_src_obj.reserve_back(onetile);
-            noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+            cb_src.reserve_back(onetile);
+            noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
             if constexpr (batch_stat_is_fp32) {
-                fill_tile_with_first_element<float>(cb_id_src);
+                fill_tile_with_first_element<float>(cb_src.get_write_ptr());
             } else {
-                fill_tile_with_first_element_bfloat16(cb_id_src);
+                fill_tile_with_first_element_bfloat16(cb_src.get_write_ptr());
             }
-            cb_id_src_obj.push_back(onetile);
+            cb_src.push_back(onetile);
 
             // read a tile from batch variance
-            cb_id_batch_var_obj.reserve_back(onetile);
+            cb_batch_var.reserve_back(onetile);
             noc.async_read(
-                batch_var, cb_id_batch_var_obj, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                batch_var, cb_batch_var, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
             if constexpr (batch_stat_is_fp32) {
-                fill_tile_with_first_element<float>(cb_id_batch_var);
+                fill_tile_with_first_element<float>(cb_batch_var.get_write_ptr());
             } else {
-                fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+                fill_tile_with_first_element_bfloat16(cb_batch_var.get_write_ptr());
             }
-            cb_id_batch_var_obj.push_back(onetile);
+            cb_batch_var.push_back(onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
-                cb_id_weight_obj.reserve_back(onetile);
-                noc.async_read(
-                    weight, cb_id_weight_obj, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                cb_weight.reserve_back(onetile);
+                noc.async_read(weight, cb_weight, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if constexpr (param_is_fp32) {
-                    fill_tile_with_first_element<float>(cb_id_weight);
+                    fill_tile_with_first_element<float>(cb_weight.get_write_ptr());
                 } else {
-                    fill_tile_with_first_element_bfloat16(cb_id_weight);
+                    fill_tile_with_first_element_bfloat16(cb_weight.get_write_ptr());
                 }
-                cb_id_weight_obj.push_back(onetile);
+                cb_weight.push_back(onetile);
             }
 
             if constexpr (bias_has_value) {  // read a tile from bias tensor
-                cb_id_bias_obj.reserve_back(onetile);
-                noc.async_read(bias, cb_id_bias_obj, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                cb_bias.reserve_back(onetile);
+                noc.async_read(bias, cb_bias, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if constexpr (param_is_fp32) {
-                    fill_tile_with_first_element<float>(cb_id_bias);
+                    fill_tile_with_first_element<float>(cb_bias.get_write_ptr());
                 } else {
-                    fill_tile_with_first_element_bfloat16(cb_id_bias);
+                    fill_tile_with_first_element_bfloat16(cb_bias.get_write_ptr());
                 }
-                cb_id_bias_obj.push_back(onetile);
+                cb_bias.push_back(onetile);
             }
 
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst
-                cb_id_dst_obj.wait_front(onetile);
+                cb_dst.wait_front(onetile);
                 noc.async_write(
-                    cb_id_dst_obj,
-                    dst,
-                    dst_tile_bytes,
-                    {.offset_bytes = 0},
-                    {.page_id = start_tile_id + num_tiles_written});
+                    cb_dst, dst, dst_tile_bytes, {.offset_bytes = 0}, {.page_id = start_tile_id + num_tiles_written});
                 noc.async_write_barrier();
-                cb_id_dst_obj.pop_front(onetile);
+                cb_dst.pop_front(onetile);
             }
             tile_offset += c_stride;
         }

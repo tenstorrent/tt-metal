@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -15,7 +19,9 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(1);
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    Noc noc;
+    DataflowBuffer dfb(tt::CBIndex::c_0);
 
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
     uint32_t input_shape[N], perm[N], dest_strides[N];
@@ -25,7 +31,6 @@ void kernel_main() {
         dest_strides[i - 3] = get_arg_val<uint32_t>(i + 2 * N);
     }
 
-    uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
     uint32_t curr_addr = dst_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {
         // Compute multi-dimensional index for the source row
@@ -49,11 +54,10 @@ void kernel_main() {
         for (uint32_t i = 0; i < N - 1; ++i) {
             dest_linear_idx += dest_multi_idx[i] * dest_strides[i];
         }
-        cb_wait_front(tt::CBIndex::c_0, 1);
-        uint32_t l1_read_addr = get_read_ptr(tt::CBIndex::c_0);
-        uint64_t dst_noc_addr = s0.get_noc_addr(dest_linear_idx);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-        noc_async_write_barrier();
-        cb_pop_front(tt::CBIndex::c_0, 1);
+        dfb.wait_front(1);
+        uint32_t l1_read_addr = dfb.get_read_ptr();
+        tt::data_movement::common::noc_async_write_sharded(noc, l1_read_addr, s0, dest_linear_idx, 0, page_size);
+        noc.async_write_barrier();
+        dfb.pop_front(1);
     }
 }

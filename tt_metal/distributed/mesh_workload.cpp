@@ -86,6 +86,7 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+    TT_FATAL(!is_finalized(), "Cannot add programs to a MeshWorkload after it has been finalized.");
     auto potential_intersection = find_intersection(programs_, device_range);
     TT_FATAL(
         !potential_intersection,
@@ -98,13 +99,7 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
-    program.impl().compile(mesh_device);
-    program.impl().allocate_circular_buffers(mesh_device);
-    program.impl().validate_circular_buffer_core_ranges(mesh_device);
-    program.impl().validate_circular_buffer_region(mesh_device);
-    program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(mesh_device);
-    program.impl().validate_dataflow_buffer_region(mesh_device);
+    program.impl().compile_and_allocate(mesh_device, false);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
@@ -137,7 +132,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
             program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
-            "Expected Program Biinaries to be committed to DRAM.");
+            "Expected Program Binaries to be committed to DRAM.");
     } else {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
         uint32_t max_kernel_bin_buf_size = 0;
@@ -149,6 +144,13 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
         // primarily for test workloads, where a program may not have an attached kernel.
         if (max_kernel_bin_buf_size) {
+            // We can't load while capturing a trace, it needs to already be in program cache.
+            const bool is_capturing_trace = mesh_cq.trace_id().has_value();
+            TT_FATAL(
+                !is_capturing_trace,
+                "Cannot load new binaries during trace capture."
+                "This program is not yet in program cache. Warm up before capturing a trace."
+                "See the operation's hash signature for arguments that must match.");
             // Allocate a MeshBuffer for kernel binaries on each device. This buffer is replicated along the MeshDevice
             // and matches the max kernel binary size across programs.
             DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
@@ -239,16 +241,6 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
         ret = ret || (program.impl().runs_on_noc_unicast_only_cores());
     }
     return ret;
-}
-
-bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
-    // Return true if kernel binaries cannot be placed in a ring buffer for
-    // any program in the MeshWorkload
-    bool stored_in_ring_buf = true;
-    for (auto& [device_range, program] : programs_) {
-        stored_in_ring_buf &= program.impl().kernel_binary_always_stored_in_ringbuffer();
-    }
-    return stored_in_ring_buf;
 }
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
@@ -417,7 +409,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     for (auto& [_, program] : programs_) {
         program_impls.push_back(&program.impl());
     }
-    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+    ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         extract_context_id(mesh_device),

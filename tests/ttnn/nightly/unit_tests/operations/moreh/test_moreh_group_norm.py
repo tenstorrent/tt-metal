@@ -546,3 +546,54 @@ def test_moreh_group_norm_backward_callback(
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize(
+    "are_required_outputs",
+    [
+        (True, False, False),
+        (False, True, False),
+    ],
+    ids=["input_grad", "gamma_grad"],
+)
+def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outputs, device):
+    torch.manual_seed(2024)
+
+    N, C, H, W = 2, 4, 23, 23
+    num_groups = 2
+    input_shape = (N, C, H, W)
+    mean_rstd_shape = [1, 1, N, num_groups]
+    wrong_mean_shape = [1, 1, N + 1, num_groups]
+    gamma_beta_shape = [1, 1, 1, C]
+
+    cpu_input, _, _, cpu_output_grad = make_input_tensors(input_shape, affine=False, do_backward=True)
+
+    x_view = cpu_input.view(N, num_groups, -1)
+    cpu_rstd = (((x_view - x_view.mean(dim=-1, keepdim=True)) ** 2).mean(dim=-1, keepdim=False) + 1e-5).rsqrt()
+
+    npu_output_grad = to_ttnn(cpu_output_grad, device=device)
+    npu_input = to_ttnn(cpu_input, device=device)
+    npu_mean = to_ttnn(torch.zeros(wrong_mean_shape, dtype=torch.bfloat16), device=device)
+    npu_rstd = to_ttnn(cpu_rstd, device=device, shape=mean_rstd_shape)
+
+    npu_input_grad = None
+    if are_required_outputs[0]:
+        npu_input_grad = to_ttnn(torch.empty(input_shape, dtype=torch.bfloat16), device=device)
+
+    npu_gamma_grad = None
+    if are_required_outputs[1]:
+        npu_gamma_grad = to_ttnn(torch.empty(gamma_beta_shape, dtype=torch.bfloat16), device=device)
+
+    with pytest.raises(RuntimeError, match="mean must have logical volume"):
+        ttnn.operations.moreh.group_norm_backward(
+            npu_output_grad,
+            npu_input,
+            npu_mean,
+            npu_rstd,
+            num_groups,
+            are_required_outputs=are_required_outputs,
+            gamma=None,
+            input_grad=npu_input_grad,
+            gamma_grad=npu_gamma_grad,
+            beta_grad=None,
+        )

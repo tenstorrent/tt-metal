@@ -78,6 +78,7 @@ class BroadcastConfig:
         num_links=1,
         fabric_config=None,
         broadcast_topology_override=None,
+        tensor_size_bytes=None,
     ):
         self.mesh_device = mesh_device
         self.input_tensor_mesh = input_tensor_mesh
@@ -113,17 +114,22 @@ class BroadcastConfig:
         self.output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
 
         input_sample = self.input_tensors_per_device[0]
-        tile_height, tile_width = input_sample.tile.tile_shape
-        element_size = dtype_size(input_sample.dtype)
-        self.tensor0_page_size = tile_height * tile_width * element_size
-        shard_spec = input_sample.memory_config().shard_spec
-        shard_height, shard_width = shard_spec.shape
-        if shard_height % tile_height != 0 or shard_width % tile_width != 0:
-            raise ValueError(
-                f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
-            )
-        self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
-        self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
+        if tensor_size_bytes is not None:
+            self.tensor0_page_size = tensor_size_bytes
+            self.num_pages_to_read = 1
+            self.tensor_size_bytes = tensor_size_bytes
+        else:
+            tile_height, tile_width = input_sample.tile.tile_shape
+            element_size = dtype_size(input_sample.dtype)
+            self.tensor0_page_size = tile_height * tile_width * element_size
+            shard_spec = input_sample.memory_config().shard_spec
+            shard_height, shard_width = shard_spec.shape
+            if shard_height % tile_height != 0 or shard_width % tile_width != 0:
+                raise ValueError(
+                    f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
+                )
+            self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
+            self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
         if self.socket is not None:
@@ -322,8 +328,6 @@ class BroadcastConfig:
                     "is_root": row == self.root_row and col == self.root_col,
                     "num_neighbors": len(dst_nodes),
                     "dst_nodes": dst_nodes,
-                    "dst_mesh_ids": [int(node.mesh_id) for node in dst_nodes],
-                    "dst_chip_ids": [int(node.chip_id) for node in dst_nodes],
                     "worker_core": worker_core,
                     "worker_core_set": worker_core_set,
                     "my_noc_x": my_noc_x,
@@ -400,12 +404,10 @@ class BroadcastConfig:
         src_node = d["my_fabric_node_id"]
         payload = []
 
-        # Neighbor-blocked RT arg layout:
-        # for each neighbor: append dst ids first, then all link setup args.
-        for i in range(d["num_neighbors"]):
-            payload.append(d["dst_mesh_ids"][i])
-            payload.append(d["dst_chip_ids"][i])
-            dst_node = d["dst_nodes"][i]
+        # RT arg layout:
+        # 1. all fabric setup args for every (neighbor, link) connection
+        # 2. one dst_mesh_id / dst_chip_id pair per neighbor
+        for dst_node in d["dst_nodes"]:
             for link_idx in range(self.num_links):
                 setup_args = ttnn.setup_fabric_connection(src_node, dst_node, link_idx, program, core)
                 if self._setup_fabric_rt_arg_count is None:
@@ -415,6 +417,9 @@ class BroadcastConfig:
                         len(setup_args) == self._setup_fabric_rt_arg_count
                     ), "setup_fabric_connection arg width changed across calls"
                 payload.extend(setup_args)
+        for dst_node in d["dst_nodes"]:
+            payload.append(int(dst_node.mesh_id))
+            payload.append(int(dst_node.chip_id))
         return [len(payload)] + payload
 
     # Public RISC-named interface
@@ -487,6 +492,7 @@ class DeepseekMinimalBroadcast:
         *,
         fabric_config=None,
         broadcast_topology_override=None,
+        tensor_size_bytes=None,
     ):
         if bcast_cb_id is None:
             raise ValueError("Expected explicit `bcast_cb_id`")
@@ -512,6 +518,7 @@ class DeepseekMinimalBroadcast:
             num_links=num_links,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
+            tensor_size_bytes=tensor_size_bytes,
         )
 
     @staticmethod
@@ -582,6 +589,7 @@ class DeepseekMinimalBroadcast:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         ncrisc_args=[(config.get_worker_core(coord), [])],
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 # Create program descriptor (only reader and writer, no compute)

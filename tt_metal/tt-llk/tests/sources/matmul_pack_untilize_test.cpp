@@ -33,14 +33,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, face_size, face_size);
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    {
+        _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, face_size, face_size);
+    }
 }
 
 #endif
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_matmul.h"
 #include "params.h"
 
@@ -52,19 +55,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_matmul_init_<MATH_FIDELITY>();
     _llk_math_pack_sync_init_<sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-#ifdef ARCH_BLACKHOLE
-    _llk_math_reconfig_remap_(true);
-#endif
-    _llk_math_wait_for_dest_available_<sync>();
-    _llk_math_matmul_<MATH_FIDELITY>(0);
-    _llk_math_dest_section_done_<sync, is_fp32_dest_acc_en>();
+    _llk_math_reconfig_remap_wrapper_(true);
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    {
+        _llk_math_wait_for_dest_available_<sync>();
+        _llk_math_matmul_<MATH_FIDELITY>(0);
+        _llk_math_dest_section_done_<sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -73,18 +77,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);
-    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en>();
-    _llk_pack_untilize_init_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, tile_size);
-    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, UNTILIZE>();
-    _llk_pack_untilize_init_<ct_dim>(formats.pack_dst, FACE_R_DIM, 4);
-#endif
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 4, 0);
-    _llk_pack_dest_section_done_<sync, is_fp32_dest_acc_en>();
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_dest_init_wrapper_<sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
+    _llk_pack_untilize_init_wrapper_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_untilize_wrapper_<ct_dim>(L1_ADDRESS(params.buffer_Res[block]), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+        _llk_pack_dest_section_done_<sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

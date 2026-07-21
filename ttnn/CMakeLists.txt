@@ -2,6 +2,8 @@
 # Build TTNN and TTNNCPP
 ####################################################################################################
 
+include(sources.cmake)
+
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
 
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.
@@ -16,15 +18,34 @@ add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
 # Extends common PCH with frequently used TTNN headers to speed up compilation
 ##################################################
 
-add_library(ttnn_pch STATIC)
-add_library(TTNN::PCH ALIAS ttnn_pch)
-file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp CONTENT "/*dummy ttnn pch file*/\n")
-target_sources(ttnn_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp)
-
-target_precompile_headers(
-    ttnn_pch
+# ── Lean PCH: STL + fmt + json only — immune to TT::Metalium header churn ─────
+# Backed by TT::CommonPCH so it shares the same compiled .pch binary.
+# Use for targets whose sources do NOT include device_operation.hpp/operation.hpp.
+add_library(ttnn_pch_lean STATIC)
+add_library(TTNN::PCHLean ALIAS ttnn_pch_lean)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp CONTENT "/*dummy ttnn lean pch file*/\n")
+target_sources(ttnn_pch_lean PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp)
+target_precompile_headers(ttnn_pch_lean REUSE_FROM TT::CommonPCH)
+target_link_libraries(
+    ttnn_pch_lean
     PUBLIC
-        # Reuse common PCH headers
+        TT::Metalium
+        nlohmann_json::nlohmann_json
+        fmt::fmt-header-only
+)
+target_include_directories(ttnn_pch_lean PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+# tt_disable_ccache_for_pch already applied to TT::CommonPCH in root CMakeLists.txt.
+
+# ── Full PCH: lean + volatile TT headers — for targets with device operations ──
+# Invalidated on any TT::Metalium change; only use for targets that actually
+# include device_operation.hpp or operation.hpp.
+add_library(ttnn_pch_full STATIC)
+add_library(TTNN::PCHFull ALIAS ttnn_pch_full)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_full.cpp CONTENT "/*dummy ttnn full pch file*/\n")
+target_sources(ttnn_pch_full PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_full.cpp)
+target_precompile_headers(
+    ttnn_pch_full
+    PUBLIC
         <fmt/core.h>
         <fmt/format.h>
         <nlohmann/json.hpp>
@@ -38,23 +59,23 @@ target_precompile_headers(
         <unordered_map>
         <variant>
         <vector>
-        # TTNN-specific headers that are included frequently
+        # Volatile TTNN headers — only for targets that actually include these
         <ttnn/device_operation.hpp>
         <ttnn/operation.hpp>
 )
-
 target_link_libraries(
-    ttnn_pch
+    ttnn_pch_full
     PUBLIC
         TT::Metalium
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
-
-target_include_directories(ttnn_pch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+target_include_directories(ttnn_pch_full PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
 if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttnn_pch)
+    tt_disable_ccache_for_pch(ttnn_pch_full)
 endif()
+
+# NOTE: Legacy TTNN::PCH alias removed — all consumers migrated to PCHLean or PCHFull.
 
 ##################################################
 # Set options
@@ -75,7 +96,15 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-tt_reuse_precompile_headers(ttnn_core TTNN::PCH)
+
+# Descriptor cache-hit fast-path parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK).
+# The #ifdef lives in ttnn/api/ttnn/mesh_device_operation_adapter.hpp, so scope the definition to the
+# ttnn target (PUBLIC so header consumers see it consistently) instead of defining it globally.
+if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttnn_core PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+endif()
+
+tt_reuse_precompile_headers(ttnn_core TTNN::PCHFull)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
@@ -107,71 +136,10 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            api/ttnn/tensor/layout/layout.hpp
-            cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
-            cpp/ttnn/kernel/compute/eltwise_copy.cpp
-            cpp/ttnn/kernel/compute/moreh_common.hpp
-            cpp/ttnn/kernel/compute/tilize.cpp
-            cpp/ttnn/kernel/compute/transpose_wh.cpp
-            cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
-            cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
-            cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
-            cpp/ttnn/kernel/dataflow/moreh_common.hpp
-            cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
-            cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
-            cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
-            cpp/ttnn/kernel/kernel_common_utils.hpp
-            cpp/ttnn/kernel/kernel_utils.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.inl
-            cpp/ttnn/kernel_lib/dest_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.inl
-            cpp/ttnn/kernel_lib/untilize_helpers.hpp
-            cpp/ttnn/kernel_lib/untilize_helpers.inl
+        FILES ${TTNN_CORE_JIT_API_HEADERS}
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
-        core/async_runtime.cpp
-        core/cluster.cpp
-        core/config.cpp
-        core/core.cpp
-        core/device.cpp
-        core/device_operation_detail.cpp
-        cpp/tools/profiler/op_profiler_json.cpp
-        core/distributed/api.cpp
-        core/distributed/distributed_tensor.cpp
-        core/distributed/distribution_mode.cpp
-        core/distributed/host_ccl.cpp
-        core/distributed/bidirectional_fabric_socket.cpp
-        core/distributed/create_socket.cpp
-        core/distributed/fabric_socket.cpp
-        core/distributed/mpi_socket.cpp
-        core/events.cpp
-        core/global_circular_buffer.cpp
-        core/global_semaphore.cpp
-        core/operation.cpp
-        core/graph/graph_processor.cpp
-        core/graph/graph_trace_utils.cpp
-        core/graph/levelized_graph.cpp
-        core/reports.cpp
-        core/tensor/flatbuffer/tensor_flatbuffer.cpp
-        core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
-        core/tensor/flatbuffer/overlapped_tensor_flatbuffer.cpp
-        core/tensor/overlapped_serialization.cpp
-        core/tensor/host_buffer/functions.cpp
-        core/tensor/serialization.cpp
-        core/tensor/storage.cpp
-        core/tensor/tensor.cpp
-        core/tensor/tensor_attributes.cpp
-        core/tensor/tensor_impl.cpp
-        core/tensor/host_tensor_factory.cpp
-        core/tensor/tensor_ops.cpp
-        core/tensor/tensor_utils.cpp
-        core/tensor/unit_mesh/unit_mesh_utils.cpp
-        core/tensor/xtensor/partition.cpp
-        core/tensor/to_string.cpp
-        core/tensor/py_to_tt_tensor.cpp
+        ${TTNN_CORE_SRCS}
 )
 
 target_include_directories(
@@ -206,310 +174,6 @@ install(
 )
 
 ##################################################
-# Collect all the files and folders that TTNN will use
-##################################################
-set(TTNN_SRC_PYBIND
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/graph/graph_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/bernoulli/bernoulli_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv1d/conv1d_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/conv2d_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation/creation_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/bcast/bcast_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/chunk/chunk_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/clone/clone_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/copy/copy_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/chunk/chunk_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/expand_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_pad/fill_pad_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fold/fold_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/narrow/narrow_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/moe_routing_remap/moe_routing_remap_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/move/move_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/non_zero_indices/non_zero_indices_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/pad/pad_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/permute_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/repeat_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat_interleave/repeat_interleave_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_view/reshape_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_view/reshape_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/roll/roll_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/scatter/scatter_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/scatter/tosa_scatter_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/slice/slice_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/split/split_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/squeeze/squeeze_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/tilize/tilize_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/transpose/transpose_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize/untilize_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/view/view_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_backward/binary_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex/complex_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary/complex_unary_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/quantization/quantization_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/ternary/ternary_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/ternary_backward/ternary_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary_backward/unary_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding/embedding_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding_backward/embedding_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/example_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/examples_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/generic/patchable_generic_op_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reshape/view_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/slice_write/slice_write_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/padded_slice_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/full_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/full_like_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/index_fill/index_fill_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/kv_cache_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/loss/loss_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul/matmul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/moreh_adam_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adamw/moreh_adamw_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_arange/moreh_arange_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_bmm/moreh_bmm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_dot/moreh_dot_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_dot/moreh_dot_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_fold/fold_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_getitem/moreh_getitem_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_group_norm_backward/moreh_group_norm_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_mean/moreh_mean_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_norm/moreh_norm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_norm_backward/moreh_norm_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sgd/moreh_sgd_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/batch_norm/batch_norm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/groupnorm/groupnorm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/layernorm/layernorm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/layernorm_distributed/layernorm_distributed_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/normalization_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/softmax_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/reduction_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/argmax/argmax_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/accumulation/cumprod/cumprod_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/accumulation/cumsum/cumsum_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/accumulation/ema/ema_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/moe_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/prod/prod_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/sampling_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/topk_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/manual_seed/manual_seed_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/sliding_window_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/attention_softmax/attention_softmax_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/rand/rand_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/randn/randn_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sort/sort_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/gather_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.cpp
-)
-
-set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ccl_experimental_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
-)
-
-set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
-
-set(CCL_TTNN_SRCS_PYBIND
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_broadcast/all_broadcast_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/reduce_to_root/reduce_to_root_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/broadcast/broadcast_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp
-)
-
-set(DEBUG_TTNN_SRCS_PYBIND
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/debug_nanobind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/apply_device_delay_nanobind.cpp
-)
-
-#TODO : should be using nanobind_add_module, but right now it introduces many build problems
-#nanobinds will always be built as a shared library
-list(
-    APPEND
-    TTNN_SRC_PYBIND
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/__init__.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/activation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/events.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/fabric.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/disaggregation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/global_circular_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/global_semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/hd_socket.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/mesh_socket.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/profiler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/program_descriptors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/pytensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/reports.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/types.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/bfp_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/copy.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation/creation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/trace.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor_accessor_args.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
-)
-
-##################################################
 # Build the libraries!
 ##################################################
 
@@ -529,7 +193,7 @@ add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-tt_reuse_precompile_headers(ttnncpp TTNN::PCH)
+tt_reuse_precompile_headers(ttnncpp TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
 set_target_properties(
@@ -551,113 +215,20 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
+file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*.cpp)
 target_sources(
     ttnncpp
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-        FILES
-            api/tools/profiler/op_profiler.hpp
-            api/tools/profiler/op_profiler_serialize.hpp
-            api/ttnn/async_runtime.hpp
-            api/ttnn/cluster.hpp
-            api/ttnn/common/constants.hpp
-            api/ttnn/common/guard.hpp
-            api/ttnn/common/queue_id.hpp
-            api/ttnn/config.hpp
-            api/ttnn/core.hpp
-            api/ttnn/device.hpp
-            api/ttnn/device_operation.hpp
-            api/ttnn/device_operation_detail.hpp
-            api/ttnn/distributed/api.hpp
-            api/ttnn/distributed/bidirectional_fabric_socket.hpp
-            api/ttnn/distributed/create_socket.hpp
-            api/ttnn/distributed/distributed_configs.hpp
-            api/ttnn/distributed/distributed_nanobind.hpp
-            api/ttnn/distributed/distributed_tensor.hpp
-            api/ttnn/distributed/fabric_socket.hpp
-            api/ttnn/distributed/host_ccl.hpp
-            api/ttnn/distributed/isocket.hpp
-            api/ttnn/distributed/mpi_socket.hpp
-            api/ttnn/distributed/tensor_topology.hpp
-            api/ttnn/distributed/types.hpp
-            api/ttnn/events.hpp
-            api/ttnn/global_circular_buffer.hpp
-            api/ttnn/global_semaphore.hpp
-            api/ttnn/graph/graph_consts.hpp
-            api/ttnn/graph/graph_serialization.hpp
-            api/ttnn/graph/graph_operation_queries.hpp
-            api/ttnn/graph/graph_processor.hpp
-            api/ttnn/graph/graph_nanobind.hpp
-            api/ttnn/graph/graph_query_op_constraints.hpp
-            api/ttnn/graph/graph_query_op_runtime.hpp
-            api/ttnn/graph/graph_trace_utils.hpp
-            api/ttnn/graph/levelized_graph.hpp
-            api/ttnn/mesh_device_operation_adapter.hpp
-            api/ttnn/mesh_device_operation_utils.hpp
-            api/ttnn/operation.hpp
-            api/ttnn/operation_concepts.hpp
-            api/ttnn/reports.hpp
-            api/ttnn/tensor/host_buffer/functions.hpp
-            api/ttnn/tensor/layout/alignment.hpp
-            api/ttnn/tensor/layout/layout.hpp
-            api/ttnn/tensor/layout/page_config.hpp
-            api/ttnn/tensor/layout/tensor_layout.hpp
-            api/ttnn/tensor/memory_config/memory_config.hpp
-            api/ttnn/tensor/serialization.hpp
-            api/ttnn/tensor/shape/shape.hpp
-            api/ttnn/tensor/storage.hpp
-            api/ttnn/tensor/tensor.hpp
-            api/ttnn/tensor/tensor_attributes.hpp
-            api/ttnn/tensor/tensor_impl.hpp
-            api/ttnn/tensor/tensor_ops.hpp
-            api/ttnn/tensor/tensor_spec.hpp
-            api/ttnn/tensor/tensor_utils.hpp
-            api/ttnn/tensor/to_string.hpp
-            api/ttnn/tensor/types.hpp
-            api/ttnn/tensor/unit_mesh/unit_mesh_utils.hpp
-            api/ttnn/tensor/xtensor/conversion_utils.hpp
-            api/ttnn/tensor/xtensor/partition.hpp
-            api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
-            api/ttnn/types.hpp
-            api/ttnn/tensor/py_to_tt_tensor.hpp
-            cpp/ttnn/operations/copy/typecast/typecast.hpp
-            cpp/ttnn/operations/creation/creation.hpp
-            cpp/ttnn/operations/functions.hpp
-            cpp/ttnn/operations/compute_throttle_utils.hpp
-            cpp/ttnn/operations/cb_utils.hpp
-            cpp/ttnn/operations/math.hpp
-            cpp/ttnn/operations/trace.hpp
+        FILES ${TTNNCPP_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${ttnn_kernels}
     PRIVATE
-        # FIXME: Move these out to appropriate sub targets
-        cpp/ttnn/operations/compute_throttle_utils.cpp
-        cpp/ttnn/operations/trace.cpp
-        cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
-        cpp/ttnn/operations/generic/generic_op.cpp
-        cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
-        cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/generic/device/patchable_generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/generic/device/patchable_generic_op_program_factory.cpp
-        cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
-        cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
-        cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
-        cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
-        cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
-        cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
-        cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
-        cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
-        cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
-        cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
-        cpp/ttnn/operations/copy/typecast/typecast.cpp
+        ${TTNNCPP_SRCS}
 )
 
 target_include_directories(
@@ -675,75 +246,14 @@ target_link_libraries(
         xtensor
     PRIVATE
         TTNN::Core
-        TTNN::Ops::Bernoulli
-        TTNN::Ops::CCL
-        TTNN::Ops::Conv
-        TTNN::Ops::Core
-        TTNN::Ops::Creation
-        TTNN::Ops::DataMovement
-        TTNN::Ops::Eltwise::Binary
-        TTNN::Ops::Eltwise::Binary::Backward
-        TTNN::Ops::Eltwise::Binary::NG
-        TTNN::Ops::Eltwise::Complex
-        TTNN::Ops::Eltwise::Complex::Binary
-        TTNN::Ops::Eltwise::Complex::Unary
-        TTNN::Ops::Eltwise::Complex::Unary::Backward
+        TTNN::Ops::OperationsShared
         TTNN::Ops::Eltwise::Quantization
-        TTNN::Ops::Eltwise::Ternary
-        TTNN::Ops::Eltwise::Ternary::Backward
-        TTNN::Ops::Eltwise::Unary
-        TTNN::Ops::Eltwise::UnaryNG
-        TTNN::Ops::Eltwise::Unary::Backward
-        TTNN::Ops::Embedding
-        TTNN::Ops::Embedding::Backward
-        TTNN::Ops::Examples
-        TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::BcastTo
-        TTNN::Ops::Experimental::CCL
-        TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::Conv3d
-        TTNN::Ops::Experimental::Copy
-        TTNN::Ops::Experimental::Dropout
-        TTNN::Ops::Experimental::IsIn
-        TTNN::Ops::Experimental::Matmul
-        TTNN::Ops::Experimental::PaddedSlice
-        TTNN::Ops::Experimental::MinimalMatmul
-        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
-        TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
-        TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
-        TTNN::Ops::Experimental::MoEGPT
-        TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
-        TTNN::Ops::Experimental::DeepSeekPrefill::Combine
-        TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
-        TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
-        TTNN::Ops::Experimental::PagedCache
-        TTNN::Ops::Experimental::PlusOne
-        TTNN::Ops::Experimental::Reduction
-        TTNN::Ops::Experimental::Reshape
-        TTNN::Ops::Experimental::SliceWrite
-        TTNN::Ops::Experimental::SSM
+        TTNN::Ops::Eltwise
+        TTNN::Ops::Experimental
+        TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
-        TTNN::Ops::Experimental::UnaryBackward
-        TTNN::Ops::Experimental::Test
-        TTNN::Ops::Full
-        TTNN::Ops::FullLike
-        TTNN::Ops::IndexFill
-        TTNN::Ops::KvCache
-        TTNN::Ops::Loss
-        TTNN::Ops::Matmul
         TTNN::Ops::Moreh
-        TTNN::Ops::Prefetcher
-        TTNN::Ops::Reduction
-        TTNN::Ops::SlidingWindow
         TTNN::Ops::Transformer
-        TTNN::Ops::Uniform
-        TTNN::Ops::Debug
-        TTNN::Ops::PointToPoint
-        TTNN::Ops::Pool
-        TTNN::Ops::Normalization
-        TTNN::Ops::Rand
-        TTNN::Ops::Randn
 )
 if(TT_INSTALL)
     install(
@@ -797,10 +307,6 @@ if(WITH_PYTHON_BINDINGS)
         PRIVATE
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
-            ${CCL_TTNN_SRCS_PYBIND}
-            ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
-            ${DEBUG_TTNN_SRCS_PYBIND}
-            ${TTNN_P2P_PYBIND}
     )
     target_include_directories(
         ttnn
@@ -926,74 +432,14 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
-add_subdirectory(cpp/ttnn/operations/bernoulli)
-add_subdirectory(cpp/ttnn/operations/ccl)
-add_subdirectory(cpp/ttnn/operations/conv)
-add_subdirectory(cpp/ttnn/operations/creation)
-add_subdirectory(cpp/ttnn/operations/core)
-add_subdirectory(cpp/ttnn/operations/data_movement)
-add_subdirectory(cpp/ttnn/operations/debug)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_binary)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary_backward)
+add_subdirectory(cpp/ttnn/operations)
+add_subdirectory(cpp/ttnn/operations/eltwise)
 add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
-add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
-add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_ng)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
-add_subdirectory(cpp/ttnn/operations/embedding)
-add_subdirectory(cpp/ttnn/operations/embedding_backward)
-add_subdirectory(cpp/ttnn/operations/examples)
-add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
-add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl)
-add_subdirectory(cpp/ttnn/operations/experimental/cnn)
-add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
-add_subdirectory(cpp/ttnn/operations/experimental/copy)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
-add_subdirectory(cpp/ttnn/operations/experimental/dropout)
-add_subdirectory(cpp/ttnn/operations/experimental/isin)
-add_subdirectory(cpp/ttnn/operations/experimental/matmul)
-add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
-add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum)
-add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
-add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
-add_subdirectory(cpp/ttnn/operations/experimental/plusone)
-add_subdirectory(cpp/ttnn/operations/experimental/reduction)
-add_subdirectory(cpp/ttnn/operations/experimental/reshape)
-add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
-add_subdirectory(cpp/ttnn/operations/experimental/ssm)
-add_subdirectory(cpp/ttnn/operations/experimental/test)
+add_subdirectory(cpp/ttnn/operations/experimental)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
-add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
-add_subdirectory(cpp/ttnn/operations/full)
-add_subdirectory(cpp/ttnn/operations/full_like)
-add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
-add_subdirectory(cpp/ttnn/operations/kv_cache)
-add_subdirectory(cpp/ttnn/operations/loss)
-add_subdirectory(cpp/ttnn/operations/matmul)
 add_subdirectory(cpp/ttnn/operations/moreh)
-add_subdirectory(cpp/ttnn/operations/normalization)
-add_subdirectory(cpp/ttnn/operations/point_to_point)
-add_subdirectory(cpp/ttnn/operations/pool)
-add_subdirectory(cpp/ttnn/operations/prefetcher)
-add_subdirectory(cpp/ttnn/operations/rand)
-add_subdirectory(cpp/ttnn/operations/randn)
-add_subdirectory(cpp/ttnn/operations/reduction)
-add_subdirectory(cpp/ttnn/operations/sliding_window)
 add_subdirectory(cpp/ttnn/operations/transformer)
-add_subdirectory(cpp/ttnn/operations/uniform)
 add_subdirectory(examples)

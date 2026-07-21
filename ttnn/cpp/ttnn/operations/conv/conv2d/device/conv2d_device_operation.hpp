@@ -28,7 +28,6 @@ namespace sliding_window = ttnn::operations::sliding_window;
 
 struct Conv2dDeviceOperation {
     using operation_attributes_t = Conv2dParams;
-    using hashable_operation_attributes_t = Conv2dHashableParams;
     using tensor_args_t = Conv2dInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
@@ -41,8 +40,6 @@ struct Conv2dDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
@@ -54,6 +51,9 @@ struct Conv2dDeviceOperation {
 bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w);
 
 // L1 allocation is either for the output tensor or for Circular Buffers.
+// reader_indices_actual_page_size lets the program factory communicate the in-DRAM config tensor's
+// true per-core page size; auto-shard estimation passes std::nullopt and falls back to the worst
+// case (1 uint16 index per output row).
 conv_op_l1_usage calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
@@ -68,7 +68,8 @@ conv_op_l1_usage calculate_L1_usage(
     bool enable_bias,
     bool is_1d_depthwise_conv,
     uint32_t input_channels_padded,
-    bool skip_act_cb_create = false);
+    bool skip_act_cb_create = false,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 Tensor conv2d(
     const Tensor& a,

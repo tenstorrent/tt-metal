@@ -20,8 +20,7 @@ void kernel_main() {
 #else
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -33,7 +32,7 @@ void kernel_main() {
 #endif
         cb_reserve_back(cb_id_in0, onetile);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(i, s, l1_write_addr);
+        noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }

@@ -44,12 +44,19 @@ class RMSNorm(Module):
             self.weight = None
             self.bias = None
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        compute_kernel_config=None,
+        program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+    ) -> ttnn.Tensor:
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
             bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
+            program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
@@ -194,6 +201,7 @@ class DistributedRMSNorm(Module):
         rope_cos=None,
         rope_sin=None,
         trans_mat=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
@@ -203,29 +211,43 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
-        stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
-        )
-
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-            stats = self.ccl_manager.all_gather_persistent_buffer(
-                stats,
-                dim=len(x.shape) - 1,
-                mesh_axis=self.mesh_axis,
-            )
-
-        x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+        # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
+        # normalize, with optional fused RoPE / per-head norm).
+        return ttnn.experimental.dit_fused_distributed_rmsnorm(
             x,
-            stats,
+            self.mesh_axis,
+            self.mesh_device,
+            self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+            topology=self.ccl_manager.topology,
+            persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
+                # Key includes everything that changes the stats-buffer geometry:
+                # shape, heads-per-device, RoPE presence, and weight presence (weight is
+                # forwarded to create_stats_buffer and affects its sizing). Guards against
+                # a shared-cache collision between two same-shape modules differing only
+                # in affine geometry.
+                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, self.weight is not None),
+                lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    num_heads_per_device=num_heads_per_device,
+                    num_links=self.ccl_manager.num_links,
+                    weight=self.weight.data if self.weight is not None else None,
+                    transformation_mat=trans_mat,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                ),
+            ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
             weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
+            dtype=dtype,
         )
-        return x
 
 
 class DistributedLayerNorm(Module):
@@ -233,10 +255,9 @@ class DistributedLayerNorm(Module):
     Implements LayerNorm on an activation sharded on the reduction dimension.
     """
 
-    # Shared dictionary to store reciprocal tensors
-    # Key: (device id, width_per_device)
-    # Value: recip_tensor
-    _recip_tensors: ClassVar[dict[tuple[int, int], ttnn.Tensor]] = {}
+    # The fused-op reciprocal LUT depends only on (device, width_per_device), so it is shared
+    # across DistributedLayerNorm instances of the same shape instead of each allocating its own.
+    _fused_ln_recip_cache: ClassVar[dict[tuple[int, int], "ttnn.Tensor"]] = {}
 
     def __init__(
         self,
@@ -269,38 +290,25 @@ class DistributedLayerNorm(Module):
         )
 
         n = self.TILE_SIZE * self.mesh_width
-        shape = [embedding_dim // n, n]
-
         assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
 
+        # Static affine weight/bias are TILE [1, embedding_dim] sharded on the reduction axis —
+        # the broadcast layout the fused dit_fused_distributed_rmsnorm op consumes (per-device
+        # [1, H/mesh_width]). adaLN passes dynamic weight/bias at forward instead.
         self.weight = (
-            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, embedding_dim], layout=ttnn.TILE_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device
+            )
             if self.norm_elementwise_affine
             else None
         )
         self.bias = (
-            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, embedding_dim], layout=ttnn.TILE_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device
+            )
             if self.use_bias
             else None
         )
-
-        # Create or reuse reciprocal tensor for Welford algorithm used in dit_layernorm_pre_allgather
-        # Width per device is embedding_dim / mesh_width
-        width_per_device = embedding_dim // self.mesh_width
-
-        # `ttnn.MeshDevice.id()` returns a unique identifier generated by
-        # `generate_unique_mesh_id()`.
-        key = (mesh_device.id(), width_per_device)
-
-        # Check if we already have a recip_tensor for this width_per_device
-        if key not in self._recip_tensors:
-            grid = mesh_device.compute_with_storage_grid_size()
-            core_range_set = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-            )
-            self._recip_tensors[key] = ttnn.create_layer_norm_reciprocals(mesh_device, core_range_set, width_per_device)
-
-        self.recip_tensor = self._recip_tensors[key]
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
@@ -308,19 +316,35 @@ class DistributedLayerNorm(Module):
         assert (weight is not None) == self.norm_elementwise_affine
         assert (bias is not None) == self.use_bias
 
+        # TILE [1, embedding_dim] sharded on the reduction axis (matches DistributedRMSNorm).
         if self.norm_elementwise_affine:
-            state["weight"] = (
-                weight.reshape(self.mesh_width, -1, self.TILE_SIZE)
-                .permute(1, 0, 2)
-                .reshape(-1, self.TILE_SIZE * self.mesh_width)
-            )
+            state["weight"] = weight.reshape(1, self.embedding_dim)
 
         if self.use_bias:
-            state["bias"] = (
-                bias.reshape(self.mesh_width, -1, self.TILE_SIZE)
-                .permute(1, 0, 2)
-                .reshape(-1, self.TILE_SIZE * self.mesh_width)
-            )
+            state["bias"] = bias.reshape(1, self.embedding_dim)
+
+    def _ensure_fused_ln_recip(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
+
+        The fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device] DRAM tensor
+        holding [1/1..1/width] (replicated per device) — unlike the composite Welford op,
+        which used a HEIGHT_SHARDED L1 layout. Cached per (device, width).
+        """
+        width = self.embedding_dim // self.mesh_width
+        key = (self.mesh_device.id(), width)
+        cached = DistributedLayerNorm._fused_ln_recip_cache.get(key)
+        if cached is not None:
+            return cached
+        recip = torch.tensor([1.0 / (i + 1) for i in range(width)], dtype=torch.float32).reshape(1, 1, 1, width)
+        tensor = ttnn.from_torch(
+            recip,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        DistributedLayerNorm._fused_ln_recip_cache[key] = tensor
+        return tensor
 
     def forward(
         self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
@@ -332,35 +356,37 @@ class DistributedLayerNorm(Module):
             assert (
                 not self.norm_elementwise_affine
             ), "Module must not have weight and bias parameters when dynamic_weight and dynamic_bias are provided"
-
             weight = dynamic_weight
             bias = dynamic_bias
         else:
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
 
-        stats = ttnn.experimental.dit_layernorm_pre_allgather(
+        # Fused Welford LayerNorm device op. weight/bias (static or adaLN, bf16 or fp32) are
+        # consumed natively in-op — fp32 affine keeps the modulation precision adaLN needs.
+        return ttnn.experimental.dit_fused_distributed_layernorm(
             x,
-            self.recip_tensor,
-            compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-        )
-
-        stats = self.ccl_manager.all_gather_persistent_buffer(
-            stats,
-            dim=len(x.shape) - 1,
-            mesh_axis=self.mesh_axis,
-        )
-
-        x = ttnn.experimental.dit_layernorm_post_allgather(
-            x,
-            stats,
+            self.mesh_axis,
+            self.mesh_device,
+            self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+            topology=self.ccl_manager.topology,
+            persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
+                ("ln", tuple(x.shape)),
+                lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    num_links=self.ccl_manager.num_links,
+                ),
+            ),
+            epsilon=self.norm_eps,
             weight=weight,
             bias=bias,
-            epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             dtype=dtype,
+            reciprocals=self._ensure_fused_ln_recip(x),
         )
-        return x
 
 
 """
@@ -478,11 +504,10 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
-        x = ttnn.group_norm(
-            x,
+        kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
             input_mask=self.mask.data,
@@ -493,6 +518,133 @@ class GroupNorm(Module):
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
+        x = ttnn.group_norm(x, **kwargs)
         x = x.reshape([batch_size, height, width, channels])
 
         return x
+
+
+class GroupNorm3D(Module):
+    """``torch.nn.GroupNorm(num_groups, num_channels)`` on a 5D BTHWC tensor, dims=3
+    semantics (statistics pool over ``channels-in-group x T x H x W`` per batch).
+
+    Routes through the DRAM-interleaved ``ttnn.group_norm``. The grid is pinned at
+    construction from ``input_nhw``/``num_batches`` via
+    ``determine_expected_group_norm_dram_grid_size`` (uniform multicast groups; avoids
+    the mcast deadlock at small spatial sizes), so gamma/beta/mask are static
+    ``Parameter``s and round-trip through ``Module.save``/``load``.
+    """
+
+    def __init__(
+        self,
+        num_channels: int,
+        num_groups: int,
+        *,
+        input_nhw: int,
+        num_batches: int = 1,
+        eps: float = 1e-5,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        use_welford: bool = True,
+    ) -> None:
+        super().__init__()
+        assert num_channels % 32 == 0, "num_channels must be divisible by tile size"
+        assert num_channels % num_groups == 0, "num_channels must be divisible by num_groups"
+
+        self.num_channels = num_channels
+        self.num_groups = num_groups
+        self.eps = eps
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        # Welford avoids the (E[x^2]-E[x]^2) precision loss when groups have nonzero mean.
+        self.use_welford = use_welford
+        self.input_nhw = input_nhw
+        self.num_batches = num_batches
+
+        self.core_grid = ttnn.determine_expected_group_norm_dram_grid_size(
+            device=mesh_device,
+            num_channels=num_channels,
+            num_groups=num_groups,
+            input_nhw=input_nhw,
+            num_batches=num_batches,
+        )
+        self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
+            self.core_grid, num_channels, num_groups
+        )
+
+        weight_shape = [1, 1, math.ceil(num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols, 32]
+        block_wt = ttnn.operations.normalization.find_max_tile_span(num_channels, num_channels // num_groups, 32)
+        mask_shape = [1, num_groups, 32, 32 * block_wt]
+
+        self.weight = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
+        self.bias = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
+        self.mask = Parameter(total_shape=mask_shape, dtype=dtype, device=mesh_device)
+
+    @classmethod
+    def from_torch(
+        cls,
+        torch_ref: torch.nn.GroupNorm,
+        *,
+        input_nhw: int,
+        num_batches: int = 1,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> GroupNorm3D:
+        module = cls(
+            num_channels=torch_ref.num_channels,
+            num_groups=torch_ref.num_groups,
+            input_nhw=input_nhw,
+            num_batches=num_batches,
+            eps=torch_ref.eps,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+        module.load_torch_state_dict(torch_ref.state_dict())
+        return module
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            state["weight"] = ttnn.create_group_norm_weight_bias_rm(
+                state["weight"], self.num_channels, self.num_virtual_cols
+            )
+        if "bias" in state:
+            state["bias"] = ttnn.create_group_norm_weight_bias_rm(
+                state["bias"], self.num_channels, self.num_virtual_cols
+            )
+        mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        state["mask"] = ttnn.to_torch(mask)
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        B, T, H, W, C = x_BTHWC.shape
+        # dims=3: pool over (channels-in-group, T, H, W) — frames share one group statistic.
+        THW = T * H * W
+        assert B == self.num_batches and B * THW == self.input_nhw, (
+            f"GroupNorm3D built for input_nhw={self.input_nhw}, num_batches={self.num_batches}; "
+            f"got B={B}, T*H*W={THW}"
+        )
+
+        if x_BTHWC.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.tilize_with_zero_padding(ttnn.reshape(x_BTHWC, (B, 1, THW, C)), use_multicore=True)
+
+        out = ttnn.group_norm(
+            x,
+            num_groups=self.num_groups,
+            # -1 = built-in chunk heuristic. Default 1 (with pinned core_grid) overflows L1
+            # at large gathered spatial.
+            num_out_blocks=-1,
+            input_mask=self.mask.data,
+            weight=self.weight.data,
+            bias=self.bias.data,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=self.core_grid,
+            inplace=False,
+            use_welford=self.use_welford,
+        )
+
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (B, T, H, W, C))

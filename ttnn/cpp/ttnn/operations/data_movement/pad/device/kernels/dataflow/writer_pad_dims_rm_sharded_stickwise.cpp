@@ -5,16 +5,23 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint_pages.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
 
 template <uint32_t padding_value_num_bytes, uint32_t num_bytes>
 inline __attribute__((always_inline)) void fill_cb_with_padding_value(
-    const uint32_t cb, const uint32_t padding_value_as_u32) {
+    const uint32_t cb_id, const uint32_t padding_value_as_u32) {
     constexpr uint32_t num_elts =
         num_bytes / padding_value_num_bytes;  // constexpr so that this division happens once on host
-    uint32_t cb_write_addr = get_write_ptr(cb);
+    DataflowBuffer dfb(cb_id);
+    uint32_t cb_write_addr = dfb.get_write_ptr();
 
     if constexpr (padding_value_num_bytes == 4) {
         u32_l1_ptr cb_write_addr_as_u32 = reinterpret_cast<u32_l1_ptr>(cb_write_addr);
@@ -39,22 +46,34 @@ void kernel_main() {
     constexpr uint32_t padding_value_as_u32         = get_compile_time_arg_val(2);
     constexpr uint32_t padding_value_num_bytes      = get_compile_time_arg_val(3);
 
-    constexpr auto output_shard_cb = get_compile_time_arg_val(4);
+    constexpr auto output_shard_dfb = get_compile_time_arg_val(4);
     constexpr auto padding_value_cb = get_compile_time_arg_val(5);
+    DataflowBuffer dfb_output_shard(output_shard_dfb);
+    DataflowBuffer dfb_padding_value(padding_value_cb);
 
-    cb_reserve_back(output_shard_cb, padded_shard_height);
-    uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
+    Noc noc;
+
+    dfb_output_shard.reserve_back(padded_shard_height);
+    uint32_t output_shard_base_addr = dfb_output_shard.get_write_ptr();
 
     fill_cb_with_padding_value<padding_value_num_bytes, padded_stick_bytes>(padding_value_cb, padding_value_as_u32);
-    uint32_t padding_value_base_addr = get_read_ptr(padding_value_cb);
+    uint32_t padding_value_base_addr = dfb_padding_value.get_read_ptr();
 
-    uint64_t output_stick_noc_addr = get_noc_addr(output_shard_base_addr);
+    CoreLocalMem<uint32_t> pad_src(padding_value_base_addr);
+    uint32_t output_stick_addr = output_shard_base_addr;
     for (uint32_t h = 0; h < padded_shard_height; h++) {
-        noc_async_write(padding_value_base_addr, output_stick_noc_addr, padded_stick_bytes);
-        noc_async_write_barrier();
+        noc.async_write(
+            pad_src,
+            UnicastEndpoint{},
+            padded_stick_bytes,
+            {.offset_bytes = 0},
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = output_stick_addr});
+        noc.async_write_barrier();
 
-        cb_push_back(output_shard_cb, 1);
+        dfb_output_shard.push_back(1);
 
-        output_stick_noc_addr += padded_stick_bytes;
+        output_stick_addr += padded_stick_bytes;
     }
 }

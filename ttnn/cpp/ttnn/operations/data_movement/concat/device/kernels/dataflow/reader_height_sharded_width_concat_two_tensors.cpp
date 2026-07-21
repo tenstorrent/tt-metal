@@ -1,12 +1,17 @@
-
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t output_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
 
     constexpr uint32_t input_stick_size_0 = get_compile_time_arg_val(1);
     constexpr uint32_t input_stick_size_1 = get_compile_time_arg_val(2);
@@ -21,43 +26,70 @@ void kernel_main() {
     const uint32_t input_start_1 = get_compile_time_arg_val(10);
 
     const uint32_t groups = get_compile_time_arg_val(11);
+    constexpr uint32_t input_dfb_0_id = get_compile_time_arg_val(12);
+    constexpr uint32_t input_dfb_1_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t group_stick_size_0 = input_stick_size_0 / groups;
     constexpr uint32_t group_stick_size_1 = input_stick_size_1 / groups;
     constexpr uint32_t group_stride_0 = input_stride_0 / groups;
     constexpr uint32_t group_stride_1 = input_stride_1 / groups;
 
-    const uint32_t base_l1_write_addr = get_write_ptr(output_cb);
+    Noc noc;
+    DataflowBuffer output_dfb(output_dfb_id);
+    DataflowBuffer input_dfb_0(input_dfb_0_id);
+    DataflowBuffer input_dfb_1(input_dfb_1_id);
+
+    const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
 
     uint32_t l1_write_addr_0 = base_l1_write_addr + output_stick_offset;
-    const uint32_t l1_read_addr_0 = get_read_ptr(0) + input_start_0;
-    const uint64_t noc_addr_0 = get_noc_addr(l1_read_addr_0);
-    noc_async_read_one_packet_set_state(noc_addr_0, group_stick_size_0);
+    const uint32_t l1_read_addr_0 = input_dfb_0.get_read_ptr() + input_start_0;
+    noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+        UnicastEndpoint{},
+        group_stick_size_0,
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = l1_read_addr_0});
 
     uint32_t read_offset_0 = l1_read_addr_0;
     uint32_t l1_write_addr_inc_0 = group_stick_size_0 + group_stride_0;
     for (uint32_t page_id_input = page_start; page_id_input < page_end; page_id_input++) {
         for (uint32_t i = 0; i < groups; i++) {
-            noc_async_read_one_packet_with_state<true>(read_offset_0, l1_write_addr_0);
+            CoreLocalMem<uint32_t> dst(l1_write_addr_0);
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                dst,
+                group_stick_size_0,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = read_offset_0},
+                {.offset_bytes = 0});
             l1_write_addr_0 += (l1_write_addr_inc_0);
             read_offset_0 += group_stick_size_0;
         }
     }
 
     uint32_t l1_write_addr_1 = base_l1_write_addr + output_stick_offset + group_stick_size_0;
-    const uint32_t l1_read_addr_1 = get_read_ptr(1) + input_start_1;
-    const uint64_t noc_addr_1 = get_noc_addr(l1_read_addr_1);
-    noc_async_read_one_packet_set_state(noc_addr_1, group_stick_size_1);
+    const uint32_t l1_read_addr_1 = input_dfb_1.get_read_ptr() + input_start_1;
+    noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+        UnicastEndpoint{},
+        group_stick_size_1,
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = l1_read_addr_1});
 
     uint32_t read_offset_1 = l1_read_addr_1;
     uint32_t l1_write_addr_inc_1 = group_stick_size_1 + group_stride_1;
     for (uint32_t page_id_input = page_start; page_id_input < page_end; page_id_input++) {
         for (uint32_t i = 0; i < groups; i++) {
-            noc_async_read_one_packet_with_state<true>(read_offset_1, l1_write_addr_1);
+            CoreLocalMem<uint32_t> dst(l1_write_addr_1);
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                dst,
+                group_stick_size_1,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = read_offset_1},
+                {.offset_bytes = 0});
             l1_write_addr_1 += (l1_write_addr_inc_1);
             read_offset_1 += group_stick_size_1;
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

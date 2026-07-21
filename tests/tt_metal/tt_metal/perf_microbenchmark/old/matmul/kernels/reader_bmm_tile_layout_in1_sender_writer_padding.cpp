@@ -126,12 +126,12 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 #endif
 
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 #ifdef FUSE_BIAS
-    const auto s3 = TensorAccessor(in3_args, in3_tensor_addr, bias_single_tile_size_bytes);
+    const auto s3 = TensorAccessor(in3_args, in3_tensor_addr);
 #endif
     // WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
@@ -149,7 +149,7 @@ void kernel_main() {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in1_block_w; w++) {
                     if (w < last_block_w) {
-                        noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                        noc_async_read_page(in1_tensor_tile_id, s1, l1_write_addr_in1);
                     }
                     l1_write_addr_in1 += in1_single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
@@ -220,7 +220,7 @@ void kernel_main() {
             uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
             for (uint32_t w = 0; w < in1_block_w; w++) {
                 if (w < last_block_w) {
-                    noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
+                    noc_async_read_page(in3_tensor_tile_id, s3, l1_write_addr_in3);
                 }
                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                 in3_tensor_tile_id += in3_tensor_stride_w;
@@ -300,7 +300,7 @@ void kernel_main() {
                 for (uint32_t h = 0; h < out_subblock_h_; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w_; w++) {
-                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                        noc_async_write_page(out_tensor_tile_id, s, l1_read_addr);
 
                         l1_read_addr += output_single_tile_size_bytes;
 

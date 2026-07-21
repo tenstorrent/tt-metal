@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 
@@ -27,7 +30,10 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<2>();
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
+
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
 
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
@@ -37,13 +43,11 @@ void kernel_main() {
 
         uint32_t src_stick_id = t * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset;
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-            cb_reserve_back(cb_output_id, 1);
-            uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
-            uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
-            noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+            cb_output.reserve_back(1);
+            noc_obj.async_read(src_accessor, cb_output, read_size, {.page_id = src_stick_id}, {});
             src_stick_id++;
-            noc_async_read_barrier();
-            cb_push_back(cb_output_id, 1);
+            noc_obj.async_read_barrier();
+            cb_output.push_back(1);
         }
     }
 }

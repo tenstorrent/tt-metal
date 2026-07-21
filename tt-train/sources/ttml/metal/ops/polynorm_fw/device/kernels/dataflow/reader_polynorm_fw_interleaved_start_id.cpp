@@ -17,33 +17,30 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t scaler_fp32_bits = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t eps_fp32_bits = get_arg_val<uint32_t>(arg_idx++);
 
     // CBs with input data / scalar parameters
     constexpr auto cb_input_pass_1 = tt::CBIndex::c_0;
     constexpr auto cb_input_pass_2 = tt::CBIndex::c_1;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_eps = tt::CBIndex::c_3;
-    constexpr auto cb_w0 = tt::CBIndex::c_4;
-    constexpr auto cb_w1 = tt::CBIndex::c_5;
-    constexpr auto cb_w2 = tt::CBIndex::c_6;
-    constexpr auto cb_bias = tt::CBIndex::c_7;
+    constexpr auto cb_w0 = tt::CBIndex::c_3;
+    constexpr auto cb_w1 = tt::CBIndex::c_4;
+    constexpr auto cb_w2 = tt::CBIndex::c_5;
+    constexpr auto cb_bias = tt::CBIndex::c_6;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
     generate_tile_with_uint32_value(cb_scaler, scaler_fp32_bits);
-    generate_tile_with_uint32_value(cb_eps, eps_fp32_bits);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_pass_1);
     constexpr auto input_args = TensorAccessorArgs<2>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto weight_address_generator = TensorAccessor(weight_args, weight_address, tile_bytes);
-    const auto bias_address_generator = TensorAccessor(bias_args, bias_address, tile_bytes);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto weight_address_generator = TensorAccessor(weight_args, weight_address);
+    const auto bias_address_generator = TensorAccessor(bias_args, bias_address);
 
-    constexpr uint32_t cb_scratch = tt::CBIndex::c_4;
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_3;
     const uint16_t w0_bf16 =
         read_bfloat16_scalar_from_tile(weight_address_generator, /*row=*/0U, /*col=*/0U, cb_scratch);
     const uint16_t w1_bf16 =

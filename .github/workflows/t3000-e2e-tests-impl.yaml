@@ -22,14 +22,15 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_e2e_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -90,7 +91,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -105,8 +107,25 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          ${{ matrix.test-group.cmd }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -114,3 +133,40 @@ jobs:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [load-test-matrix, t3000-e2e-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
+          run-result: ${{ needs.t3000-e2e-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi

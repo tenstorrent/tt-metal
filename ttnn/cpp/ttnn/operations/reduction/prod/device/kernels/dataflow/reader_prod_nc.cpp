@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const auto input_addr = get_arg_val<uint32_t>(0);
@@ -23,18 +21,12 @@ void kernel_main() {
     constexpr auto dram_input_addrg_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
-    uint32_t scaler = 0;
-    const float one_f = 1.0f;
-    std::memcpy(&scaler, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
-    fill_cb_with_value(cb_id_in1, scaler);
-
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);
+    Noc noc;
+    CircularBuffer cb_in0(tt::CBIndex::c_0);
 
     uint32_t input_tile_bytes = get_tile_size(cb_in0.get_cb_id());
-    const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr, input_tile_bytes);
+    const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr);
 
     uint32_t read_tile_id_temp = (dim == 0) ? (start_id) : (start_id / HtWt * CHtWt) + (start_id % HtWt);
     uint32_t start_tile_id = start_id / HtWt * CHtWt;

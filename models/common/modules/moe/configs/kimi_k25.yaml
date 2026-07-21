@@ -1,0 +1,30 @@
+# kimi_k25
+mesh_shape: [16, 8]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 7168
+select_experts_k: 8
+num_routed_experts: 384
+num_shared_experts: 1
+has_bias: false
+
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# Kimi-K2 is deepseek-arch but config.json has n_group=1 / topk_group=1 → the grouped path is a NO-OP
+# (1 group, select 1 of 1 = all experts), i.e. UNGROUPED top-8 with sigmoid(logit)+score_correction_bias
+# for selection, linear renormalization (norm_topk_prob), scaled by 2.827. 384 experts → 2-block combine.
+n_group: 1
+score_func: sigmoid
+routed_scaling_factor: 2.827
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sigmoid scores for SELECTION only.
+score_correction_bias: true
+
+compute:
+  intermediate_size: 2048
+  activation_type: SILU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential
+  shared_expert_ids_to_devices: fully_replicated

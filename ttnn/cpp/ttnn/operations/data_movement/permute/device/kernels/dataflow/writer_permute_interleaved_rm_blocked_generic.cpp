@@ -5,7 +5,11 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Compile-time constants
@@ -27,10 +31,11 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t output_tensor_page_size = get_named_compile_time_arg_val("output_tensor_page_size");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_id_in = tt::CBIndex::c_2;
+    Noc noc;
+    DataflowBuffer dfb_in(dfb_id_in);
 
     // Precompute bytes-per-block along X
     constexpr uint32_t x_block_size_bytes = x_block_size * element_size;
@@ -47,7 +52,7 @@ void kernel_main() {
     const uint32_t end_block = get_arg_val<uint32_t>(2);
 
     // Interleaved address configuration for the destination
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_tensor_page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     // Input shape, permutation, and destination strides
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
@@ -134,8 +139,8 @@ void kernel_main() {
         }
 
         // Wait for the transposed block data to be ready in the input CB
-        cb_wait_front(cb_id_in, w_block_size);
-        uint32_t transposed_buffer_read_addr = get_read_ptr(cb_id_in);
+        dfb_in.wait_front(w_block_size);
+        uint32_t transposed_buffer_read_addr = dfb_in.get_read_ptr();
 
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
@@ -149,20 +154,15 @@ void kernel_main() {
                 dest_linear_idx += dest_multi_idx[x_dim_in_dest] * dest_strides[x_dim_in_dest];
             }
 
-            // Compute the NoC address for the output
-            uint64_t dst_noc_addr = s0.get_noc_addr(dest_linear_idx, x_offset);
-
-            // Compute the L1 address from which to write (offset by W-block pages)
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;
-
-            // Perform an asynchronous write of the X-block to the destination
-            noc_async_write(l1_addr, dst_noc_addr, x_read_size_bytes);
+            tt::data_movement::common::noc_async_write_sharded(
+                noc, l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
         }
 
         // Wait until all writes are completed before proceeding to the next block
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // Pop the block from the input circular buffer, as we're done writing it
-        cb_pop_front(cb_id_in, w_block_size);
+        dfb_in.pop_front(w_block_size);
     }
 }

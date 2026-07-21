@@ -26,7 +26,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
+from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix, strip_mesh_suffix
 from matrix_runner_config import (
     DEFAULT_MODEL_TRACED_GROUPING_MODE,
     GENERATION_MANIFEST_FILENAME,
@@ -34,6 +34,7 @@ from matrix_runner_config import (
     LEAD_MODELS_BATCH_POLICY,
     LEAD_MODELS_DEFAULT_TEST_GROUP,
     LEAD_MODELS_SUITE_NAME,
+    MODEL_TRACED_BATCH_POLICY,
     SCHEDULE_TYPES,
     SUPPORTED_VECTOR_GROUPING_MODES,
     SWEEP_TYPES,
@@ -81,16 +82,33 @@ def _log_module_groups(header, modules, groups):
 
 
 def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
-    """Create matrix include entries for a set of batches using a runner config."""
-    return [
-        {
-            **runner_config,
-            "module_selector": batch,
-            "batch_display": f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch,
-            "suite_name": suite_name,
-        }
-        for batch in batches
-    ]
+    """Create matrix include entries for a set of batches using a runner config.
+
+    One include entry per batch (mesh_dims "").
+
+    Multi-device CCL modules whose vectors span both FABRIC_1D/RING and FABRIC_2D
+    meshes (e.g. all_gather) used to be split into per-fabric-family [1D]/[2D] jobs
+    to avoid an in-process FABRIC_1D->FABRIC_2D transition hang on T3K. That hang
+    was the device profiler overflowing the idle-erisc dispatch kernel (cq_prefetch)
+    at FABRIC_2D mesh open; it is now resolved by skipping the profiler for CCL in
+    sweeps_runner (_is_multidevice_ccl_module). With the profiler off, the
+    transition runs cleanly in one process (validated on T3K: 3/3 single-process
+    1D->2D runs passed, 0 hangs), so the split is no longer needed. The runner's
+    --mesh-dims filter remains available for ad-hoc per-fabric-family runs.
+    """
+    entries = []
+    for batch in batches:
+        base_display = f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch
+        entries.append(
+            {
+                **runner_config,
+                "module_selector": batch,
+                "batch_display": base_display,
+                "suite_name": suite_name,
+                "mesh_dims": "",
+            }
+        )
+    return entries
 
 
 def _load_generation_manifest(vectors_path):
@@ -133,7 +151,14 @@ def _group_modules_by_preference(modules, grouping_mode):
 
     for module in modules:
         mesh = get_mesh_shape_string(module)
-        hw = parse_hardware_suffix(module)
+        # Strip the trailing .mesh_NxM before parsing the hardware suffix: vector
+        # files carry BOTH suffixes (e.g. .hw_blackhole_p300a_2c.mesh_1x2), and
+        # parse_hardware_suffix returns None when the .mesh_* tail is still present.
+        # Without this, every hw-suffixed file falls through to mesh routing —
+        # harmless for wormhole (mesh shape maps to its own lane) but it sends
+        # blackhole files (mesh 1x1/1x2) to the wormhole n150/n300 lanes where they
+        # are dropped, so the blackhole lanes never run. Mirrors vector_source.py.
+        hw = parse_hardware_suffix(strip_mesh_suffix(module))
 
         if grouping_mode == "mesh":
             if mesh:
@@ -174,12 +199,25 @@ def _get_test_group_for_mesh_shape(mesh_shape, mesh_test_groups, run_label, defa
 
 
 def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
-    """Batch base module names using fixed size or policy-defined parallel jobs."""
+    """Batch base module names using fixed size or policy-defined parallel jobs.
+
+    Modules listed in LEAD_MODELS_BATCH_POLICY["solo_modules"] are pulled out
+    and given their own dedicated 1-module batch before the rest are chunked.
+    """
+    solo_set = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
+    solo = [m for m in base_modules if m in solo_set]
+    rest = [m for m in base_modules if m not in solo_set]
+
     parallel_jobs = (batch_policy or {}).get("parallel_jobs")
     if parallel_jobs:
-        size = max(1, -(-len(base_modules) // parallel_jobs))
-        return chunk_modules(base_modules, size)
-    return chunk_modules(base_modules, batch_size)
+        size = max(1, -(-len(rest) // parallel_jobs))
+        batches = chunk_modules(rest, size)
+    else:
+        batches = chunk_modules(rest, batch_size)
+
+    for sm in solo:
+        batches.append(sm)
+    return batches
 
 
 def _append_routed_group(
@@ -289,6 +327,7 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
             test_group_name,
             batch_size,
             suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(test_group_name),
         )
 
     grouped = sorted(hw_modules.items(), key=lambda x: x[0])
@@ -296,15 +335,17 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
         grouped.append((None, unmatched))
 
     for hw_group, mods in grouped:
+        hw_test_group = get_test_group_name_for_hardware_group(hw_group)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             f"hardware {_hw_label(hw_group)}",
             mods,
-            get_test_group_name_for_hardware_group(hw_group),
+            hw_test_group,
             batch_size,
             suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(hw_test_group),
         )
 
     _log_module_groups(f"Model traced run ({mode}-grouped)", modules, log_groups)

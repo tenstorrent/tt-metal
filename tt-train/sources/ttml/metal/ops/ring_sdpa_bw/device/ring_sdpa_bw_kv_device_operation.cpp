@@ -62,28 +62,13 @@ RingSDPABwKVDeviceOperation::tensor_return_value_t RingSDPABwKVDeviceOperation::
     return {grad_key, grad_value};
 }
 
-ttsl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
-    return ttsl::hash::hash_objects(
-        1,  // KV marker (different from Q)
-        attrs.ring_size,
-        attrs.ring_axis,
-        attrs.step,
-        static_cast<int>(attrs.mask_type),
-        static_cast<int>(attrs.ring_direction),
-        tensor_args.query.tensor_spec().logical_shape(),
-        tensor_args.query.dtype(),
-        tensor_args.key.tensor_spec().logical_shape());
-}
-
 }  // namespace ttml::metal::ops::ring_sdpa_bw::kv
 
 namespace ttnn::prim {
 
 ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_value_t ttml_ring_sdpa_bw_kv(
     const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
+    const ttnn::Tensor& u_scaler,
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
@@ -106,7 +91,7 @@ ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_v
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
-        .attn_output = attn_output,
+        .u_scaler = u_scaler,
         .query = query,
         .key = key,
         .value = value,

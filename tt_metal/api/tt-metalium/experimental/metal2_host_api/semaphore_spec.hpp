@@ -5,38 +5,49 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
-using SemaphoreSpecName = std::string;
+// ============================================================================
+//  SemaphoreSpec API
+// ============================================================================
+//
+// A SemaphoreSpec is a descriptor for a Tenstorrent semaphore,
+// which can be used for inter-kernel instance synchronization.
+//
+// INSTANCING: One SRAM ("L1") cell per node in the set of target_nodes.
+//
+// PLACEMENT: Specified directly via target_nodes. Unlike DFBs, semaphores are
+//   remote resources for kernels. Placement cannot be inferred from kernel
+//   bindings.
+//
+// BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec,
+//   regardless of location. Any kernel instance can signal or wait on any
+//   semaphore instance.
+//
+// ============================================================================
+
+// A name identifying a SemaphoreSpec within a ProgramSpec.
+using SemaphoreSpecName = ttsl::StrongType<std::string, struct SemaphoreSpecNameTag>;
 
 struct SemaphoreSpec {
     // Semaphore identifier: used to reference this Semaphore within the ProgramSpec
     SemaphoreSpecName unique_id;
 
     // Target nodes
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     Nodes target_nodes;
 
-    //////////////////////////////
-    // Advanced options
-    //////////////////////////////
-
-    // Initial value
-    // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
-    // Runtime wants to deprecate this feature for ALL architectures
-    uint32_t initial_value = 0;
-
-    // Backing memory
-    // NOTE: Register-backed semaphores are only supported on Gen2 architectures.
-    enum class SemaphoreMemoryType { L1, Register };
-    SemaphoreMemoryType memory_type = SemaphoreMemoryType::L1;
+    //////////////////////////////////////////////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    //////////////////////////////////////////////////////////////////////////////
+    SemaphoreAdvancedOptions advanced_options;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

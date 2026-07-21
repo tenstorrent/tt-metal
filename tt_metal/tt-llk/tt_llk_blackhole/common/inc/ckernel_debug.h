@@ -7,6 +7,8 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_dest.h"
 
 // Debug bus and register array dump
 // TODO: RT Review this debug file for BH, currently copy from whb0
@@ -102,9 +104,7 @@ typedef union
 template <ThreadId thread_id>
 inline void dbg_thread_halt()
 {
-    static_assert(
-        (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
-        "Invalid thread id set in dbg_wait_for_thread_idle(...)");
+    static_assert(IS_TRISC_THREAD<thread_id>, "Invalid thread id set in dbg_wait_for_thread_idle(...)");
 
     if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
@@ -131,9 +131,7 @@ inline void dbg_thread_halt()
 template <ThreadId thread_id>
 inline void dbg_thread_unhalt()
 {
-    static_assert(
-        (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
-        "Invalid thread id set in dbg_wait_for_thread_idle(...)");
+    static_assert(IS_TRISC_THREAD<thread_id>, "Invalid thread id set in dbg_wait_for_thread_idle(...)");
 
     if constexpr (thread_id == ThreadId::MathThreadId)
     {
@@ -151,6 +149,98 @@ inline void dbg_thread_unhalt()
 
         // Unhalt unpack thread
         mailbox_write(ThreadId::UnpackThreadId, 1);
+    }
+}
+
+constexpr bool dbg_dest_fmt_supported(DataFormat fmt)
+{
+    return fmt == DataFormat::Float32 || fmt == DataFormat::Float16 || fmt == DataFormat::Float16_b || fmt == DataFormat::Int32 || fmt == DataFormat::UInt32 ||
+           fmt == DataFormat::UInt16 || fmt == DataFormat::Int8 || fmt == DataFormat::UInt8;
+}
+
+// Direction of the copy performed by `dbg_copy_dest_tile`.
+//   Read:  copy a tile from DEST into the caller's buffer.
+//   Write: copy a tile from the caller's buffer into DEST.
+enum class DbgDestTileOp : std::uint8_t
+{
+    Read,
+    Write,
+};
+
+// Copy a single tile between the DEST register and a memory buffer through the
+// RISC-V memory-mapped dest register.
+//
+// Template parameters:
+//   op:         direction of the copy (see `DbgDestTileOp`).
+//   thread_id:  TRISC thread issuing the copy (defaults to `MathThreadId`).
+//
+// Parameters:
+//   fmt:             data format of the values stored in DEST.
+//   tile_id:         index of the tile within DEST to copy.
+//   buffer:          memory buffer holding TILE_HEIGHT * TILE_WIDTH elements of
+//                    `fmt`. For `DbgDestTileOp::Read` it receives the tile read
+//                    from DEST; for `DbgDestTileOp::Write` its contents are
+//                    written into DEST.
+//   enable_swizzle:  when true, access DEST with hardware swizzling enabled
+//                    (matches the FPU's view of DEST); when false, access the
+//                    raw layout.
+template <DbgDestTileOp op, ThreadId thread_id = ThreadId::MathThreadId>
+inline void dbg_copy_dest_tile(
+    DataFormat fmt, std::uint32_t tile_id, std::conditional_t<op == DbgDestTileOp::Write, const void *, void *> buffer, bool enable_swizzle = true)
+{
+    static_assert(IS_TRISC_THREAD<thread_id>, "dbg_copy_dest_tile: invalid thread id");
+
+    LLK_ASSERT(dbg_dest_fmt_supported(fmt), "dbg_copy_dest_tile: unsupported DataFormat");
+
+    constexpr std::uint32_t TILE_ELEMENTS = TILE_HEIGHT * TILE_WIDTH;
+
+    const std::uint8_t dest_type = fmt_to_dest_type(fmt);
+
+    configure_dest_access<thread_id>(fmt, enable_swizzle);
+    tensix_sync();
+
+    const std::uint32_t offset = tile_id * TILE_ELEMENTS;
+
+    auto copy_with_element_type = [&](auto element_tag)
+    {
+        using elem_t                = decltype(element_tag);
+        volatile elem_t *dest_array = reinterpret_cast<volatile elem_t *>(RISCV_DEST_START_ADDR);
+        if constexpr (op == DbgDestTileOp::Write)
+        {
+            const volatile elem_t *src = reinterpret_cast<const volatile elem_t *>(buffer);
+            for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+            {
+                dest_array[offset + i] = src[i];
+            }
+        }
+        else
+        {
+            volatile elem_t *dst = reinterpret_cast<volatile elem_t *>(buffer);
+            for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
+            {
+                dst[i] = dest_array[offset + i];
+            }
+        }
+    };
+
+    if (dest_type == RISC_DEST_FMT_FP32 || dest_type == RISC_DEST_FMT_INT32)
+    {
+        copy_with_element_type(std::uint32_t {});
+    }
+    else if (dest_type == RISC_DEST_FMT_INT8)
+    {
+        copy_with_element_type(std::uint8_t {});
+    }
+    else // FP16A, FP16B, INT16
+    {
+        copy_with_element_type(std::uint16_t {});
+    }
+
+    if constexpr (op == DbgDestTileOp::Write)
+    {
+        // Ensure stores have drained before the caller resumes math/pack ops
+        // that will observe the freshly-written tile.
+        tensix_sync();
     }
 }
 
@@ -266,8 +356,6 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     }
 
     // Disable debug control
-    dbg_array_rd_cmd.val = 0;
-    reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
     dbg_array_rd_en.val = 0;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
 

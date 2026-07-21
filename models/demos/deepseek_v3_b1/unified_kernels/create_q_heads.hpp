@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "dataflow_utils.hpp"
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
@@ -186,10 +187,6 @@ struct CreateQHeads {
                 unified_kernels::setup_sharded_buffer(src_cb, args.src_num_pages);
             }
 
-            // Wait for source CB data to be ready
-            cb_wait_front(src_cb, args.src_num_pages);
-
-            // Get source address from CB
             uint32_t src_addr = get_read_ptr(src_cb);
 
             if (is_qnope_core) {
@@ -204,16 +201,28 @@ struct CreateQHeads {
                 // First half: tight row-major packing
                 uint32_t dst_offset_0 = my_col * half_qnope_data_size_bytes;
                 uint64_t dst_data_noc_addr_0 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_0);
-                noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
+                unified_kernels::unicast_write_set_state<true, true, true, true, false, write_cmd_buf>(
                     src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes, WRITE_NOC);
-                noc_semaphore_inc(phase1_semaphore_noc_addr, 1, WRITE_NOC);
+                unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
+                    phase1_semaphore_noc_addr, 1, 31, WRITE_NOC);
+
+                // Wait for source CB data to be ready
+                cb_wait_front(src_cb, args.src_num_pages);
+                unified_kernels::unicast_write_increment_counters<true>(2, WRITE_NOC);
+
+                unified_kernels::noc_async_write_issue_txn<true, false>(WRITE_NOC);
+                unified_kernels::unicast_atomic_inc_increment_counters<false>(2, WRITE_NOC);
+                unified_kernels::noc_async_atomic_inc_issue_txn<false, false>(WRITE_NOC);
 
                 // Second half: continues after first block
                 uint32_t dst_offset_1 = (args.qnope_cols * half_qnope_data_size_bytes) + dst_offset_0;
                 uint64_t dst_data_noc_addr_1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_1);
-                noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
+                unified_kernels::unicast_write_set_state<true, false, true, false, false, write_cmd_buf>(
                     src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes, WRITE_NOC);
-                noc_semaphore_inc(phase2_semaphore_noc_addr, 1, WRITE_NOC);
+                unified_kernels::noc_async_write_issue_txn<true, false>(WRITE_NOC);
+                unified_kernels::unicast_atomic_inc_set_state<false, true, false, false, write_at_cmd_buf>(
+                    phase2_semaphore_noc_addr, 1, 31, WRITE_NOC);
+                unified_kernels::noc_async_atomic_inc_issue_txn<false, false>(WRITE_NOC);
             } else {
                 // QROPE core: Write 2 heads × 64 elements = 128 elements
                 // Memory layout: after all QNOPE data, QROPE is packed row-major [8, 64]
@@ -224,9 +233,16 @@ struct CreateQHeads {
                     (args.qnope_cols * CTArgs::qnope_data_size_bytes) + (2 * qrope_col * CTArgs::qrope_head_size_bytes);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
                 constexpr uint32_t double_qrope_head_size_bytes = CTArgs::qrope_head_size_bytes * 2;
-                noc_async_write<double_qrope_head_size_bytes, true, /*posted=*/true>(
+                unified_kernels::noc_async_write_preprogram_all_state<true>(
                     src_addr, dst_data_noc_addr, double_qrope_head_size_bytes, WRITE_NOC);
-                noc_semaphore_inc(rope_semaphore_noc_addr, 1, WRITE_NOC);
+                unified_kernels::noc_async_atomic_inc_preprogram_all_state<false>(
+                    rope_semaphore_noc_addr, 1, 31, WRITE_NOC);
+
+                // Wait for source CB data to be ready
+                cb_wait_front(src_cb, args.src_num_pages);
+
+                unified_kernels::noc_async_write_issue_txn<true>(WRITE_NOC);
+                unified_kernels::noc_async_atomic_inc_issue_txn<false>(WRITE_NOC);
             }
 
             if constexpr (!is_receiver_same_risc) {
@@ -256,23 +272,23 @@ struct CreateQHeads {
             volatile tt_l1_ptr uint32_t* rope_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)args.rope_semaphore_addr;
 
             if (args.num_nope_senders > 0) {
+                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 noc_semaphore_wait(phase1_semaphore_ptr, args.num_nope_senders);
                 noc_semaphore_set(phase1_semaphore_ptr, 0);
-                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 cb_push_back(args.receiver_in_cb, args.nope_tiles);
             }
 
             if (args.num_nope_senders > 0) {
+                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 noc_semaphore_wait(phase2_semaphore_ptr, args.num_nope_senders);
                 noc_semaphore_set(phase2_semaphore_ptr, 0);
-                cb_reserve_back(args.receiver_in_cb, args.nope_tiles);
                 cb_push_back(args.receiver_in_cb, args.nope_tiles);
             }
 
             if (args.num_rope_senders > 0) {
+                cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 noc_semaphore_wait(rope_semaphore_ptr, args.num_rope_senders);
                 noc_semaphore_set(rope_semaphore_ptr, 0);
-                cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 cb_push_back(args.receiver_in_cb, args.rope_tiles);
             }
             if constexpr (is_sender_same_risc) {

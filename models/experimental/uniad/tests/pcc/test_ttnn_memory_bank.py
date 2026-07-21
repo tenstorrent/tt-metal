@@ -13,7 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.tt.model_preprocessing_encoder import (
     create_uniad_model_parameters_encoder,
 )
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -35,7 +35,10 @@ def test_uniad_memory_bank(device, reset_seeds, model_location_generator):
     mem_bank = torch.zeros((901, 4, 256))
     obj_idxes = torch.full((num_instances,), -1, dtype=torch.long)
     scores = torch.randn(901)
-    save_period = torch.zeros(901)
+    # Non-constant save_period: zeros would make the PCC assert below compare
+    # an all-zero reference against an all-zero result, which passes trivially
+    # regardless of correctness.
+    save_period = torch.rand(901)
 
     track_instances.ref_pts = ref_pts.clone()
     track_instances.query = query.clone()

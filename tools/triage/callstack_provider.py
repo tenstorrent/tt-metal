@@ -38,7 +38,8 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
-from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
+from ttexalens.elf import ElfFile
+from ttexalens.elf import CallstackEntry
 from ttexalens.tt_exalens_lib import top_callstack, callstack
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
@@ -61,6 +62,15 @@ class KernelCallstackWithMessage:
     message: str | None
 
 
+def _pc_not_in_range_message(dispatcher_core_data: DispatcherCoreData) -> str:
+    msg = "PC was not in range of any provided ELF files."
+    if dispatcher_core_data.block_type == "active_eth":
+        msg += " Probably context switch occurred and PC is contained in base ERISC firmware."
+    if dispatcher_core_data.kernel_lookup_warning:
+        msg += "\n" + dispatcher_core_data.kernel_lookup_warning
+    return msg
+
+
 def get_callstack(
     location: OnChipCoordinate,
     risc_name: str,
@@ -69,24 +79,22 @@ def get_callstack(
     full_callstack: bool,
     rewind_pc_for_ebreak: bool,
 ) -> KernelCallstackWithMessage:
-    context = location._device._context
-    elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
+    context = location.device._context
+    elfs: list[ElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
     if dispatcher_core_data.kernel_path is not None:
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+            pc = location.device.get_block(location).get_risc_debug(risc_name).get_pc()
             if rewind_pc_for_ebreak:
                 pc = pc - 4
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
                 error_message = None
                 if len(cs) == 0:
-                    error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
-                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                    error_message = _pc_not_in_range_message(dispatcher_core_data)
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
                 raise
@@ -97,27 +105,20 @@ def get_callstack(
                 cs = callstack(location, elfs, offsets, risc_name)
                 error_message = None
                 if len(cs) == 0:
-                    error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
-                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                    error_message = _pc_not_in_range_message(dispatcher_core_data)
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
                 raise
             except Exception as e:
+                error_message = str(e) + " - defaulting to top callstack"
                 try:
                     # If full callstack failed, we default to top callstack
-                    pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    pc = location.device.get_block(location).get_risc_debug(risc_name).get_pc()
                     if rewind_pc_for_ebreak:
                         pc = pc - 4
-                    error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
-                        additional_message = "PC was not in range of any provided ELF files."
-                        if location in location._device.active_eth_block_locations:
-                            additional_message += (
-                                " Probably context switch occurred and PC is contained in base ERISC firmware."
-                            )
-                        error_message = "\n".join([error_message, additional_message])
+                        error_message = "\n".join([error_message, _pc_not_in_range_message(dispatcher_core_data)])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
                 except TimeoutDeviceRegisterError:
                     raise
@@ -142,24 +143,23 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
             line += f"[blue]0x{frame.pc:08X}[/] in "
         if frame.function_name is not None:
             line += f"[yellow]{frame.function_name}[/] () "
-        if frame.file is not None:
+        if frame.file_info is not None:
+            fi = frame.file_info
             # Convert absolute path to relative path with ./ prefix
-            file_path = Path(frame.file)
+            file_path = Path(fi.file)
             try:
                 if file_path.is_absolute():
                     rel_path = file_path.relative_to(cwd)
                     display_path = f"./{rel_path}"
                 else:
-                    display_path = frame.file
+                    display_path = fi.file
             except ValueError:
                 # Path is not relative to cwd, keep as is
-                display_path = frame.file
+                display_path = fi.file
 
             line += f"at [green]{display_path}[/]"
-            if frame.line is not None:
-                line += f" [green]{frame.line}[/]"
-                if frame.column is not None:
-                    line += f"[green]:{frame.column}[/]"
+            line += f" [green]{fi.line}[/]"
+            line += f"[green]:{fi.column}[/]"
         result.append(line)
     return result
 
@@ -230,7 +230,7 @@ class CallstackProvider:
         gdb = use_gdb_callstack if use_gdb_callstack is not None else self.gdb_callstack
 
         cache_key = (
-            location._device.id,
+            location.device.id,
             location.to_str("noc0"),
             risc_name,
             full,
@@ -273,7 +273,7 @@ class CallstackProvider:
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
 
-        if location in location._device.active_eth_block_locations and not self.force_active_eth:
+        if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
                 risc_name,
@@ -316,7 +316,7 @@ class CallstackProvider:
                     # If GDB failed to get callstack, surface errors and default to top callstack
                     if len(gdb_callstack) == 0:
                         error_message = ""
-                        if self.gdb_server.error_stream:
+                        if isinstance(self.gdb_server.error_stream, io.StringIO):
                             error_message = f"\n  {self.gdb_server.error_stream.getvalue().strip()}"
                             # Clear after read so we don't repeat the same errors next time
                             self.gdb_server.error_stream.seek(0)
@@ -341,7 +341,7 @@ class CallstackProvider:
                 if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
                     try:
                         callstack_with_message.callstack[0].pc = (
-                            location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                            location.device.get_block(location).get_risc_debug(risc_name).get_pc()
                         )
                     except TimeoutDeviceRegisterError:
                         raise
@@ -381,7 +381,7 @@ def find_available_port() -> int:
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
             s.bind(("", 0))  # 0 → OS picks a free port
             s.listen()
-            return s.getsockname()[1]
+            return int(s.getsockname()[1])
     except (socket.error, OSError) as e:
         # If we get here, no port was found
         raise TTTriageError(f"No available port found: {e}")

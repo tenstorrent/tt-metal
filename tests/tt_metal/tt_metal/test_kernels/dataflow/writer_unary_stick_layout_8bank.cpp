@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Constexpr
@@ -26,10 +26,10 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::CircularBuffer cb(cb_id_out0);
-    experimental::Noc noc;
+    CircularBuffer cb(cb_id_out0);
+    Noc noc;
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads

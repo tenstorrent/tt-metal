@@ -4,8 +4,8 @@
 
 #include <cstdlib>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
@@ -35,10 +35,10 @@ void kernel_main() {
     std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base;
     std::uint32_t dram_buffer_dst_addr = dram_buffer_dst_addr_base;
 
-    experimental::CoreLocalMem<uint32_t> l1_mem_1(l1_buffer_addr);
-    experimental::CoreLocalMem<uint32_t> l1_mem_2(l1_buffer_addr + rd_wr_l1_buffer_size_bytes);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src_bank;
+    CoreLocalMem<uint32_t> l1_mem_1(l1_buffer_addr);
+    CoreLocalMem<uint32_t> l1_mem_2(l1_buffer_addr + rd_wr_l1_buffer_size_bytes);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src_bank;
 
     // Copy data from DRAM into destination L1 buffer
     noc.async_read(

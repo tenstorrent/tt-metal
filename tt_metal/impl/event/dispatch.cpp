@@ -46,8 +46,8 @@ void issue_record_event_commands(
     uint8_t cq_id,
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
@@ -55,6 +55,10 @@ void issue_record_event_commands(
 
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t num_worker_counters = sub_device_ids.size();
+    const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    const uint32_t num_cqs_per_dispatch_core =
+        MetalContext::instance().get_dispatch_query_manager().cq_dispatch_layout(dispatch_core_type).num_cqs_per_core;
+    const uint32_t num_dispatch_cores = num_command_queues / num_cqs_per_dispatch_core;
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
     // Calculate the packed event payload size
@@ -62,7 +66,7 @@ void issue_record_event_commands(
     {
         tt::tt_metal::DeviceCommandCalculator event_payload_calculator;
         event_payload_calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-            num_command_queues, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
+            num_dispatch_cores, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
         packed_event_payload_sizeB =
             tt::align(event_payload_calculator.write_offset_bytes() - sizeof(CQPrefetchCmd), l1_alignment);
     }
@@ -77,7 +81,7 @@ void issue_record_event_commands(
     }
 
     calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-        num_command_queues, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
+        num_dispatch_cores, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
 
     if (notify_host) {
         calculator.add_dispatch_write_linear_host_event(DispatchSettings::EVENT_PADDED_SIZE);
@@ -87,9 +91,6 @@ void issue_record_event_commands(
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
@@ -106,35 +107,37 @@ void issue_record_event_commands(
                 wait_flags,
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index]);
+                expected_num_workers_completed[offset_index],
+                cq_id);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index]);
+                expected_num_workers_completed[offset_index],
+                cq_id);
         }
     }
 
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
     std::vector<std::pair<const void*, uint32_t>> event_payloads(num_command_queues);
 
-    for (auto cq_id = 0; cq_id < num_command_queues; cq_id++) {
-        tt_cxy_pair dispatch_location = MetalContext::instance().get_dispatch_query_manager().get_dispatch_core(cq_id);
+    for (auto cq = 0; cq < num_command_queues; cq++) {
+        tt_cxy_pair dispatch_location = MetalContext::instance().get_dispatch_query_manager().get_dispatch_core(cq);
         CoreCoord dispatch_virtual_core = device->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-        unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
+        unicast_sub_cmds[cq] = CQDispatchWritePackedUnicastSubCmd{
             .noc_xy_addr = device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_virtual_core)};
-        event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
+        event_payloads[cq] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
     uint32_t completion_q0_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+        CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT, cq_id);
     uint32_t completion_q1_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+        CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
     uint32_t address = cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT,
-        num_command_queues,
+        num_dispatch_cores,
         address,
         DispatchSettings::EVENT_PADDED_SIZE,
         packed_event_payload_sizeB,
@@ -165,15 +168,15 @@ void issue_wait_for_event_commands(
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     uint32_t completion_q0_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+        CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT, cq_id);
     uint32_t completion_q1_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+        CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
 
     uint32_t last_completed_event_address =
         event_cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
 
     command_sequence.add_dispatch_wait(
-        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id, cq_id);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 
@@ -211,8 +214,7 @@ void read_events_from_completion_queue(
     SystemMemoryManager& sysmem_manager) {
     // For mock devices, the sysmem_manager is a stubbed singleton
     // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
-    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
         sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
         return;
     }

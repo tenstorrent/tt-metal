@@ -21,8 +21,14 @@ from vllm.model_executor.models.mistral3 import (
     Mistral3ProcessingInfo,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import MultiModalDataDict
-from vllm.multimodal.profiling import BaseDummyInputsBuilder
+from vllm.multimodal.processing import BaseDummyInputsBuilder
+
+try:
+    # vLLM >= 0.24.0 exposes MultiModalDataDict from vllm.inputs; older
+    # versions export it from vllm.multimodal.inputs.
+    from vllm.inputs import MultiModalDataDict
+except ImportError:
+    from vllm.multimodal.inputs import MultiModalDataDict
 
 import ttnn
 from models.common.llama_models import create_vision_mask
@@ -32,13 +38,42 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
+    """Allocate KV cache tensors with optional cross-layer DRAM sharing.
+
+    Args:
+        per_layer_specs: list of ``(kv_cache_shape, dtype, tensor_idx)``
+            triples, one per layer in model layer-index order. Layers with
+            the same ``tensor_idx`` share one underlying TT tensor — this
+            is upstream's HMA tensor-sharing layout (e.g. for Gemma3 5:1,
+            one full-attention layer and several sliding-window layers
+            collapse to a single DRAM buffer; per-group block tables keep
+            their slot accesses disjoint at runtime). Layers with unique
+            ``tensor_idx`` get their own buffer.
+        dp_model: list of replicated TT model handles, one per data-parallel
+            submesh.
+        tt_cache_path: path used for on-disk weight cache file naming.
+
+    Returns:
+        ``list[submesh][layer_idx][k_or_v]`` of TT tensors. Multiple
+        ``layer_idx`` entries may refer to the same underlying tensor
+        objects when they share a ``tensor_idx``.
+    """
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+        # tensor_idx -> [k, v] ttnn handles; reused across all layers that
+        # share a buffer.
+        unique_buffers: dict[int, list] = {}
         kv_tt = []
-        for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
+        for layer_num, (kv_cache_shape, dtype, tensor_idx) in enumerate(
+            tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
+        ):
+            existing = unique_buffers.get(tensor_idx)
+            if existing is not None:
+                kv_tt.append(existing)
+                continue
+            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
                 kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
@@ -60,14 +95,242 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
+                    # ``tensor_idx`` distinguishes shared buffers that have the
+                    # same shape but back different layer subsets.
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}",
                 )
                 for kv in ["k", "v"]
             ]
 
+            unique_buffers[tensor_idx] = kv_tt_i
             kv_tt.append(kv_tt_i)
         kv_cache.append(kv_tt)
     return kv_cache
+
+
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    """Uniform-shape KV cache allocator for non-hybrid models.
+
+    Hybrid attention models should use :func:`allocate_vllm_kv_cache_per_layer`,
+    which takes a per-layer ``(shape, dtype, tensor_idx)`` list so layers
+    can share DRAM buffers per upstream's HMA tensor-sharing model.
+    """
+    return allocate_vllm_kv_cache_per_layer(
+        [(kv_cache_shape, dtype, i) for i in range(num_layers)],
+        dp_model=dp_model,
+        tt_cache_path=tt_cache_path,
+    )
+
+
+class HybridAttentionForCausalLM(Generator):
+    """vLLM wrapper base for hybrid attention models.
+
+    Models with mixed sliding-window + full-attention layers (Gemma3,
+    Gemma4, GPT-OSS, ...) inherit from this class instead of plain
+    :class:`Generator` so they can opt in to upstream's hybrid kv cache
+    manager. The shared ``get_kv_cache_spec`` classmethod here builds
+    the per-layer KV cache spec from ``hf_config.text_config.layer_types``
+    — the standard HF convention used by all of these models — emitting
+    ``SlidingWindowSpec`` for sliding layers and ``FullAttentionSpec``
+    for full-attention layers.
+
+    Subclasses are responsible for the model-specific pieces:
+
+    * ``initialize_vllm_model``: load the underlying TT model.
+    * ``prefill_forward`` / ``decode_forward``: consume the
+      ``page_tables_per_layer`` list (one tensor per decoder layer, layer-
+      aligned with the model's ``self.layers``) and pass each entry to its
+      corresponding attention layer. The plugin pre-expands
+      ``block_tables_per_group`` into this per-layer view at submission
+      time so bridges don't have to re-derive vLLM's group construction
+      order — see ``TTModelRunner._block_tables_per_layer``.
+    * ``allocate_kv_cache_per_layer``: typically just delegates to
+      :func:`allocate_vllm_kv_cache_per_layer` with the model handles.
+
+    Until a subclass overrides them, ``prefill_forward`` and
+    ``decode_forward`` raise :class:`NotImplementedError` to make the
+    contract explicit. Legacy (non-hybrid) models never see the
+    ``page_tables_per_layer`` kwarg — vLLM's plugin opts in via the
+    presence of ``get_kv_cache_spec`` on the model class.
+    """
+
+    # Keep this in sync with get_kv_cache_spec below and with the TT vLLM
+    # worker's token-budget calculation. While SlidingWindowSpec is disabled,
+    # vLLM produces one full-attention KV group and the legacy single page_table
+    # path is sufficient. When SlidingWindowSpec is restored, flip this back so
+    # warmup also exercises the per-layer persistent page-table path.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = False
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config):
+        """Build per-layer KVCacheSpec from HF config ``layer_types``.
+
+        Returns a dict keyed by ``model.layers.<idx>.self_attn`` (the
+        upstream attention-layer naming convention vLLM's KVCacheGroup
+        machinery understands) so :func:`_parse_layer_index` on the
+        runner side can map each spec back to its model layer index.
+        """
+        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+
+        # SlidingWindowSpec import intentionally dropped; restore alongside the
+        # branch below when re-enabling kv cache groups.
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
+
+        model_config = vllm_config.model_config
+        cache_config = vllm_config.cache_config
+
+        hf_config = model_config.hf_config
+        text_config = getattr(hf_config, "text_config", hf_config)
+        layer_types = getattr(text_config, "layer_types", None)
+        if layer_types is None:
+            raise ValueError(
+                f"{cls.__name__}.get_kv_cache_spec requires "
+                "hf_config.text_config.layer_types (one of 'full_attention' / "
+                "'sliding_attention' per layer); none found on this model"
+            )
+        num_kv_heads = model_config.get_num_kv_heads(vllm_config.parallel_config)
+        head_size = model_config.get_head_size()
+        dtype = (
+            model_config.dtype
+            if cache_config.cache_dtype == "auto"
+            else STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+        )
+        block_size = cache_config.block_size
+
+        common = dict(
+            block_size=block_size,
+            num_kv_heads=num_kv_heads,
+            head_size=head_size,
+            dtype=dtype,
+        )
+
+        # SlidingWindowSpec is temporarily disabled: TT-side decode passes the
+        # absolute position to paged_update_cache / paged_sdpa_decode, but vLLM
+        # zero-pads the sliding group's page_table past sliding_window/block_size
+        # entries, so positions beyond the sliding window collapse onto physical
+        # block 0 and silently corrupt the cache. Emit FullAttentionSpec for every
+        # layer so vLLM allocates a max_model_len cache per layer; the SDPA op's
+        # own sliding_window_size kwarg still trims attention correctly on the
+        # read side.
+        spec_per_layer = {}
+        for i, lt in enumerate(layer_types):
+            name = f"model.layers.{i}.self_attn"
+            if lt not in ("sliding_attention", "full_attention"):
+                raise ValueError(
+                    f"Unsupported layer_type {lt!r} at layer {i} on "
+                    f"{cls.__name__}; expected 'full_attention' or "
+                    "'sliding_attention'"
+                )
+            spec_per_layer[name] = FullAttentionSpec(**common)
+        return spec_per_layer
+
+    def prefill_forward(self, *args, **kwargs):
+        raise NotImplementedError(
+            f"{type(self).__name__} must override prefill_forward to consume "
+            "`page_tables_per_layer` and pass each entry to the matching "
+            "attention layer."
+        )
+
+    def decode_forward(self, *args, **kwargs):
+        raise NotImplementedError(
+            f"{type(self).__name__} must override decode_forward to consume "
+            "`page_tables_per_layer` and pass each entry to the matching "
+            "attention layer."
+        )
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
+        """When invoked outside the vLLM hybrid plugin (e.g. by warmup
+        which only knows about the legacy single ``page_table``), optionally
+        broadcast the single page table to a per-layer list.
+
+        Broadcasting is only correct while hybrid KV cache groups are enabled:
+        trace capture then needs to exercise the per-layer code path inside
+        ``Transformer.forward`` so replay reads the persistent per-layer device
+        tensors updated before each call. While hybrid groups are temporarily
+        disabled, all layers use one full-attention KV group, so we intentionally
+        keep warmup/runtime on the legacy single-page-table path.
+        """
+        if page_tables_per_layer is not None or page_table is None or not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return page_tables_per_layer
+        # Broadcast the same torch tensor across every layer in every
+        # submesh — content is identical, persistent allocation gives each
+        # layer its own device tensor at a stable address.
+        num_layers = len(self.model[0].layers)
+        return [page_table] * num_layers
+
+    def _chunk_page_tables_per_dp(self, page_tables_per_layer):
+        """Split a global per-layer list along DP into one per-layer list
+        per submesh.
+
+        The plugin pads each per-layer table to the global
+        ``(max_num_seqs * data_parallel, max_num_blocks_per_req)`` shape
+        (see ``TTModelRunner._block_tables_per_layer``); warmup likewise
+        builds a global-batch tensor. ``Generator.decode_forward`` already
+        does ``torch.chunk(page_table, self.data_parallel, 0)`` for the
+        legacy single-page-table path before the per-submesh
+        ``prepare_inputs_decode``; the hybrid bridge has to do the
+        equivalent so each submesh's ``_page_tables_to_ttnn`` receives a
+        per-DP slice whose batch dim matches the submesh's K/V tensors.
+        Without this, ``paged_update_cache`` asserts a batch-size mismatch
+        on multi-DP runs.
+        """
+        if page_tables_per_layer is None:
+            return None
+        dp = self.data_parallel
+        if dp <= 1:
+            return [page_tables_per_layer]
+        per_submesh = [list() for _ in range(dp)]
+        for pt in page_tables_per_layer:
+            if pt is None or isinstance(pt, ttnn.Tensor):
+                # Already-resolved or absent entries pass through unchanged
+                # to every submesh — chunking only applies to torch tensors
+                # carrying global batch.
+                for s in per_submesh:
+                    s.append(pt)
+                continue
+            chunks = torch.chunk(pt, dp, dim=0)
+            for s, c in zip(per_submesh, chunks):
+                s.append(c)
+        return per_submesh
+
+    def _route_per_layer_page_tables(self, per_submesh_page_tables):
+        """Stash each submesh's per-layer page-table list on its model
+        handle for the duration of a forward call.
+
+        ``Generator``'s prefill/decode paths invoke
+        ``model[i].ttnn_prefill_forward`` / ``ttnn_decode_forward`` from
+        many sites (warmup, trace capture, traced replay, etc.) without
+        forwarding an arbitrary kwarg. Threading the per-layer list through
+        every site would be a wide change for a feature only this hybrid
+        bridge consumes, so we use a localised attribute injection: each
+        model reads ``getattr(self, "_active_page_tables_per_layer", None)``
+        when its own kwarg is None. ``per_submesh_page_tables[i]`` is the
+        per-layer slice that submesh ``i`` should see; ``None`` clears the
+        stash entirely (legacy fallback).
+        """
+
+        class _Stash:
+            def __init__(self, models, per_submesh):
+                self._models = models
+                self._per_submesh = per_submesh
+
+            def __enter__(self):
+                if self._per_submesh is None:
+                    return
+                for m, value in zip(self._models, self._per_submesh):
+                    m._active_page_tables_per_layer = value
+
+            def __exit__(self, *_):
+                if self._per_submesh is None:
+                    return
+                for m in self._models:
+                    if hasattr(m, "_active_page_tables_per_layer"):
+                        del m._active_page_tables_per_layer
+
+        return _Stash(self.model, per_submesh_page_tables)
 
 
 def initialize_vllm_text_transformer(
@@ -149,6 +412,7 @@ class CustomNamespace(SimpleNamespace):
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -239,10 +503,36 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # Class-level capabilities
     # Note: Mllama doesn't support prefix caching (it's V0 only)
+    # decode_forward calls decode_forward_llama_vision and discards anything
+    # but logits, so sampling_params never reach a sampler — explicitly
+    # declare on-device sampling unsupported.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": True,
+        "supports_sample_on_device": False,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Llama90B on WH T3K
+        if "Llama-3.2-90B" in model_name and devices_per_dp_cache == 8 and is_wormhole:
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -339,7 +629,30 @@ class LlamaForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": True,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Llama8B on N150
+        if "Llama-3.1-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+            return 32_768
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -401,7 +714,37 @@ class QwenForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": True,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Qwen3-8B on N150 (same constraint as Llama8B-N150)
+        if "Qwen3-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+            return 32_768
+        # DeepSeek-R1-Distill-Qwen-14B / Qwen2.5-14B on N300
+        if (
+            ("DeepSeek-R1-Distill-Qwen-14B" in model_name or "Qwen2.5-14B" in model_name)
+            and devices_per_dp_cache == 2
+            and is_wormhole
+        ):
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -450,7 +793,30 @@ class MistralForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": True,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Mistral-7B on N150
+        if "Mistral-7B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -499,12 +865,56 @@ class MistralForCausalLM(Generator):
     info=Gemma3ProcessingInfo,
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
-class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiModal):
+    """Gemma3 multimodal — hybrid attention (sliding-window + full).
+
+    Gemma3's text decoder alternates ``sliding_attention`` and
+    ``full_attention`` per ``hf_config.text_config.layer_types`` (a 5:1
+    ratio in the 27B variant), so the bridge inherits from
+    :class:`HybridAttentionForCausalLM` to opt into vLLM's hybrid kv cache
+    manager. Sliding-window layers index a smaller paged pool than
+    full-attention layers — the per-layer KV cache shape difference is
+    where the asymmetric-hybrid memory savings live, and was the original
+    motivation for kv-cache-groups (it's what unblocks the 62-layer × 107
+    MB-per-layer DRAM OOM on T3K seen in run 25437459815).
+
+    Mirrors the ``GptOssForCausalLM`` plumbing: ``prefill_forward`` /
+    ``decode_forward`` stash ``page_tables_per_layer`` on each
+    ``self.model[i]`` for the duration of a single
+    ``super().{prefill_forward_text,decode_forward}`` call. The underlying
+    ``Transformer.ttnn_*_forward`` (which ``TtGemmaModel`` inherits)
+    picks up the stash via ``_active_page_tables_per_layer`` and routes
+    each layer's attention to its own page table.
+    """
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific all-user KV-cache token capacity."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # gemma-3-4b on wormhole configurations with up to 2 devices per DP shard
+        if "gemma-3-4b" in model_name.lower() and devices_per_dp_cache in (1, 2) and is_wormhole:
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -550,27 +960,120 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def cache_path(self):
         return self.model_args[0].model_cache_path
 
-    def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(**kwargs)
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled (one full-attention group
+        # for every layer), the per-layer page-table routing inside this
+        # bridge is buggy for users_row_sharded models: it shards page tables
+        # naively by mesh row, which doesn't match the gpt-oss
+        # slot // max_local_batch_size → row mapping and produces null
+        # content on the rows whose page-table chunks point at the wrong
+        # KV blocks. Until a row-aware per-layer routing lands, skip the
+        # hybrid path entirely and let the legacy single page_table flow
+        # through Generator.prefill_forward_text reach the model untouched.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        # Push the per-layer block IDs into the persistent device buffers
+        # *before* entering ``Generator.prefill_forward_text`` — that path
+        # may execute a captured trace, which reads block IDs from the
+        # persistent addresses and forbids in-trace writes. Allocation
+        # itself happens lazily in ``Transformer._page_tables_to_ttnn``
+        # the first time the inner forward runs (warmup compile).
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            return super().prefill_forward_text(**kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # See prefill_forward note above. Skip the hybrid path while
+        # _HYBRID_KV_CACHE_GROUPS_ENABLED is False.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
+            # NotImplementedError placeholder; route to ``Generator``'s
+            # actual decode implementation.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
 
+class GptOssForCausalLM(HybridAttentionForCausalLM):
+    """GPT-OSS model for vLLM integration.
 
-class GptOssForCausalLM(Generator):
-    """GPT-OSS model for vLLM integration"""
+    GPT-OSS is a hybrid attention model — its layers alternate between
+    full attention and sliding-window attention per ``hf_config.layer_types``.
+    Inheriting from :class:`HybridAttentionForCausalLM` opts into vLLM's
+    hybrid kv cache manager so sliding-window layers can index a smaller
+    paged pool than full-attention layers, recovering the asymmetric-hybrid
+    memory waste described in vLLM's hybrid kv cache manager design.
+
+    The bridge accepts ``page_tables_per_layer`` from the plugin (one tensor
+    per decoder layer, layer-aligned with the underlying TT model's
+    ``self.layers``) and stashes it on each TT model handle as
+    ``_active_page_tables_per_layer`` so the model's ``ttnn_prefill_forward``
+    / ``ttnn_decode_forward`` pick it up without us having to thread the
+    kwarg through every call site in :class:`Generator`. The attribute is
+    cleared on the way out so a subsequent legacy single-page-table call
+    isn't accidentally affected.
+    """
 
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled (one full-attention group
+        # for every layer), the per-layer page-table routing inside this
+        # bridge is buggy for users_row_sharded models: it shards page tables
+        # naively by mesh row, which doesn't match the gpt-oss
+        # slot // max_local_batch_size → row mapping and produces null
+        # content on the rows whose page-table chunks point at the wrong
+        # KV blocks. Until a row-aware per-layer routing lands, skip the
+        # hybrid path entirely and let the legacy single page_table flow
+        # through Generator.prefill_forward_text reach the model untouched.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        # See ``Gemma3ForConditionalGeneration.prefill_forward`` for why
+        # the persistent-buffer update has to happen *before* the inner
+        # decode/prefill path that may run captured traces.
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # See prefill_forward note above. Skip the hybrid path while
+        # _HYBRID_KV_CACHE_GROUPS_ENABLED is False.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
+            # NotImplementedError placeholder; route to ``Generator``'s
+            # actual decode implementation.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
 
     @classmethod
     def initialize_vllm_model(
@@ -623,11 +1126,8 @@ class GptOssForCausalLM(Generator):
     def cache_path(self):
         return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
 
-    def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(*args, **kwargs)
-
-    def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
-
+    # prefill_forward / decode_forward are defined above with the
+    # per-layer page-table stash; allocate_kv_cache_per_layer is inherited
+    # from HybridAttentionForCausalLM.
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

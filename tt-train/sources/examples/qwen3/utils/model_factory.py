@@ -6,11 +6,12 @@
 
 import time
 
-from model_qwen3 import (
-    Qwen3ForCausalLM,
+from ttml.models import RunnerType
+from ttml.models.qwen3 import (  # noqa: F401
+    Qwen3,
     create_qwen3_config_from_hf,
-    load_weights_from_hf,
 )
+from ttml.models.qwen3.weights import load_weights_from_hf
 from model_qwen3_distributed import (
     DistributedQwen3ForCausalLM,
     load_weights_from_hf_distributed,
@@ -35,24 +36,24 @@ def create_ttml_model(
     tp_size=1,
     checkpoint=False,
     track_memory=False,
-    sharded_loss=False,
 ):
     """Instantiate a ttml Qwen3 model (single-device or TP).
 
     Returns ``(model, config, tie, shard_dim, mode_str)``.
     Weight loading is left to the caller (see :func:`load_hf_weights`).
+
+    In TP mode the LM head emits vocab-sharded logits ([..., V/tp_size] per
+    device) and callers should pair it with
+    :func:`ttml.ops.distributed.vocab_parallel_cross_entropy_loss`.
     """
     use_tp = tp_size > 1
-    config = create_qwen3_config_from_hf(hf_config, max_seq_len)
+    runner = RunnerType.MemoryEfficient if checkpoint else RunnerType.Default
+    config = create_qwen3_config_from_hf(hf_config, max_seq_len, runner_type=runner)
     tie = getattr(hf_config, "tie_word_embeddings", False)
     mode_str = build_mode_str(dp_size, tp_size)
 
     print(f"\nCreating ttml model ({mode_str}, max_seq_len={max_seq_len})...")
     t0 = time.time()
-
-    if sharded_loss and not use_tp:
-        print("  WARNING: --sharded_loss requires TP mode, ignoring.")
-        sharded_loss = False
 
     with empty_init():
         if use_tp:
@@ -63,20 +64,12 @@ def create_ttml_model(
                 shard_dim=shard_dim,
                 use_checkpoint=checkpoint,
                 track_memory=track_memory,
-                sharded_loss=sharded_loss,
             )
             if checkpoint:
                 print("  Gradient checkpointing: ENABLED")
-            if sharded_loss:
-                print("  Sharded loss: ENABLED (LM head gather_output=False)")
         else:
             shard_dim = None
-            model = Qwen3ForCausalLM(
-                config,
-                tie_word_embeddings=tie,
-                track_memory=track_memory,
-                use_checkpoint=checkpoint,
-            )
+            model = Qwen3(config, track_memory=track_memory)
             if checkpoint:
                 print("  Gradient checkpointing: ENABLED")
 

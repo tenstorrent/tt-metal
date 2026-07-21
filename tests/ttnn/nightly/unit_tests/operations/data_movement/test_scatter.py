@@ -503,14 +503,19 @@ def test_scatter_forge(input_shape, index_and_source_shape, input_dtype, device)
         assert_allclose(torch_result_from_ttnn, torch_result)
 
 
-@pytest.mark.parametrize("shape", [(4, 128), (2, 3, 4), (1, 2, 3, 4)])
+@pytest.mark.parametrize("shape", [(100,), (4, 128), (2, 3, 4), (1, 2, 3, 4)])
 @pytest.mark.parametrize("dim", [-1, -2])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_scatter_negative_dim(device, shape, dim, dtype):
     """
     Regression test for negative dimension support in ttnn.scatter.
     Verifies that negative dimension values work correctly and match PyTorch behavior.
+    Includes 1D tensors to cover the logical_shape vs padded_shape bug (PR #41762).
     """
+    # Skip invalid dim combinations (e.g., dim=-2 for 1D tensor)
+    if abs(dim) > len(shape):
+        pytest.skip(f"dim={dim} invalid for rank={len(shape)} tensor")
+
     torch_input = torch.rand(shape, dtype=dtype)
 
     # Create index and source tensors for scattering
@@ -549,6 +554,7 @@ def test_scatter_negative_dim(device, shape, dim, dtype):
 @pytest.mark.parametrize(
     "shape,dim",
     [
+        ((100,), -1),  # 1D tensor (regression for PR #41762)
         ((4, 128), -1),  # Last dimension
         ((4, 128), -2),  # First dimension
         ((2, 3, 4), -1),  # 3D tensor, last dim
@@ -559,6 +565,7 @@ def test_scatter_negative_dim(device, shape, dim, dtype):
 def test_scatter_negative_dim_equals_positive(device, shape, dim):
     """
     Verify that negative and positive dim produce identical results.
+    Includes 1D tensors to cover the logical_shape vs padded_shape bug (PR #41762).
     """
     positive_dim = len(shape) + dim
 
@@ -590,3 +597,43 @@ def test_scatter_negative_dim_equals_positive(device, shape, dim):
 
     assert_allclose(ttnn_output_neg, ttnn_output_pos, rtol=1e-3)
     assert_allclose(torch_output_neg, ttnn_output_neg, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "shape,index_shape",
+    [
+        ((100,), (80,)),  # 1D tensor
+        ((50,), (50,)),  # 1D tensor, full scatter
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
+    """
+    Regression test for PR #41762: 1D tensors in TILE_LAYOUT with negative dim.
+
+    The bug was that dim normalization used padded_shape().rank() instead of
+    logical_shape().rank(). For a 1D tensor [100] in TILE_LAYOUT, the padded
+    shape becomes [1, 128] (rank 2), causing dim=-1 to normalize to 1 instead
+    of 0, which then fails validation.
+    """
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16
+
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    torch_index = torch.randint(0, shape[0], index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch_dtype)
+
+    # PyTorch reference with dim=-1 (should be equivalent to dim=0 for 1D)
+    torch_result = torch.scatter(torch_input, dim=-1, index=torch_index, src=torch_src)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # This would fail before PR #41762 with:
+    # "dim must follow the condition -input_rank <= dim < input_rank (dim: 1, rank: 1)"
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert result.shape == torch_result.shape
+    assert_allclose(result, torch_result)

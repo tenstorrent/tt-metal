@@ -45,7 +45,7 @@ CONV_PERF_CONFIGS = [
         "act_block_h_override": 0, "act_block_w_div": 1,
         "enable_activation_reuse": True, "enable_act_double_buffer": True,
         "enable_weights_double_buffer": False, "fp32_accum": False,
-        "perf_targets": {"wh": 87, "bh_p150": 36},
+        "perf_targets": {"wh": 87, "bh_p150": 32},
     },
     # BLOCK SHARDED, SDXL
     {

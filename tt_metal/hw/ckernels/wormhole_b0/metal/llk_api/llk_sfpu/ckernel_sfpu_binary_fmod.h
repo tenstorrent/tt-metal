@@ -8,6 +8,8 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
 
@@ -19,12 +21,8 @@ sfpi_inline void calculate_fmod_int32_body(
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Load signed inputs
-    // Equivalent to: sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi] = a_signed;
-    sfpi::vInt a_signed = __builtin_rvtt_sfpload(
-        sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
-    // Equivalent to: sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi] = b_signed;
-    sfpi::vInt b_signed = __builtin_rvtt_sfpload(
-        sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
+    sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
@@ -33,9 +31,7 @@ sfpi_inline void calculate_fmod_int32_body(
     v_if(a_signed < 0) { r = -r; }
     v_endif;
 
-    // Equivalent to: sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-    __builtin_rvtt_sfpstore(
-        r.get(), sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
 }
 
 template <bool is_fp32_dest_acc_en = false>
@@ -47,19 +43,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     sfpi::vFloat b_abs = sfpi::abs(b);
 
     // Compute reciprocal 1/b
-    sfpi::vFloat recip = ckernel::sfpu::_sfpu_reciprocal_<2>(b);
+    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b);
 
     // Compute a/b = a * (1/b)
     sfpi::vFloat div_result = a * recip;
 
-    // Compute trunc(a/b)
-    // Input in LReg0, output in LReg1. LReg2/LReg3 are clobbered by _trunc_body_(),
-    // so we must read them to inform the SFPI register allocator they are not immediately available.
-    sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
-    _trunc_body_();
-    sfpi::vFloat trunc_div = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
+    sfpi::vFloat trunc_div = _trunc_body_(div_result);
 
     // Compute fmod = a - trunc(a/b) * b
     sfpi::vFloat result = a - trunc_div * b;
@@ -111,7 +100,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
 
     return result;
@@ -148,7 +137,7 @@ inline void fmod_int32_init() {
 
 template <bool APPROXIMATION_MODE>
 inline void fmod_binary_init() {
-    _init_sfpu_reciprocal_<false>();
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu

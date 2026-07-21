@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import pathlib
 import shutil
 import pytest
@@ -394,6 +395,34 @@ def test_graph_capture_without_dtype_json_output(device):
     assert mem_config_item1["shard_spec"] == "std::nullopt"
 
 
+def test_graph_report_json_metadata_includes_rank(tmp_path, device):
+    if ttnn.distributed_context_is_initialized():
+        expected_rank = int(ttnn.distributed_context_get_rank())
+        expected_world = int(ttnn.distributed_context_get_size())
+    else:
+        expected_rank = 0
+        expected_world = 1
+
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((32,), dtype=torch.bfloat16)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    _ = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    report_path = tmp_path / "graph_report.json"
+    ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+    report = json.loads(report_path.read_text())
+
+    assert "metadata" in report
+    meta = report["metadata"]
+    assert "rank" in meta
+    assert isinstance(meta["rank"], int)
+    assert meta["rank"] == expected_rank
+    assert "world_size" in meta
+    assert isinstance(meta["world_size"], int)
+    assert meta["world_size"] == expected_world
+
+
 def test_extract_levelized_graph(device):
     """Test extract_levelized_graph API"""
     torch.manual_seed(0)
@@ -610,3 +639,21 @@ def test_duration_captured(device, mode):
 
     assert found_function_end_with_duration, "Expected function_end nodes to have duration"
     assert found_capture_end_with_duration, "Expected capture_end node to have duration"
+
+
+def test_graph_capture_inactive_with_open_device(device):
+    """Regression: is_graph_capture_active() must return False when a device is open but no
+    capture has been started, True during capture, and False again after end_graph_capture() —
+    regardless of any background processors registered on device open.
+    """
+    assert (
+        not ttnn.graph.is_graph_capture_active()
+    ), "is_graph_capture_active() should be False with an open device and no active capture"
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    assert ttnn.graph.is_graph_capture_active(), "is_graph_capture_active() should be True during capture"
+
+    ttnn.graph.end_graph_capture()
+    assert (
+        not ttnn.graph.is_graph_capture_active()
+    ), "is_graph_capture_active() should be False after end_graph_capture()"

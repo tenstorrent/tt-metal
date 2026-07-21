@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -67,31 +67,31 @@ void kernel_main() {
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_a(cb_id_src);
-    experimental::CircularBuffer cb_b(cb_id_src_b);
-    experimental::CircularBuffer cb_c(cb_id_src_c);
+    Noc noc;
+    CircularBuffer cb_a(cb_id_src);
+    CircularBuffer cb_b(cb_id_src_b);
+    CircularBuffer cb_c(cb_id_src_c);
 
 #if SRC_SHARDED_A
     cb_a.reserve_back(src_num_tiles);
     cb_a.push_back(src_num_tiles);
 #else
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src0_args, src_addr, src_tile_bytes);
+    const uint32_t src_tile_bytes = cb_a.get_tile_size();
+    const auto src = TensorAccessor(src0_args, src_addr);
 #endif
 #if SRC_SHARDED_B
     cb_b.reserve_back(src_num_tiles_b);
     cb_b.push_back(src_num_tiles_b);
 #else
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const auto src_b = TensorAccessor(src1_args, src_addr_b, src_tile_bytes_b);
+    const uint32_t src_tile_bytes_b = cb_b.get_tile_size();
+    const auto src_b = TensorAccessor(src1_args, src_addr_b);
 #endif
 #if SRC_SHARDED_C
     cb_c.reserve_back(src_num_tiles_c);
     cb_c.push_back(src_num_tiles_c);
 #else
-    const uint32_t src_tile_bytes_c = get_tile_size(cb_id_src_c);
-    const auto src_c = TensorAccessor(src2_args, src_addr_c, src_tile_bytes_c);
+    const uint32_t src_tile_bytes_c = cb_c.get_tile_size();
+    const auto src_c = TensorAccessor(src2_args, src_addr_c);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
@@ -172,13 +172,13 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_BCAST_A && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+                            FILL_TILE_WITH_FIRST_ROW(cb_a.get_write_ptr());
 #endif
 #if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_b.get_write_ptr());
 #endif
 #if SRC_BCAST_C && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW_C(cb_id_src_c);
+                            FILL_TILE_WITH_FIRST_ROW_C(cb_c.get_write_ptr());
 #endif
 #if !SRC_SHARDED_A
                             cb_a.push_back(onetile);

@@ -50,6 +50,8 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     return config, weights
 
 
+@pytest.mark.parametrize("is_column_parallel", [True, False], ids=["col", "row"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
     "batch_seq_len, emb_dim, vocab_size, run_full_pcc_check",
     [
@@ -86,6 +88,16 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
             id="2x4-linear",
         ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -99,6 +111,8 @@ def test_lm_head(
     run_full_pcc_check: bool,
     num_links: int,
     topology: ttnn.Topology,
+    is_balanced: bool,
+    is_column_parallel: bool,
 ):
     """
     Test TtLMHead PCC against torch.nn.Linear reference.
@@ -141,16 +155,18 @@ def test_lm_head(
         logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN LM head model
-    logger.debug("Creating TtLMHead")
+    logger.debug(f"Creating TtLMHead (is_column_parallel={is_column_parallel})")
     tt_model = TtLMHead(
         mesh_device=mesh_device,
         emb_dim=emb_dim,
         vocab_size=vocab_size,
-        torch_weights=weights,
+        torch_weight=weights["lm_head.weight"] if weights else None,
         num_links=num_links,
         topology=topology,
         activations_dtype=ttnn_activations_dtype,
         weights_dtype=ttnn_weights_dtype,
+        is_balanced=is_balanced,
+        is_column_parallel=is_column_parallel,
     )
 
     tt_input = ttnn.from_torch(
@@ -164,7 +180,7 @@ def test_lm_head(
 
     logger.debug("Running ttnn forward pass")
     global_token_id = batch_seq_len * dispatch_group_size - 1
-    tt_output, token_offset = tt_model(tt_input, global_token_id=global_token_id)
+    tt_output, (device_id, token_offset) = tt_model(tt_input, global_token_id=global_token_id)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
     # For now, we only run the full PCC check on input tensors with seq_len == TILE_SIZE to avoid slicing
@@ -176,16 +192,15 @@ def test_lm_head(
 
     # Convert and compare
     logger.debug("Converting TTNN output to torch for comparison")
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-    )
+    tt_output_torch = tt_model.logit_to_host(tt_output, device_id)
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
     logger.debug("Comparing outputs with PCC")
+    expected = torch_output[device_id]
+    actual = tt_output_torch.squeeze(0)
     pcc_passed, pcc_message = assert_with_pcc(
-        torch_output.to(torch.float32),
-        tt_output_torch.to(torch.float32),
+        expected.to(torch.float32),
+        actual.to(torch.float32),
         pcc=0.9999,
     )
 
@@ -193,3 +208,50 @@ def test_lm_head(
     assert pcc_passed, f"PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
+
+
+def test_global_to_local_token_id():
+    """Verify token mapping for both balanced and sequential modes."""
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
+
+    sp_factor = 4
+    seq_len = 1024
+    chunk_size_balanced = seq_len // (2 * sp_factor)  # 128
+    chunk_size_sequential = seq_len // sp_factor  # 256
+
+    # === is_balanced=True (zigzag) ===
+    # Token 0 -> device 0, offset 0
+    device_id, local_id = global_to_local_token_id(0, sp_factor, seq_len, is_balanced=True)
+    assert device_id == 0 and local_id == 0, f"Expected (0, 0), got ({device_id}, {local_id})"
+
+    # Token at start of chunk 1 -> device 1, offset 0
+    device_id, local_id = global_to_local_token_id(chunk_size_balanced, sp_factor, seq_len, is_balanced=True)
+    assert device_id == 1 and local_id == 0, f"Expected (1, 0), got ({device_id}, {local_id})"
+
+    # Token at start of chunk 7 (last chunk) -> device 0, with offset chunk_size
+    # Chunk 7 maps to device: num_chunks - 1 - chunk_id = 8 - 1 - 7 = 0
+    device_id, local_id = global_to_local_token_id(7 * chunk_size_balanced, sp_factor, seq_len, is_balanced=True)
+    assert (
+        device_id == 0 and local_id == chunk_size_balanced
+    ), f"Expected (0, {chunk_size_balanced}), got ({device_id}, {local_id})"
+
+    # === is_balanced=False (sequential) ===
+    # Token 0 -> device 0, offset 0
+    device_id, local_id = global_to_local_token_id(0, sp_factor, seq_len, is_balanced=False)
+    assert device_id == 0 and local_id == 0, f"Expected (0, 0), got ({device_id}, {local_id})"
+
+    # Token 256 -> device 1, offset 0
+    device_id, local_id = global_to_local_token_id(chunk_size_sequential, sp_factor, seq_len, is_balanced=False)
+    assert device_id == 1 and local_id == 0, f"Expected (1, 0), got ({device_id}, {local_id})"
+
+    # Token 512 -> device 2, offset 0
+    device_id, local_id = global_to_local_token_id(2 * chunk_size_sequential, sp_factor, seq_len, is_balanced=False)
+    assert device_id == 2 and local_id == 0, f"Expected (2, 0), got ({device_id}, {local_id})"
+
+    # Last token (1023) -> device 3, offset 255
+    device_id, local_id = global_to_local_token_id(seq_len - 1, sp_factor, seq_len, is_balanced=False)
+    assert (
+        device_id == 3 and local_id == chunk_size_sequential - 1
+    ), f"Expected (3, {chunk_size_sequential - 1}), got ({device_id}, {local_id})"
+
+    logger.info("test_global_to_local_token_id passed!")

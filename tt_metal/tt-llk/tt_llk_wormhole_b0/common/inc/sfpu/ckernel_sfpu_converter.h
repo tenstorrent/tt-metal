@@ -14,13 +14,7 @@ class Converter
 public:
     static float as_float(std::uint32_t value)
     {
-        union
-        {
-            std::uint32_t u;
-            float f;
-        } converter {value};
-
-        return converter.f;
+        return __builtin_bit_cast(float, value);
     }
 };
 

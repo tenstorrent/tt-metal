@@ -6,6 +6,7 @@
 #include "api/socket_api.h"
 #include "pcie_noc_utils.h"
 #include "api/debug/dprint.h"
+#include "../../../unified_kernels/termination.hpp"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -19,18 +20,6 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
 constexpr uint32_t num_whole_fabric_packets_per_link = get_compile_time_arg_val(8);
 constexpr uint32_t partial_packet_size = get_compile_time_arg_val(9);
 constexpr bool use_fabric = get_compile_time_arg_val(10);
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
 
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
@@ -123,8 +112,7 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
-    DPRINT << "Starting h2d receiver kernel" << ENDL();
-    DEVICE_PRINT("Starting h2d receiver kernel\n");
+    DPRINT("Starting h2d receiver kernel\n");
     size_t rt_args_idx = 0;
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
@@ -192,7 +180,7 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
-        if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
         if constexpr (pull_from_host) {

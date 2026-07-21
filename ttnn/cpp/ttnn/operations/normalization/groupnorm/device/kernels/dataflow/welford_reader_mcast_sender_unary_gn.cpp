@@ -7,12 +7,12 @@
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
 #include "noc_parameters.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
@@ -117,9 +117,9 @@ void kernel_main() {
         noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
     }
 
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
 
     constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
@@ -128,13 +128,21 @@ void kernel_main() {
     constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
+    // Welford-fp32 alias for cb_in0. Shares SRAM with cb_in0 but has its own buffer index
+    // configured with UnpackToDestFp32, plus its own read/write pointers.
+    // The Welford section of compute reads the alias to get full fp32 into DEST, while later
+    // FPU consumers read cb_in0 directly. When welford_fp32_alias is false, cb_in0_welford_id
+    // == cb_in0_id and the gated pushes below are skipped.
+    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_in0(cb_in0_id);
-    experimental::CircularBuffer cb_repack(cb_repack_id);
-    experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
-    experimental::CircularBuffer cb_out0(cb_out0_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_in0_welford(cb_in0_welford_id);
+    CircularBuffer cb_repack(cb_repack_id);
+    CircularBuffer cb_repack_out(cb_repack_out_id);
+    CircularBuffer cb_out0(cb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
@@ -144,19 +152,19 @@ void kernel_main() {
     constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
-    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});
@@ -169,29 +177,24 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
-        out_block_hw_last = out_block_h_last * block_w;
     }
 
     uint32_t index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
             } else {
                 out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
@@ -201,12 +204,20 @@ void kernel_main() {
                     const uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     noc.async_read(
                         src_a,
-                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                        CoreLocalMem<uint32_t>(l1_write_addr),
                         src0_tile_bytes,
                         {.page_id = start_id + index_b_offset + mt_offset + nt},
                         {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
+                    if constexpr (welford_fp32_alias) {
+                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                        // alias) so the noc.async_read above already filled both views; this is
+                        // purely bookkeeping so compute's welford section can wait_front
+                        // on cb_in0_welford independently of cb_in0.
+                        cb_in0_welford.reserve_back(1);
+                        cb_in0_welford.push_back(1);
+                    }
                 }
                 mt_offset += num_channels_tiles;
             }
@@ -243,16 +254,16 @@ void kernel_main() {
                 reduce_receiver_sem.set(0);
 
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                    experimental::UnicastEndpoint remote_ep;
+                    UnicastEndpoint remote_ep;
                     noc.async_read(
                         remote_ep,
-                        experimental::CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_means_ptr},
                         {});
                     noc.async_read(
                         remote_ep,
-                        experimental::CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_vars_ptr},
                         {});
@@ -271,9 +282,9 @@ void kernel_main() {
 
             if constexpr (num_mcast_cores > 1) {
                 // mcast to other cores
-                experimental::MulticastEndpoint mcast_dst;
+                MulticastEndpoint mcast_dst;
                 noc.async_write_multicast(
-                    experimental::CoreLocalMem<uint32_t>(global_means_ptr),
+                    CoreLocalMem<uint32_t>(global_means_ptr),
                     mcast_dst,
                     2 * single_tile_size_bytes,
                     num_mcast_cores_mid_group,
@@ -294,9 +305,9 @@ void kernel_main() {
                     false);
 
                 if (has_mcast_first_group) {
-                    experimental::MulticastEndpoint mcast_first_group_dst;
+                    MulticastEndpoint mcast_first_group_dst;
                     noc.async_write_multicast(
-                        experimental::CoreLocalMem<uint32_t>(global_means_ptr),
+                        CoreLocalMem<uint32_t>(global_means_ptr),
                         mcast_first_group_dst,
                         2 * single_tile_size_bytes,
                         num_mcast_cores_first_group,
@@ -318,9 +329,9 @@ void kernel_main() {
                 }
 
                 if (has_mcast_last_group) {
-                    experimental::MulticastEndpoint mcast_last_group_dst;
+                    MulticastEndpoint mcast_last_group_dst;
                     noc.async_write_multicast(
-                        experimental::CoreLocalMem<uint32_t>(global_means_ptr),
+                        CoreLocalMem<uint32_t>(global_means_ptr),
                         mcast_last_group_dst,
                         2 * single_tile_size_bytes,
                         num_mcast_cores_last_group,
@@ -354,13 +365,11 @@ void kernel_main() {
 
         mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
             } else {
                 out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -369,12 +378,20 @@ void kernel_main() {
                     const uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     noc.async_read(
                         src_a,
-                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                        CoreLocalMem<uint32_t>(l1_write_addr),
                         src0_tile_bytes,
                         {.page_id = start_id + index_b_offset + mt_offset + nt},
                         {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
+                    if constexpr (welford_fp32_alias) {
+                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                        // alias) so the noc.async_read above already filled both views; this is
+                        // purely bookkeeping so compute's welford section can wait_front
+                        // on cb_in0_welford independently of cb_in0.
+                        cb_in0_welford.reserve_back(1);
+                        cb_in0_welford.push_back(1);
+                    }
                 }
                 mt_offset += num_channels_tiles;
             }
@@ -389,11 +406,11 @@ void kernel_main() {
         cb_repack_out.wait_front(per_core_N);
         uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
         uint32_t src_addr_in0 = in0_l1_read_addr;
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});

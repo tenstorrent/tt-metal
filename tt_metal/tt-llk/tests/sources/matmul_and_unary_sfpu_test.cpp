@@ -50,9 +50,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, FACE_R_DIM, 4, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
+        0 /* transpose_of_faces */,
+        0 /* within_face_16x16_transpose */,
+        ckernel::DEFAULT_TENSOR_SHAPE,
+        formats_array[run].unpack_A_src,
+        formats_array[run].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(buffer_A_tilized), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
 }
@@ -62,8 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_sfpu.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_matmul.h"
 #include "params.h"
@@ -89,24 +93,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(formats_array[run].math);
     // copy srca to dest
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, formats_array[run].math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, formats_array[run].math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+        4 /* num_faces */, formats_array[run].math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0, formats_array[run].math, formats_array[run].math);
 
     // calculation of sfpu operation on dest
-    _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32 /* iterations */>();
+
     // calling sfpu function from ckernel
     // this part is where parametrization of operation takes part
-    test_utils::call_sfpu_operation<APPROX_MODE, is_fp32_dest_acc_en, 32>(SFPU_UNARY_OPERATION);
-
-    _llk_math_eltwise_unary_sfpu_done_();
+    test_utils::call_unary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32 /* iterations */>(
+        0 /* dst_index */);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -124,18 +124,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats_array = params.formats;
 #endif
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<false, false, false>(formats_array[run].pack_dst);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+        formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<false, false>(formats_array[run].pack_dst);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-#endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(buffer_A_tilized));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(buffer_A_tilized));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     t6_semaphore_post<>(semaphore::PACK_DONE);
@@ -144,16 +139,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, params.TILE_SIZE_PACK);
 
-    _llk_pack_init_<false, false>(formats_array[run].pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

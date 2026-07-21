@@ -12,6 +12,7 @@ def test_manual_seed_different_argument_calls(device):
     """
     Test that manual_seed accepts various valid argument configurations.
     """
+    torch.manual_seed(0)
     # Keyword minimum arguments
     ttnn.manual_seed(seeds=42, device=device)
 
@@ -38,6 +39,7 @@ def test_manual_tensors_wrong_config(device):
     """
     Test that manual_seed correctly rejects invalid argument combinations.
     """
+    torch.manual_seed(0)
     seed_tensor = ttnn.from_torch(torch.Tensor([42]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
     with pytest.raises(
         Exception, match="Seeds were provided as a tensor, so user_ids must not be provided as a scalar."
@@ -49,6 +51,7 @@ def test_manual_seed_base_functionality(device):
     """
     Test that manual_seed produces deterministic and reproducible results.
     """
+    torch.manual_seed(0)
     # Prepare test data
     shape = (1, 1, 32, 64)
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -92,6 +95,7 @@ def test_manual_seed_mapping_functionality(device):
     """
     Test that manual_seed correctly handles per-core seed mapping.
     """
+    torch.manual_seed(0)
     # Prepare test data
     shape = (1, 1, 32, 64)
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -143,6 +147,7 @@ def test_manual_seed_skip_with_uint32_max(device):
     """
     Test that manual_seed with seeds=UINT32_MAX skips rand_tile_init (PRNG state unchanged).
     """
+    torch.manual_seed(0)
     # Prepare test data
     shape = (1, 1, 32, 64)
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -184,6 +189,7 @@ def test_manual_seed_skip_with_uint32_max_user_ids_scalar(device):
     """
     Test that manual_seed with seeds=UINT32_MAX and scalar user_ids works (Strategy 2).
     """
+    torch.manual_seed(0)
     ttnn.manual_seed(seeds=42, device=device)
     # UINT32_MAX means skip rand_tile_init on the targeted core
     ttnn.manual_seed(seeds=SKIP_SEED, device=device, user_ids=7)
@@ -193,6 +199,7 @@ def test_manual_seed_skip_with_uint32_max_user_ids_tensor(device):
     """
     Test that manual_seed with seeds=UINT32_MAX and tensor user_ids works (Strategy 3).
     """
+    torch.manual_seed(0)
     ttnn.manual_seed(seeds=42, device=device)
     user_id_tensor = ttnn.from_torch(
         torch.Tensor([0, 1, 2]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device
@@ -205,6 +212,7 @@ def test_manual_seed_mapping_functionality_sub_core_grids(device):
     """
     Test that manual_seed correctly handles per-core seed mapping.
     """
+    torch.manual_seed(0)
     # Prepare test data
     shape = (1, 1, 32, 64)
     input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

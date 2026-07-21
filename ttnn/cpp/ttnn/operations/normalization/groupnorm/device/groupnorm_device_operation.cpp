@@ -5,6 +5,8 @@
 #include "groupnorm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -15,7 +17,7 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     const auto& input = tensor_args.input;
 
     if (input.is_sharded()) {
-        return GroupNormShardedProgramFactory{};
+        return GroupNormDeviceOperation::GroupNormShardedProgramFactory{};
     }
 
     // For non-sharded: determine if we need mcast or no-mcast based on batch vs virtual rows
@@ -23,21 +25,23 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     uint32_t batch = input.padded_shape()[0];
     uint32_t W = input.padded_shape()[3];
-    const uint32_t tile_width = input.tensor_spec().tile().get_width();
-    uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, args.num_groups);
-
-    while (num_virtual_cols > 0 &&
-           ((W / num_virtual_cols) % tile_width != 0 || (args.num_groups % num_virtual_cols) != 0)) {
-        num_virtual_cols -= 1;
-    }
+    uint32_t num_virtual_cols =
+        ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, args.num_groups, W);
+    TT_FATAL(
+        num_virtual_cols > 0,
+        "group_norm: No valid num_virtual_cols for grid_x={}, num_groups={}, W={}. "
+        "Channels must be aligned to tile width and divisible by num_groups.",
+        grid_size.x,
+        args.num_groups,
+        W);
 
     uint32_t num_actual_rows = grid_size.y;
     uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
 
     if (batch >= num_virtual_rows) {
-        return GroupNormNoMcastProgramFactory{};
+        return GroupNormDeviceOperation::GroupNormNoMcastProgramFactory{};
     }
-    return GroupNormMcastProgramFactory{};
+    return GroupNormDeviceOperation::GroupNormMcastProgramFactory{};
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_miss(
@@ -63,6 +67,25 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
+    if (a.is_sharded()) {
+        const auto& shard_spec = a.shard_spec().value();
+        const auto bbox = shard_spec.grid.bounding_box();
+        const auto bbox_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
+        const uint32_t bbox_num_cores = bbox_grid.x * bbox_grid.y;
+        TT_FATAL(
+            shard_spec.grid.num_cores() == bbox_num_cores,
+            "Sharded groupnorm does not support non-rectangular core grids. "
+            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
+            shard_spec.grid.num_cores(),
+            bbox_num_cores,
+            bbox_grid.x,
+            bbox_grid.y);
+
+        const auto program_grid =
+            std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
+        ttnn::operations::normalization::detail::validate_sharded_input(
+            a, program_grid, /*require_shard_width_tile_aligned=*/false);
+    }
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
@@ -146,6 +169,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             "Input mask must have TILE layout, got: {}",
             input_mask.value().layout());
         TT_FATAL(
+            input_mask.value().storage_type() == StorageType::DEVICE,
+            "Input mask must be on device, got storage type: {}",
+            input_mask.value().storage_type());
+        TT_FATAL(input_mask.value().buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(a.device() == input_mask.value().device(), "Input and input mask tensors must be on same device");
+        TT_FATAL(
             input_mask.value().padded_shape()[1] == args.num_groups,
             "Input mask dim1 must match number of groups, got: {} vs {}",
             input_mask.value().padded_shape()[1],
@@ -169,8 +198,16 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     if (negative_mask.has_value()) {
         TT_FATAL(
             negative_mask.value().layout() == Layout::TILE,
-            "Negative musk must be in TILE layout, but layout is {}",
+            "Negative mask must have TILE layout, got: {}",
             negative_mask.value().layout());
+        TT_FATAL(
+            negative_mask.value().storage_type() == StorageType::DEVICE,
+            "Negative mask must be on device, got storage type: {}",
+            negative_mask.value().storage_type());
+        TT_FATAL(
+            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(
+            a.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
         TT_FATAL(
             negative_mask.value().padded_shape()[1] == args.num_groups,
             "Negative mask padded shape[1] must be equal to num_groups, but is {} and num_groups is {}",
@@ -209,6 +246,31 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(reciprocals.value().storage_type() == StorageType::DEVICE, "Reciprocals tensor must be on device");
         TT_FATAL(reciprocals.value().buffer() != nullptr, "Reciprocals tensor must be allocated in buffers on device");
         TT_FATAL(a.device() == reciprocals.value().device(), "Input and reciprocals tensors must be on same device");
+    }
+
+    // For non-sharded DRAM tensors, validate that the grid produces uniform
+    // multicast groups.  Non-uniform groups cause a deadlock because the sender
+    // kernel waits for an exact semaphore count equal to (group_size - 1).
+    if (!a.is_sharded()) {
+        if (const auto* mc_config = std::get_if<GroupNormMultiCoreProgramConfig>(&args.program_config)) {
+            CoreCoord grid_size = mc_config->compute_with_storage_grid_size;
+            uint32_t W = a.padded_shape()[3];
+            uint32_t num_batches = a.padded_shape()[0];
+            uint32_t nvc = ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, args.num_groups, W);
+            if (nvc > 0) {
+                uint32_t num_virtual_rows = (grid_size.x / nvc) * grid_size.y;
+                TT_FATAL(
+                    num_virtual_rows < num_batches || num_virtual_rows % num_batches == 0,
+                    "group_norm: The core grid (x={}, y={}) produces num_virtual_rows={} which is not "
+                    "divisible by num_batches={}. This creates non-uniform multicast groups and will "
+                    "deadlock. Use determine_expected_group_norm_dram_grid_size() with num_batches to select a valid "
+                    "grid.",
+                    grid_size.x,
+                    grid_size.y,
+                    num_virtual_rows,
+                    num_batches);
+            }
+        }
     }
 }
 
@@ -272,6 +334,15 @@ Tensor group_norm(
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
+    if (negative_mask.has_value()) {
+        TT_FATAL(
+            negative_mask.value().storage_type() == StorageType::DEVICE,
+            "Negative mask must be on device, got storage type: {}",
+            negative_mask.value().storage_type());
+        TT_FATAL(
+            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
+    }
     using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,

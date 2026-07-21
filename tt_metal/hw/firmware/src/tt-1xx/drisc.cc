@@ -7,6 +7,7 @@
 #include "risc_common.h"
 #include "noc.h"
 #include "noc_nonblocking_api.h"
+#include "experimental/drisc_mode.h"
 #include "internal/firmware_common.h"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
@@ -27,8 +28,8 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -57,10 +58,16 @@ int main() {
 
     risc_init();
 
+    // NIU_CFG_0 persists across program runs (only cleared on chip reset: tt-smi -r).
+    // Force NOC2AXI on every boot so the starting mode is deterministic
+    // regardless of what prior runs left in the register.
+    experimental::drisc_set_noc2axi_mode_all();
+
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    noc_clear_all_packet_tags();
 
     DEVICE_PRINT_INITIALIZE_LOCK();
 

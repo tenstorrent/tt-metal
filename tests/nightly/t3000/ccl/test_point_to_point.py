@@ -269,3 +269,54 @@ def test_point_to_point_optional_intermediate(mesh_device):
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_point_to_point_cache_hit_with_output_tensor(mesh_device):
+    # Regression test for issue #45422. Two p2p invocations with the same coord pair
+    # (so the second is a program-cache hit) but distinct input/output buffers, both
+    # passing output_tensor=... so that tensor_return_value[1] aliases the optional.
+    # Pre-fix, the duplicate-Buffer* aliasing guard in resolve_bindings disabled the
+    # cache-hit fast path and the second invocation ran with stale buffer addresses
+    # from the first miss, producing garbage output.
+    shape, coords = ((1, 1, 1, 16), ((0, 0), (0, 1)))
+    coord0, coord1 = (ttnn.MeshCoordinate(c) for c in coords)
+
+    devices = prod(list(mesh_device.shape))
+    multi_device_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(shape))
+    lcoord0, lcoord1 = (_linear_coord(c, list(mesh_device.shape)) for c in coords)
+    idx_start0, idx_end0 = lcoord0 * shape[0], (lcoord0 + 1) * shape[0]
+    idx_start1, idx_end1 = lcoord1 * shape[0], (lcoord1 + 1) * shape[0]
+
+    def _make_inputs(seed):
+        torch.manual_seed(seed)
+        t = torch.zeros(multi_device_shape, dtype=torch.bfloat16)
+        t[idx_start0:idx_end0, :, :, :] = torch.rand(shape, dtype=torch.bfloat16)
+        return t
+
+    def _to_device(torch_tensor):
+        return ttnn.from_torch(
+            torch_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+    def _run_once(seed):
+        input_torch = _make_inputs(seed)
+        tt_in = _to_device(input_torch)
+        # Allocate a fresh output buffer for each iter so the buffer address differs.
+        tt_out = _to_device(torch.zeros(multi_device_shape, dtype=torch.bfloat16))
+        out = ttnn.point_to_point(tt_in, coord0, coord1, topology=ttnn.Topology.Linear, output_tensor=tt_out)
+        out_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        ttnn.deallocate(tt_in)
+        ttnn.deallocate(tt_out)
+        return input_torch, out_torch
+
+    in1_torch, out1_torch = _run_once(seed=0)
+    in2_torch, out2_torch = _run_once(seed=1)
+
+    assert_equal(in1_torch[idx_start0:idx_end0, :, :, :], out1_torch[idx_start1:idx_end1, :, :, :])
+    assert_equal(in2_torch[idx_start0:idx_end0, :, :, :], out2_torch[idx_start1:idx_end1, :, :, :])

@@ -6,7 +6,9 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include <bit>
 #include <cmath>
 
 namespace {
@@ -20,26 +22,20 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const tt::
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
 }
 
-template <typename F>
-void set_or_update_runtime_arguments(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    tt::tt_metal::KernelHandle compute_kernel_id,
+void populate_runtime_arguments(
+    tt::tt_metal::KernelDescriptor& reader_desc,
+    tt::tt_metal::KernelDescriptor& writer_desc,
+    tt::tt_metal::KernelDescriptor& compute_desc,
     CoreCoord compute_with_storage_grid_size,
     bool any_float32,
     const BatchNormOperation::operation_attributes_t& operation_attributes,
     const BatchNormOperation::tensor_args_t& tensor_args,
-    BatchNormOperation::tensor_return_value_t& c,
-    F handle_args) {
+    BatchNormOperation::tensor_return_value_t& c) {
     const auto& [input_tensor, batch_mean_tensor, batch_var_tensor, weight_tensor, bias_tensor, _] = tensor_args;
     const auto eps = operation_attributes.eps;
 
     const bool weight_has_value = weight_tensor.has_value();
     const bool bias_has_value = bias_tensor.has_value();
-
-    const auto ashape = input_tensor.padded_shape();
-    const auto bshape = batch_mean_tensor.padded_shape();
 
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(input_tensor);
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_mean_tensor);
@@ -51,8 +47,14 @@ void set_or_update_runtime_arguments(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
+    auto
+        [_unused_num_cores,
+         _unused_all_cores,
+         core_group_1,
+         core_group_2,
+         num_tiles_per_core_group_1,
+         num_tiles_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
@@ -62,15 +64,18 @@ void set_or_update_runtime_arguments(
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, num_reader_args>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, num_writer_args>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
+            reader_desc.runtime_args.emplace_back(
+                core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(num_reader_args, 0));
+            writer_desc.runtime_args.emplace_back(
+                core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(num_writer_args, 0));
+            compute_desc.runtime_args.emplace_back(
+                core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(num_kernel_args, 0));
             continue;
         }
 
@@ -79,44 +84,50 @@ void set_or_update_runtime_arguments(
         const auto packed_scalar_eps =
             any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
 
-        std::array reader_runtime_args = {
-            packed_scalar_eps,
-            input_tensor.buffer()->address(),
-            start_tile_id,
-            num_tiles_per_core,
-            cHtWt,
-            aHt * aWt * aC * (aN > 1),
-            aHt * aWt * (aC > 1),
-            cN,
-            cC,
-            cHt,
-            cWt};
-        handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        reader_desc.emplace_runtime_args(
+            core,
+            {packed_scalar_eps,
+             input_tensor.buffer(),
+             start_tile_id,
+             num_tiles_per_core,
+             cHtWt,
+             aHt * aWt * aC * static_cast<uint32_t>(aN > 1),
+             aHt * aWt * static_cast<uint32_t>(aC > 1),
+             cN,
+             cC,
+             cHt,
+             cWt});
 
-        const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
-        const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
-        std::array writer_runtime_args = {
-            batch_mean_tensor.buffer()->address(),  //  batch mean
-            batch_var_tensor.buffer()->address(),   //  batch var
-            weight_addr,                            // weight
-            bias_addr,                              // bias
-            c.buffer()->address(),                  // output
-            start_tile_id,
-            num_tiles_per_core,
-            cHtWt,
-            bHt * bWt * bC * (bN > 1),
-            bHt * bWt * (bC > 1),
-            cN,
-            cC,
-            cHt,
-            cWt};
-        handle_args(program, writer_kernel_id, core, writer_runtime_args);
+        std::variant<uint32_t, tt::tt_metal::Buffer*> weight_arg = 0u;
+        if (weight_has_value) {
+            weight_arg = weight_tensor->buffer();
+        }
+        std::variant<uint32_t, tt::tt_metal::Buffer*> bias_arg = 0u;
+        if (bias_has_value) {
+            bias_arg = bias_tensor->buffer();
+        }
+        writer_desc.emplace_runtime_args(
+            core,
+            {batch_mean_tensor.buffer(),  //  batch mean
+             batch_var_tensor.buffer(),   //  batch var
+             weight_arg,                  // weight
+             bias_arg,                    // bias
+             c.buffer(),                  // output
+             start_tile_id,
+             num_tiles_per_core,
+             cHtWt,
+             bHt * bWt * bC * static_cast<uint32_t>(bN > 1),
+             bHt * bWt * static_cast<uint32_t>(bC > 1),
+             cN,
+             cC,
+             cHt,
+             cWt});
 
         auto counter = start_tile_id % cHtWt;
         auto freq = cHtWt;
 
-        std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
-        handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs compute_runtime_args = {num_tiles_per_core, freq, counter};
+        compute_desc.runtime_args.emplace_back(core, std::move(compute_runtime_args));
 
         start_tile_id += num_tiles_per_core;
     }
@@ -126,7 +137,7 @@ void set_or_update_runtime_arguments(
 }  // namespace
 
 namespace ttnn::operations::normalization {
-BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::BatchNormFactory::create(
+tt::tt_metal::ProgramDescriptor BatchNormOperation::BatchNormFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -135,7 +146,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     const auto& [input_tensor, batch_mean_tensor, batch_var_tensor, weight_tensor, bias_tensor, _] = tensor_args;
 
-    auto program = CreateProgram();
+    ProgramDescriptor desc;
 
     auto* device = input_tensor.device();
 
@@ -174,70 +185,120 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    auto all_device_cores = CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
 
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
     uint32_t b_num_tiles_per_cb = num_tiles_per_cb;
 
     // Input buffers
-    auto [input_tensor_cb, input_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);  // input
-    auto [batch_mean_tensor_cb, batch_mean_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_1,
-        program,
-        all_device_cores,
-        b_single_tile_size,
-        b_num_tiles_per_cb,
-        b_data_format);  // batch_mean
-    auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_2,
-        program,
-        all_device_cores,
-        needs_output_typecast ? interm_single_tile_size : c_single_tile_size,
-        num_tiles_per_cb,
-        needs_output_typecast ? interm_data_format : c_data_format);  // compute output (staging when typecast)
+    uint32_t input_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_0);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = a_single_tile_size * num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_tensor_cb),
+            .data_format = a_data_format,
+            .page_size = a_single_tile_size,
+        }}},
+    });  // input
+    uint32_t batch_mean_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_1);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = b_single_tile_size * b_num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(batch_mean_tensor_cb),
+            .data_format = b_data_format,
+            .page_size = b_single_tile_size,
+        }}},
+    });  // batch_mean
+    uint32_t output_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_2);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = (needs_output_typecast ? interm_single_tile_size : c_single_tile_size) * num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_tensor_cb),
+            .data_format = needs_output_typecast ? interm_data_format : c_data_format,
+            .page_size = needs_output_typecast ? interm_single_tile_size : c_single_tile_size,
+        }}},
+    });  // compute output (staging when typecast)
 
     uint32_t writer_output_cb = output_tensor_cb;
     if (needs_output_typecast) {
-        auto [writer_cb, writer_cb_handle] = create_cb(
-            tt::CBIndex::c_9,
-            program,
-            all_device_cores,
-            c_single_tile_size,
-            num_tiles_per_cb,
-            c_data_format);  // writer-facing output (BF16)
+        uint32_t writer_cb = static_cast<uint32_t>(tt::CBIndex::c_9);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = c_single_tile_size * num_tiles_per_cb,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(writer_cb),
+                .data_format = c_data_format,
+                .page_size = c_single_tile_size,
+            }}},
+        });  // writer-facing output (BF16)
         writer_output_cb = writer_cb;
     }
-    auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_3,
-        program,
-        all_device_cores,
-        d_single_tile_size,
-        b_num_tiles_per_cb,
-        d_data_format);  // batch_var
-    auto [eps_cb, eps_cb_handle] = create_cb(
-        tt::CBIndex::c_4,
-        program,
-        all_device_cores,
-        interm_single_tile_size,
-        b_num_tiles_per_cb,
-        interm_data_format);  // eps
-    auto [weight_tensor_cb, weight_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_5, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
-    auto [bias_tensor_cb, bias_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_6, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
+    uint32_t batch_var_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_3);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = d_single_tile_size * b_num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(batch_var_tensor_cb),
+            .data_format = d_data_format,
+            .page_size = d_single_tile_size,
+        }}},
+    });  // batch_var
+    uint32_t eps_cb = static_cast<uint32_t>(tt::CBIndex::c_4);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(eps_cb),
+            .data_format = interm_data_format,
+            .page_size = interm_single_tile_size,
+        }}},
+    });  // eps
+    uint32_t weight_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_5);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = e_single_tile_size * b_num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(weight_tensor_cb),
+            .data_format = e_data_format,
+            .page_size = e_single_tile_size,
+        }}},
+    });  // weight
+    uint32_t bias_tensor_cb = static_cast<uint32_t>(tt::CBIndex::c_6);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = f_single_tile_size * b_num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(bias_tensor_cb),
+            .data_format = f_data_format,
+            .page_size = f_single_tile_size,
+        }}},
+    });  // bias
 
     // Temporary buffers to store intermediate results
-    auto [den_cb, den_cb_handle] = create_cb(
-        tt::CBIndex::c_7,
-        program,
-        all_device_cores,
-        interm_single_tile_size,
-        num_tiles_per_cb,
-        interm_data_format);  // to store 1/(sqrt(batch_var + eps))
-    auto [temp_1_cb, temp_1_cb_handle] = create_cb(
-        tt::CBIndex::c_8, program, all_device_cores, interm_single_tile_size, num_tiles_per_cb, interm_data_format);
+    uint32_t den_cb = static_cast<uint32_t>(tt::CBIndex::c_7);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = interm_single_tile_size * num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(den_cb),
+            .data_format = interm_data_format,
+            .page_size = interm_single_tile_size,
+        }}},
+    });  // to store 1/(sqrt(batch_var + eps))
+    uint32_t temp_1_cb = static_cast<uint32_t>(tt::CBIndex::c_8);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = interm_single_tile_size * num_tiles_per_cb,
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(temp_1_cb),
+            .data_format = interm_data_format,
+            .page_size = interm_single_tile_size,
+        }}},
+    });
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb,
@@ -267,18 +328,22 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     writer_compile_time_args.push_back(static_cast<uint32_t>(param_data_format == DataFormat::Float32));
 
     // READER KERNEL
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_device_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // WRITER KERNEL
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
-        all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_device_cores;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
 
     // COMPUTE KERNEL
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -316,64 +381,35 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         static_cast<uint32_t>(DataFormat::Float32),
         needs_output_typecast ? static_cast<uint32_t>(c_data_format) : static_cast<uint32_t>(DataFormat::Float32)};
 
-    auto compute_kernel_id = tt_metal::CreateKernel(
-        program,
-        fmt::format(
-            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
-            (fp32_dest_acc_en || any_float32) ? "sfpu_kernel" : "kernel"),
-        all_device_cores,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args});
-
-    auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = fmt::format(
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
+        (fp32_dest_acc_en || any_float32) ? "sfpu_kernel" : "kernel");
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_device_cores;
+    compute_desc.compile_time_args = compute_kernel_args;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode,
     };
 
-    CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        program,
-        reader_kernel_id,
-        writer_kernel_id,
-        compute_kernel_id,
+    CMAKE_UNIQUE_NAMESPACE::populate_runtime_arguments(
+        reader_desc,
+        writer_desc,
+        compute_desc,
         compute_with_storage_grid_size,
         any_float32,
         operation_attributes,
         tensor_args,
-        output,
-        set_runtime_args);
+        output);
 
-    return {
-        std::move(program),
-        {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size, any_float32}};
-}
-
-void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto update_args =
-        [](tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
-            auto& all_args = GetRuntimeArgs(program, kernel_id);
-            auto& core_args = all_args.at(core.x).at(core.y);
-            std::copy(args.begin(), args.end(), core_args.data());
-        };
-
-    CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        cached_program.program,
-        cached_program.shared_variables.reader_kernel_id,
-        cached_program.shared_variables.writer_kernel_id,
-        cached_program.shared_variables.compute_kernel_id,
-        cached_program.shared_variables.compute_with_storage_grid_size,
-        cached_program.shared_variables.any_float32,
-        operation_attributes,
-        tensor_args,
-        output,
-        update_args);
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
 }
 
 }  // namespace ttnn::operations::normalization

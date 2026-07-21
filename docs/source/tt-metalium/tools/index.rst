@@ -7,13 +7,6 @@ Tools
 .. toctree::
     :maxdepth: 1
 
-    kernel_print
-
-Kernel print is the debug tool for printing tiles, scalers, and strings from device to host.
-
-.. toctree::
-    :maxdepth: 1
-
     checkpoint
 
 Debug checkpoints provide synchronized inspection points for fused kernels, where all RISCs on a core halt together and dump circular buffer state.
@@ -23,7 +16,7 @@ Debug checkpoints provide synchronized inspection points for fused kernels, wher
 
     device_print
 
-Device print is the debug tool for printing formatted messages from device to host. It is currently experimental feature and it expected to replace dprint in the future.
+Device print is the debug tool for printing formatted messages from kernels to the host terminal or a log file. ``DPRINT(...)`` is the recommended user-facing macro.
 
 .. toctree::
     :maxdepth: 1

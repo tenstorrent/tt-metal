@@ -11,6 +11,10 @@ import ttml
 
 from utils.context_managers import is_empty_init
 
+# ``torch_to_ttml`` lives in the shared ttml.models.qwen3.weights module (single
+# source of truth, shared with the GRPO example); the make_* helpers below use it.
+from ttml.models.qwen3.weights import torch_to_ttml
+
 
 def get_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
@@ -53,15 +57,6 @@ def get_tp_size(shard_dim=None):
 def tile_pad(dim: int) -> int:
     """Round *dim* up to the nearest multiple of 32 (tile alignment)."""
     return ((dim + 31) // 32) * 32
-
-
-def torch_to_ttml(t: torch.Tensor):
-    """Convert torch.Tensor → ttml.autograd.Tensor (bfloat16 on device)."""
-    device = get_device()
-    ttnn_host = ttnn.from_torch(t, dtype=ttnn.bfloat16)
-    ttnn_dev = ttnn.to_device(ttnn_host, device)
-    ttnn_tiled = ttnn.tilize_with_zero_padding(ttnn_dev)
-    return ttml.autograd.create_tensor(ttnn_tiled)
 
 
 def make_weight(shape, std=0.02):
@@ -201,12 +196,6 @@ def create_input_tensor_dp(token_ids_np, device):
         ttnn.DataType.UINT32,
         mapper,
     )
-
-
-def create_causal_mask(seq_len):
-    """Create causal attention mask as a ttml Tensor (numpy path)."""
-    mask = np.tril(np.ones((1, 1, seq_len, seq_len), dtype=np.float32))
-    return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
 def create_input_tensor(x_np, dp_mapper=None):

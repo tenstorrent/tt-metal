@@ -10,29 +10,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/device_operation.hpp"
-
-#define MOREH_SUM_FACTORY_H(name)                                                           \
-    struct name {                                                                           \
-        struct shared_variables_t {                                                         \
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;                              \
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;                              \
-            std::size_t num_cores;                                                          \
-            std::size_t num_cores_y;                                                        \
-        };                                                                                  \
-                                                                                            \
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>; \
-                                                                                            \
-        static cached_program_t create(                                                     \
-            const operation_attributes_t& operation_attributes,                             \
-            const tensor_args_t& tensor_args,                                               \
-            tensor_return_value_t& output_tensor);                                          \
-                                                                                            \
-        static void override_runtime_arguments(                                             \
-            cached_program_t& cached_program,                                               \
-            const operation_attributes_t& operation_attributes,                             \
-            const tensor_args_t& tensor_args,                                               \
-            tensor_return_value_t& output_tensor);                                          \
-    };
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_sum {
 struct MorehSumOperation {
@@ -52,12 +30,47 @@ struct MorehSumOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    MOREH_SUM_FACTORY_H(MorehSumHFactory)
-    MOREH_SUM_FACTORY_H(MorehSumNCFactory)
-    MOREH_SUM_FACTORY_H(MorehSumWFactory)
-    MOREH_SUM_FACTORY_H(MorehSumHIntFactory)
-    MOREH_SUM_FACTORY_H(MorehSumNCIntFactory)
-    MOREH_SUM_FACTORY_H(MorehSumWIntFactory)
+    struct MorehSumHFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct MorehSumNCFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct MorehSumWFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct MorehSumHIntFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct MorehSumNCIntFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    struct MorehSumWIntFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
 
     using program_factory_t = std::variant<
         MorehSumHFactory,

@@ -44,6 +44,8 @@ enum class ClusterType : std::uint8_t {
     BLACKHOLE_GALAXY = 16,       // Blackhole Galaxy, all chips with mmio
     P300_X2 = 17,                // 2 P300 cards
     CUSTOM = 18,  // Custom cluster type, used boards with custom fabric mesh graph descriptor path specified
+    // NOTE:
+    // ttnn/cpp/ttnn-nanobind/cluster.cpp needs to be kept in sync with this enum class.
 };
 
 /**

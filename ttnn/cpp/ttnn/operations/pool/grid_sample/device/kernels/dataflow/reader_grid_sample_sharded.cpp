@@ -4,7 +4,7 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
@@ -14,21 +14,23 @@
 #include "api/debug/dprint.h"
 #endif
 
-// Push one dummy input stick and one zeroed scalar stick into their CBs.
+// Push in_nblocks_c dummy input pages and one zeroed scalar page into their CBs.
 // Used for height-sharding padding sticks that have no real grid data:
 // the compute kernel always consumes a fixed number of CB entries per core,
 // so we must push placeholder pages to keep reader and compute in sync.
 // The scalar page is zeroed so the interpolation weight is 0, making the
 // padded output harmless (written to the shard but masked by valid_sticks).
-template <uint32_t input_cb_index, uint32_t scalar_cb_index>
-ALWI void push_noop_sticks() {
-    cb_reserve_back(input_cb_index, 1);
-    cb_push_back(input_cb_index, 1);
+template <uint32_t scalar_cb_index, uint32_t in_nblocks_c>
+ALWI void push_noop_sticks(Noc noc, DataflowBuffer input_dfb, DataflowBuffer scalar_dfb) {
+    for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+        input_dfb.reserve_back(1);
+        input_dfb.push_back(1);
+    }
 
-    cb_reserve_back(scalar_cb_index, 1);
-    zero_out_page<scalar_cb_index>(get_write_ptr(scalar_cb_index));
-    noc_async_read_barrier();
-    cb_push_back(scalar_cb_index, 1);
+    scalar_dfb.reserve_back(1);
+    zero_out_page(noc, scalar_dfb);
+    noc.async_read_barrier();
+    scalar_dfb.push_back(1);
 }
 
 ALWI void advance_grid_index_bounded(
@@ -75,23 +77,31 @@ void kernel_main() {
     constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
     constexpr uint32_t grid_hw = get_compile_time_arg_val(10);
     constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(11);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(12);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(13);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(14);
+    constexpr bool align_corners = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t input_chunk_nbytes = get_compile_time_arg_val(14);
+    constexpr bool last_chunk_partial = get_compile_time_arg_val(15);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(16);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(17);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(18);
 
     // Input tensor accessor for remote NOC reads (updated for new arg count)
-    constexpr auto input_tensor_args = TensorAccessorArgs<15>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
+    constexpr auto input_tensor_args = TensorAccessorArgs<19>();
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     // Calculate starting batch from global grid stick position
     // All grid points in one grid stick are in the same batch
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;
 
     // Zero out input CB to handle invalid coordinates properly
-    zero_out_tiles<input_cb_index>();
+    Noc noc;
+    DataflowBuffer input_dfb(input_cb_index);
+    DataflowBuffer scalar_dfb(scalar_cb_index);
+    zero_out_tiles<input_cb_index>(noc, input_dfb);
 
     // Get local grid data base address (already in L1)
-    const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
+    DataflowBuffer grid_dfb(grid_cb_index);
+    const uint32_t l1_grid_base_addr = grid_dfb.get_read_ptr();
 
     // Clamp this core's stick count to exclude height-sharding padding.
     // Padding sticks contain garbage that would produce invalid NOC addresses.
@@ -136,15 +146,20 @@ void kernel_main() {
             process_grid_point<
                 grid_dtype,
                 use_precomputed_grid,
+                align_corners,
                 input_height,
                 input_width,
                 input_stick_nbytes,
+                in_nblocks_c,
+                input_chunk_nbytes,
+                last_chunk_partial,
                 input_cb_index,
-                scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
+                scalar_cb_index>(
+                noc, input_dfb, scalar_dfb, grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
         } else {
             // Padding stick from height-sharding — push zero-weight data to CBs
             // so the compute kernel receives the expected number of items.
-            push_noop_sticks<input_cb_index, scalar_cb_index>();
+            push_noop_sticks<scalar_cb_index, in_nblocks_c>(noc, input_dfb, scalar_dfb);
         }
 
         // Always advance once after processing

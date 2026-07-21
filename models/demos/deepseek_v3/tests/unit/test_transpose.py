@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -67,7 +68,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_transpose(mesh_device, shape, transpose_type, pad_val, dtype, layout, mem_config, enable_trace):
     if transpose_type == "HC":

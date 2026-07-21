@@ -5,8 +5,10 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -40,9 +42,9 @@ void kernel_main() {
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
     constexpr auto src_args = TensorAccessorArgs<0>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_src_b(cb_id_src_b);
 
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
@@ -56,15 +58,17 @@ void kernel_main() {
     const uint32_t outND = cND;
 
     const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
 
     cb_src_b.reserve_back(1);
 #ifdef FILL_WITH_VALUE_FLOAT_B
     const auto float_ptr_b = reinterpret_cast<const float*>(&packed_scalar);
-    FILL_WITH_VALUE_FLOAT_B(cb_id_src_b, *float_ptr_b);
+    FILL_WITH_VALUE_FLOAT_B(cb_src_b.get_write_ptr(), *float_ptr_b);
 #endif
 #ifdef FILL_WITH_VALUE_B
-    FILL_WITH_VALUE_B(cb_id_src_b, packed_scalar);
+    FILL_WITH_VALUE_B(cb_src_b.get_write_ptr(), packed_scalar);
 #endif
     cb_src_b.push_back(1);
 
@@ -121,8 +125,12 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
-                                const uint64_t addr_a = get_noc_addr(row_idx_a, src) + current_chunk_offset;
-                                noc_async_read(addr_a, curr_l1_a, current_read_len);
+                                noc.async_read(
+                                    src,
+                                    CoreLocalMem<uint32_t>(curr_l1_a),
+                                    current_read_len,
+                                    {.page_id = row_idx_a, .offset_bytes = current_chunk_offset},
+                                    {});
                                 curr_l1_a += current_chunk_bytes;
                             }
                             noc.async_read_barrier();

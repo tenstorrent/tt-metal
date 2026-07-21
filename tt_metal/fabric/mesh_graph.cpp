@@ -69,8 +69,8 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
 using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
 using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
 
-const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
-    tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
+const ttsl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
+    ttsl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
         {tt::tt_fabric::FabricType::MESH,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
@@ -649,6 +649,9 @@ void MeshGraph::initialize_from_mgd(
 }
 
 void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    // The connection_hash (std::get<2>) is intentionally unused here: MeshGraph models the
+    // chip-level topology and doesn't need per-cable identification. ControlPlane uses the
+    // hash for its own per-cable bookkeeping.
     for (const auto& connection : intermesh_connections) {
         auto src_mesh = std::get<0>(connection).first;
         auto dst_mesh = std::get<1>(connection).first;
@@ -851,7 +854,12 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, ChipId chip_id) con
     return MeshCoordinate(ns, ew);
 }
 
-ChipId MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
+ChipId MeshGraph::coordinate_to_chip(
+    MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank) const {
+    if (host_rank.has_value()) {
+        auto offset = get_coord_range(mesh_id, host_rank).start_coord();
+        coordinate = MeshCoordinate(offset[0] + coordinate[0], offset[1] + coordinate[1]);
+    }
     const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
     return (coordinate[0] * mesh_shape[1]) + coordinate[1];
 }

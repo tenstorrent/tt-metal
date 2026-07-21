@@ -3,32 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/numeric/bfloat16.h"
 #include "../scatter_bf16_reduction_common.hpp"
 
 #include <array>
 
 namespace {
 
-FORCE_INLINE static float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
-    std::memcpy(&f, &uint32_data, sizeof(f));
-    return f;
-}
-
-FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
-    std::uint32_t bits;
-    std::memcpy(&bits, &x, sizeof(bits));
-
-    std::uint32_t lsb = (bits >> 16) & 1u;
-    std::uint32_t rounding_bias = 0x7FFFu + lsb;
-    bits += rounding_bias;
-
-    return static_cast<std::uint16_t>(bits >> 16);
-}
-
 FORCE_INLINE float perform_reduction(float input, uint16_t source_value, ScatterReductionType scatter_reduction_type) {
-    float fp32_source_value = bfloat16_to_float(source_value);
+    float fp32_source_value = bf16_to_fp32(source_value);
     switch (scatter_reduction_type) {
         case ScatterReductionType::ADD: {
             return input + fp32_source_value;
@@ -51,24 +36,24 @@ FORCE_INLINE float perform_reduction(float input, uint16_t source_value, Scatter
     }
 }
 
-// performs scatter on data loaded to cb with load_to_cb
+// performs scatter on data loaded to dfb with load_to_dfb
 template <typename index_type>
 FORCE_INLINE void scatter_along_chunk(
-    const uint32_t& input_cb,
-    const uint32_t& index_cb,
-    const uint32_t& source_cb,
-    const uint32_t& output_cb,
-    const uint32_t& fp32_temp_cb,
+    const DataflowBuffer& input_dfb,
+    const DataflowBuffer& index_dfb,
+    const DataflowBuffer& source_dfb,
+    const DataflowBuffer& output_dfb,
+    const DataflowBuffer& fp32_temp_dfb,
     const uint32_t& input_stick_size,
     const index_type& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
-    const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
-    const uint32_t fp32_temp_l1_write_addr = get_write_ptr(fp32_temp_cb);
+    const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
+    const uint32_t index_l1_read_addr = index_dfb.get_read_ptr();
+    const uint32_t source_l1_read_addr = source_dfb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
+    const uint32_t fp32_temp_l1_write_addr = fp32_temp_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
@@ -98,20 +83,22 @@ FORCE_INLINE void scatter_along_chunk(
 }
 
 // copies source stick to destination stick (first phase of scatter)
-FORCE_INLINE void copy_input_to_fp32_temp(uint32_t input_cb, uint32_t fp32_temp_cb, uint32_t input_chunk_size) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t fp32_temp_l1_write_addr = get_write_ptr(fp32_temp_cb);
+FORCE_INLINE void copy_input_to_fp32_temp(
+    const DataflowBuffer& input_dfb, const DataflowBuffer& fp32_temp_dfb, uint32_t input_chunk_size) {
+    const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
+    const uint32_t fp32_temp_l1_write_addr = fp32_temp_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
     for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
-        fp32_temp_l1_write_ptr[index_in_input_chunk] = bfloat16_to_float(input_l1_read_ptr[index_in_input_chunk]);
+        fp32_temp_l1_write_ptr[index_in_input_chunk] = bf16_to_fp32(input_l1_read_ptr[index_in_input_chunk]);
     }
 }
 
-FORCE_INLINE void copy_fp32_temp_to_output(uint32_t fp32_temp_cb, uint32_t output_cb, uint32_t chunk_size) {
-    const uint32_t fp32_temp_l1_read_addr = get_read_ptr(fp32_temp_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+FORCE_INLINE void copy_fp32_temp_to_output(
+    const DataflowBuffer& fp32_temp_dfb, const DataflowBuffer& output_dfb, uint32_t chunk_size) {
+    const uint32_t fp32_temp_l1_read_addr = fp32_temp_dfb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr float* fp32_temp_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_read_addr);
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
@@ -125,6 +112,7 @@ FORCE_INLINE void copy_fp32_temp_to_output(uint32_t fp32_temp_cb, uint32_t outpu
 }  // namespace
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -140,12 +128,12 @@ void kernel_main() {
     const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
     const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg_val<uint32_t>(8));
 
-    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
-    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
-    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address, ctas.source_stick_size_bytes);
+    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address);
+    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address);
+    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address);
 
-    using input_std_type = std_type_t<get_dataformat(ctas.input_cb)>;
-    using index_std_type = std_type_t<get_dataformat(ctas.index_cb)>;
+    using input_std_type = std_type_t<get_dataformat(ctas.input_dfb)>;
+    using index_std_type = std_type_t<get_dataformat(ctas.index_dfb)>;
 
     constexpr uint32_t N = ctas.input_rank - 1;
     // generate 2 stick shape counters
@@ -156,6 +144,12 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
+    DataflowBuffer input_dfb(ctas.input_dfb);
+    DataflowBuffer fp32_temp_dfb(ctas.fp32_temp_dfb);
+    DataflowBuffer output_dfb(ctas.output_dfb);
+    DataflowBuffer index_dfb(ctas.index_dfb);
+    DataflowBuffer source_dfb(ctas.source_dfb);
+
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {
         // process input/output chunks sequentially
@@ -165,16 +159,17 @@ void kernel_main() {
                 std::min(ctas.input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
-            load_to_cb(
-                ctas.input_cb,
+            load_to_dfb(
+                noc,
+                ctas.input_dfb,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
-            cb_wait_front(ctas.input_cb, ONE_PAGE);
-            cb_reserve_back(ctas.fp32_temp_cb, ONE_PAGE);
+            input_dfb.wait_front(ONE_PAGE);
+            fp32_temp_dfb.reserve_back(ONE_PAGE);
 
-            copy_input_to_fp32_temp(ctas.input_cb, ctas.fp32_temp_cb, input_chunk_length);
+            copy_input_to_fp32_temp(input_dfb, fp32_temp_dfb, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -187,47 +182,49 @@ void kernel_main() {
                     const uint32_t source_chunk_length =
                         std::min(ctas.source_stick_size - source_offset, source_chunk_size);
 
-                    load_to_cb(
-                        ctas.index_cb,
+                    load_to_dfb(
+                        noc,
+                        ctas.index_dfb,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
                         index_chunk_length * sizeof(index_std_type),
                         index_stick_id);
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
-                    load_to_cb(
-                        ctas.source_cb,
+                    load_to_dfb(
+                        noc,
+                        ctas.source_dfb,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),
                         source_chunk_length * sizeof(input_std_type),
                         index_stick_id);
-                    cb_wait_front(ctas.index_cb, ONE_PAGE);
-                    cb_wait_front(ctas.source_cb, ONE_PAGE);
+                    index_dfb.wait_front(ONE_PAGE);
+                    source_dfb.wait_front(ONE_PAGE);
                     scatter_along_chunk<index_std_type>(
-                        ctas.input_cb,
-                        ctas.index_cb,
-                        ctas.source_cb,
-                        ctas.output_cb,
-                        ctas.fp32_temp_cb,
+                        input_dfb,
+                        index_dfb,
+                        source_dfb,
+                        output_dfb,
+                        fp32_temp_dfb,
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
                         index_chunk_length,
                         scatter_reduction_type);
-                    cb_pop_front(ctas.source_cb, ONE_PAGE);
-                    cb_pop_front(ctas.index_cb, ONE_PAGE);
+                    source_dfb.pop_front(ONE_PAGE);
+                    index_dfb.pop_front(ONE_PAGE);
                 }
             }
 
-            cb_pop_front(ctas.input_cb, ONE_PAGE);
-            cb_push_back(ctas.fp32_temp_cb, ONE_PAGE);
-            cb_wait_front(ctas.fp32_temp_cb, ONE_PAGE);
-            cb_reserve_back(ctas.output_cb, ONE_PAGE);
+            input_dfb.pop_front(ONE_PAGE);
+            fp32_temp_dfb.push_back(ONE_PAGE);
+            fp32_temp_dfb.wait_front(ONE_PAGE);
+            output_dfb.reserve_back(ONE_PAGE);
 
-            // third phase: push to the output cb with fp32->bf16 conversion
-            copy_fp32_temp_to_output(ctas.fp32_temp_cb, ctas.output_cb, input_chunk_length);
-            cb_pop_front(ctas.fp32_temp_cb, ONE_PAGE);
-            cb_push_back(ctas.output_cb, ONE_PAGE);
+            // third phase: push to the output dfb with fp32->bf16 conversion
+            copy_fp32_temp_to_output(fp32_temp_dfb, output_dfb, input_chunk_length);
+            fp32_temp_dfb.pop_front(ONE_PAGE);
+            output_dfb.push_back(ONE_PAGE);
         }
         next_inplace<N>(coord, input_dims);
     }

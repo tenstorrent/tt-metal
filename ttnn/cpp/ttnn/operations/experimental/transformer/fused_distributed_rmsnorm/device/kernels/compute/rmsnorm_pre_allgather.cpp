@@ -10,14 +10,13 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/debug/dprint_pages.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -26,12 +25,13 @@ void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(4);
     constexpr uint32_t block_size = get_compile_time_arg_val(5);
-    constexpr bool use_float32_reduction = get_compile_time_arg_val(6) == 1;
 
     uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(reduce_scalar_cb, onetile);  // comes from the reader
+    CircularBuffer cb_input(input_cb);
+    CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
+    CircularBuffer cb_intermediate(intermediate_cb);
 
     binary_op_init_common(input_cb, input_cb, intermediate_cb);
 
@@ -46,9 +46,9 @@ void kernel_main() {
         PACK((llk_pack_reconfig_l1_acc(0)));
 
         mul_tiles_init(input_cb, input_cb);
-        cb_reserve_back(intermediate_cb, onetile);
+        cb_intermediate.reserve_back(onetile);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_wait_front(input_cb, block_size);
+            cb_input.wait_front(block_size);
 
             tile_regs_acquire();
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -68,9 +68,9 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            cb_pop_front(input_cb, block_size);
+            cb_input.pop_front(block_size);
         }
-        cb_push_back(intermediate_cb, onetile);
+        cb_intermediate.push_back(onetile);
 
         // Disable L1 accumulation
         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -78,25 +78,8 @@ void kernel_main() {
         /*
          * sum(x**2)
          */
-        reconfig_data_format(intermediate_cb, reduce_scalar_cb);
-        pack_reconfig_data_format(output_cb);
-        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, output_cb);
-        cb_wait_front(intermediate_cb, onetile);
-        cb_reserve_back(output_cb, onetile);
-
-        tile_regs_acquire();
-        reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, 0, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, output_cb);
-        tile_regs_release();
-
-        /*NOTE: for some reason, outputs are sometimes incorrect if you uninit with the use_float32_reduction flag!*/
-        reduce_uninit<false>();
-
-        cb_push_back(output_cb, onetile);
-        cb_pop_front(intermediate_cb, onetile);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, intermediate_cb, reduce_scalar_cb, output_cb>(
+            compute_kernel_lib::ReduceInputBlockShape::single());
     }
-    cb_pop_front(reduce_scalar_cb, onetile);
+    cb_reduce_scalar.pop_front(onetile);
 }

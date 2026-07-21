@@ -4,7 +4,6 @@
 
 import contextlib
 from typing import Optional, List
-import os
 
 import ttnn
 from loguru import logger
@@ -14,15 +13,33 @@ from loguru import logger
 Device = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
+_DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 get_max_worker_l1_unreserved_size = ttnn._ttnn.device.get_max_worker_l1_unreserved_size
+get_dram_alignment = ttnn._ttnn.device.get_dram_alignment
+get_l1_alignment = ttnn._ttnn.device.get_l1_alignment
 get_optimal_dram_bank_to_logical_worker_assignment = (
     ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment
 )
 enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
 disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
+is_asynchronous_slow_dispatch_enabled = ttnn._ttnn.device.is_asynchronous_slow_dispatch_enabled
+
+
+class DispatchCoreConfig(_DispatchCoreConfig):
+    def __init__(
+        self,
+        type: Optional[DispatchCoreType] = None,
+        axis: Optional[DispatchCoreAxis] = None,
+        fabric_tensix_config=None,
+    ):
+        resolved_config = ttnn._ttnn.device.create_dispatch_core_config(
+            type=type, axis=axis, fabric_tensix_config=fabric_tensix_config
+        )
+        super().__init__(resolved_config.type, resolved_config.axis)
+
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
@@ -78,80 +95,6 @@ def is_blackhole(device=None):
     return "blackhole" in ARCH_NAME
 
 
-def get_default_dispatch_core_type():
-    eth_default_dispatch_clusters = [
-        ttnn._ttnn.cluster.ClusterType.N300,
-        ttnn._ttnn.cluster.ClusterType.T3K,
-        ttnn._ttnn.cluster.ClusterType.N300_2x2,
-    ]
-    return (
-        ttnn._ttnn.device.DispatchCoreType.ETH
-        if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
-        else ttnn._ttnn.device.DispatchCoreType.WORKER
-    )
-
-
-def get_default_dispatch_core_axis(fabric_tensix_config=None):
-    """Get default dispatch core axis, considering fabric tensix config if available."""
-    if is_blackhole():
-        # On Blackhole, if fabric tensix MUX is enabled, use ROW; otherwise use COL
-        if fabric_tensix_config == ttnn.FabricTensixConfig.MUX:
-            return DispatchCoreAxis.ROW
-        else:
-            return DispatchCoreAxis.COL
-    else:
-        # Non-Blackhole architectures default to ROW
-        return DispatchCoreAxis.ROW
-
-
-class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
-    def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None, fabric_tensix_config=None):
-        # Validate user provided args
-        if type:
-            if not isinstance(type, DispatchCoreType):
-                valid_values = [e for e in DispatchCoreType.__members__.values()]
-                raise ValueError(f"Invalid dispatch core type: {type}. Valid values are: {valid_values}")
-            if type == DispatchCoreType.ETH and axis == DispatchCoreAxis.COL:
-                raise ValueError("COL axis is not supported for ETH dispatch core type")
-        if axis:
-            if not isinstance(axis, DispatchCoreAxis):
-                valid_values = [e for e in DispatchCoreAxis.__members__.values()]
-                raise ValueError(f"Invalid dispatch core axis: {axis}. Valid values are: {valid_values}")
-            if axis == DispatchCoreAxis.ROW and is_blackhole() and fabric_tensix_config != ttnn.FabricTensixConfig.MUX:
-                raise ValueError(
-                    "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled"
-                )
-        if type and axis:
-            # User provided both valid type and axis, check if they are compatible
-            self.type = type
-            self.axis = axis
-        elif type:
-            # User provided only valid type
-            self.type = type
-            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        elif axis:
-            self.axis = axis
-            # User provided only valid axis
-            if self.axis == DispatchCoreAxis.COL:
-                # COL axis is not supported for ETH dispatch core type, default to WORKER
-                self.type = DispatchCoreType.WORKER
-                logger.info(
-                    f"{self.axis} axis is only supported on WORKER dispatch core type, defaulting to {self.type}"
-                )
-            elif self.axis == DispatchCoreAxis.ROW:
-                # ROW axis is supported for all dispatch core types, use default type for their system
-                self.type = get_default_dispatch_core_type()
-                logger.debug(f"Using default dispatch core type for this system: {self.type}")
-        else:
-            # User provided no valid type or axis, use default for their system
-            self.type = get_default_dispatch_core_type()
-            logger.debug(f"Using default dispatch core type for this system: {self.type}")
-            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        super().__init__(self.type, self.axis)
-
-
 def CreateDevice(
     device_id: int,
     num_command_queues: int = 1,
@@ -166,7 +109,7 @@ def CreateDevice(
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
+        dispatch_core_config,
         worker_l1_size=worker_l1_size,
     )
 
@@ -185,7 +128,7 @@ def CreateDevices(
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
+        dispatch_core_config,
         worker_l1_size=worker_l1_size,
     )
 
@@ -269,10 +212,29 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
-pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
+def get_allocator_base_address(device, buffer_type):
+    """Return the lowest address (bytes) of the given allocator region.
+
+    For ``ttnn.BufferType.L1`` this is the worker-L1 unreserved base; combined
+    with the per-bank L1 size from :func:`get_memory_view`, callers can derive
+    the absolute L1 top address used by the device-side allocator.
+    """
+    return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
+
 
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
-__all__ = []
+# Real-time profiler callbacks (experimental)
+ProgramRealtimeRecord = ttnn._ttnn.device.ProgramRealtimeRecord
+RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealtimeProfilerCallback
+UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
+IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
+
+__all__ = [
+    "ProgramRealtimeRecord",
+    "RegisterProgramRealtimeProfilerCallback",
+    "UnregisterProgramRealtimeProfilerCallback",
+    "IsProgramRealtimeProfilerActive",
+]

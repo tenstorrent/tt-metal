@@ -26,6 +26,10 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -33,6 +37,7 @@
 #include <cstdint>
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -72,6 +77,11 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
+    Noc noc_obj;
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_intermediate(cb_intermediate_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+
     uint32_t arg_idx = 0;
     // Load the input tensor spec
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
@@ -102,7 +112,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -122,10 +132,10 @@ void kernel_main() {
     arg_idx += intermediate_rt_increment;
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
 #ifdef FUSE_MM_OP_SIGNALER
-    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> mm_op_ready_sem(get_arg_val<uint32_t>(arg_idx++));
     uint32_t mm_sem_target = 0;
 #endif
 
@@ -148,8 +158,10 @@ void kernel_main() {
     constexpr auto addcmul_a_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2>();
     constexpr uint32_t ct_offset_a = addcmul_a_tensor_args.num_compile_time_args();
     constexpr auto addcmul_b_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2 + ct_offset_a>();
-    auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address, page_size);
-    auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address, page_size);
+    auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address);
+    auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address);
+    CircularBuffer cb_addcmul_a(addcmul_a_cb);
+    CircularBuffer cb_addcmul_b(addcmul_b_cb);
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
     // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
     // b tile index (non-broadcast): same as a  (b has full N rows per batch)
@@ -192,14 +204,14 @@ void kernel_main() {
                 // signals guarantees all N-full-blocks covering this chunk are ready.
                 const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
                 mm_sem_target += sem_increment;
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+                mm_op_ready_sem.wait_min(mm_sem_target);
 #endif
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
                 // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
                 // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
-                    const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+                    CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
 #ifdef FUSE_RS_ADDCMUL
                     // At the final ring step the local chip's slice is written to DRAM by the writer.
@@ -245,21 +257,21 @@ void kernel_main() {
                             const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
-                            cb_reserve_back(cb_in0, tile_granularity);
-                            uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                            cb_in0.reserve_back(tile_granularity);
+                            uint32_t l1_write_addr = cb_in0.get_write_ptr();
                             uint32_t intermediate_l1_write_addr;
                             if (do_reduce) {
-                                cb_reserve_back(cb_intermediate_id, tile_granularity);
-                                intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                                cb_intermediate.reserve_back(tile_granularity);
+                                intermediate_l1_write_addr = cb_intermediate.get_write_ptr();
                             }
 #ifdef FUSE_RS_ADDCMUL
                             uint32_t addcmul_a_l1_write_addr = 0;
                             uint32_t addcmul_b_l1_write_addr = 0;
                             if (is_final_ring_step) {
-                                cb_reserve_back(addcmul_a_cb, tile_granularity);
-                                addcmul_a_l1_write_addr = get_write_ptr(addcmul_a_cb);
-                                cb_reserve_back(addcmul_b_cb, tile_granularity);
-                                addcmul_b_l1_write_addr = get_write_ptr(addcmul_b_cb);
+                                cb_addcmul_a.reserve_back(tile_granularity);
+                                addcmul_a_l1_write_addr = cb_addcmul_a.get_write_ptr();
+                                cb_addcmul_b.reserve_back(tile_granularity);
+                                addcmul_b_l1_write_addr = cb_addcmul_b.get_write_ptr();
                             }
 #endif
 
@@ -282,13 +294,19 @@ void kernel_main() {
                                     const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, col_in_slice, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     const uint32_t input_tile_id = global_tile_idx + batch_offset;
-                                    noc_async_read(
-                                        get_noc_addr(input_tile_id, input_tensor_addrgen), l1_write_addr, page_size);
+                                    noc_obj.async_read(
+                                        input_tensor_addrgen,
+                                        CoreLocalMem<uint8_t>(l1_write_addr),
+                                        page_size,
+                                        {.page_id = input_tile_id},
+                                        {});
                                     if (do_reduce) {
-                                        noc_async_read(
-                                            get_noc_addr(global_tile_idx, intermediate_tensor_addrgen),
-                                            intermediate_l1_write_addr,
-                                            page_size);
+                                        noc_obj.async_read(
+                                            intermediate_tensor_addrgen,
+                                            CoreLocalMem<uint8_t>(intermediate_l1_write_addr),
+                                            page_size,
+                                            {.page_id = global_tile_idx},
+                                            {});
                                     }
 #ifdef FUSE_RS_ADDCMUL
                                     if (is_final_ring_step) {
@@ -300,14 +318,18 @@ void kernel_main() {
                                         const uint32_t b_gate_idx =
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
 #endif
-                                        noc_async_read(
-                                            get_noc_addr(a_tile_idx, addcmul_a_addrgen),
-                                            addcmul_a_l1_write_addr,
-                                            page_size);
-                                        noc_async_read(
-                                            get_noc_addr(b_gate_idx, addcmul_b_addrgen),
-                                            addcmul_b_l1_write_addr,
-                                            page_size);
+                                        noc_obj.async_read(
+                                            addcmul_a_addrgen,
+                                            CoreLocalMem<uint8_t>(addcmul_a_l1_write_addr),
+                                            page_size,
+                                            {.page_id = a_tile_idx},
+                                            {});
+                                        noc_obj.async_read(
+                                            addcmul_b_addrgen,
+                                            CoreLocalMem<uint8_t>(addcmul_b_l1_write_addr),
+                                            page_size,
+                                            {.page_id = b_gate_idx},
+                                            {});
                                     }
 #endif
                                 }
@@ -333,15 +355,15 @@ void kernel_main() {
                                     effective_chunk_width_in_tiles,
                                     current_mm_block_ht);
                             }
-                            noc_async_read_barrier();
-                            cb_push_back(cb_in0, tile_granularity);
+                            noc_obj.async_read_barrier();
+                            cb_in0.push_back(tile_granularity);
                             if (do_reduce) {
-                                cb_push_back(cb_intermediate_id, tile_granularity);
+                                cb_intermediate.push_back(tile_granularity);
                             }
 #ifdef FUSE_RS_ADDCMUL
                             if (is_final_ring_step) {
-                                cb_push_back(addcmul_a_cb, tile_granularity);
-                                cb_push_back(addcmul_b_cb, tile_granularity);
+                                cb_addcmul_a.push_back(tile_granularity);
+                                cb_addcmul_b.push_back(tile_granularity);
                             }
 #endif
                         }
@@ -356,7 +378,7 @@ void kernel_main() {
         out_ready_sem_target = 0;
 
 #ifdef FUSE_MM_OP_SIGNALER
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
+        mm_op_ready_sem.set(0);
         mm_sem_target = 0;
 #endif
     }

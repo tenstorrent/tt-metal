@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t has_input_grad = get_arg_val<uint32_t>(0);
@@ -19,30 +22,31 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t dst0_tile_bytes = get_tile_size(cb_id_out0);
 
-    const uint32_t dst1_tile_bytes = get_tile_size(cb_id_out1);
+    const auto s0 = TensorAccessor(dst0_args, dst0_addr);
 
-    const auto s0 = TensorAccessor(dst0_args, dst0_addr, dst0_tile_bytes);
+    const auto s1 = TensorAccessor(dst1_args, dst1_addr);
 
-    const auto s1 = TensorAccessor(dst1_args, dst1_addr, dst1_tile_bytes);
+    Noc noc;
+    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out1(cb_id_out1);
+    const auto out0_tile_bytes = get_tile_size(cb_id_out0);
+    const auto out1_tile_bytes = get_tile_size(cb_id_out1);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {
         if (has_input_grad) {
-            cb_wait_front(cb_id_out0, onetile);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-            noc_async_write_tile(i, s0, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_out0, onetile);
+            dfb_out0.wait_front(onetile);
+            noc.async_write(dfb_out0, s0, out0_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            noc.async_write_barrier();
+            dfb_out0.pop_front(onetile);
         }
 
         if (has_other_grad) {
-            cb_wait_front(cb_id_out1, onetile);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out1);
-            noc_async_write_tile(i, s1, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_out1, onetile);
+            dfb_out1.wait_front(onetile);
+            noc.async_write(dfb_out1, s1, out1_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            noc.async_write_barrier();
+            dfb_out1.pop_front(onetile);
         }
     }
 }

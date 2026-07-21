@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -68,6 +70,12 @@ void wait_until_cores_done(
 
 void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& logical_cores);
 
+// In test mode, return a watcher fault message if one was recorded, so host waits can unwind.
+std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id);
+
+// In test mode, throw if watcher detected a device-side fault so host waits can unwind.
+void throw_if_watcher_tripped_in_test_mode(ChipId device_id);
+
 // Send a message to the ethernet firmware mailbox, if supported
 // Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
 // Maximum number of args depends on the architecture. Args not provided will be set to zero.
@@ -81,9 +89,9 @@ void send_msg_to_eth_mailbox(
     int timeout_ms = 10000);
 
 // Return to base firmware and wait for a heartbeat from the active ethernet core, if supported
-// Default timeout time empirically chosen to be 10 seconds to avoid timeouts
+// Default timeout time empirically chosen to be 20 seconds to avoid timeouts
 void return_to_base_firmware_and_wait_for_heartbeat(
-    ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
+    ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 20000);
 
 void set_metal_eth_fw_run_flag(ChipId device_id, const CoreCoord& virtual_core, bool enable);
 

@@ -54,11 +54,20 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+// dispatch_s aggregates device_print buffers from all cores into this DRAM region:
+// [DRAM_ALIGNMENT bytes for {dram_write_ptr, dram_read_ptr}][1 MiB ring buffer payload].
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE = 1 << 20;  // 1 MiB
+constexpr static std::uint32_t DRAM_DEVICE_PRINT_DISPATCH_SIZE =
+    DRAM_ALIGNMENT + DRAM_DEVICE_PRINT_DISPATCH_PAYLOAD_SIZE;
+constexpr static std::uint32_t get_dram_device_print_dispatch_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
+
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
+    return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
+}
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
@@ -181,6 +190,12 @@ public:
             params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        // We need to disable -mtt-fix-whbhebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will
+        // unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
+        }
         return cflags;
     }
 
@@ -245,6 +260,10 @@ void Hal::initialize_wh(
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        get_dram_device_print_dispatch_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DEVICE_PRINT_DISPATCH)] =
+        DRAM_DEVICE_PRINT_DISPATCH_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
         get_dram_backed_command_queues_base(dram_profiler_size);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
@@ -338,6 +357,7 @@ void Hal::initialize_wh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
@@ -395,9 +415,10 @@ void Hal::initialize_wh(
         }
     };
 
+    constexpr size_t kWormholePinnedMemoryBudgetBytes =
+        (2ULL * 1024ULL * 1024ULL * 1024ULL) - (512ULL * 1024ULL * 1024ULL);
     this->max_pinned_memory_count_ = 12;
-    this->total_pinned_memory_size_ =
-        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
+    this->total_pinned_memory_size_ = kWormholePinnedMemoryBudgetBytes;
 }
 
 }  // namespace tt::tt_metal

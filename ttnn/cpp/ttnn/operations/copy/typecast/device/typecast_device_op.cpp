@@ -100,11 +100,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
             "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
-        TT_FATAL(
-            input_tensor.padded_shape()[-1] % 32 == 0,
-            "Typecast operation requires Row-Major input tensor's padded shape to be multiple of 32. "
-            "Padded shape: {}",
-            input_tensor.padded_shape());
     }
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
@@ -156,36 +151,6 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
-    const TypecastParams& args, const TypecastInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    operation::Hash hash;
-
-    // For tile layout, only volume matters. For row-major, actual shape dimensions matter.
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape.volume(),
-            input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
-    }
-    return hash;
 }
 
 bool TypecastDeviceOperation::skip_launch(

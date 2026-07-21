@@ -42,6 +42,37 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
+def get_root3_row(root_row: int, use_torus: bool = False) -> int:
+    """Pick the row of ROOT3 for a given root row.
+
+    Linear (default) mode covers all 4 rows of a 4x2 mesh by always placing
+    ROOT3 on an inner row (1 or 2). For inner roots this matches the historical
+    "other inner row" rule. For corner roots (0 or 3) we pick the inner row on
+    the OPPOSITE side of the root, which keeps the LEAF→{ROOT3,ROOT_ROW} hops
+    1 row apart and only forces the ROOT3→ROOT_ROW hop to be 2 rows
+    (resolved via fabric multi-hop routing, see `reduce_num_hops`).
+
+    Torus mode is retained for callers that explicitly know the fabric wraps
+    rows; it is no longer auto-enabled by lm_head_sampling.
+    """
+    if use_torus:
+        if root_row == 0:
+            return 3
+        if root_row == 3:
+            return 0
+        raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+
+    if root_row == 0:
+        return 2
+    if root_row == 1:
+        return 2
+    if root_row == 2:
+        return 1
+    if root_row == 3:
+        return 1
+    raise ValueError(f"Unsupported root_row {root_row} for 4-row mesh")
+
+
 def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
@@ -50,29 +81,10 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate,
     root_row = root_coord[0]
     my_row = coord[0]
 
-    # ROOT2: same row as ROOT1, different column
     if my_row == root_row:
         return MESH_ROOT2
 
-    # ROOT3 coord
-    if use_torus:
-        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
-        if root_row == 0:
-            root3_row = 3
-        elif root_row == 3:
-            root3_row = 0
-        else:
-            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
-    else:
-        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
-        if root_row == 1:
-            root3_row = 2
-        elif root_row == 2:
-            root3_row = 1
-        else:
-            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
-
-    if my_row == root3_row:
+    if my_row == get_root3_row(root_row, use_torus):
         return MESH_ROOT3
 
     return MESH_LEAF
@@ -111,6 +123,9 @@ class ReduceToOneB1:
         agg_output_size_bytes: int = 0,
         num_iterations: int = 1,
         is_torus: bool = False,
+        forward_metadata_size_bytes: int = 0,
+        metadata_l1_addr: int = 0,
+        worker_fabric_ready_semaphore=None,
     ) -> ttnn.Tensor:
         """
         Execute reduce-to-one operation using generic_op.
@@ -131,6 +146,9 @@ class ReduceToOneB1:
             agg_output_size_bytes: Total useful output bytes (unpadded) for socket aggregation
             num_iterations: Number of iterations to run inside the kernel
             is_torus: Whether to use torus topology
+            worker_fabric_ready_semaphore: Optional shared worker->fabric ready semaphore.
+                                         When provided, this avoids allocating the semaphore
+                                         inside the op, which is required for trace capture.
 
         Returns:
             Output tensor
@@ -193,7 +211,7 @@ class ReduceToOneB1:
             compute_tile_height * compute_tile_width
         )
 
-        packet_header_size_bytes = 96
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         slot_size_bytes = packet_header_size_bytes + payload_size_bytes
 
         # CB indices (matching C++ implementation)
@@ -217,21 +235,20 @@ class ReduceToOneB1:
         shard_grid = input_sample.memory_config().shard_spec.grid
         shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
 
-        # Create global semaphores for worker→fabric signaling
-        # Compute num_workers_per_column from input shard grid (same for all devices)
-        sample_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
-        sample_columns = {}
-        for c in sample_cores:
-            sample_columns.setdefault(c.x, []).append(c)
-        num_worker_fabric_sems = len(sample_columns[sorted(sample_columns.keys())[0]])
+        # Create a single global ready semaphore for worker->fabric signaling.
+        # Each FC sees its own local semaphore instance at the same L1 address.
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_fabric_sem_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-        worker_fabric_global_sems = [
-            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_worker_fabric_sems)
-        ]
-        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
+        if isinstance(worker_fabric_ready_semaphore, (list, tuple)):
+            raise ValueError(
+                "Expected a single worker_fabric_ready_semaphore; "
+                "reduce_to_one standalone now uses one shared ready-mask semaphore"
+            )
+        if worker_fabric_ready_semaphore is None:
+            worker_fabric_ready_semaphore = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
+        worker_fabric_ready_sem_addr = ttnn.get_global_semaphore_address(worker_fabric_ready_semaphore)
 
         # Persistent-signal sync setup for downstream sockets
         agg_sem_addr = 0
@@ -370,6 +387,9 @@ class ReduceToOneB1:
                     total_num_workers_count if (is_root1 and downstream_sockets is not None) else 0
                 )
                 device_agg_output_size = agg_output_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                device_forward_metadata_size = (
+                    forward_metadata_size_bytes if (is_root1 and downstream_sockets is not None) else 0
+                )
                 writer_ct_args = [
                     ("device_role", role),
                     ("num_tiles", num_compute_tiles),
@@ -383,9 +403,9 @@ class ReduceToOneB1:
                     ("output_core_noc_x", output_core_phys.x),
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
-                    ("slot_size_bytes", slot_size_bytes),
                     ("total_num_workers", device_total_num_workers),
                     ("agg_output_size_bytes", device_agg_output_size),
+                    ("forward_metadata_size_bytes", device_forward_metadata_size),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -418,6 +438,9 @@ class ReduceToOneB1:
                     persistent_core_noc_x = persistent_core_phys.x
                     persistent_core_noc_y = persistent_core_phys.y
 
+                # Resolve metadata L1 address for ROOT1 last-worker forwarding
+                device_metadata_l1_addr = metadata_l1_addr if (is_root1 and forward_metadata_size_bytes > 0) else 0
+
                 # Build per-core BRISC args for worker cores
                 brisc_per_core_args = []
                 for core_idx, core in enumerate(input_cores_list):
@@ -434,21 +457,22 @@ class ReduceToOneB1:
                         fabric_core_phys.x,
                         fabric_core_phys.y,
                         slot_idx,
-                        worker_fabric_sem_addrs[slot_idx],
+                        worker_fabric_ready_sem_addr,
                         dst_l1_addr,
                         dst_sem_addr,
                         output_tensor_device.buffer_address(),
                         shard_idx,
                         socket_config_addr,
+                        device_metadata_l1_addr,
                     ]
                     if is_root1 and downstream_sockets is not None:
                         worker_args.extend([agg_sem_addr, persistent_core_noc_x, persistent_core_noc_y])
 
                     brisc_per_core_args.append((core, worker_args))
 
-                # Fabric cores BRISC args: worker semaphore addresses (fabric args appended later)
+                # Fabric cores BRISC args: shared ready semaphore address (fabric args appended later)
                 for fc in fabric_cores:
-                    brisc_per_core_args.append((fc, list(worker_fabric_sem_addrs)))
+                    brisc_per_core_args.append((fc, [worker_fabric_ready_sem_addr]))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -548,6 +572,7 @@ class ReduceToOneB1:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()

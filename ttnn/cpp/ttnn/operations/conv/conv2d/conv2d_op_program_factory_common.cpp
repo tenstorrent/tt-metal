@@ -22,6 +22,7 @@ namespace ttnn::prim {
 
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
@@ -66,7 +67,8 @@ std::vector<CBInfo> get_cb_info(
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
-    uint32_t input_channels_padded) {
+    uint32_t input_channels_padded,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -161,7 +163,11 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t per_core_out_ntiles =
         pconfig.per_core_out_matrix_height_ntile * pconfig.per_core_out_matrix_width_ntile;
 
-    const uint32_t num_blocks_act_w = weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        is_1d_depthwise_conv, sharding_scheme, input_channels_padded, kernel_size[1], dilation[1], input_datatype);
+    const uint32_t num_blocks_act_w = is_1d_depthwise_conv
+                                          ? (coalesce_1d_depthwise_kw_reads ? 1 : kernel_size[0] * kernel_size[1])
+                                          : weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
     const uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     const uint32_t in0_num_blocks_w =
@@ -174,17 +180,21 @@ std::vector<CBInfo> get_cb_info(
 
     {
         // Weights CB
-        // For 1D depthwise conv, the weight matrix inner dimension is act_block_h_ntiles * kernel_w,
-        // not act_block_w_ntiles (which is just padded_in_channels for depthwise).
         uint32_t weight_inner_dim_ntiles =
-            is_1d_depthwise_conv ? block_config.act_block_h_ntiles * kernel_size[1] : block_config.act_block_w_ntiles;
+            is_1d_depthwise_conv
+                ? block_config.act_block_h_ntiles * (coalesce_1d_depthwise_kw_reads ? kernel_size[1] : 1)
+                : block_config.act_block_w_ntiles;
         uint32_t weight_block_num_tiles = per_core_out_matrix_width_ntiles * weight_inner_dim_ntiles;
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
             if (!conv_config.enable_activation_reuse) {
                 const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
                 if (enable_fully_buffered_weights) {
-                    weight_block_num_tiles *= kernel_size[0];
+                    // 1D depthwise (non-coalesced) streams num_blocks_act_w one-tap weight blocks per
+                    // height block. Buffer all of them so they stay resident and are reused across
+                    // height blocks (the writer reads weights once, on the first block) instead of
+                    // re-reading from DRAM each block. Normal conv buffers kernel_size[0] blocks.
+                    weight_block_num_tiles *= is_1d_depthwise_conv ? num_blocks_act_w : kernel_size[0];
                 } else if (conv_config.enable_weights_double_buffer) {
                     weight_block_num_tiles *= 2;
                 }
@@ -200,13 +210,22 @@ std::vector<CBInfo> get_cb_info(
             .data_format = weights_df});
     }
 
-    // Matmul partials CB
+    // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation.
+    //  - Single height block: it reuses out_cb directly for the read-back, so no partials CB
+    //    (0-page entry; allocate_cbs skips the device allocation).
+    //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
+    //    double as the dest-reuse scratch across blocks, so allocate a dedicated scratch CB in the
+    //    output data format.
+    const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
+                                              sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                              !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 1 : per_core_out_ntiles,
-        .page_size = partial_tile_size,
+        .num_pages =
+            depthwise_dest_reuse_scratch ? act_block_num_tiles : (is_1d_depthwise_conv ? 0 : per_core_out_ntiles),
+        .page_size = depthwise_dest_reuse_scratch ? output_tile_size : partial_tile_size,
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
-        .data_format = partial_df});
+        .data_format = depthwise_dest_reuse_scratch ? output_df : partial_df});
 
     const bool overlap_im2col_cb =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
@@ -245,13 +264,6 @@ std::vector<CBInfo> get_cb_info(
             .page_size = input_tile_size,
             .data_format = conv_input_df});
     }
-
-    // Temp sum CB (1d depthwise conv only)
-    cb_info.emplace_back(CBInfo{
-        .name = Conv2dCb::TEMP_SUM,
-        .num_pages = is_1d_depthwise_conv ? 1 : 0,
-        .page_size = output_tile_size,
-        .data_format = output_df});
 
     // Tilized act CB
     cb_info.emplace_back(CBInfo{
@@ -293,10 +305,27 @@ std::vector<CBInfo> get_cb_info(
         .data_format = output_df});
 
     // Reader indices CB
+    // Worst case is 1 uint16 index per output row (segment headers and discontinuity markers
+    // empirically stay below this bound for supported configs). When the factory has the real
+    // DRAM config buffer it passes its actual per-core page size so the predicted CB footprint
+    // matches the CB the factory creates; auto-shard estimation passes std::nullopt.
+    const uint32_t reader_indices_worst_case_page_size =
+        pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * sizeof(uint16_t);
+    if (reader_indices_actual_page_size.has_value()) {
+        // Sanity: the worst-case formula is also what auto-shard L1 estimation uses, so if it ever
+        // underestimates the real config tensor we want to catch it here rather than silently
+        // running auto-shard with the wrong budget.
+        TT_FATAL(
+            reader_indices_actual_page_size.value() <= reader_indices_worst_case_page_size,
+            "Reader indices buffer page size {} exceeds worst-case CB size {} (config tensor "
+            "layout changed?)",
+            reader_indices_actual_page_size.value(),
+            reader_indices_worst_case_page_size);
+    }
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .page_size = reader_indices_actual_page_size.value_or(reader_indices_worst_case_page_size),
         .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
@@ -400,6 +429,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
 
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
         default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
@@ -437,6 +467,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
 
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
         default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
@@ -475,6 +506,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
     // NOLINTBEGIN(modernize-use-std-numbers)
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
@@ -534,7 +566,8 @@ static uint32_t get_tilize_cycles_per_tile(
                {DataType::BFLOAT8_B, {40, 43}}}}  // [non-fp32_dest_acc, fp32_dest_acc]
          }}};
 
-    auto arch_it = tilize_cycles.find(arch);
+    // Quasar is not yet benchmarked; reuse the Blackhole tilize-cycle table.
+    auto arch_it = tilize_cycles.find(arch == tt::ARCH::QUASAR ? tt::ARCH::BLACKHOLE : arch);
     if (arch_it == tilize_cycles.end()) {
         TT_THROW("Unsupported architecture when calculating tilize cycles");
     }
@@ -670,16 +703,20 @@ bool is_split_reader_viable(
     return is_viable;
 }
 
-void post_conv2d_op_memory_checks(
-    tt::tt_metal::Program& program,
+// Helper shared by the legacy and descriptor post-build checks: recomputes the
+// CBInfo-predicted L1 usage (CB_allocation_size + tensor_allocation_size) from
+// the operation attributes.  Callers compute the actually-emitted CB byte
+// count themselves (calculate_total_cb_size for the legacy path, summed
+// desc.cbs for the descriptor path) and compare against the returned
+// `CB_allocation_size`.
+static conv_op_l1_usage predicted_conv2d_l1_usage(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
-    Tensor& /*output_tensor*/) {
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;
     const bool has_bias = input_tensor_bias.has_value();
-    auto *device = input_tensor_a.device();
     const auto& weights_shape = input_tensor_b.padded_shape();
     const auto& sliding_window_config = operation_attributes.sliding_window_config;
     const auto& parallelization_config = operation_attributes.parallelization_config;
@@ -692,16 +729,10 @@ void post_conv2d_op_memory_checks(
     const auto& enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto& enable_activation_reuse = operation_attributes.enable_activation_reuse;
     const auto& config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
-    const auto& pre_op_l1_allocation_size_bytes = operation_attributes.pre_op_l1_allocation_size_bytes;
     const auto& force_split_reader = operation_attributes.force_split_reader;
     const auto output_channels = operation_attributes.output_channels;
     const auto groups = operation_attributes.groups;
     const auto untilize_out = operation_attributes.untilize_out;
-
-    const uint32_t post_op_l1_allocation_size =
-        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-
-    auto actual_cb_size = calculate_total_cb_size(program);
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
@@ -711,7 +742,7 @@ void post_conv2d_op_memory_checks(
 
     const std::array<uint32_t, 2> shard_shape = input_tensor_a.shard_spec().value().shape;
     const uint32_t input_channels_padded = shard_shape[1];
-    conv_op_l1_usage l1_usage = calculate_L1_usage(
+    return calculate_L1_usage(
         compute_kernel_config,
         block_config,
         parallelization_config,
@@ -732,15 +763,114 @@ void post_conv2d_op_memory_checks(
         output_image_width,
         has_bias,
         is_1d_depthwise_conv(
-            groups,
-            input_tensor_shape[3],
-            output_channels,
-            kernel_dims[0],
-            kernel_dims[1],
-            input_tensor_shape[1],
-            has_bias),
+            groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias),
         input_channels_padded,
-        skip_mcast.skip_activation_mcast);
+        skip_mcast.skip_activation_mcast,
+        reader_indices_actual_page_size);
+}
+
+void emit_cb_descriptors(
+    std::vector<CBInfo>& cb_info,
+    tt::tt_metal::ProgramDescriptor& desc,
+    const CoreRangeSet& all_cores_set,
+    tt::tt_metal::Buffer* input_buffer,
+    tt::tt_metal::Buffer* output_buffer,
+    tt::tt_metal::Buffer* indices_buffer) {
+    uint32_t cb_index = 0;
+    for (auto& cb : cb_info) {
+        if (cb.num_pages == 0) {
+            // Skip circular buffers with zero pages (matches allocate_cbs behavior).
+            continue;
+        }
+
+        tt::tt_metal::Buffer* buffer = nullptr;
+        if (cb.is_globally_allocated) {
+            if (cb.name == Conv2dCb::ACT_SHARDED) {
+                buffer = input_buffer;
+            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
+                buffer = output_buffer;
+            } else if (cb.name == Conv2dCb::READER_INDICES) {
+                buffer = indices_buffer;
+            } else {
+                TT_THROW(
+                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
+                    enchantum::to_string(cb.name));
+            }
+        }
+
+        cb.index = cb_index++;
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = cb.num_pages * cb.page_size,
+            .core_ranges = all_cores_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb.index),
+                .data_format = cb.data_format,
+                .page_size = cb.page_size,
+            }}},
+            .buffer = buffer,
+        });
+    }
+
+    for (auto& cb : cb_info) {
+        if (cb.overlapped_by_cb.has_value()) {
+            // If this CB is overlapped by another CB, mirror the overlapped CB's index.
+            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
+            cb.index = overlapped_cb.index;
+        }
+    }
+}
+
+void post_conv2d_op_memory_checks_descriptor(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
+    // Sum non-globally-allocated CB sizes from the descriptor.  Mirrors
+    // calculate_total_cb_size(program) which sums (cb->globally_allocated() ? 0 : cb->size())
+    // over the realised program: in the descriptor world, a CB is globally
+    // allocated iff its `buffer` is non-null.
+    uint32_t actual_cb_size = 0;
+    for (const auto& cb : desc.cbs) {
+        if (cb.buffer == nullptr) {
+            actual_cb_size += cb.total_size;
+        }
+    }
+
+    const conv_op_l1_usage l1_usage =
+        predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
+
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
+
+    // NOTE: the legacy post_conv2d_op_memory_checks() also verifies that the
+    // device L1 allocator advanced by exactly l1_usage.tensor_allocation_size
+    // bytes between pre_op_l1_allocation_size_bytes and post-Program-creation.
+    // That second check requires a realised Program (so create_circular_buffer
+    // has already affected the allocator) and isn't reachable from the
+    // descriptor path: the framework realises the Program after this function
+    // returns.  The CB-size equality above is the same fail-fast guard the
+    // legacy path opens with, and is sufficient to catch CBInfo vs. emission
+    // drifts.
+}
+
+void post_conv2d_op_memory_checks(
+    tt::tt_metal::Program& program,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& /*output_tensor*/,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
+    auto* device = tensor_args.a.device();
+    const auto& pre_op_l1_allocation_size_bytes = operation_attributes.pre_op_l1_allocation_size_bytes;
+
+    const uint32_t post_op_l1_allocation_size =
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+
+    const auto actual_cb_size = calculate_total_cb_size(program);
+    const conv_op_l1_usage l1_usage =
+        predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,

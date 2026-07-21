@@ -11,9 +11,9 @@
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -26,7 +26,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "sdpa_bw_compute_utils.hpp"
 
 // ----------------------------------------------------------------------
@@ -58,18 +58,19 @@
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t qWt = get_compile_time_arg_val(1);              // num tile in inner dim (qWt == kWt == vWt)
-constexpr uint32_t Ht = get_compile_time_arg_val(2);               // num_seq_len / TILE_H
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);      // sqrt(Et) - sdpa scaler factor
-constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-inf
-constexpr uint32_t block_size = get_compile_time_arg_val(6);       // block size
+constexpr uint32_t qWt = get_compile_time_arg_val(1);              // Q/K inner dim in tiles
+constexpr uint32_t vWt = get_compile_time_arg_val(2);              // V/dO/O inner dim in tiles
+constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_len / TILE_H
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) - sdpa scaler factor
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-inf
+constexpr uint32_t block_size = get_compile_time_arg_val(7);       // block size for update_grad_query (divides qWt)
 
-constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
-constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
-constexpr uint32_t cb_query = tt::CBIndex::c_2;               // Original query
-constexpr uint32_t cb_key = tt::CBIndex::c_3;                 // Original key
-constexpr uint32_t cb_value = tt::CBIndex::c_4;               // Original value
+constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
+constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;  // Attention output from forward pass
+constexpr uint32_t cb_query = tt::CBIndex::c_2;        // Original query
+constexpr uint32_t cb_key = tt::CBIndex::c_3;          // Original key
+constexpr uint32_t cb_value = tt::CBIndex::c_4;        // Original value
 #if defined(CAUSAL_MASK) || defined(USE_ATTN_MASK)
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;  // Attention mask (causal or arbitrary)
 #endif
@@ -81,9 +82,11 @@ constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_10;  // Gradient w.r.t.
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_11;        // Gradient w.r.t. QK scores
 constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_12;       // u_scalar per row
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
+constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;    // Output: u_scaler to DRAM for KV kernel
 
-const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
-const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
+const uint32_t qk_tiles = qWt;            // Q/K inner dim tiles
+const uint32_t v_tiles = vWt;             // V/dO/O inner dim tiles
+const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
 
 /**
  * Process a single row of the SDPA backward Q computation.
@@ -96,12 +99,18 @@ const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates bu
  * @param global_row_idx The global row index (across all batches/heads/sequences)
  */
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
-    cb_wait_front(cb_attn_output, tiles_per_row);
-    cb_wait_front(cb_grad_output, tiles_per_row);
-    cb_wait_front(cb_query, tiles_per_row);
+    cb_wait_front(cb_attn_output, v_tiles);
+    cb_wait_front(cb_grad_output, v_tiles);
+    cb_wait_front(cb_query, qk_tiles);
 
     compute_u_scalar_row(
-        cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
+        cb_grad_output,
+        cb_attn_output,
+        cb_u_scalar_row,
+        cb_mat_mul_reduction,
+        v_tiles,
+        scaler_bits,
+        cb_u_scaler_output);
 
     const uint32_t q_row_tile = global_row_idx % Ht;
 
@@ -111,15 +120,17 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     const uint32_t num_kv_tiles_to_process = Ht;
 #endif
 
+    cb_wait_front(cb_intermediates, num_of_interm_tiles);
+
     const uint32_t matmul_accum_reg = 0;
     for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
-        cb_wait_front(cb_key, tiles_per_row);
-        cb_wait_front(cb_value, tiles_per_row);
+        cb_wait_front(cb_key, qk_tiles);
+        cb_wait_front(cb_value, v_tiles);
 
         reconfig_data_format(cb_query, cb_key);
-        mm_init_short(cb_query, cb_key, /*transpose*/ 1);
+        matmul_init(cb_query, cb_key, /*transpose*/ 1);
         tile_regs_acquire();
-        for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        for (uint32_t tile_idx = 0; tile_idx < qk_tiles; ++tile_idx) {
             matmul_tiles(
                 cb_query,
                 cb_key,
@@ -142,16 +153,22 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         binop_with_scalar_tile_init();
         mul_unary_tile(matmul_accum_reg, scaler_bits);
 #endif
+
+        // Fused softmax: scores are still in DST at full FP32 from the matmul.
+        // Apply exp(S - lse) directly on DST — no CB roundtrip, no TF32 truncation.
+        apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates);
+
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(cb_attention_weights);
+        cb_reserve_back(cb_attention_weights, onetile);
+        // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+        pack_reconfig_data_format(cb_grad_query_accum, cb_attention_weights);
         pack_tile(matmul_accum_reg, cb_attention_weights);
         tile_regs_release();
         cb_push_back(cb_attention_weights, onetile);
 
-        apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
-
-        compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
+        compute_grad_attn_weights(
+            cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
 
         compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
@@ -159,24 +176,24 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_grad_scores,
             cb_key,
             cb_grad_query_accum,
-            tiles_per_row,
+            qk_tiles,
             block_size,
             /* do_accumulate */ (h > 0));
-        cb_wait_front(cb_grad_query_accum, tiles_per_row);
+        cb_wait_front(cb_grad_query_accum, qk_tiles);
 
-        cb_pop_front(cb_key, tiles_per_row);
-        cb_pop_front(cb_value, tiles_per_row);
+        cb_pop_front(cb_key, qk_tiles);
+        cb_pop_front(cb_value, v_tiles);
         cb_pop_front(cb_attention_weights, onetile);
         cb_pop_front(cb_grad_attn_weights, onetile);
     }
 
-    pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, tiles_per_row);
+    pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, qk_tiles);
 
     cb_pop_front(cb_u_scalar_row, onetile);
     cb_pop_front(cb_intermediates, num_of_interm_tiles);
-    cb_pop_front(cb_query, tiles_per_row);
-    cb_pop_front(cb_attn_output, tiles_per_row);
-    cb_pop_front(cb_grad_output, tiles_per_row);
+    cb_pop_front(cb_query, qk_tiles);
+    cb_pop_front(cb_attn_output, v_tiles);
+    cb_pop_front(cb_grad_output, v_tiles);
 }
 
 void kernel_main() {
@@ -193,7 +210,9 @@ void kernel_main() {
     binary_op_init_common(cb_grad_output, cb_query, cb_key);
 
     cb_wait_front(cb_mat_mul_reduction, onetile);
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // re-establishes its state with reconfig_data_format + matmul_init.
+    matmul_init(cb_query, cb_key);
 
 #ifdef CAUSAL_MASK
     // Wait for causal mask tile ONCE - it's generated by writer and will be reused for every diagonal
@@ -215,8 +234,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        process_single_row(light_global_row);
         process_single_row(heavy_global_row);
+        process_single_row(light_global_row);
     }
 #else
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

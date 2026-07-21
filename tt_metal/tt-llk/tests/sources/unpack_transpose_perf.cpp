@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -40,16 +41,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-        _llk_unpack_A_init_<>(UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_init_<>(
+            UNPACK_TRANSPOSE_FACES,
+            UNPACK_TRANSPOSE_WITHIN_FACE,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
         PROFILER_SYNC();
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
         {
@@ -63,8 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_lib_math_wrappers.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -76,20 +81,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-#ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
-#else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(TILE_NUM_FACES, formats.math);
-#endif
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(TILE_NUM_FACES, formats.math);
         PROFILER_SYNC();
     }
 
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // _llk_unpack_A     sets both A and B valid
@@ -120,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -133,15 +139,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
-        _llk_pack_init_<false, false>(formats.pack_dst);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             return;

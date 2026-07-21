@@ -191,8 +191,7 @@ void kernel_main() {
 
     if constexpr (!is_2d_fabric) {  // 1D
         setup_header_routing_1d(fwd_packet_header, fwd_start_distance, fwd_range);
-        DPRINT << "fwd_start_distance" << fwd_start_distance << ", fwd_range" << fwd_range << ENDL();
-        DEVICE_PRINT("fwd_start_distance{}, fwd_range{}\n", fwd_start_distance, fwd_range);
+        DPRINT("fwd_start_distance{}, fwd_range{}\n", fwd_start_distance, fwd_range);
     } else {  // 2D
         setup_header_routing_2d(
             fwd_packet_header, (eth_chan_directions)fwd_dir, fwd_range, my_dev_id, fwd_dev_id, fwd_mesh_id, ew_dim);

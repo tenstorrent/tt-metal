@@ -5,33 +5,37 @@
 """
 Matmul operation descriptor.
 
-Creates an OpDescriptor for matrix multiplication using the
-MatmulMultiCoreReuseOptimizedProgramFactory descriptor path.
+Creates an OpDescriptor for matrix multiplication using any of the backend
+matmul program factories.  The factory is selected automatically based on
+the ``program_config`` type, matching the dispatch logic in
+``MatmulDeviceOperation::select_program_factory``.
 
-WARNING: This descriptor always uses MatmulMultiCoreReuseOptimizedProgramFactory.
-The ttnn.matmul() path may select a different factory (e.g. multicast) for the
-same shapes.
-Further, it computes a simplified program config that does not guarantee parity
-with the ttnn.matmul() path. This descriptor is currently for demonstration purposes only.
-When all variants of matmul have a create_descriptor(), and have the ability
-to construct a program config from a CoreRangeSet so it can be offset from core 0,0,
-then this descriptor interface can be made general.
+The descriptor sets ``allowed_worker_cores`` on the program config to
+``core_range_set``, which is the single source of truth for core placement.
 """
 
-import math
 from typing import Optional
 
 import ttnn
 
-from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+from models.experimental.ops.descriptors.op_descriptor import (
+    OpDescriptor,
+    LazyOutputList,
+    core_range_set_fusion_key,
+    extend_branch_program_cache_key,
+)
 
 
+_UNSUPPORTED_FACTORY = getattr(ttnn, "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory", None)
+
+
+@OpDescriptor.create(name="matmul")
 def matmul(
     input_a: "ttnn.Tensor",
     input_b: "ttnn.Tensor",
     *,
-    core_range_set: Optional["ttnn.CoreRangeSet"] = None,
-    program_config: Optional["ttnn.MatmulMultiCoreReuseProgramConfig"] = None,
+    core_range_set: "ttnn.CoreRangeSet",
+    program_config: "ttnn.MatmulProgramConfig",
     compute_kernel_config: Optional["ttnn.DeviceComputeKernelConfig"] = None,
     output_mem_config: Optional["ttnn.MemoryConfig"] = None,
     output_dtype: Optional["ttnn.DataType"] = None,
@@ -43,9 +47,11 @@ def matmul(
     Args:
         input_a: First input tensor (on device, tiled).
         input_b: Second input tensor (on device, tiled).
-        core_range_set: Optional core range set override.
-        program_config: MatmulMultiCoreReuseProgramConfig. If None, a simple
-            single-core config is generated from tensor shapes.
+        core_range_set: Core range set for this operation.  Will be written to
+            ``program_config.allowed_worker_cores``.
+        program_config: One of the matmul program config variants
+            (e.g. MatmulMultiCoreReuseProgramConfig,
+            MatmulMultiCoreReuseMultiCastProgramConfig, etc.).
         compute_kernel_config: Compute kernel configuration.
         output_mem_config: Output memory configuration.
         output_dtype: Output data type. Defaults to input_a dtype.
@@ -57,18 +63,18 @@ def matmul(
     """
     device = input_a.device()
 
-    if core_range_set is None:
-        grid_size = device.compute_with_storage_grid_size()
-        core_range_set = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    # Detect gather_in0 early — the factory it selects (MeshWorkload) has no
+    # Python binding, so matmul_select_program_factory would raise a TypeError.
+    if getattr(program_config, "gather_in0", False):
+        raise ValueError(
+            "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory (gather_in0) "
+            "is not supported in the descriptor interface"
         )
 
-    # Auto-generate a simple program config if not provided
-    if program_config is None:
-        fp32 = getattr(compute_kernel_config, "fp32_dest_acc_en", False) if compute_kernel_config else False
-        program_config = _default_program_config(input_a, input_b, transpose_a, transpose_b, core_range_set, fp32)
+    if hasattr(program_config, "allowed_worker_cores"):
+        program_config.allowed_worker_cores = core_range_set
 
-    # Use create_matmul_attributes to finalize params (computes bcast_batch, output_dtype, etc.)
+    # Build MatmulParams
     base_params = ttnn.MatmulParams()
     base_params.program_config = program_config
     base_params.transpose_a = transpose_a
@@ -85,100 +91,37 @@ def matmul(
     # Build MatmulInputs
     tensor_args = ttnn.MatmulInputs()
     tensor_args.input_tensors = [input_a, input_b]
+    tensor_args.optional_input_tensors = [None]
 
-    # Get the output spec from the factory (shape, dtype, tile, shard shape, etc.).
-    # When the output is sharded, compute_output_specs() computes the correct shard
-    # shape/orientation but places it on a (0,0)-based grid. Replace the grid with
-    # core_range_set, which is the single source of truth for where this op lives.
-    output_spec = ttnn.MatmulDeviceOperation.compute_output_specs(operation_params, tensor_args)[0]
-
-    if output_mem_config is not None and output_mem_config.is_sharded():
-        factory_shard = output_spec.memory_config.shard_spec
-        corrected_shard = ttnn.ShardSpec(core_range_set, factory_shard.shape, factory_shard.orientation)
-        output_spec = ttnn.TensorSpec(
-            output_spec.shape,
-            output_spec.dtype,
-            output_spec.layout,
-            output_mem_config.memory_layout,
-            corrected_shard,
-            output_mem_config.buffer_type,
-            output_spec.tile,
+    # Select the program factory based on program_config type
+    factory = ttnn.matmul_select_program_factory(operation_params, tensor_args)
+    if _UNSUPPORTED_FACTORY is not None and isinstance(factory, _UNSUPPORTED_FACTORY):
+        raise ValueError(
+            "MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory (gather_in0) "
+            "is not supported in the descriptor interface"
         )
 
-    output_tensors = [ttnn.allocate_tensor_on_device(output_spec, device)]
+    # Compute program cache key
+    h = ttnn.MatmulDeviceOperation.compute_program_hash(operation_params, tensor_args)
+    program_cache_key = extend_branch_program_cache_key(h, core_range_set_fusion_key(core_range_set))
 
-    # Create descriptor via the factory.
-    # Only MatmulMultiCoreReuseOptimizedProgramFactory is supported for now.
-    program_descriptor = ttnn.MatmulMultiCoreReuseOptimizedProgramFactory.create_descriptor(
-        operation_params, tensor_args, output_tensors, core_range_set
-    )
+    # Build input dict
+    inputs = {"input_a": input_a, "input_b": input_b}
 
-    # Build OpDescriptor
-    inputs = [input_a, input_b]
-    outputs = list(output_tensors)
+    # Lazy output allocation
+    def _alloc_outputs(slots):
+        spec = ttnn.MatmulDeviceOperation.compute_output_specs(operation_params, tensor_args)[0]
+        slots[0] = ttnn.allocate_tensor_on_device(spec, device)
 
-    return OpDescriptor(program_descriptor, inputs, outputs, "matmul")
+    outputs = LazyOutputList([None], _alloc_outputs)
 
+    def _run_factory():
+        out = outputs[0]
+        return factory.create_descriptor(operation_params, tensor_args, [out], core_range_set)
 
-def _default_program_config(
-    input_a: "ttnn.Tensor",
-    input_b: "ttnn.Tensor",
-    transpose_a: bool,
-    transpose_b: bool,
-    core_range_set: "ttnn.CoreRangeSet",
-    fp32_dest_acc_en: bool,
-) -> "ttnn.MatmulMultiCoreReuseProgramConfig":
-    """Generate a MatmulMultiCoreReuseProgramConfig from tensor shapes and core grid.
-
-    Distributes M rows across cores. Each core handles all N columns.
-    """
-    TILE_HEIGHT = 32
-    TILE_WIDTH = 32
-
-    a_shape = input_a.padded_shape
-    b_shape = input_b.padded_shape
-
-    if transpose_a:
-        M = a_shape[-1] // TILE_WIDTH
-        K = a_shape[-2] // TILE_HEIGHT
-    else:
-        M = a_shape[-2] // TILE_HEIGHT
-        K = a_shape[-1] // TILE_WIDTH
-
-    if transpose_b:
-        N = b_shape[-2] // TILE_HEIGHT
-    else:
-        N = b_shape[-1] // TILE_WIDTH
-
-    # Count cores and compute bounding box from the core range set
-    num_cores = 0
-    max_x = 0
-    max_y = 0
-    for cr in core_range_set.ranges():
-        start = cr.start
-        end = cr.end
-        num_cores += (end.x - start.x + 1) * (end.y - start.y + 1)
-        max_x = max(max_x, end.x)
-        max_y = max(max_y, end.y)
-
-    grid_size = ttnn.CoreCoord(max_x + 1, max_y + 1)
-
-    per_core_M = math.ceil(M / num_cores)
-    per_core_N = N
-    in0_block_w = K
-
-    # Subblock tiling: maximize out_subblock_w under fp32/fp16 limit
-    limit = 4 if fp32_dest_acc_en else 8
-    out_subblock_w = min(per_core_N, limit)
-    while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
-        out_subblock_w -= 1
-    out_subblock_h = 1
-
-    return ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
+    return OpDescriptor(
+        factory_fn=_run_factory,
+        input_tensors=inputs,
+        output_tensors=outputs,
+        program_cache_key=program_cache_key,
     )

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include <algorithm>
 
 bool contains_element(uint32_t* arr, uint32_t size, uint32_t val) {
@@ -25,23 +28,25 @@ void kernel_main() {
     uint32_t end_row = get_arg_val<uint32_t>(3);
     uint32_t num_rows_in_dim = get_arg_val<uint32_t>(4);
     uint32_t dim_size = get_arg_val<uint32_t>(5);
+    uint32_t col_shard_id = get_arg_val<uint32_t>(6);
+    uint32_t row_page_stride = get_arg_val<uint32_t>(7);
 
     // Derived
-    constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t index_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t fill_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t onepage = 1;
 
-    const auto s0 = TensorAccessor(input_args, input_buffer_address, input_page_size);
-    const auto s1 = TensorAccessor(index_args, index_buffer_address, index_total_size);
+    Noc noc;
+    CircularBuffer cb_src(tt::CBIndex::c_0);
+    CircularBuffer cb_index(tt::CBIndex::c_1);
+
+    const auto s0 = TensorAccessor(input_args, input_buffer_address);
+    const auto s1 = TensorAccessor(index_args, index_buffer_address);
 
     // Read the entire index tensor into L1
-    cb_reserve_back(index_cb_id, onepage);
-    uint32_t index_addr = get_write_ptr(index_cb_id);
-    uint64_t index_noc_addr = s1.get_noc_addr(0);
-    noc_async_read(index_noc_addr, index_addr, index_total_size);
-    noc_async_read_barrier();
-    cb_push_back(index_cb_id, onepage);
+    cb_index.reserve_back(onepage);
+    uint32_t index_addr = cb_index.get_write_ptr();
+    noc.async_read(s1, cb_index, index_total_size, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_index.push_back(onepage);
     uint32_t* index_ptr = reinterpret_cast<uint32_t*>(index_addr);
 
     // Read input tensor pages
@@ -55,12 +60,15 @@ void kernel_main() {
 
         if (!use_filled_page) {
             // Read input page
-            cb_reserve_back(src_cb_id, onepage);
-            uint32_t input_addr = get_write_ptr(src_cb_id);
-            uint64_t input_noc_addr = s0.get_noc_addr(row_id);
-            noc_async_read(input_noc_addr, input_addr, input_page_size);
-            noc_async_read_barrier();
-            cb_push_back(src_cb_id, onepage);
+            cb_src.reserve_back(onepage);
+            noc.async_read(
+                s0,
+                cb_src,
+                input_page_size,
+                {.page_id = row_id * row_page_stride + col_shard_id, .offset_bytes = 0},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_src.push_back(onepage);
         }
     }
 }

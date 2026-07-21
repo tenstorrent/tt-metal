@@ -9,19 +9,17 @@
 #include <tuple>
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace detail {
-/**
- * Helper to create tuple of TensorAccessors from TensorAccessorArgs tuple.
- * Unlike make_tensor_accessor_tuple, this takes the actual page_size value,
- * not a Compile Time Argument (CTA) index.
- */
 template <typename... Args, uint32_t... Indexes>
-auto make_tensor_accessor_tuple_with_page_size(
+auto make_tensor_accessor_tuple_impl(
     const std::tuple<Args...>& args_tuple,
     uint32_t address_rt_arg_index_start,
     uint32_t page_size,
     std::integer_sequence<uint32_t, Indexes...>) {
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     return std::make_tuple(TensorAccessor(
         std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
 }
@@ -30,28 +28,15 @@ auto make_tensor_accessor_tuple_with_page_size(
 /**
  * Create a tuple of TensorAccessors from a tuple of TensorAccessorArgs.
  * Each tensor gets its address from consecutive RT args starting at address_rt_arg_index_start.
- * All tensors share the same page_size (actual value, not CTA index).
  */
 template <typename... Args>
 auto make_tensor_accessor_tuple_uniform_page_size(
     const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
-    return detail::make_tensor_accessor_tuple_with_page_size(
+    return detail::make_tensor_accessor_tuple_impl(
         args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, const CircularBuffer& cb, uint32_t bytes, uint32_t offset_bytes = 0) {
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
 struct TensorShape2D {
@@ -86,7 +71,7 @@ template <
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
 #ifdef READ_FROM_LOCAL_INPUT
     const LocalTensorAccessorType& in3_accessor,
@@ -101,6 +86,10 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -111,16 +100,16 @@ void read_in0_block_sync(
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                    noc_async_read_page(tile_id, in3_accessor, write_ptr);
                 } else {
 #endif
                     uint32_t tile_id = i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                    noc_async_read_page(tile_id, tensor_accessor, write_ptr);
 #ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -128,6 +117,7 @@ void read_in0_block_sync(
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -139,7 +129,7 @@ template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccesso
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -147,6 +137,10 @@ void read_in1_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -155,9 +149,9 @@ void read_in1_block_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+                noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -165,6 +159,7 @@ void read_in1_block_sync(
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -194,7 +189,7 @@ void write_block_sync(
                 continue;
             }
             uint32_t tile_id = i * shape.logical_d1 + j;
-            noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
+            noc_async_write_page(tile_id, tensor_accessor, read_ptr);
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
@@ -240,7 +235,7 @@ void read_ternary_blocks_sync(
             if (n_tile_id >= shape.logical_d1) {
                 break;
             }
-            noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
+            noc_async_read_page(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
             ternary_b_write_ptr += b_tile_size_bytes;
         }
         noc_async_read_barrier();
@@ -258,7 +253,7 @@ void read_ternary_blocks_sync(
                 }
                 if (b_i < shape.logical_d0) {
                     uint32_t tile_id = b_i * shape.logical_d1 + j;
-                    noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
+                    noc_async_read_page(tile_id, ternary_b_accessor, ternary_b_write_ptr);
                 }
                 ternary_b_write_ptr += b_tile_size_bytes;
             }
@@ -287,7 +282,7 @@ void read_ternary_blocks_sync(
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
+                noc_async_read_page(tile_id, ternary_a_accessor, ternary_a_write_ptr);
             }
             ternary_a_write_ptr += a_tile_size_bytes;
         }
@@ -325,25 +320,28 @@ void write_block_sync_granular(
                     break;
                 }
                 uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
-                noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                noc_async_write_page(tile_id, tensor_accessor, out_read_ptr);
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Drain this row's outstanding write-source reads out of the cb_out L1 slot BEFORE cb_pop_front
+        // releases it back to the compute producer. Otherwise the producer can repack the freed slot while
+        // the noc_async_write_page reads are still in flight (WAR on the output CB source) -> corrupt output.
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
  * Helper: dispatch to correct tuple element using fold expression.
- * Each branch calls noc_async_write_tile with the concrete TensorAccessor type.
+ * Each branch calls noc_async_write_page with the concrete TensorAccessor type.
  */
 template <typename Tuple, size_t... Is>
 FORCE_INLINE void write_tile_to_chunk(
     const Tuple& accessors, uint32_t chunk_idx, uint32_t tile_id, uint32_t read_ptr, std::index_sequence<Is...>) {
     // Fold expression: expands to if/else chain at compile time
-    // Each branch calls noc_async_write_tile with the concrete type
-    ((chunk_idx == Is ? (noc_async_write_tile(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
+    // Each branch calls noc_async_write_page with the concrete type
+    ((chunk_idx == Is ? (noc_async_write_page(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
 }
 
 /**
@@ -458,7 +456,9 @@ void write_block_sync_granular_split(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Flush this row's write-source reads out of the cb_out slot before releasing it (same WAR on the
+        // output CB as write_block_sync_granular above).
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }

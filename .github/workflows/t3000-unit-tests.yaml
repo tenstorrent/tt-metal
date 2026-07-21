@@ -10,27 +10,12 @@ on:
         type: choice
         options:
           - all
-          - falcon7b
-          - falcon40b
-          - llama3-small
-          - llama3.2-11b
-          - llama3.2-11b-vision
-          - n300 mesh llama3.2-11b-vision
-          - llama3.2-90b-vision
-          # - llama3.1-70b
-          - llama3.2-90b
-          - mistral
-          - mistral-small-3.1-24b-vision
-          - mixtral
           - grok
-          - unet shallow
-          - qwen25_vl
-          - qwen3_vl
-          - gemma3-small
           - dits
           - deepseek
-          - gpt-oss
           - tttv2 modules
+          - mistral-small-3.1-24b-vision
+          - qwen3_vl
       platform:
         required: false
         type: choice
@@ -56,16 +41,20 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
+    - cron: "0 */6 * * *" # This cron schedule runs the workflow every 6 hours
 
 permissions:
   packages: write
   contents: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -74,7 +63,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-unit-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:

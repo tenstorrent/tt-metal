@@ -23,6 +23,9 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
     auto input_shape = input_tensor.padded_shape();
     auto topk_shape = topk_mask_tensor.padded_shape();
     auto expert_shape = expert_mask_tensor.padded_shape();
+    auto input_logical_shape = input_tensor.logical_shape();
+    auto topk_logical_shape = topk_mask_tensor.logical_shape();
+    auto expert_logical_shape = expert_mask_tensor.logical_shape();
 
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
     TT_FATAL(args.k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", args.k);
@@ -43,13 +46,33 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");
     TT_FATAL(input_tensor.layout() == Layout::TILE, "The input must be in tiled format");
 
-    TT_FATAL(topk_shape[-1] == args.k, "Topk shape inner dim must be equal to k, got {}", topk_shape[-1]);
+    auto is_row_broadcastable_mask = [](const auto& shape, uint32_t expected_last_dim) {
+        if (shape.rank() == 0 || shape[-1] != expected_last_dim) {
+            return false;
+        }
+        for (uint32_t d = 0; d + 1 < shape.rank(); ++d) {
+            if (shape[d] != 1) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     TT_FATAL(
-        expert_shape[-1] == input_shape[-1],
-        "Expert shape inner dim must be equal to input_shape[-1], got {}",
-        expert_shape[-1]);
-    TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be equal to 32, got {}", topk_shape[-2]);
-    TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]);
+        is_row_broadcastable_mask(topk_logical_shape, args.k),
+        "Topk mask must be row-broadcastable with last dim == k. Got rank={} and shape={} for k={}",
+        topk_logical_shape.rank(),
+        topk_logical_shape,
+        args.k);
+    TT_FATAL(
+        is_row_broadcastable_mask(expert_logical_shape, input_logical_shape[-1]),
+        "Expert mask must be row-broadcastable with last dim == input_shape[-1]. Got rank={} and shape={} for "
+        "input_shape[-1]={}",
+        expert_logical_shape.rank(),
+        expert_logical_shape,
+        input_logical_shape[-1]);
+    TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be padded to 32, got {}", topk_shape[-2]);
+    TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be padded to 32, got {}", expert_shape[-2]);
 }
 
 TensorSpec MoeDeviceOperation::compute_output_specs(

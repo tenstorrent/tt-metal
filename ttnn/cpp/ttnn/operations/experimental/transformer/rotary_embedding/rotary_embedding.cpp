@@ -21,9 +21,11 @@ ttnn::Tensor rotary_embedding(
 
     using tt::tt_metal::PadValue;
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
-        "Input X dimension ({}) must be divisible by {} for tiling.",
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dimension ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint "
+        "must align with a tile boundary).",
         input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
         TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
@@ -31,7 +33,7 @@ ttnn::Tensor rotary_embedding(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(
-        cos_cache.padded_shape() == sin_cache.padded_shape(),
+        cos_cache.logical_shape() == sin_cache.logical_shape(),
         "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
         cos_cache.padded_shape(),
         sin_cache.padded_shape());
@@ -42,6 +44,7 @@ ttnn::Tensor rotary_embedding(
         X,
         cos_cache.padded_shape());
 
+    uint32_t cos_seq_len = cos_cache.logical_shape()[-2];
     if (token_index.has_value()) {
         seq_len = input_tensor.padded_shape()[0];
         TT_FATAL(
@@ -50,16 +53,18 @@ ttnn::Tensor rotary_embedding(
             seq_len);
 
         TT_FATAL(
-            cos_cache.padded_shape()[-2] >= token_index,
-            "Cosine cache dimensions must cover the token index. Token index: {}, Cos cache dimension: {}.",
+            cos_seq_len > token_index.value(),
+            "Cosine cache must cover the token index. Token index: {}, Cos cache sequence length: {}.",
             token_index.value(),
-            cos_cache.padded_shape()[-2]);
+            cos_seq_len);
     } else {
+        uint32_t input_seq_len = input_tensor.logical_shape()[-2];
         TT_FATAL(
-            cos_cache.padded_shape()[-2] >= seq_len,
-            "Cosine cache dimensions must cover the sequence length. Sequence length: {}, Cos cache dimension: {}.",
-            seq_len,
-            cos_cache.padded_shape()[-2]);
+            cos_seq_len >= input_seq_len,
+            "Cosine cache must cover the input sequence length. Input sequence length: {}, "
+            "Cos cache sequence length: {}.",
+            input_seq_len,
+            cos_seq_len);
     }
 
     auto arch = input_tensor.device()->arch();

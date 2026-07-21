@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for diff_line_numbers, diff_file_paths, _truncate_diff, and check_prerequisites."""
+"""Tests for GitHub client helpers."""
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -13,8 +14,8 @@ from bug_checker.github_client import (
     check_prerequisites,
     diff_file_paths,
     diff_line_numbers,
+    fetch_pr_info,
 )
-
 
 DIFF_SINGLE_HUNK = """\
 diff --git a/foo/bar.cpp b/foo/bar.cpp
@@ -148,6 +149,41 @@ def test_diff_file_paths_empty():
     assert diff_file_paths("") == set()
 
 
+# --- fetch_pr_info ---
+
+
+@patch("bug_checker.github_client._gh")
+def test_fetch_pr_info_uses_gh_fields_supported_by_older_clients(mock_gh):
+    pr_json = json.dumps(
+        {
+            "title": "Test PR",
+            "labels": [{"name": "area:ops"}],
+            "files": [{"path": "ttnn/foo.cpp"}],
+            "commits": [{"oid": "base"}, {"oid": "head"}],
+        }
+    )
+    diff = "diff --git a/ttnn/foo.cpp b/ttnn/foo.cpp\n@@ -1 +1 @@\n+new\n"
+    mock_gh.side_effect = [pr_json, diff]
+
+    pr_info = fetch_pr_info(123)
+
+    assert pr_info.title == "Test PR"
+    assert pr_info.base_sha == ""
+    assert pr_info.head_sha == "head"
+    assert pr_info.changed_files == ["ttnn/foo.cpp"]
+    assert pr_info.labels == ["area:ops"]
+    assert pr_info.diff == diff
+    mock_gh.assert_any_call(
+        "pr",
+        "view",
+        "123",
+        "--repo",
+        "tenstorrent/tt-metal",
+        "--json",
+        "title,labels,files,commits",
+    )
+
+
 # --- _truncate_diff ---
 
 
@@ -176,9 +212,7 @@ def test_truncate_diff_identifies_cut_files():
 
     # file_a alone exceeds MAX_DIFF_LINES, so file_b's header falls after the cutoff.
     # file_a's header survived but its content is partial, so both are truncated.
-    diff = _make_diff_for_files(
-        ["file_a.cpp", "file_b.cpp"], lines_per_file=MAX_DIFF_LINES
-    )
+    diff = _make_diff_for_files(["file_a.cpp", "file_b.cpp"], lines_per_file=MAX_DIFF_LINES)
     result_diff, truncated = _truncate_diff(diff, ["file_a.cpp", "file_b.cpp"])
     assert "file_b.cpp" in truncated
     assert "file_a.cpp" in truncated

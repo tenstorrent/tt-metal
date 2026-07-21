@@ -36,15 +36,17 @@ on:
   schedule:
     # Every 2 hours (UTC)
     - cron: "0 */2 * * *"
-  push:
-    branches: ["roseli/0-refactor-galaxy-quick2"]
 
 run-name: "(Galaxy) Sanity"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -54,10 +56,10 @@ jobs:
       build-wheel: true
 
   galaxy-sanity-test:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-sanity-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

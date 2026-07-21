@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -22,17 +22,17 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_in0);
+    Noc noc;
+    DataflowBuffer dfb(cb_id_in0);
 
 #ifdef OUT_SHARDED
-    cb.wait_front(onetile);
+    dfb.wait_front(onetile);
 #else
 
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
 #ifdef BACKWARDS
     uint32_t end_id = -num_tiles_per_2d;
@@ -49,11 +49,11 @@ void kernel_main() {
                  i < end_id + num_tiles_per_2d * dim;
                  i = i + tiles_per_row) {
 #endif
-                cb.reserve_back(onetile);
-                noc.async_read(s, cb, tile_bytes, {.page_id = static_cast<uint32_t>(i + k)}, {.offset_bytes = 0});
+                dfb.reserve_back(onetile);
+                noc.async_read(s, dfb, tile_bytes, {.page_id = static_cast<uint32_t>(i + k)}, {.offset_bytes = 0});
 
                 noc.async_read_barrier();
-                cb.push_back(onetile);
+                dfb.push_back(onetile);
             }
         }
     }

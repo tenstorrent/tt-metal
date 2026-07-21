@@ -25,9 +25,9 @@ void kernel_main() {
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy. But may not be the most efficient way to do it in all cases.
     constexpr auto a_args = TensorAccessorArgs<0>();
-    const auto a = TensorAccessor(a_args, a_addr, tile_size_bytes);
+    const auto a = TensorAccessor(a_args, a_addr);
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    const auto b = TensorAccessor(b_args, b_addr, tile_size_bytes);
+    const auto b = TensorAccessor(b_args, b_addr);
 
     // Now we loop over all the tiles and read them into the circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -38,15 +38,15 @@ void kernel_main() {
                                      // Deciding how large the buffer should be is a tradeoff.
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-        noc_async_read_tile(i, a, cb_in0_addr);  // read the tile into the circular buffer
-        noc_async_read_tile(i, b, cb_in1_addr);  // We can overlap async reads and writes
+        noc_async_read_page(i, a, cb_in0_addr);  // read the tile into the circular buffer
+        noc_async_read_page(i, b, cb_in1_addr);  // We can overlap async reads and writes
                                                  // to reduce the data movement overhead.
 
         // NOTE: Since circular buffers are backed by SRAM, we can actually access them by
         // casting the address to a pointer. This is not helpful in most cases as the CPU
         // is quite slow compared to the tensor/simd engines. But useful for debugging.
         // uint16_t* ptr = (uint16_t*)cb_in0_addr;
-        // DEVICE_PRINT("cb_in0_addr: {} {}\n", ptr, *ptr);
+        // DPRINT("cb_in0_addr: {} {}\n", ptr, *ptr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
         cb_push_back(cb_in0, 1);

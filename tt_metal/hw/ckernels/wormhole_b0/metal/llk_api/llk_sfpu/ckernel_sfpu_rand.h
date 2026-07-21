@@ -5,6 +5,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 
 using namespace sfpi;
 
@@ -12,6 +13,7 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void rand_init(uint32_t seed) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     init_prng_seed(seed);
 }
 
@@ -46,7 +48,7 @@ inline void rand(uint32_t from, uint32_t scale) {
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
 
-        TTI_SFPSTORE(0, 3, 3, 0);
+        TTI_SFPSTORE(0, InstrModLoadStore::FP32, 3, 0);
         dst_reg++;
     }
 }

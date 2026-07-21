@@ -12,7 +12,10 @@ from models.demos.deepseek_v3_b1.weights.cache.cache import EphemeralTensorCache
 from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 from models.demos.deepseek_v3_b1.weights.cache.types import (
     ArtifactTarget,
+    BspmVariant,
     CacheContext,
+    CompressedTensorBuildInputs,
+    CompressedTensorTarget,
     Fingerprint,
     FusionGroupSpec,
     MeshMapperConfig,
@@ -21,16 +24,42 @@ from models.demos.deepseek_v3_b1.weights.cache.types import (
     Shard2dMeshMapper,
     ShardMeshMapper,
     SourceTensorSelection,
+    SramCompressedTensorTarget,
     TensorTarget,
 )
 
 
-def __getattr__(name: str):
-    """Lazy export of ``create_overlapped_tensor`` to avoid import cycles."""
-    if name == "create_overlapped_tensor":
-        from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor as _cot
+def create_overlapped_tensor(*args, **kwargs):
+    """Lazy wrapper — defers heavy fuse imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.fuse import create_overlapped_tensor as _cot
 
-        return _cot
+    return _cot(*args, **kwargs)
+
+
+def get_or_create_bspm_expert(*args, **kwargs):
+    """Lazy wrapper — defers bspm_expert_cache imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert as _fn
+
+    return _fn(*args, **kwargs)
+
+
+def get_or_create_sram_compressed_expert(*args, **kwargs):
+    """Lazy wrapper — defers sram_compressed_cache imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.sram_compressed_cache import (
+        get_or_create_sram_compressed_expert as _fn,
+    )
+
+    return _fn(*args, **kwargs)
+
+
+def get_or_create_bspm_expert_tp8(*args, **kwargs):
+    """Lazy wrapper — defers bspm_expert_cache imports until first call."""
+    from models.demos.deepseek_v3_b1.weights.cache.bspm_expert_cache import get_or_create_bspm_expert_tp8 as _fn
+
+    return _fn(*args, **kwargs)
+
+
+def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -42,22 +71,31 @@ class CacheConfig:
     context: CacheContext
 
     @classmethod
-    def ephemeral(cls, *, move_to_device: bool = True) -> CacheConfig:
-        """Config with in-memory cache only (no disk); used when callers omit ``cache_config``."""
+    def ephemeral(cls, *, move_to_device: bool = True, mesh_shape: tuple[int, int] = (1, 1)) -> CacheConfig:
+        """Config with in-memory cache only (no disk); used when callers omit ``cache_config``.
+
+        ``mesh_shape`` must match the actual device mesh — the TP8 cache helpers
+        (e.g. :func:`get_or_create_bspm_expert_tp8`) cross-check ``Fingerprint.mesh_shape``
+        against the runtime device mesh, so leaving the default ``(1, 1)`` on a
+        multi-device run will raise.
+        """
         return cls(
             cache=EphemeralTensorCache(move_to_device=move_to_device),
             context=CacheContext(
                 schema_version=0,
                 hf_model_id="ephemeral",
                 hf_revision="ephemeral",
-                mesh_shape=(1, 1),
+                mesh_shape=mesh_shape,
             ),
         )
 
 
 __all__ = [
     "ArtifactTarget",
+    "BspmVariant",
     "CacheConfig",
+    "CompressedTensorBuildInputs",
+    "CompressedTensorTarget",
     "EphemeralTensorCache",
     "CacheContext",
     "Fingerprint",
@@ -68,9 +106,13 @@ __all__ = [
     "Shard2dMeshMapper",
     "ShardMeshMapper",
     "SourceTensorSelection",
+    "SramCompressedTensorTarget",
     "OverlappedTensorSpec",
     "TensorCache",
     "TensorCacheProtocol",
     "TensorTarget",
     "create_overlapped_tensor",
+    "get_or_create_bspm_expert",
+    "get_or_create_bspm_expert_tp8",
+    "get_or_create_sram_compressed_expert",
 ]

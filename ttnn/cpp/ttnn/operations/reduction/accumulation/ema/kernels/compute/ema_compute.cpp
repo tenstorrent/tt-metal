@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/ema.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "../../../device/kernels/accumulation_common.hpp"
 
 /*
@@ -58,7 +58,7 @@ inline void ema_sfpi_tile(
     float alpha,
     float beta,
     bool first_sample) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(
+    MATH(_llk_math_eltwise_binary_sfpu_params_(
         ema_sfpi_face, inp_dst_index, prv_dst_index, out_dst_index,
         VectorMode::RC, alpha, beta, first_sample));
 }
@@ -79,9 +79,9 @@ void kernel_main() {
     constexpr auto dst_cb_idx = tt::CBIndex::c_1;
     constexpr auto trp_cb_idx = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_src(src_cb_idx);
-    experimental::CircularBuffer cb_dst(dst_cb_idx);
-    experimental::CircularBuffer cb_trp(trp_cb_idx);
+    CircularBuffer cb_src(src_cb_idx);
+    CircularBuffer cb_dst(dst_cb_idx);
+    CircularBuffer cb_trp(trp_cb_idx);
 
     // DST indices
     // -----------
@@ -90,8 +90,9 @@ void kernel_main() {
 
     //-------------------------------------------------------------------------
     // Main loop - compute ema for each batch
+    compute_kernel_hw_startup(src_cb_idx, dst_cb_idx);
     ema_init(alpha_bits, beta_bits);
-    transpose_wh_init(src_cb_idx, dst_cb_idx);
+    transpose_init(src_cb_idx);
 
     for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
         // For each batch, clear the previous output
@@ -100,7 +101,7 @@ void kernel_main() {
             // Read input, transpose and compute ema
             cb_src.wait_front(ONE_TILE);
             tile_regs_acquire();
-            transpose_wh_tile(src_cb_idx, 0, inp_dst_index);
+            transpose_tile(src_cb_idx, 0, inp_dst_index);
             ema_tile(inp_dst_index);
             tile_regs_commit();
             cb_src.pop_front(ONE_TILE);
@@ -114,7 +115,7 @@ void kernel_main() {
             // Transpose back and write to output
             cb_trp.wait_front(ONE_TILE);
             tile_regs_acquire();
-            transpose_wh_tile(trp_cb_idx, 0, output_dst_index);
+            transpose_tile(trp_cb_idx, 0, output_dst_index);
             tile_regs_commit();
             cb_trp.pop_front(ONE_TILE);
 

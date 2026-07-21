@@ -8,11 +8,13 @@
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <string_view>
+#include <tt_stl/assert.hpp>
 
 std::string tt::get_string(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "WORMHOLE_B0"; break;
         case tt::ARCH::BLACKHOLE: return "BLACKHOLE"; break;
+        case tt::ARCH::QUASAR: return "QUASAR"; break;
         case tt::ARCH::Invalid:
         default: return "Invalid"; break;
     }
@@ -22,6 +24,7 @@ std::string tt::get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
+        case tt::ARCH::QUASAR: return "quasar"; break;
         case tt::ARCH::Invalid:
         default: return "invalid"; break;
     }
@@ -31,6 +34,7 @@ std::string tt::get_alias(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
+        case tt::ARCH::QUASAR: return "quasar"; break;
         default: return "invalid"; break;
     }
 }
@@ -55,8 +59,77 @@ tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
 bool tt::is_integer_format(DataFormat format) {
     return (
         (format == DataFormat::UInt32) || (format == DataFormat::Int8) || (format == DataFormat::UInt16) ||
-        (format == DataFormat::UInt8) || (format == DataFormat::Int32) || (format == DataFormat::RawUInt32) ||
-        (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
+        (format == DataFormat::Int16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32) ||
+        (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
+}
+
+bool tt::is_fp8_format(DataFormat format) { return format == DataFormat::Fp8_e4m3 || format == DataFormat::Lf8; }
+
+// TT-1.x (Wormhole / Blackhole) host-side enumeration.
+bool is_supported_wormhole_blackhole(tt::DataFormat format, bool is_blackhole) {
+    switch (format) {
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Bfp2_b:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp8_b:
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int32:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::RawUInt8:
+        case tt::DataFormat::RawUInt16:
+        case tt::DataFormat::RawUInt32:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt16:
+        case tt::DataFormat::UInt32: return true;
+        case tt::DataFormat::Fp8_e4m3: return is_blackhole;
+        case tt::DataFormat::Invalid:
+        default: return false;
+    }
+}
+
+// TT-2.x (Quasar) host-side enumeration.
+bool is_supported_quasar(tt::DataFormat format) {
+    switch (format) {
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Fp8_e4m3:
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int16:
+        case tt::DataFormat::Int32:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::MxFp4:
+        case tt::DataFormat::MxFp6P:
+        case tt::DataFormat::MxFp6R:
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P:
+        case tt::DataFormat::MxInt8:
+        case tt::DataFormat::MxInt4:
+        case tt::DataFormat::MxInt2:
+        case tt::DataFormat::RawUInt8:
+        case tt::DataFormat::RawUInt16:
+        case tt::DataFormat::RawUInt32:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::UInt8: return true;
+        case tt::DataFormat::Invalid:
+        default: return false;
+    }
+}
+
+bool tt::is_data_format_supported(DataFormat format, ARCH arch) {
+    switch (arch) {
+        case ARCH::WORMHOLE_B0: return is_supported_wormhole_blackhole(format, /*is_blackhole=*/false);
+        case ARCH::BLACKHOLE: return is_supported_wormhole_blackhole(format, /*is_blackhole=*/true);
+        case ARCH::QUASAR: return is_supported_quasar(format);
+        case ARCH::Invalid:
+        default: TT_FATAL(false, "Unsupported architecture");
+    }
 }
 
 std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
@@ -75,7 +148,16 @@ std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::UInt8: os << "UInt8"; break;
         case DataFormat::Lf8: os << "Lf8"; break;
         case DataFormat::Fp8_e4m3: os << "Fp8_e4m3"; break;
+        case DataFormat::MxFp4: os << "MxFp4"; break;
+        case DataFormat::MxFp6P: os << "MxFp6P"; break;
+        case DataFormat::MxFp6R: os << "MxFp6R"; break;
+        case DataFormat::MxFp8R: os << "MxFp8R"; break;
+        case DataFormat::MxFp8P: os << "MxFp8P"; break;
+        case DataFormat::MxInt8: os << "MxInt8"; break;
+        case DataFormat::MxInt4: os << "MxInt4"; break;
+        case DataFormat::MxInt2: os << "MxInt2"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
+        case DataFormat::Int16: os << "Int16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
         case DataFormat::Int32: os << "Int32"; break;
         case DataFormat::RawUInt8: os << "RawUInt8"; break;

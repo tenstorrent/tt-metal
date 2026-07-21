@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -547,6 +548,13 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     sizes.in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
 
     sizes.x_CB_size = in0_block_tiles * single_tile_size;
+    if (is_post_all_gather && !rms_norm) {
+        // Non-RMSNORM post-allgather reuses cb_x (c_24) as both cb_ex_sqr and cb_im.
+        // The allgather worker writes 1 tile to cb_ex_sqr first, advancing the write
+        // pointer. The CB needs an extra tile so the subsequent cb_im write has enough
+        // contiguous space.
+        sizes.x_CB_size += single_tile_size;
+    }
     sizes.xmm_CB_size = in0_block_tiles * single_tile_size;
 
     sizes.ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
@@ -748,20 +756,42 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
     // Welford-specific compute args
     if (ctx.use_welford) {
         const uint32_t tile_width = ctx.tile_width;
-        uint32_t last_tile_W = ctx.K - (((ctx.K - tile_width) / tile_width) * tile_width);
+        // Number of valid (logical) columns in the final tile of the width. The kernel uses this
+        // both to bound the partial Welford tile and, via last_block_w, to weight the final width
+        // shard in the cross-core combine, so it must reflect the logical width, not padded K.
+        uint32_t last_tile_W = (ctx.logical_K % tile_width == 0) ? tile_width : (ctx.logical_K % tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
+        const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
+        // Number of valid (logical) tiles the final width block reduces. The other width blocks each own
+        // block_wt tiles; the final block owns the remainder. Each block spans a whole number of tiles
+        // (block_w columns), so when the logical width does not fill them evenly the final core owns
+        // fewer than block_wt tiles, and the cross-core combine must weight it by its true width, not
+        // block_w. A partial boundary tile is counted as a valid tile here; its valid-column count is
+        // carried separately in last_tile_W and combined into last_block_w.
+        // For example, w=96 gives 3 tiles, which sharded on two cores leaves two real tiles on the
+        // first core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles),
+        // the second core owns last_block_wt = 1 tile that is itself partial (last_tile_W = 16 valid
+        // columns) plus one padding tile.
+        // The subtraction below does not underflow: validate_sharded_input requires the trailing width pad
+        // to be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < Kt, and the padded width
+        // Kt equals logical_Kt (padded_shape rounds the logical width up to a whole tile). So
+        // (num_blocks - 1) * block_wt is strictly less than logical_Kt, and the final width block always
+        // owns at least one logical tile: last_block_wt >= 1.
+        const uint32_t last_block_wt = logical_Kt - (ctx.grid->num_blocks - 1) * ctx.block_wt;
 
         args.compute_all_to_all.push_back(tile_width);
         args.compute_all_to_all.push_back(last_tile_W);
-        args.compute_all_to_all.push_back(ctx.K);
+        args.compute_all_to_all.push_back(ctx.logical_K);
         args.compute_all_to_all.push_back(eps_u32);
         args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
+        args.compute_all_to_all.push_back(last_block_wt);
 
         args.compute_not_all_to_all.push_back(tile_width);
         args.compute_not_all_to_all.push_back(last_tile_W);
-        args.compute_not_all_to_all.push_back(ctx.K);
+        args.compute_not_all_to_all.push_back(ctx.logical_K);
         args.compute_not_all_to_all.push_back(eps_u32);
         args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
+        args.compute_not_all_to_all.push_back(last_block_wt);
     }
 
     return args;
@@ -770,6 +800,31 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 //////////////////////////////////////////////////////////////////////////////
 // Kernel and CB descriptor builders
 //////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
+// build_writer_args() lays out the gamma/beta base addresses at fixed writer arg indices 3 and 4.
+constexpr uint32_t kWriterGammaArgIdx = 3;
+constexpr uint32_t kWriterBetaArgIdx = 4;
+
+// Bind the gamma/beta writer address slots to their Buffer* so the framework patches them on
+// cache hits. A null buffer (absent optional tensor) leaves the baked 0 untouched.
+void bind_writer_gamma_beta(KernelDescriptor& desc, Buffer* gamma_buffer, Buffer* beta_buffer) {
+    if (gamma_buffer == nullptr && beta_buffer == nullptr) {
+        return;
+    }
+    for (const auto& core_args : desc.runtime_args) {
+        const CoreCoord& core = core_args.first;
+        if (gamma_buffer != nullptr) {
+            desc.buffer_bindings.push_back({core, kWriterGammaArgIdx, gamma_buffer});
+        }
+        if (beta_buffer != nullptr) {
+            desc.buffer_bindings.push_back({core, kWriterBetaArgIdx, beta_buffer});
+        }
+    }
+}
+
+}  // namespace
 
 void add_kernel_descriptors(
     ProgramDescriptor& program_descriptor,
@@ -797,6 +852,14 @@ void add_kernel_descriptors(
         {"cb_in_2", tt::CBIndex::c_2},
         {"cb_eps", tt::CBIndex::c_3},
         {"cb_in_4", tt::CBIndex::c_4},
+        // On-device column mask (non-distributed, generated by the writer under DO_COL_MASK): the mask
+        // CB and the logical width (where the padding columns begin).
+        {"cb_col_mask", tt::CBIndex::c_19},
+        {"logical_K", kernel_config.logical_K},
+        // Per-core width in tiles and the Welford flag, shared by both writer descriptors. The
+        // per-role is_all_to_all_worker flag is appended per descriptor below, since it differs.
+        {"block_w", kernel_config.block_wt},
+        {"use_welford", static_cast<uint32_t>(kernel_config.use_welford)},
     };
 
     KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
@@ -818,6 +881,17 @@ void add_kernel_descriptors(
         {"cb_xmm", tt::CBIndex::c_18},
         {"cb_ex2pe", tt::CBIndex::c_20},
         {"cb_x", tt::CBIndex::c_24},
+        // Welford-fp32 alias of cb_x (c_0 in non-fused mode, c_24 in fused mode). When the
+        // alias is active the kernel reads cb_x_welford for the Welford section so the unpacker
+        // takes the UnpackToDestFp32 path; the post-Welford eltwise still reads cb_x via SrcA.
+        // When inactive, cb_x_welford == cb_x on the kernel side (see
+        // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
+        {"cb_x_welford", tt::CBIndex::c_29},
+        {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
+        // Column mask for the non-tile-aligned path. CB 14 (E[x] scratch) is LayerNorm-only; CB 19
+        // (the writer-generated mask) is applied at every masking site and shared with RMSNorm.
+        {"cb_mask_scratch", tt::CBIndex::c_14},
+        {"cb_col_mask_packed", tt::CBIndex::c_19},
     };
 
     // Reader sender kernel
@@ -877,9 +951,12 @@ void add_kernel_descriptors(
     writer_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_sender_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
     writer_sender_kernel_desc.compile_time_args = std::move(kernel_config.writer_sender_ct_args);
-    writer_sender_kernel_desc.named_compile_time_args = writer_cb_named_args;
+    auto writer_sender_named_args = writer_cb_named_args;
+    writer_sender_named_args.push_back({"is_all_to_all_worker", 1});
+    writer_sender_kernel_desc.named_compile_time_args = std::move(writer_sender_named_args);
     writer_sender_kernel_desc.defines = kernel_config.writer_defines;
     writer_sender_kernel_desc.runtime_args = std::move(kernel_config.writer_sender_rt_args);
+    bind_writer_gamma_beta(writer_sender_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
     writer_sender_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = kernel_config.writer_noc,
@@ -893,9 +970,12 @@ void add_kernel_descriptors(
         writer_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         writer_receiver_kernel_desc.compile_time_args = std::move(kernel_config.writer_receiver_ct_args);
-        writer_receiver_kernel_desc.named_compile_time_args = writer_cb_named_args;
+        auto writer_receiver_named_args = writer_cb_named_args;
+        writer_receiver_named_args.push_back({"is_all_to_all_worker", 0});
+        writer_receiver_kernel_desc.named_compile_time_args = std::move(writer_receiver_named_args);
         writer_receiver_kernel_desc.defines = std::move(kernel_config.writer_defines);
         writer_receiver_kernel_desc.runtime_args = std::move(kernel_config.writer_receiver_rt_args);
+        bind_writer_gamma_beta(writer_receiver_kernel_desc, kernel_config.gamma_buffer, kernel_config.beta_buffer);
         writer_receiver_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = kernel_config.writer_noc,
@@ -905,6 +985,22 @@ void add_kernel_descriptors(
 
     // Compute kernel (all-to-all cores)
     KernelDescriptor compute_all_to_all_kernel_desc;
+    // Welford-fp32 alias index gets UnpackToDestFp32 mode so the welford section reads full
+    // FP32 into DEST via cb_x_welford (c_29). cb_x itself (c_0 non-fused, c_24 fused) stays at
+    // Default mode so the post-welford FPU eltwise (sub_tiles_bcast_cols) keeps reading via
+    // SrcA TF32.
+    //
+    // cb_ex_global (c_15) was considered and rejected. Its only consumer is transpose_tile,
+    // which would benefit from UnpackToDestFp32 in isolation, but the transpose result is then
+    // packed into cb_transpose and the downstream consumers (sub_tiles_bcast_cols /
+    // mul_tiles_bcast_cols) read cb_transpose via SrcA, truncating to TF32.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (kernel_config.welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     compute_all_to_all_kernel_desc.kernel_source = kernel_config.compute_path;
     compute_all_to_all_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_all_to_all_kernel_desc.core_ranges = core_ranges.all_to_all_cores;
@@ -915,6 +1011,8 @@ void add_kernel_descriptors(
     compute_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = kernel_config.math_fidelity,
         .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+        .dst_full_sync_en = kernel_config.dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = kernel_config.math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_all_to_all_kernel_desc));
 
@@ -931,6 +1029,8 @@ void add_kernel_descriptors(
         compute_not_all_to_all_kernel_desc.config = ComputeConfigDescriptor{
             .math_fidelity = kernel_config.math_fidelity,
             .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+            .dst_full_sync_en = kernel_config.dst_full_sync_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = kernel_config.math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_not_all_to_all_kernel_desc));
     }
@@ -956,14 +1056,27 @@ void add_cb_descriptors(
         return cb_desc;
     };
 
-    // CB 0: in0 sharded
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        cb_config.in0_CB_size,
-        core_ranges.all_cores,
-        tt::CBIndex::c_0,
-        cb_config.in_data_format,
-        cb_config.in_single_tile_size,
-        cb_config.a_buffer));
+    // CB 0: in0 sharded. In non-fused welford-fp32 mode we also register c_29 as a second
+    // buffer index on the same SRAM so the Welford section can read with UnpackToDestFp32
+    // while the post-Welford eltwise keeps reading c_0 via SrcA.
+    // In fused mode c_0 carries the raw input which Welford never reads -- Welford
+    // reads the post-add result in c_24 instead -- so the alias goes there (see CB 24 below).
+    {
+        auto cb0_desc = make_cb_descriptor(
+            cb_config.in0_CB_size,
+            core_ranges.all_cores,
+            tt::CBIndex::c_0,
+            cb_config.in_data_format,
+            cb_config.in_single_tile_size,
+            cb_config.a_buffer);
+        if (cb_config.welford_fp32_alias && !cb_config.has_b) {
+            cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                .data_format = cb_config.in_data_format,
+                .page_size = cb_config.in_single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb0_desc));
+    }
 
     // CB 1: in1 sharded (if b)
     if (cb_config.has_b) {
@@ -1005,13 +1118,24 @@ void add_cb_descriptors(
             cb_config.beta_single_tile_size));
     }
 
-    // CB 24: x
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        cb_config.x_CB_size,
-        core_ranges.all_cores,
-        tt::CBIndex::c_24,
-        cb_config.cb_data_format,
-        cb_config.single_tile_size));
+    // CB 24: x. In fused welford-fp32 mode we add c_29 as a second buffer index on c_24
+    // (the post-add result), backed by the same SRAM, configured with UnpackToDestFp32
+    // for the Welford section. The post-Welford eltwise still reads c_24 via SrcA (TF32).
+    {
+        auto cbx_desc = make_cb_descriptor(
+            cb_config.x_CB_size,
+            core_ranges.all_cores,
+            tt::CBIndex::c_24,
+            cb_config.cb_data_format,
+            cb_config.single_tile_size);
+        if (cb_config.welford_fp32_alias && cb_config.has_b) {
+            cbx_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                .data_format = cb_config.cb_data_format,
+                .page_size = cb_config.single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cbx_desc));
+    }
 
     // CB 18: xmm
     program_descriptor.cbs.push_back(make_cb_descriptor(
@@ -1051,6 +1175,27 @@ void add_cb_descriptors(
             tt::CBIndex::c_2,
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
+        if (cb_config.do_legacy_layernorm_col_mask) {
+            // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction (so cb_in stays
+            // intact for the (x - E[x]) pass). The mask itself is the writer-generated CB 19 below.
+            program_descriptor.cbs.push_back(make_cb_descriptor(
+                cb_config.xmm_CB_size,
+                core_ranges.all_cores,
+                tt::CBIndex::c_14,
+                cb_config.cb_data_format,
+                cb_config.single_tile_size));
+        }
+        if (cb_config.do_col_mask) {
+            // CB 19: writer-generated column mask, block_wt tiles (one tile-row), always in bfloat16.
+            // The mask holds only 1.0 or 0.0 in bfloat16. The writer fills it per core from the core's
+            // width position (full / partial / all-padding per tile); compute waits on it and reads by tile index.
+            program_descriptor.cbs.push_back(make_cb_descriptor(
+                cb_config.col_mask_gen_CB_size_bytes,
+                core_ranges.all_cores,
+                tt::CBIndex::c_19,
+                tt::DataFormat::Float16_b,
+                cb_config.bfloat16_tile_size));
+        }
         // CB 3: in3 eps
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.in3_CB_size,
@@ -1058,13 +1203,16 @@ void add_cb_descriptors(
             tt::CBIndex::c_3,
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
-        // CB 4: in4 scaler-c
+        // CB 4: in4 scaler-c (global reduce scaler — F32 when intermediates are F32, otherwise BF16)
+        tt::DataFormat scaler_global_format =
+            cb_config.cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
         program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in2_CB_size,
+            scaler_global_tile_size,
             core_ranges.all_cores,
             tt::CBIndex::c_4,
-            tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
+            scaler_global_format,
+            scaler_global_tile_size));
         // CB 11: ex_partial2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_partial_CB_size,
@@ -1217,12 +1365,24 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
             (idx.width_index * ctx.workers.num_rows_per_all_to_all_worker) * ctx.single_tile_size;
     }
 
-    idx.gamma_tile_start_id = idx.width_index * ctx.block_wt;
-    idx.beta_tile_start_id = idx.width_index * ctx.block_wt;
+    idx.width_shard_tile_start_id = idx.width_index * ctx.block_wt;
 
     idx.num_reduce_tiles_per_block_h = ctx.block_wt;
     if (idx.width_index == ctx.last_core_width_index) {
         idx.num_reduce_tiles_per_block_h = ctx.Kt - ctx.last_core_width_index * ctx.block_wt;
+    }
+
+    // Real (logical) column count this core reduces over (used by the Welford compute kernel, which has
+    // no per-column mask). Cores before the last own a full block_w; the final real core owns the
+    // remaining logical columns (which may end in a partial tile); any all-padding core beyond it owns
+    // none. For a single width shard this is just the whole logical width.
+    const uint32_t block_w = ctx.block_wt * TILE_WIDTH;
+    if (idx.width_index < ctx.last_core_width_index) {
+        idx.welford_reduce_w = block_w;
+    } else if (idx.width_index == ctx.last_core_width_index) {
+        idx.welford_reduce_w = ctx.logical_K - ctx.last_core_width_index * block_w;
+    } else {
+        idx.welford_reduce_w = 0;
     }
 
     return idx;
@@ -1260,6 +1420,16 @@ std::vector<uint32_t> build_compute_args(
             args.push_back((uint32_t)ctx.num_distributed_devices);
         }
     }
+    // Welford-only args, appended after the all-to-all args so the other compute kernels, which do not
+    // read them, are unaffected. The Welford kernel reads welford_reduce_w at different index on
+    // all-to-all workers vs other workers.
+    args.push_back(idx.welford_reduce_w);
+    // The global width-block index of the last real (partial) block, and this core's own width-block
+    // index. The Welford cross-core combine (run only on all-to-all workers) uses these to weight each
+    // combined block/row by its true logical width: the partial block sits at a single global position,
+    // not in every row. Read at indices 5 and 6 on all-to-all workers.
+    args.push_back(ctx.last_core_width_index);
+    args.push_back(idx.width_index);
     return args;
 }
 
@@ -1438,8 +1608,7 @@ std::vector<uint32_t> build_writer_args(
     args.push_back(ctx.eps_u);
     args.push_back(ctx.gamma_dram_addr);
     args.push_back(ctx.beta_dram_addr);
-    args.push_back(idx.gamma_tile_start_id);
-    args.push_back(idx.beta_tile_start_id);
+    args.push_back(idx.width_shard_tile_start_id);
     args.insert(args.end(), write_back_args.begin(), write_back_args.end());
     return args;
 }

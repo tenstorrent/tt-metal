@@ -12,7 +12,10 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
@@ -51,36 +54,20 @@ struct AllToAllCombineDeviceOperation {
     using tensor_return_value_t = ttnn::Tensor;
 
     struct AllToAllCombineFromSparse {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle ternary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::vector<CoreCoord> cores;
-            const GlobalSemaphore init_semaphore;
-            const GlobalSemaphore cross_device_semaphore;
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
+        // Builds the entire workload in one call (cache miss):
+        //   1. Allocates the two GlobalSemaphores used by the kernels (init / cross-device)
+        //      and parks them on `WorkloadDescriptor::semaphores` so the framework keeps
+        //      them alive for the cached workload's lifetime.
+        //   2. Runs the cross-device Synchronize barrier once per workload.
+        //   3. Loops `tensor_coords.coords()` and pushes a per-coord ProgramDescriptor
+        //      into `programs`.  Each program depends on its mesh coordinate (fabric
+        //      routing / DEST_CHIP_ID define / linearized mesh index), so descriptors
+        //      cannot be shared across coords.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<AllToAllCombineFromSparse>;
@@ -99,6 +86,10 @@ struct AllToAllCombineDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Keys on attributes + tensor specs only (address-free); see the .cpp for the op-created-semaphore
+    // invariant that keeps baked addresses valid across cache hits.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::ccl
 

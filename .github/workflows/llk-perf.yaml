@@ -1,0 +1,54 @@
+name: "LLK perf"
+
+on:
+  schedule:
+    # Run every night at 3AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
+    github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  llk-perf-tests:
+    name: "LLK perf tests"
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    secrets: inherit
+
+  llk-perf-summary:
+    name: "LLK perf summary"
+    if: always()
+    needs:
+      - llk-perf-tests
+    runs-on: ubuntu-slim
+    steps:
+      - name: Check perf test results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  report-status:
+    name: "Report status"
+    runs-on: ubuntu-slim
+    if: always()
+    needs: llk-perf-summary
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Report status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "LLK perf tests"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: ${{ needs.llk-perf-summary.result }}

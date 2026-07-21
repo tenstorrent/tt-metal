@@ -5,11 +5,11 @@
 #include "data_extractor.hpp"
 #include <map>
 
-namespace tt::tt_metal::noc_estimator::offline {
+namespace tt::tt_metal::experimental::noc_estimator::offline {
 
-common::LatencyData extract_latencies(const std::vector<DataPoint>& points) {
-    common::LatencyData result;
-    const auto& sizes = common::STANDARD_TRANSACTION_SIZES;
+LatencyData extract_latencies(const std::vector<DataPoint>& points) {
+    LatencyData result;
+    const auto& sizes = STANDARD_TRANSACTION_SIZES;
     result.latencies.resize(sizes.size(), 0.0);
 
     // Build map of transaction_size -> latency from data points
@@ -47,4 +47,4 @@ common::LatencyData extract_latencies(const std::vector<DataPoint>& points) {
     return result;
 }
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline

@@ -8,8 +8,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
 #include "barrier_sync.hpp"
 #include "log_helpers.hpp"
 
@@ -36,10 +36,10 @@ void kernel_main() {
     uint32_t num_cores = get_arg_val<uint32_t>(6);
     uint32_t local_scratch_addr = get_arg_val<uint32_t>(7);
 
-    auto s = TensorAccessor(accessor_args, src_buffer_addr, page_size_bytes);
+    auto s = TensorAccessor(accessor_args, src_buffer_addr);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_ep;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_ep;
 
     barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_scratch_addr);
 

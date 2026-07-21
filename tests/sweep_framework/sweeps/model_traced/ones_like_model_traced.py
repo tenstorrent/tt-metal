@@ -9,10 +9,12 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -39,32 +41,18 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
@@ -73,9 +61,27 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # ones_like's traced input arg is named `tensor`, so the loader emits the
+    # tensor_* kwarg family rather than input_a_*. Alias them so these configs
+    # run instead of crashing with "run() missing required positional arguments".
+    if input_a_shape is None:
+        input_a_shape = kwargs.get("tensor_shape")
+        if input_a_dtype is None:
+            input_a_dtype = kwargs.get("tensor_dtype")
+        if input_a_layout is None:
+            input_a_layout = kwargs.get("tensor_layout")
+        if input_a_memory_config is None:
+            input_a_memory_config = kwargs.get("tensor_memory_config")
+
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None) or kwargs.get(
+        "tensor_tensor_placement", None
+    )
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs,
+        exclude={"tensor_shape", "tensor_dtype", "tensor_layout", "tensor_memory_config", "tensor_tensor_placement"},
+        output_memory_config=output_memory_config,
+    )
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -110,8 +116,11 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.ones_like(input_tensor, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
+from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -32,6 +33,7 @@ from .llk_params import (
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
+    VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
 
@@ -122,6 +124,38 @@ class EN_DEST_REUSE(TemplateParameter):
         return "#define EN_DEST_REUSE"
 
 
+@dataclass
+class SFPU_INT_OP(TemplateParameter):
+    """Emit a #define to select the integer SFPU operation in a shared C++ test source.
+
+    Supported values: "MUL", "GT", "LT", "LE", "GE".  When omitted the C++ source
+    falls through to its default (add_int) path.
+    """
+
+    op: str = ""
+
+    def convert_to_cpp(self) -> str:
+        if self.op:
+            return f"#define SFPU_INT_OP_{self.op.upper()}"
+        return ""
+
+
+@dataclass
+class SFPU_BINARY_OP(TemplateParameter):
+    """Select the consolidated Quasar binary-SFPU op at compile time.
+
+    Emits ``constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::<op>;``,
+    consumed by ``sfpu_operations_quasar.h``. ``op`` is one of:
+    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN (reusing the LLK BinaryOp enum, like
+    Blackhole — int vs float MUL is disambiguated by the math format in the cpp).
+    """
+
+    op: str = "ADD"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::{self.op};"
+
+
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
     """Generate the appropriate operation constants based on the math operation type."""
     constants = []
@@ -179,6 +213,70 @@ class MATH_OP(TemplateParameter):
             )
 
         return "\n".join(temp_header)
+
+
+@dataclass
+class SFPU_TERNARY_OP(TemplateParameter):
+    """Select the ternary SFPU op at compile time.
+
+    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
+    ``sfpu_operations.h``. ``mathop.cpp_enum_value`` must match the
+    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
+    """
+
+    mathop: MathOperation = None
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.mathop.cpp_enum_value};"
+
+
+@dataclass
+class SFPU_TERNARY_SCALAR(TemplateParameter):
+    """Scalar multiplier for addcmul/addcdiv, passed as a raw fp32 bit pattern.
+
+    The ternary addc kernels take a ``std::uint32_t value`` reinterpreted as float in
+    the SFPU. Emit the bit pattern so the C++ and torch golden agree exactly.
+    """
+
+    value_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.value_bits}u;"
+
+
+@dataclass
+class SFPU_BINOP_MODE(TemplateParameter):
+    """Select the float unary-with-scalar binop at compile time.
+
+    Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
+    ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
+    ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    """
+
+    # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
+    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+
+    mathop: MathOperation = None
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int SFPU_BINOP_MODE = {self._MODE[self.mathop.cpp_enum_value]};"
+        )
+
+
+@dataclass
+class SFPU_UNARY_SCALAR(TemplateParameter):
+    """Scalar operand for the float unary-with-scalar binops, as raw fp32 bits.
+
+    ``calculate_binop_with_scalar`` decodes it via ``Converter::as_float``; emit
+    the bit pattern so the C++ and torch golden agree exactly. For DIV this is
+    the host-inverted divisor (1/divisor), since the kernel multiplies.
+    """
+
+    value_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_UNARY_SCALAR = {self.value_bits}u;"
 
 
 @dataclass
@@ -264,11 +362,37 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
 
 @dataclass
+class ENABLE_2X_FORMAT(TemplateParameter):
+    enable_2x_format: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
+        )
+
+
+@dataclass
+class ENABLE_DIRECT_INDEXING(TemplateParameter):
+    enable_direct_indexing: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool ENABLE_DIRECT_INDEXING = {str(self.enable_direct_indexing).lower()};"
+
+
+@dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
+
+
+@dataclass
+class VECTOR_MODE(TemplateParameter):
+    vector_mode: VectorMode = VectorMode.RC
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto VECTOR_MODE = {self.vector_mode.cpp_enum_value};"
 
 
 @dataclass
@@ -333,6 +457,16 @@ class TO_FROM_INT8(TemplateParameter):
         return f"constexpr bool TO_FROM_INT8 = {str(self.to_from_int8).lower()};"
 
 
+@dataclass
+class IS_MAX_OP(TemplateParameter):
+    """Compile-time flag: true for element-wise max, false for min."""
+
+    is_max_op: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
@@ -341,8 +475,9 @@ def generate_input_dim(
     srcB: tuple[int],
     block_ct_dim: int = None,
     block_rt_dim: int = None,
+    tile_dimensions: tuple[int, int] = (32, 32),
 ):
-    num_rows, num_cols = 32, 32
+    num_rows, num_cols = tile_dimensions
     validate_tile_dimensions(srcA[0], num_rows)
     validate_tile_dimensions(srcA[1], num_cols)
     validate_tile_dimensions(srcB[0], num_rows)
@@ -439,6 +574,29 @@ class DEST_INDEX(RuntimeParameter):
 
 
 @dataclass
+class SFPU_TILE_INDICES(RuntimeParameter):
+    src0_tile_idx: int = 0
+    src1_tile_idx: int = 1
+    dst_tile_idx: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr int SRC0_TILE_IDX = {self.src0_tile_idx};",
+            f"constexpr int SRC1_TILE_IDX = {self.src1_tile_idx};",
+            f"constexpr int DST_TILE_IDX = {self.dst_tile_idx};",
+        ]
+        return "\n".join(lines)
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        lines = [
+            "int SRC0_TILE_IDX;",
+            "int SRC1_TILE_IDX;",
+            "int DST_TILE_IDX;",
+        ]
+        return "\n".join(lines), "iii"
+
+
+@dataclass
 class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 
@@ -460,6 +618,17 @@ class TILE_COUNT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t TILE_CNT;", "I"
+
+
+@dataclass
+class NUM_GUARD_TILES(RuntimeParameter):
+    count: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.count};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t NUM_GUARD_TILES;", "I"
 
 
 @dataclass
@@ -808,6 +977,26 @@ class NUM_ROWS_TO_PACK(RuntimeParameter):
 
 
 @dataclass
+class EMA_ALPHA_BETA(TemplateParameter):
+    """Alpha/beta smoothing weights for the EMA entry, as raw fp32 bit patterns.
+
+    ``_load_alpha_beta_`` loads each as the fp32 representation into LREG5 (alpha)
+    and LREG6 (beta); the kernel computes ``EMA_new = alpha*EMA_old + beta*input``.
+    Emitting the bit patterns keeps the C++ and torch golden exactly aligned.
+    """
+
+    alpha_bits: int = 0x3E800000  # 0.25f
+    beta_bits: int = 0x3F400000  # 0.75f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t EMA_ALPHA_BITS = {self.alpha_bits}u;",
+            f"constexpr std::uint32_t EMA_BETA_BITS = {self.beta_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 
@@ -846,3 +1035,31 @@ class HOST_IS_STREAM_CONSUMER(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool HOST_IS_STREAM_CONSUMER;", "?"
+
+
+@dataclass
+class FILL_INT_FORMAT(TemplateParameter):
+    data_format: DataFormat = DataFormat.Int32
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
+
+
+@dataclass
+class TYPECAST_FORMATS(TemplateParameter):
+    """Compile-time config for the SFPU typecast test kernel.
+
+    Emits the logical input/output ``DataFormat`` enum values consumed by
+    ``typecast_tile<IN, OUT>`` (mirrored by the typecast dispatch in
+    ``sfpu_operations.h``, reached via ``SfpuType::typecast``).
+    """
+
+    input_format: DataFormat = DataFormat.Float32
+    output_format: DataFormat = DataFormat.Float16_b
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr auto TYPECAST_IN_FORMAT = DataFormat::{self.input_format.name};",
+            f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
+        ]
+        return "\n".join(lines)

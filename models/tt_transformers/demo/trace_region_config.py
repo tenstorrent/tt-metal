@@ -8,13 +8,15 @@ import re
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_quasar, is_wormhole_b0
+from models.demos.utils.model_targets import normalize_sku
+from models.demos.utils.trace_region_sizes import hf_model_name_candidates, resolve_trace_region_size_for_candidates
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
-# NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
-# example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we efectivly have 8 N150's with trace_region_size=X which could leed to OOM if X is too large)
+# NOTE: When using DP, we need to have the implemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
+# example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we effectively have 8 N150's with trace_region_size=X which could lead to OOM if X is too large)
 
-# TODO: For now, each confest.py should call get_supported_trace_region_size if they want to override the trace region size
+# TODO: For now, each conftest.py should call get_supported_trace_region_size if they want to override the trace region size
 
 
 def get_base_model_name(model_name: str) -> str:
@@ -48,6 +50,10 @@ def get_mesh_device_name(num_devices, mesh_device_name):
             8: "T3K",
             32: "TG",
         }
+    elif is_quasar():
+        dict_device_names = {
+            1: "QUASAR_BOARD",
+        }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")
 
@@ -76,71 +82,38 @@ def device_name_based_on_data_parallel(request, num_devices, mesh_device_name):
     return get_mesh_device_name(num_devices_data_parallel, mesh_device_name)
 
 
-def get_supported_trace_region_size(request, mesh_device):
-    # TODO: If no specific trace region size is listed for a model and device, the default one will be used (the one set in simple_text_demo.py @parametrize)
-    trace_region_size_dict = {
-        "Llama-3.1-8B": {
-            "N150": 25000000,
-            "N300": 38000000,
-            "T3K": 50000000,
-            "TG": 50000000,
-            "P150": 52000000,
-            "P300": 52000000,
-        },
-        "Llama-3.3-70B": {
-            "T3K": 90000000,
-            "TG": 80000000,
-            "P150": 80000000,
-            "P300": 80000000,
-            "P150x4": 96000000,
-            "P150x8": 84000000,
-        },
-        "Llama-3.1-70B": {
-            "T3K": 90000000,
-            "TG": 90000000,
-            "P150": 90000000,
-            "P300": 90000000,
-            "P150x4": 90000000,
-            "P150x8": 90000000,
-        },
-        "Llama-3.2-90B": {
-            "T3K": 20000000,
-        },
-        "Qwen3-32B": {
-            "T3K": 90000000,
-            "TG": 96000000,
-            "P150": 90000000,
-            "P300": 90000000,
-            "P150x4": 90000000,
-            "P150x8": 90000000,
-        },
-        "GPT-OSS-20B": {
-            "T3K": 50000000,
-            "TG": 50000000,
-        },
-        "GPT-OSS-120B": {
-            "T3K": 50000000,
-            "TG": 50000000,
-        },
-        "Qwen2.5-72B": {
-            "T3K": 70000000,
-            "TG": 70000000,
-        },
-        "gemma-3-27b": {
-            "T3K": 70000000,
-            "TG": 70000000,
-        },
-        "DeepSeek-R1-Distill-Llama-70B": {
-            "P150x4": 90000000,
-        },
-        "Llama-3.2-3B": {
-            "N150": 10000000,
-        },
-        "Qwen2.5-VL-7B": {
-            "N300": 10000000,
-        },
-    }
+def _model_name_candidates() -> list[str]:
+    hf_model = os.getenv("HF_MODEL")
+    if not hf_model:
+        base = base_model_name_from_env()
+        return [base] if base else []
 
+    return hf_model_name_candidates(hf_model)
+
+
+def get_logical_sku(request, mesh_device):
+    """Canonical SKU for the submesh actually opened.
+
+    Derives the SKU from the parametrized mesh shape, ``data_parallel``, and
+    ``MESH_DEVICE`` rather than the physical cluster, so a logical submesh
+    (e.g. a 1x4 slice of a Galaxy, or a ``MESH_DEVICE=N300`` run on a T3K) maps
+    to the SKU of the mesh that is actually opened. Returns ``None`` for CPU or
+    when the device count is unsupported.
+    """
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
-    base_model_name = base_model_name_from_env()
-    return trace_region_size_dict.get(base_model_name, {}).get(device_name_based_on_dp, None)
+    if not device_name_based_on_dp or device_name_based_on_dp == "CPU":
+        return None
+    return normalize_sku(device_name_based_on_dp)
+
+
+def get_supported_trace_region_size(request, mesh_device):
+    sku = get_logical_sku(request, mesh_device)
+    if sku is None:
+        return None
+
+    candidates = _model_name_candidates()
+    if not candidates:
+        return None
+
+    # Unconfigured (model, SKU) pairs fall back to dynamic allocation (0).
+    return resolve_trace_region_size_for_candidates(candidates, sku)

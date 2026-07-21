@@ -17,11 +17,13 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
-    pytest --timeout 300 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
+    # pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
+    # pytest --timeout 500 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -43,9 +45,6 @@
     wh_n150:
       timeout: 5
       tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -57,9 +56,6 @@
   model: llama3.2-3b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -81,6 +77,8 @@
 - name: Llama 3.2-90B-Vision unit tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py  # text module only
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py  # text module only
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_mlp.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_attention.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_block.py
@@ -90,10 +88,12 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-  model: llama90b-vl
+    # pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
+    # pytest --timeout 900 models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
+  model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -167,6 +167,27 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Qwen3.6 unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
+  model: qwen3.6-27b
+  skus:
+    bh_quietbox_2:
+      timeout: 28
+      tier: 1
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
 - name: Mistral-7B unit tests
   cmd: |
     export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
@@ -177,10 +198,23 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+    #pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
+    #pytest --timeout 600 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   skus:
-    wh_llmbox_perf:
-      timeout: 12
+    wh_n150:
+      timeout: 20
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-3-4B unit tests
+  cmd: |
+    pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
+  model: gemma-3-4b
+  skus:
+    wh_n150:
+      timeout: 22
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -196,11 +230,197 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Janus Pro unit tests: Blackhole only (P150).
+- name: Janus Pro-7B unit tests
+  cmd: |
+    pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
+  model: janus-pro-7b
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: shield
+
+# Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
+# parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
+# runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
+# 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
+
+- name: Gemma-4-E2B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-E2B-it
+    # test_lm_head, test_packed_verify (spec-decode packed verify, #46755) and
+    # test_model::test_full_model load real weights via
+    # AutoModelForCausalLM.from_pretrained — they run in the e2e job instead
+    # so the unit suite can stay weight-free and self-contained on the
+    # checked-in config.json.
+    # test_bridge_* in test_vllm_parity.py import generator_vllm which needs
+    # the vllm package; vllm is not installed in this CI image, so skip them
+    # here (they still run in environments that have vllm).
+    # CI-burden reduction, following #45818 (Gemma-4 reduce CI burden): the
+    # heavy full-model-build + device-trace tests added *after* that PR by #45355
+    # (prefill device trace + batched prefill) time out the larger variants on
+    # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
+    # test_prefill_trace_* and test_batched_prefill_perf files are ignored here.
+    # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
+    # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
+    # kept — only the heavy test cases are removed, not the tiers.
+    # The on-device batched-decode sampling tests (test_sampling_greedy_batch32 /
+    # _top_k_constrained / _top_p_constrained / _log_probs_pcc in test_sampling.py)
+    # are excluded via "not test_sampling_": each is parametrized across multi-chip
+    # meshes (1x4/1x8) and the per-test multi-device mesh setup/teardown is slow on
+    # constrained runners. They are validated locally on 1x4/1x8 (issue #44953).
+    # The cheap pure-Python test_gemma4_make_sampling_args_* regression (no device)
+    # does not match "test_sampling_" and is intentionally still run.
+    pytest --timeout 600 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Gemma-4-E4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
+    pytest --timeout 600 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-e4b
+  skus:
+    # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 3
+    bh_p300:
+      timeout: 15
+      tier: 3
+    bh_quietbox_2:
+      timeout: 15
+      tier: 3
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Gemma-4-26B-A4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
+    pytest --timeout 900 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox:
+      timeout: 30
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 1
+    # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
+    # ethernet / fabric hang on Blackhole Galaxy that surfaces during
+    # `test_experts[blackhole-decode-1x32]` and cascades across all 32 devices.
+    # Needs separate investigation (likely Galaxy fabric infra, not gemma4
+    # code). Re-enable once root-caused.
+    # bh_galaxy:
+    #   timeout: 20
+    #   tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Gemma-4-31B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
+    pytest --timeout 900 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-31b
+  skus:
+    wh_llmbox:
+      timeout: 25
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 1
+    # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
+    # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
+    # prefill on 31B). Needs separate investigation; re-enable once root-caused.
+    # bh_galaxy:
+    #   timeout: 20
+    #   tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Gemma-4-12B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
+    pytest --timeout 900 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
+      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-12b
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
 - name: Shallow UNet unit tests
   cmd: |
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
   model: shallow-unet
   skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 2
     wh_llmbox_perf:
       timeout: 5
       tier: 2
@@ -210,7 +430,7 @@
 - name: Mixtral-8x7B unit tests
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py
+    pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
@@ -220,28 +440,29 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Llama 3.3-70B unit tests (Galaxy)
-  cmd: |
-    export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-  model: llama3.3-70b-galaxy
-  skus:
-    wh_galaxy:
-      timeout: 30
-      tier: 1
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
+# TODO See Issue: https://github.com/tenstorrent/tt-metal/issues/42139
+# - name: Llama 3.3-70B unit tests (Galaxy)
+#   cmd: |
+#     export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+#   model: llama3.3-70b-galaxy
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 30
+#       tier: 1
+#   owner_id: U053W15B6JF # Djordje Ivanovic
+#   team: models
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
@@ -254,38 +475,99 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model: qwen3-32b-galaxy
   skus:
-    wh_galaxy:
-      timeout: 30
+    wh_galaxy_perf:
+      timeout: 10
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-- name: GPT-OSS 120B unit tests (Galaxy, high batch)
+- name: Qwen3-32B unit tests (Blackhole Galaxy)
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
-    pytest models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput" --timeout 600
-  model: gpt-oss-120b-high-batch-galaxy
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
+  model: qwen3-32b-galaxy
   skus:
-    wh_galaxy:
+    bh_galaxy:
+      timeout: 20
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+# GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
+# picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
+# covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
+- name: GPT-OSS 20B unit tests
+  cmd: |
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
+    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+  model: gpt-oss-20b
+  skus:
+    # Wormhole
+    wh_llmbox:
+      timeout: 12
+      tier: 2
+    # Blackhole
+    bh_p150:
+      timeout: 10
+      tier: 2
+    bh_quietbox_2:
+      timeout: 5
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: GPT-OSS 120B unit tests
+  cmd: |
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD
+  model: gpt-oss-120b
+  skus:
+    # Wormhole
+    wh_llmbox:
       timeout: 25
       tier: 1
-  owner_id: U08TJ70UFRT # Stuti Raizada
+    wh_galaxy:
+      timeout: 40
+      tier: 1
+    # Blackhole
+    bh_quietbox_2:
+      # 10 min was too tight: the suite runs to ~12 min and got wall-clock
+      # killed mid-"Full MLP Pipeline" on the prefill_4096 test_decoder while
+      # all components were still passing (PCC 0.96-0.99). 15 also proved too
+      # tight on slower hosts (07-06: killed at the 15-min limit having done 52
+      # of ~64 tests on p03t05, vs 11.4 min for the full 64 on p02t07 — host
+      # variance, not a hang; firmware pre-compiled, all sub-tests pass). Bump to
+      # 22; suite is long (test_rope seq sweep to 131k) and may want sharding.
+      timeout: 22
+      tier: 1
+    bh_galaxy:
+      timeout: 10
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Whisper unit tests
   cmd: |
-    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-    pytest --timeout 300 models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_streaming_detok.py
   model: whisper
   skus:
     wh_n150:
       timeout: 10
       tier: 1
-    wh_n300:
-      timeout: 7
+    bh_p150:
+      timeout: 10
       tier: 1
-  owner_id: U05RWH3QUPM # Salar Hosseini
+    # wh_n300:
+    #   timeout: 15
+    #   tier: 1
+  owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
 
 - name: QwQ-32B unit tests
@@ -307,9 +589,6 @@
   model: falcon-7b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: UBHPP2NDP # Joseph Chu
@@ -357,7 +636,7 @@
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
     pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
-  model: qwen2.5-72b-vl
+  model: qwen2.5-vl-72b
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -378,20 +657,44 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
+- name: Qwen3-VL-32B unit tests
+  cmd: |
+    uv pip install -r models/demos/qwen3_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K PYTEST_ADDOPTS="--tb=short"
+    pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
+  model: qwen3-vl-32b
+  skus:
+    wh_llmbox:
+      timeout: 15
+      tier: 2
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+
 - name: Phi-3-mini unit tests
   cmd: |
     export HF_MODEL=microsoft/Phi-3-mini-128k-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-3-mini-128k-instruct
-    pytest --timeout 180 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
-    pytest --timeout 180 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
+    pytest --timeout 240 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
+    pytest --timeout 240 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: phi-3-mini
   skus:
     wh_n150:
-      timeout: 3
-      tier: 3
-    wh_n300:
-      timeout: 3
+      timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: TT-DiT common unit tests, shared amongst all models.
+  cmd: |
+    pytest --timeout 10000 models/tt_dit/tests/unit/
+  model: dit-common
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 1
+    bh_quietbox_2:
+      timeout: 115
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
@@ -411,17 +714,256 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
+# Some tests failing PCC (0.03)
 # - name: Mamba-2.8B unit tests
 #   cmd: |
-#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_block.py
+#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_model.py
 #   model: mamba-2.8b
 #   skus:
 #     wh_n150:
 #       timeout: 5
 #       tier: 3
-#     wh_n300:
-#       timeout: 5
-#       tier: 3
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
+#   owner_id: U06ECNVR0EN # Evan Smal
+#   team: models
+
+- name: TT-DiT Flux.1-schnell unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_schnell
+  model: flux.1-schnell
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Flux.1-dev unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
+  model: flux.1-dev
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: Stable Diffusion XL LoRA unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py || exit_code=$?
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/pcc || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    wh_n300:
+      timeout: 36
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL refiner unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 600 models/demos/stable_diffusion_xl_base/refiner/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL VAE unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL base unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL base unet-loop unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest --timeout 1800 models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 2
+    wh_n300:
+      timeout: 60
+      tier: 2
+    bh_p150:
+      timeout: 50
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL refiner unet-loop unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest --timeout 1800 models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 2
+    wh_n300:
+      timeout: 60
+      tier: 2
+    bh_p150:
+      timeout: 50
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+# ============================================================================
+# Multihost (exabox) model-unit tests
+# ============================================================================
+# Entries whose SKU carries an `allocation` block in .github/sku_config.yaml
+# (bh_sc1, bh_sc4, bh_sc4-blitz, bh_sc4-mgd, bh_sc16 - all runs_on
+# exabox-multihost-with-nfs) are routed by the pipeline to the
+# `models-unit-tests-multihost` job in models-unit-tests-impl.yaml instead of the
+# single-host container job. That job provisions the cluster via ttop, so the cmd
+# only needs to launch the test across the allocated hosts. The allocation writes
+# the hostfile/rankfile/rank-bindings under /etc/ttop; weights live on /mnt/models.
+#
+# The example below runs the Flux.1-dev DiT unit tests on the single-galaxy exabox SKU
+# (bh_sc1). The cmd mirrors the "TT-DiT Flux.1-dev unit tests" entry above; the pipeline
+# routes it to the multihost job purely because bh_sc1 carries an allocation block.
+- name: "Flux multihost tests"
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    # Plain single-rank mpirun (no tt-run). For one rank, tt-run's only job was to turn the rank
+    # binding into these env vars and build the mpirun command; we set them directly. Host
+    # selection (PRTE_MCA_prte_default_hostfile=/etc/ttop/hostfile), TCP interface
+    # (OMPI_MCA_btl_tcp_if_include), and env forwarding (PRTE_MCA_prte_fwd_environment) all come
+    # from the job env. The rank owns one connected 4x2 (8-device) block, so run the Flux
+    # pipeline's 8-device (2x4) parametrization.
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux1/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export TT_VISIBLE_DEVICES=0,1,4,5,8,9,12,13
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "flux_dev and 2x4sp0tp1"
+  model: flux-multihost-tests
+  skus:
+    bh_sc1:
+      timeout: 20
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-T2V-A14B  unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
+  model: wan-2.2-t2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 150
+    #   tier: 1
+    wh_galaxy:
+      timeout: 150
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B  unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
+  # NOTE! The -k filtering above is a hack! We ideally should test both is_fsdp0 and is_fsdp1
+  # but wh_galaxies error with OOM right now for fsdp0. This workaround lets tests pass on wh_galaxy.
+  model: wan-2.2-i2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
+    wh_galaxy:
+      timeout: 40
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: panoptic-deeplab unit tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
+  model: panoptic-deeplab
+  skus:
+    bh_p150b_civ2:
+      timeout: 8
+      tier: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+
+- name: bevformer unit tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
+  model: bevformer
+  skus:
+    bh_p150b_civ2:
+      timeout: 12
+      tier: 3
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: shield

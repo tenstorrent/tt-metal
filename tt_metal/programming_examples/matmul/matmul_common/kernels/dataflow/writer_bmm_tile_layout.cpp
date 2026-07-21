@@ -30,7 +30,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, out_tensor_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(s_args, out_tensor_addr);
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {
@@ -46,7 +46,7 @@ void kernel_main() {
                 for (uint32_t h = 0; h < out_subblock_h; h++) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; w++) {
-                        noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                        noc_async_write_page(out_tensor_tile_id, s, l1_read_addr);
                         l1_read_addr += single_tile_size_bytes;
 
                         out_tensor_tile_id += out_tensor_stride_w;

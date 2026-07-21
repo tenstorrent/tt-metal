@@ -6,34 +6,10 @@
 #include "api/socket_api.h"
 #include "pcie_noc_utils.h"
 #include "api/debug/dprint.h"
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
-
-FORCE_INLINE bool cb_wait_for_pages_with_termination(
-    uint32_t cb_index, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!cb_pages_available_at_front(cb_index, num_pages)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
+#include "../../../unified_kernels/termination.hpp"
 
 void kernel_main() {
-    DPRINT << "Starting d2h sender kernel" << ENDL();
-    DEVICE_PRINT("Starting d2h sender kernel\n");
+    DPRINT("Starting d2h sender kernel\n");
     // Get this value from MeshSocket struct on host
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
@@ -89,7 +65,8 @@ void kernel_main() {
         socket_reserve_pages(sender_socket, 1);
         if constexpr (loopback_mode) {
             // Wait for data in CB with termination checks
-            if (!cb_wait_for_pages_with_termination(upstream_interface_index, 1, termination_semaphore)) {
+            if (!deepseek_b1_ops::cb_wait_for_pages_with_termination(
+                    upstream_interface_index, 1, termination_semaphore)) {
                 break;
             }
             uint32_t read_addr = get_read_ptr(upstream_interface_index);
@@ -104,7 +81,7 @@ void kernel_main() {
             cb_pop_front(upstream_interface_index, 1);
         } else {
             // Wait for pages in receiver socket with timeout and termination checks
-            if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+            if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
                 break;
             }
             uint32_t read_addr = receiver_socket.read_ptr;

@@ -7,7 +7,7 @@ from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
 )
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     BroadcastGolden,
     EltwiseBinaryGolden,
@@ -17,6 +17,7 @@ from helpers.llk_params import (
     BroadcastType,
     DestSync,
     ImpliedMathFormat,
+    MathFidelity,
     MathOperation,
     format_dict,
 )
@@ -24,9 +25,10 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -40,6 +42,9 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+TILE_ELEMS = 32 * 32
+FACE_ELEMS = 16 * 16
+
 
 @pytest.mark.quasar
 @parametrize(
@@ -47,8 +52,13 @@ from helpers.utils import passed_test
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
-    ),
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     mathop=[
         MathOperation.Elwadd,
@@ -60,14 +70,21 @@ from helpers.utils import passed_test
         BroadcastType.Row,
         BroadcastType.Scalar,
     ],
-    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
-    implied_math_format=[
-        ImpliedMathFormat.No,
-        ImpliedMathFormat.Yes,
-    ],
+    math_fidelity=lambda formats, mathop: (
+        [MathFidelity.LoFi]
+        if formats.input_format == DataFormat.Int8
+        else get_valid_math_fidelities(formats, mathop)
+    ),
+    implied_math_format=lambda formats: (
+        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
-        dest_acc, dest_sync_mode
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
+            dest_acc, dest_sync_mode
+        )
     ),
 )
 def test_eltwise_binary_broadcast_quasar(
@@ -82,11 +99,17 @@ def test_eltwise_binary_broadcast_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
 
+    if formats.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
     )
 
     generate_broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -97,15 +120,24 @@ def test_eltwise_binary_broadcast_quasar(
         num_faces=4,
         tile_cnt=tile_cnt_A,
         face_r_dim=16,
+        input_format=formats.input_format,
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
+    input_format = formats.input_format
+    input_format_B = (
+        DataFormat.Float16_b
+        if formats.input_format.is_mx_format()
+        else formats.input_format
+    )
     golden_tensor = generate_golden(
         mathop,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
         math_fidelity,
+        input_format=input_format,
+        input_format_B=input_format_B,
     )
 
     configuration = TestConfig(
@@ -137,6 +169,8 @@ def test_eltwise_binary_broadcast_quasar(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

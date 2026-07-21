@@ -36,6 +36,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace ttml::nanobind::core {
@@ -132,6 +133,11 @@ void py_module(nb::module_& m) {
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);
+        py_distributed.def(
+            "disable_fabric",
+            &ttnn_fixed::distributed::disable_fabric,
+            "Tear down the process-global fabric config (SetFabricConfig(DISABLED)). "
+            "Safe to call only when no devices are open; close the mesh device first.");
 
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
@@ -142,6 +148,12 @@ void py_module(nb::module_& m) {
             nb::arg("device"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+
+        py_distributed.def(
+            "replicate_tensor_to_mesh_mapper",
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&)>(
+                &ttnn::distributed::replicate_tensor_to_mesh_mapper),
+            nb::arg("device"));
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
@@ -168,10 +180,45 @@ void py_module(nb::module_& m) {
             nb::arg("mesh_shape_override"));
         // Synchronize gradients across devices for DDP
         py_distributed.def(
-            "synchronize_gradients", &ttml::core::distributed::synchronize_gradients, nb::arg("parameters"));
+            "synchronize_gradients",
+            static_cast<void (*)(const ttml::serialization::NamedParameters&)>(
+                &ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"));
+        py_distributed.def(
+            "synchronize_gradients",
+            static_cast<void (*)(const ttml::serialization::NamedParameters&, const std::vector<uint32_t>&)>(
+                &ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"),
+            nb::arg("cluster_axes"));
+
+        // Raw (non-autograd) CCL collectives on ttnn tensors.
+        // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be
+        // freely invoked from FSDP pre/post hooks without polluting the autograd graph.
+        py_distributed.def(
+            "all_gather",
+            &ttml::ttnn_fixed::distributed::all_gather,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw all_gather without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+        py_distributed.def(
+            "reduce_scatter",
+            &ttml::ttnn_fixed::distributed::reduce_scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw reduce_scatter without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+        py_distributed.def(
+            "all_reduce",
+            &ttml::ttnn_fixed::distributed::all_reduce,
+            nb::arg("tensor"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw all_reduce without autograd tracking. Returns a new tt::tt_metal::Tensor.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
+        using DistRank = tt::tt_metal::distributed::multihost::Rank;
+        using DistTag = tt::tt_metal::distributed::multihost::Tag;
         auto py_dist_ctx = static_cast<nb::class_<DistributedContext>>(py_distributed.attr("DistributedContext"));
         py_dist_ctx.def("size", [](DistributedContext& self) { return *self.size(); });
         py_dist_ctx.def("rank", [](DistributedContext& self) { return *self.rank(); });
@@ -182,6 +229,34 @@ void py_module(nb::module_& m) {
                 return self.create_sub_context(ttsl::Span<int>(const_cast<int*>(ranks.data()), ranks.size()));
             },
             nb::arg("ranks"));
+        // Byte-level point-to-point primitives — pure host-MPI, no device or
+        // mesh-socket dependency. These are the operations the C++ training
+        // stack uses underneath SocketManager (e.g. for the multi-host socket
+        // descriptor handshake in mesh_socket_utils.cpp). Exposed here so
+        // tests can validate them directly without going through MeshSocket,
+        // which requires sender_mesh_id != receiver_mesh_id (not satisfied
+        // on Galaxy single-mesh layouts).
+        py_dist_ctx.def(
+            "send",
+            [](DistributedContext& self, nb::bytes data, int dest, int tag) {
+                // DistributedContext::send takes Span<std::byte> (non-const),
+                // but underlying MPI_Send treats it as readonly.
+                auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
+            },
+            nb::arg("data"),
+            nb::arg("dest"),
+            nb::arg("tag") = 0);
+        py_dist_ctx.def(
+            "recv",
+            [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
+                std::vector<std::byte> buffer(nbytes);
+                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+            },
+            nb::arg("nbytes"),
+            nb::arg("source"),
+            nb::arg("tag") = 0);
 
         // Bind SocketManager methods
         auto py_socket_manager =

@@ -5,8 +5,14 @@
 #include <stdint.h>
 #include <array>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     // WRITER RUNTIME ARGS
     uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);
     uint32_t k_tensor_addr = get_arg_val<uint32_t>(1);
@@ -31,12 +37,15 @@ void kernel_main() {
     constexpr uint32_t cb_id_out1 = 1;  // same as cb_id_in1
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
-    const auto sq = TensorAccessor(q_args, q_tensor_addr, single_tile_size_bytes);
-    const auto sk = TensorAccessor(k_args, k_tensor_addr, single_tile_size_bytes);
-    const auto sv = TensorAccessor(v_args, v_tensor_addr, single_tile_size_bytes);
+    const auto sq = TensorAccessor(q_args, q_tensor_addr);
+    const auto sk = TensorAccessor(k_args, k_tensor_addr);
+    const auto sv = TensorAccessor(v_args, v_tensor_addr);
 
-    uint32_t l1_read_addr_out0 = get_read_ptr(cb_id_out0);
-    uint32_t l1_read_addr_out1 = get_read_ptr(cb_id_out1);
+    CircularBuffer cb_out0(cb_id_out0);
+    CircularBuffer cb_out1(cb_id_out1);
+
+    uint32_t l1_read_addr_out0 = cb_out0.get_read_ptr();
+    uint32_t l1_read_addr_out1 = cb_out1.get_read_ptr();
     uint32_t out_num_tiles_read_out0 = block_size;
     uint32_t out_num_tiles_read_out1 = block_size;
     uint32_t out_tensor_current_tile_id_along_c;
@@ -46,7 +55,7 @@ void kernel_main() {
     out_tensor_current_tile_id_along_c = out_tensor_tile_id;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
         if constexpr (!block_size_is_one) {
-            cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+            cb_out1.wait_front(out_num_tiles_read_out1);
             out_num_tiles_read_out1 += block_size;
         }
 
@@ -54,11 +63,16 @@ void kernel_main() {
             out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
                 if constexpr (block_size_is_one) {
-                    cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+                    cb_out1.wait_front(out_num_tiles_read_out1);
                     out_num_tiles_read_out1++;
                 }
 
-                noc_async_write_tile(out_tensor_current_tile_id, sq, l1_read_addr_out1);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr_out1),
+                    sq,
+                    single_tile_size_bytes,
+                    {},
+                    {.page_id = out_tensor_current_tile_id});
                 l1_read_addr_out1 += single_tile_size_bytes;
                 out_tensor_current_tile_id++;
             }
@@ -70,18 +84,23 @@ void kernel_main() {
     out_tensor_current_tile_id = out_tensor_tile_id_with_transpose;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
         if constexpr (!block_size_is_one) {
-            cb_wait_front(cb_id_out0, out_num_tiles_read_out0);
+            cb_out0.wait_front(out_num_tiles_read_out0);
             out_num_tiles_read_out0 += block_size;
         }
 
         for (uint32_t c_dim_idx = 0; c_dim_idx < out_num_c_per_block; c_dim_idx++) {
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
                 if constexpr (block_size_is_one) {
-                    cb_wait_front(cb_id_out0, out_num_tiles_read_out0);
+                    cb_out0.wait_front(out_num_tiles_read_out0);
                     out_num_tiles_read_out0++;
                 }
 
-                noc_async_write_tile(out_tensor_current_tile_id, sk, l1_read_addr_out0);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr_out0),
+                    sk,
+                    single_tile_size_bytes,
+                    {},
+                    {.page_id = out_tensor_current_tile_id});
                 l1_read_addr_out0 += single_tile_size_bytes;
                 out_tensor_current_tile_id += out_h_tiles;
             }
@@ -92,7 +111,7 @@ void kernel_main() {
     out_tensor_current_tile_id_along_c = out_tensor_tile_id;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
         if constexpr (!block_size_is_one) {
-            cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+            cb_out1.wait_front(out_num_tiles_read_out1);
             out_num_tiles_read_out1 += block_size;
         }
 
@@ -100,11 +119,16 @@ void kernel_main() {
             out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
                 if constexpr (block_size_is_one) {
-                    cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+                    cb_out1.wait_front(out_num_tiles_read_out1);
                     out_num_tiles_read_out1++;
                 }
 
-                noc_async_write_tile(out_tensor_current_tile_id, sv, l1_read_addr_out1);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr_out1),
+                    sv,
+                    single_tile_size_bytes,
+                    {},
+                    {.page_id = out_tensor_current_tile_id});
                 l1_read_addr_out1 += single_tile_size_bytes;
                 out_tensor_current_tile_id++;
             }
@@ -112,7 +136,7 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
-    cb_pop_front(cb_id_out0, out_num_tiles_read_out0);
-    cb_pop_front(cb_id_out1, out_num_tiles_read_out1);
+    noc.async_write_barrier();
+    cb_out0.pop_front(out_num_tiles_read_out0);
+    cb_out1.pop_front(out_num_tiles_read_out1);
 }

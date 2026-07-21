@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -18,12 +21,15 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    DataflowBuffer dfb(dfb_id_in0);
+    const uint32_t tile_bytes = dfb.get_entry_size();
+    const auto s = TensorAccessor(src_args, src_addr);
+
+    Noc noc;
 
     uint32_t ht = start_ht;
     uint32_t wt = start_wt;
@@ -31,12 +37,11 @@ void kernel_main() {
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(i_tile, s, l1_write_addr);
-        noc_async_read_barrier();
+        dfb.reserve_back(onetile);
+        noc.async_read(s, dfb, tile_bytes, {.page_id = i_tile}, {.offset_bytes = 0});
+        noc.async_read_barrier();
 
-        cb_push_back(cb_id_in0, onetile);
+        dfb.push_back(onetile);
         i_tile += Wt;  // stride in H
         ht += 1;
         if (ht == Ht) {

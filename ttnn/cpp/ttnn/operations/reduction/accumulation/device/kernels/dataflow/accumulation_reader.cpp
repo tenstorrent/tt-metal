@@ -5,10 +5,10 @@
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #include "../accumulation_common.hpp"
 
@@ -27,13 +27,13 @@ void kernel_main() {
     // backward flag (from n-1 to 0)
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in_obj(CB_IN);
+    Noc noc;
+    CircularBuffer cb_in_obj(CB_IN);
 
     const uint32_t ublock_size_bytes = get_tile_size(CB_IN);
     const uint32_t input_tile_bytes = ublock_size_bytes;
 
-    const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {

@@ -18,10 +18,12 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
+    get_rope_theta,
+    get_rope_scaling,
     nearest_multiple,
 )
 from typing import Tuple
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32, is_blackhole
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_hf_state_dict,
@@ -43,16 +45,28 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 )
 
 
-def set_tg_attention_config(model_config, dim):
-    sub_core_grids = ttnn.CoreRangeSet(
+def _build_galaxy_sub_core_grids(max_y=9):
+    return ttnn.CoreRangeSet(
         [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, max_y)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, max_y)),
         ]
     )
-    start_core = ttnn.CoreCoord(1, 0)
+
+
+def set_tg_attention_config(
+    model_config,
+    dim,
+    sub_core_grids=None,
+    start_core=None,
+    create_head_input_num_cores=10,
+):
+    if sub_core_grids is None:
+        sub_core_grids = _build_galaxy_sub_core_grids()
+    if start_core is None:
+        start_core = ttnn.CoreCoord(1, 0)
     shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, 10, sub_core_grids, row_wise=False
+        start_core, create_head_input_num_cores, sub_core_grids, row_wise=False
     )
 
     #
@@ -162,6 +176,7 @@ class TtQwenModelArgs(TtModelArgs):
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
+        self.is_blackhole = ttnn.get_arch_name().lower() == "blackhole"
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -190,24 +205,25 @@ class TtQwenModelArgs(TtModelArgs):
 
         self.qk_norm = True
         self.is_qwen = True
+        # The BH no-prefetch decode norm is the distributed (non-fused) RMSNorm, which does NOT
+        # write the residual sum back in place. Relying on the fused residual path there silently
+        # drops each layer's ff_out from the residual stream (only visible across >1 layer). Add
+        # the residual explicitly instead; the decoder's BH branch already handles the mixed-layout
+        # add with a DRAM fallback.
         self.unfuse_res_add = True
         self.pad_logits_to_power_of_2 = True
 
         if self.num_devices == 32:
-            self.use_prefetcher = True
+            self.use_prefetcher = not self.is_blackhole
 
         # Set up prefetcher stuff
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
-        self.sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
+        self.sub_core_max_y = 7 if self.is_blackhole else 9
+        self.sub_core_grids = _build_galaxy_sub_core_grids(self.sub_core_max_y)
         self.sub_core_grid_topk = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, self.sub_core_max_y)),
             ]
         )
         self.start_core = ttnn.CoreCoord(1, 0)
@@ -299,8 +315,23 @@ class TtQwenModelArgs(TtModelArgs):
             raise ValueError(
                 f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
             )
-        self.model_config["GALAXY_NUM_LINKS"] = 4  # 6U configuration
-        self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Ring  # 6U configuration
+        default_links = 2 if self.is_blackhole else 4
+        self.model_config["GALAXY_NUM_LINKS"] = int(os.getenv("GALAXY_NUM_LINKS", str(default_links)))
+        # Each cluster axis forms a ring on the 2D-torus fabric, so the on-device collectives use Ring
+        # topology to match the fabric routing. (Using Linear on a ring/torus fabric leaves the
+        # cross-axis route unmapped -> IndexError: map::at.)
+        self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Ring
+        # On Blackhole the full non-greedy ttnn.sampling pipeline (distributed top-k +
+        # scatter_add bincounts) is not supported, so route greedy sampling through the
+        # simple all-gather + ttnn.argmax path. Topology follows the 2D-torus fabric (Ring).
+        # On Wormhole the full ttnn.sampling pipeline is supported and greedy sampling goes
+        # through it (with correct sub_core_grids), so force-argmax must stay disabled there.
+        self.model_config["SAMPLING_AG_CONFIG"] = {
+            "allow_force_argmax": self.is_blackhole,
+            "num_links": self.model_config["GALAXY_NUM_LINKS"],
+            "chunks_per_sync": 10,
+            "topology": ttnn.Topology.Ring,
+        }
         if device is not None:
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -308,14 +339,25 @@ class TtQwenModelArgs(TtModelArgs):
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
 
             # DRAM weight grid specs for dram sharding matmuls
-            self.dram_weight_grid = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-                    )
-                }
-            )
+            if self.is_blackhole:
+                # BH path: keep DRAM sharding width <= 8 to avoid tensor-spec shard-grid asserts.
+                self.dram_weight_grid = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 0),
+                        )
+                    }
+                )
+            else:
+                self.dram_weight_grid = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                        )
+                    }
+                )
 
             # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
             self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
@@ -357,16 +399,24 @@ class TtQwenModelArgs(TtModelArgs):
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
-            # num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
-            # num_cores_ln = 20
-            num_cores_ln = 10
+            # Keep shard width consistent with the actual norm core range.
+            # core_grid_ln is currently 5x2 -> 10 cores.
+            num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            # DECODE_RESIDUAL_MEMCFG width (1280 // num_cores_ln) and the axis-0 persistent-buffer
+            # sizing feed the Wormhole-Qwen path too, so the WH-identical guarantee relies on this
+            # being exactly 10. Lock the assumption: revisit those shapes if core_grid_ln changes.
+            assert num_cores_ln == 10, f"Expected core_grid_ln 5x2 (10 cores) for RMSNorm, got {num_cores_ln}"
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+            # Decode width-sharded paths operate on tile-padded batch rows.
+            # Wormhole keeps main's fixed height (32); only the Blackhole bring-up path uses the
+            # tile-padded batch rows.
+            decode_shard_height = self.tile_padded_batch_rows if self.is_blackhole else 32
             # Always use Galaxy configuration
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(
                     1,
                     1,
-                    32,
+                    decode_shard_height,
                     1280 // num_cores_ln,
                 ),
                 core_grid=ttnn.CoreRangeSet(
@@ -381,12 +431,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             start_core = ttnn.CoreCoord(1, 0)
-            core_grid = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                ]
-            )
+            core_grid = self.sub_core_grids
             num_cores = self.cluster_shape[0]
             shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 start_core, num_cores, core_grid, row_wise=False
@@ -424,7 +469,7 @@ class TtQwenModelArgs(TtModelArgs):
                 else min(256, chunk_start_idx & -chunk_start_idx)
                 if seqlen >= 2048
                 else min(64, chunk_start_idx & -chunk_start_idx),
-                k_chunk_size=512
+                k_chunk_size=(256 if self.is_blackhole else 512)
                 if seqlen >= 2048 and chunk_start_idx == 0
                 else 64
                 if seqlen < 2048 and chunk_start_idx == 0
@@ -755,55 +800,51 @@ class TtQwenModelArgs(TtModelArgs):
             #  Only used when seq_len >= 4096
             def prefill_ff2_minimal_matmul_config(seq_len):
                 """
-                Returns the best minimal matmul config for prefill FF2 based on sequence length.
-                Configurations are optimized based on sweep results.
+                Qwen3-32B FF2 fused AG+MM config (Galaxy, 8x4 mesh, cluster_axis=1).
+
+                Tuned via tests/ttnn/unit_tests/operations/ccl/sweep_qwen3_ff2_agmm.py.
+
+                WH Galaxy (3-4 eth links/tray-pair):
+                  grid=(6,8), M=8, K=5, N=5, sub=(1,5)   -> +7.7% 4k, +8.6% 8k TTFT
+                  (num_links=3 auto-derived from grid_x=6, 2 workers/link)
+
+                BH Galaxy (2 eth links/tray-pair cap):
+                  grid=(8,8), M=8, K=5, N=5, sub=(8,1)
+                  - num_links=2 auto-derived (BH tray-pair cap), 4 workers/link
+                    (workers_per_link in {1,2,3} hits the same CCL core-range
+                    overlap bug that WH sees at grid_x in {2,4,8})
+                  - sub=(8,1) beats (1,5)/(4,2)/(2,4) by maximizing M-unroll in
+                    dest regs when M-per-core (16 tiles) >> N-per-core (5 tiles).
+                  - Sweeps over extra Tensix cores, smaller K_block, finer
+                    M_block, larger N_block, and num_buffers_per_channel all
+                    landed within noise or slower than this config.
+                  End-to-end 4k prefill TTFT (ISL=3864, batch=1):
+                    non-fused baseline:       542.5 ms / 7121 t/s
+                    WH-config on BH:          530.1 ms / 7289 t/s (+2.3%)
+                    BH-tuned (this config):   527.8 ms / 7322 t/s (+2.7% total)
+
+                Key constraints (shape-derived, divisibility):
+                  K_block | K_tiles_per_device (= 25)        => K_block in {1, 5, 25}
+                  N_block | N_tiles            (= 40)
+                  sub_h * sub_w <= 8, sub_h | M_block, sub_w | N_block
                 """
-                # Best configurations from sweep results for each M value
-                if seq_len <= 4096:
+                if is_blackhole():
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        K_block_size=5,
+                        N_block_size=5,
+                        subblock_h=8,
+                        subblock_w=1,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
                     )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 32768:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 65536:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                else:  # For seq_len >= 131072
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
-                    )
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=5,
+                    N_block_size=5,
+                    subblock_h=1,
+                    subblock_w=5,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
@@ -834,6 +875,9 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+            # Per-row QKV width on 8x4 mesh; ring matmul pads 1280 -> 1536 (RING_SIZE=24).
+            self.qkv_n_local = self.qkv_size // 8
+            self.qkv_n_ring = ((self.qkv_n_local + 767) // 768) * 768
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
@@ -898,10 +942,12 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
+            paged_sdpa_num_cores = 40 if self.is_blackhole else 48
+            paged_sdpa_grid = (8, 5) if self.is_blackhole else (8, 6)
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 6),
+                compute_with_storage_grid_size=paged_sdpa_grid,
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, 48, self.sub_core_grids, row_wise=True
+                    self.start_core, paged_sdpa_num_cores, self.sub_core_grids, row_wise=True
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
@@ -1045,13 +1091,15 @@ class TtQwenModelArgs(TtModelArgs):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            qkv_shape_ring = (5120 // 4, 12288 // 8)  # Use padded K and N
+            # Match main: logical per-device K = dim // 4 (=1280), ring N = 12288 // 8 (=1536).
+            self.qkv_k_ring = self.dim // 4
+            qkv_shape_ring = (self.qkv_k_ring, self.qkv_n_ring)
             self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=qkv_shape_ring[0],
                 n=qkv_shape_ring[1],
             )
 
-            qkv_out_shard_shape_ring = (32, 12288 // 8 // RING_SIZE)  # Use padded N
+            qkv_out_shard_shape_ring = (32, self.qkv_n_ring // RING_SIZE)
             self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=qkv_out_shard_shape_ring,
                 core_grid=pf_mm_out_core_range_set,
@@ -1062,10 +1110,27 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                self.dim // 4,
-                12288 // 8,  # Use padded N
+                self.qkv_k_ring,
+                self.qkv_n_ring,
                 RING_SIZE,
                 untilize_out=True,
+            )
+            # BH no-prefetch: L1 column-sharded act @ DRAM width-sharded wqkv (test_galaxy_nd pattern).
+            qkv_k_per_device = self.dim // self.cluster_shape[1]
+            qkv_dram_cores = 8 if self.is_blackhole else 12
+            # SHARDED_ATTN_INPUT is 5 K-tiles wide per shard (1280 / 8 DRAM cols); dram_matmul_config
+            # can pick in0_block_w=2 from find_grid_k_n and trip shard_width % in0_block_w.
+            self.model_config[
+                "XQKV_DECODE_PER_DEVICE_PROGCFG"
+            ] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=1,
+                per_core_M=math.ceil(self.tile_padded_batch_rows / self.tile_size),
+                per_core_N=math.ceil(self.qkv_n_local / (self.tile_size * qkv_dram_cores)),
+                fused_activation=None,
+            )
+            # Per-device QKV uses SHARDED_ATTN_INPUT_MEMCFG for activations (set below); no DRAM x convert.
+            self.model_config["SHARDED_QKV_OUT_PER_DEVICE_MEMCFG"] = self.create_dram_sharded_mem_config(
+                self.tile_padded_batch_rows, self.qkv_n_local
             )
             RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
@@ -1073,6 +1138,8 @@ class TtQwenModelArgs(TtModelArgs):
                     ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
                 ]
             )
+            # Match main width (512). The Blackhole no-prefetch path re-widens this to 1280 in TT_CCL
+            # (interim-shard guard) where the all_reduce_create_qkv_heads buffer minimum requires it.
             self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 512),
                 core_grid=RS_CREATE_HEADS_PACKET_WORKER_CRS,
@@ -1082,8 +1149,9 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             # WO
+            wo_input_shard_height = decode_shard_height
             self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 12288 // 8 // RING_SIZE),  # Use padded K
+                shape=(wo_input_shard_height, self.qkv_n_ring // RING_SIZE),
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1097,7 +1165,8 @@ class TtQwenModelArgs(TtModelArgs):
                 n=wo_shape_ring[1],
             )
 
-            wo_out_shard_shape_ring = (32, self.dim_padded_24_cores // 4 // RING_SIZE)  # Use padded N
+            wo_out_shard_height = decode_shard_height
+            wo_out_shard_shape_ring = (wo_out_shard_height, self.dim_padded_24_cores // 4 // RING_SIZE)  # Use padded N
             self.model_config["SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=wo_out_shard_shape_ring,
                 core_grid=pf_mm_out_core_range_set,
@@ -1106,9 +1175,10 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
+            wo_decode_m = decode_shard_height
             self.model_config["WO_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
-                32,
+                wo_decode_m,
                 10240 // 8,
                 self.dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
@@ -1144,16 +1214,18 @@ class TtQwenModelArgs(TtModelArgs):
                 RING_SIZE,
             )
 
+            ff12_shard_height = decode_shard_height
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
+                shape=(ff12_shard_height, 6144 // 4 // RING_SIZE),  # Use padded N
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
 
+            ff12_out_shard_height = decode_shard_height
             self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 3840 // RING_SIZE),  # Use padded N
+                shape=(ff12_out_shard_height, 3840 // RING_SIZE),  # Use padded N
                 core_grid=pf_mm_out_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1310,7 +1382,8 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Always use Galaxy configuration
+            # Galaxy multicast QKV: grid anchored at (0,0); incompatible with SHARDED_ATTN_INPUT
+            # (start_core=(1,0) sub-core grids) on BH no-prefetch — use XQKV_DECODE_RING_PROGCFG instead.
             self.model_config["XQKV_DECODE_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
                 in0_block_w=2 if self.is_70b else 1,
@@ -1443,6 +1516,11 @@ class TtQwenModelArgs(TtModelArgs):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+            logger.info(
+                f"Qwen decode interim shard widths: "
+                f"RS_CREATE_HEADS={self.model_config['RS_CREATE_HEADS_INTERIM_MEMCFG'].shard_spec.shape[1]}, "
+                f"REDUCE_SCATTER={self.model_config['REDUCE_SCATTER_INTERIM_MEMCFG'].shard_spec.shape[1]}"
+            )
 
             FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 ttnn.CoreCoord(1, 0), 30, self.sub_core_grids, row_wise=True
@@ -1452,7 +1530,7 @@ class TtQwenModelArgs(TtModelArgs):
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     FF1_CRS_RS_OUT,
-                    [32, 32],
+                    [decode_shard_height, 32],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
@@ -1503,11 +1581,17 @@ class TtQwenModelArgs(TtModelArgs):
                 ),
             )
 
-            self.model_config = set_tg_attention_config(self.model_config, self.dim)
+            self.model_config = set_tg_attention_config(
+                self.model_config,
+                self.dim,
+                sub_core_grids=self.sub_core_grids,
+                start_core=self.start_core,
+                create_head_input_num_cores=8 if self.is_blackhole else 10,
+            )
 
             self.is_multichip = self.num_devices > 1
             self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = 2  # Always use Galaxy configuration
+            self.num_all_gather_links = 1 if self.is_blackhole else 2
             self.ccl_dtype = ttnn.bfloat8_b
 
     def is_distributed_norm(self, mode):
@@ -1551,7 +1635,7 @@ class TtQwenModelArgs(TtModelArgs):
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, dim]
             # Pad small batches to 32
             if batch < 32:
-                zeros = torch.zeros(1, seq_len, 32, self.dim)
+                zeros = torch.zeros(1, seq_len, 32, x.shape[-1])
                 zeros[:, :, :batch, :] = x
                 x = zeros
         elif len(x.shape) == 3:  # Input on device -> Use ttnn
@@ -1670,12 +1754,12 @@ class TtQwenModelArgs(TtModelArgs):
                     )
                     self.hidden_dim = padded_hidden_dim
 
-        # RoPE params
-        self.rope_theta = params.get("rope_theta")
+        # RoPE params (transformers 5.x nests these under `rope_parameters`)
+        self.rope_theta = get_rope_theta(params)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        rope_scaling_params = params.get("rope_scaling", None)
+        rope_scaling_params = get_rope_scaling(params)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
@@ -1798,7 +1882,7 @@ class TtQwenModelArgs(TtModelArgs):
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
+        dram_cores = 8 if self.is_blackhole else 12
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -1814,7 +1898,9 @@ class TtQwenModelArgs(TtModelArgs):
             """
             return b * math.ceil(a / b)
 
-        num_cores = 24
+        # Blackhole has a stricter effective width-shard core budget in this path.
+        # Keep local shard count <= 8 after mesh partitioning.
+        num_cores = 16 if self.is_blackhole else 24
         N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
         N_per_shard_in_dram = N_per_shard * 2
         in1_shard_shape = [k, N_per_shard_in_dram]
@@ -1965,6 +2051,8 @@ class TtQwenModelArgs(TtModelArgs):
         prefetch=True,
         untilize_out=False,
     ):
+        # If the runtime prefetcher is disabled, force ring kernels to single-CB receiver mode.
+        prefetch = prefetch and self.use_prefetcher
         M *= B  # Fuse batch always enabled
 
         in0_block_h = M // ttnn.TILE_SIZE
@@ -1984,7 +2072,8 @@ class TtQwenModelArgs(TtModelArgs):
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        hop_grid = [(3, 6)] if prefetch else []  # FIXME: Make not hard coded
+        # DRAM-sharded in1 still needs hop core without runtime prefetcher (see test_matmul_1d_ring_qwen).
+        hop_grid = [(3, 6)]
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -2023,6 +2112,7 @@ class TtQwenModelArgs(TtModelArgs):
         num_cores,
         prefetch=True,
     ):
+        prefetch = prefetch and self.use_prefetcher
         M *= B  # Fuse batch always enabled
 
         in0_block_h = M // ttnn.TILE_SIZE  # 1

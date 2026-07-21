@@ -95,7 +95,10 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
     if (operation_attributes.memory_config.is_sharded()) {
         if (operation_attributes.memory_config.shard_spec().has_value()) {
             auto shard_spec = operation_attributes.memory_config.shard_spec().value();
-            MemoryConfig mem_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
+            MemoryConfig mem_config = MemoryConfig(
+                operation_attributes.memory_config.memory_layout(),
+                operation_attributes.memory_config.buffer_type(),
+                shard_spec);
             return TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), mem_config));
@@ -123,35 +126,11 @@ RotateDeviceOperation::tensor_return_value_t RotateDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t RotateDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ttsl::hash::hash_objects_with_default_seed(
-        operation_attributes.memory_config,
-        operation_attributes.interpolation_mode,
-        tensor_args.input.logical_shape(),
-        tensor_args.input.dtype());
-}
-
-std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
-rotate_build_operation_args(
-    const Tensor& input,
-    float angle,
-    const std::optional<std::tuple<float, float>>& center,
-    float fill,
-    bool expand,
-    const std::string& interpolation_mode,
-    const std::optional<MemoryConfig>& memory_config) {
-    return {
-        RotateDeviceOperation::operation_attributes_t{
-            angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
-        RotateDeviceOperation::tensor_args_t{input}};
-}
-
 }  // namespace ttnn::operations::rotate
 
 namespace ttnn::prim {
 
-Tensor rotate(
+ttnn::Tensor rotate(
     const Tensor& input,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -159,9 +138,11 @@ Tensor rotate(
     bool expand,
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
-    auto [attrs, tensor_args] = operations::rotate::rotate_build_operation_args(
-        input, angle, center, fill, expand, interpolation_mode, memory_config);
-    return ttnn::device_operation::launch<operations::rotate::RotateDeviceOperation>(attrs, tensor_args);
+    using Op = ttnn::operations::rotate::RotateDeviceOperation;
+    return ttnn::device_operation::launch<Op>(
+        Op::operation_attributes_t{
+            angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
+        Op::tensor_args_t{input});
 }
 
 }  // namespace ttnn::prim

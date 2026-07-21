@@ -1,6 +1,9 @@
-name: "[Tier 1] Models End-To-End Tests"
+name: "(Tier 1) Models End-To-End Tests"
 
 on:
+  schedule:
+    # Once a day at 02:00 UTC — all models, all SKUs
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -11,10 +14,17 @@ on:
         options:
           - all
           - llama3.1-8b
+          - llama3.1-8b-dp-galaxy
           - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
-          - gpt-oss-120b-high-batch-galaxy
+          - qwen3.6-27b
+          - gpt-oss-120b
           - whisper
+          - gemma-4-12b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
+          - flux.1-schnell
+          - flux.1-dev
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -24,7 +34,14 @@ on:
           - all
           - "wh_n150 (N150)"
           - "wh_n300 (N300)"
-          - "wh_galaxy (Galaxy)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
       platform:
         required: false
         type: choice
@@ -49,46 +66,61 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      mlperf-read-only:
+      mlperf-write-access:
         required: false
         type: boolean
-        default: true
-        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
+        default: false
+        description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
 
 permissions:
   packages: write
   contents: write
 
+run-name: "(Tier 1) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      model: ${{ steps.resolve.outputs.model }}
     steps:
-      - name: Resolve SKU selection
+      - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_galaxy"
-          SKU_INPUT="${{ inputs.sku || 'all' }}"
-          if [[ "$SKU_INPUT" == "all" ]]; then
-            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
-          else
-            # Extract SKU name before the parenthetical description
-            SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
-            echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SKU_INPUT="${{ inputs.sku || 'all' }}"
+            if [[ "$SKU_INPUT" == "all" ]]; then
+              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            else
+              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+            fi
+            echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          # Scheduled runs: all models, all SKUs
+          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
@@ -96,6 +128,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
-      model: ${{ inputs.model || 'all' }}
-      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      model: ${{ needs.resolve-skus.outputs.model }}
+      mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
       tier: "1"

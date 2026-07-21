@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // X = output width
@@ -64,7 +68,6 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
 
-    constexpr uint32_t tile_bytes = TILE_HW * element_size;
     constexpr uint32_t w_dim = RANK - 1;
 
     // For output height, tile-based:
@@ -74,6 +77,8 @@ void kernel_main() {
     constexpr uint32_t X_t = X_p / TILE_HEIGHT;
 
     constexpr auto cb_out = tt::CBIndex::c_2;
+    Noc noc;
+    DataflowBuffer dfb_out_exp(cb_out);
 
     //--------------------------------------------------------------------------
     // 3) Runtime Arguments
@@ -123,7 +128,7 @@ void kernel_main() {
     // The stride for stepping along dimension `permuted_w_dim` in the final output
     uint32_t W_stride_tile = dest_tiled_strides[permuted_w_dim];
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t idxs[RANK];
     idxs[RANK - 1] = 0;
@@ -207,8 +212,8 @@ void kernel_main() {
         }
 
         // Wait for 1 tile from cb_out
-        cb_wait_front(cb_out, 1);
-        uint32_t transposed_buffer_read_addr = get_read_ptr(cb_out);
+        dfb_out_exp.wait_front(1);
+        uint32_t transposed_buffer_read_addr = dfb_out_exp.get_read_ptr();
 
         // ---------------------------------------------------------------------
         // 6.1) Write out each W in [w_start..w_end)
@@ -231,14 +236,19 @@ void kernel_main() {
                     tile = base_tile_offset;
                 }
 
-                uint64_t dest_noc_addr = get_noc_addr(tile, s, local_face_offset_bytes);
                 uint32_t l1_row_base = transposed_buffer_read_addr + page_offset;
 
                 // Write each face
                 uint16_t x_offset = 0;
                 uint16_t cb_x_offset = 0;
                 for (uint8_t i = 0; i < real_faces_x; i++) {
-                    noc_async_write(l1_row_base + cb_x_offset, dest_noc_addr + x_offset, SUBTILE_LINE_BYTES);
+                    CoreLocalMem<uint32_t> src(l1_row_base + cb_x_offset);
+                    noc.async_write(
+                        src,
+                        s,
+                        SUBTILE_LINE_BYTES,
+                        {.offset_bytes = 0},
+                        {.page_id = (uint32_t)tile, .offset_bytes = (uint32_t)(local_face_offset_bytes + x_offset)});
 
                     x_offset += FACE_HW_BYTES;
                     cb_x_offset += SUBTILE_LINE_BYTES;
@@ -247,8 +257,8 @@ void kernel_main() {
                 page_offset += TILE_LINE_BYTES;
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        noc.async_write_barrier();
+        dfb_out_exp.pop_front(1);
     }
 
     //--------------------------------------------------------------------------
@@ -263,8 +273,9 @@ void kernel_main() {
         // We'll reuse 'dest_multi_idx' for tile indexing
         dest_multi_idx[RANK - 2] = y_t;  // fix the tile dimension in the RANK-2 dimension
 
-        cb_wait_front(tt::CBIndex::c_3, 1);
-        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_3);
+        DataflowBuffer dfb3(tt::CBIndex::c_3);
+        dfb3.wait_front(1);
+        uint32_t l1_read_ptr = dfb3.get_read_ptr();
 
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Unflatten 'tile_idx' => dest_multi_idx
@@ -295,14 +306,18 @@ void kernel_main() {
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
                         uint16_t offset =
                             static_cast<uint16_t>((face_offset + (sub_tile_line * FACE_WIDTH)) * element_size);
-                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
-
-                        noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
+                        CoreLocalMem<uint32_t> pad_src(l1_read_ptr);
+                        noc.async_write(
+                            pad_src,
+                            s,
+                            SUBTILE_LINE_BYTES,
+                            {.offset_bytes = 0},
+                            {.page_id = linear_idx, .offset_bytes = offset});
                     }
                 }
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(tt::CBIndex::c_3, 1);
+        noc.async_write_barrier();
+        dfb3.pop_front(1);
     }
 }

@@ -11,9 +11,9 @@
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -26,7 +26,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "sdpa_bw_compute_utils.hpp"
 
 // ----------------------------------------------------------------------
@@ -63,21 +63,22 @@
 // ----------------------------------------------------------------------
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (used in update_grad_value)
-constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim (qWt == kWt == vWt)
-constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_len / TILE_H
-constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // number of heads per group
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
-constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-inf
+constexpr uint32_t block_size_q = get_compile_time_arg_val(1);     // block size for Q/K matmuls (divides qWt)
+constexpr uint32_t block_size_v = get_compile_time_arg_val(2);     // block size for V/dO matmuls (divides vWt)
+constexpr uint32_t qWt = get_compile_time_arg_val(3);              // Q/K inner dim in tiles
+constexpr uint32_t vWt = get_compile_time_arg_val(4);              // V/dO/O inner dim in tiles
+constexpr uint32_t Ht = get_compile_time_arg_val(5);               // num_seq_len / TILE_H
+constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);  // number of heads per group
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) - sdpa scaler factor
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-inf
 
-constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
-constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
-constexpr uint32_t cb_query = tt::CBIndex::c_2;               // Original query
-constexpr uint32_t cb_key = tt::CBIndex::c_3;                 // Original key
-constexpr uint32_t cb_value = tt::CBIndex::c_4;               // Original value
+constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
+constexpr uint32_t cb_query = tt::CBIndex::c_2;        // Original query
+constexpr uint32_t cb_key = tt::CBIndex::c_3;          // Original key
+constexpr uint32_t cb_value = tt::CBIndex::c_4;        // Original value
 #if defined(CAUSAL_MASK) || defined(USE_ATTN_MASK)
-constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;           // Original mask
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;  // Original mask
 #endif
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
 constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
@@ -87,13 +88,13 @@ constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed atte
 constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
 constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of attention weights
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row (precomputed by Q kernel)
 constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
 
-// in future optimization we can process data by chunks(for example 2 at once)
-const uint32_t tiles_per_row = qWt;       // assuming qWt == kWt == vWt
-const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
+const uint32_t qk_tiles = qWt;            // Q/K inner dim tiles
+const uint32_t v_tiles = vWt;             // V/dO/O inner dim tiles
+const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
 
 /**
  * Process a single K/V row of the SDPA backward KV computation.
@@ -102,8 +103,8 @@ const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates bu
  * @param global_row_idx The global row index (across all batches/groups/sequences)
  */
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
-    cb_wait_front(cb_key, tiles_per_row);
-    cb_wait_front(cb_value, tiles_per_row);
+    cb_wait_front(cb_key, qk_tiles);
+    cb_wait_front(cb_value, v_tiles);
 
 #ifdef CAUSAL_MASK
     const uint32_t k_row_tile = global_row_idx % Ht;
@@ -121,14 +122,14 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_process; ++q_idx) {
             const uint32_t h = q_start_tile + q_idx;
 
-            cb_wait_front(cb_query, tiles_per_row);
-            cb_wait_front(cb_grad_output, tiles_per_row);
-            cb_wait_front(cb_attn_output, tiles_per_row);
+            cb_wait_front(cb_query, qk_tiles);
+            cb_wait_front(cb_grad_output, v_tiles);
+            cb_wait_front(cb_intermediates, num_of_interm_tiles);
 
             reconfig_data_format(cb_query, cb_key);
-            mm_init_short(cb_query, cb_key, /* transpose */ 1);
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
             tile_regs_acquire();
-            for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+            for (uint32_t tile_idx = 0; tile_idx < qk_tiles; ++tile_idx) {
                 matmul_tiles(
                     cb_query,
                     cb_key,
@@ -151,29 +152,33 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             binop_with_scalar_tile_init();
             mul_unary_tile(matmul_accum_reg, scaler_bits);
 #endif
+
+            // Fused softmax: scores are still in DST at full FP32 from the matmul.
+            // Apply exp(S - lse) directly on DST — no CB roundtrip, no TF32 truncation.
+            apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates);
+
             tile_regs_commit();
             tile_regs_wait();
+            cb_reserve_back(cb_attention_weights, onetile);
             pack_reconfig_data_format(cb_attention_weights);
             pack_tile(matmul_accum_reg, cb_attention_weights);
             tile_regs_release();
             cb_push_back(cb_attention_weights, onetile);
-
-            apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
 
             update_grad_value(
                 cb_attention_weights,
                 cb_transpose_wh,
                 cb_grad_output,
                 cb_grad_value_accum,
-                tiles_per_row,
-                block_size,
+                v_tiles,
+                block_size_v,
                 /* do_accumulate */ q_idx > 0 || head_idx > 0);
-            cb_wait_front(cb_grad_value_accum, tiles_per_row);
+            cb_wait_front(cb_grad_value_accum, v_tiles);
 
-            compute_u_scalar_row(
-                cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
+            // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
 
-            compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
+            compute_grad_attn_weights(
+                cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_grad_value_accum, scaler_bits);
 
             compute_grad_scores(
                 cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
@@ -183,10 +188,10 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                 cb_query,
                 cb_transpose_wh,
                 cb_grad_key_accum,
-                tiles_per_row,
-                block_size,
+                qk_tiles,
+                block_size_q,
                 /* do_accumulate */ q_idx > 0 || head_idx > 0);
-            cb_wait_front(cb_grad_key_accum, tiles_per_row);
+            cb_wait_front(cb_grad_key_accum, qk_tiles);
 
             cb_pop_front(cb_u_scalar_row, onetile);
             cb_pop_front(cb_grad_attn_weights, onetile);
@@ -194,17 +199,16 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_intermediates, num_of_interm_tiles);
 
-            cb_pop_front(cb_query, tiles_per_row);
-            cb_pop_front(cb_grad_output, tiles_per_row);
-            cb_pop_front(cb_attn_output, tiles_per_row);
+            cb_pop_front(cb_query, qk_tiles);
+            cb_pop_front(cb_grad_output, v_tiles);
         }
     }
 
-    pack_tiles_to_output(cb_grad_value_accum, cb_grad_value, tiles_per_row);
-    pack_tiles_to_output(cb_grad_key_accum, cb_grad_key, tiles_per_row);
+    pack_tiles_to_output(cb_grad_value_accum, cb_grad_value, v_tiles);
+    pack_tiles_to_output(cb_grad_key_accum, cb_grad_key, qk_tiles);
 
-    cb_pop_front(cb_key, tiles_per_row);
-    cb_pop_front(cb_value, tiles_per_row);
+    cb_pop_front(cb_key, qk_tiles);
+    cb_pop_front(cb_value, v_tiles);
 }
 
 void kernel_main() {
@@ -222,7 +226,9 @@ void kernel_main() {
 
     cb_wait_front(cb_mat_mul_reduction, onetile);
 
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // re-establishes its state with reconfig_data_format + matmul_init.
+    matmul_init(cb_query, cb_key);
 
 #ifdef CAUSAL_MASK
     cb_wait_front(cb_attn_mask, onetile);
@@ -243,8 +249,8 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        process_single_row(light_global_row);
         process_single_row(heavy_global_row);
+        process_single_row(light_global_row);
     }
 #else
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

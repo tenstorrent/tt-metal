@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -15,18 +18,19 @@ void kernel_main() {
     uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(out_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(out_args, dst_addr);
+
+    Noc noc;
+    DataflowBuffer dfb_out_obj(cb_id_out);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < N; i++) {
-        cb_wait_front(cb_id_out, Wt);
-        auto l1_read_addr = get_read_ptr(cb_id_out);
+        dfb_out_obj.wait_front(Wt);
         for (uint32_t w = 0; w < Wt; w++) {
-            noc_async_write_tile(tile_id, s, l1_read_addr);
-            l1_read_addr += tile_bytes;
+            noc.async_write(dfb_out_obj, s, tile_bytes, {.offset_bytes = w * tile_bytes}, {.page_id = tile_id});
             tile_id++;
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, Wt);
+        noc.async_write_barrier();
+        dfb_out_obj.pop_front(Wt);
     }
 }

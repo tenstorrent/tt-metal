@@ -1,0 +1,32 @@
+training_config:
+  project_name: "tt_train_llama8b_dp2_tp4"
+  seed: 5489
+  # model_save_interval intentionally omitted: TP forbids --model_save_path / --resume,
+  # so checkpointing never fires for this config.
+  batch_size: 2  # = dp_size; 1 sample per DP shard per microbatch
+  gradient_accumulation_steps: 2  # effective global batch = batch_size * grad_acc = 4 (matches DP=4 numerics)
+  num_epochs: 50  # ~1075 samples/epoch at seq=1024 / batch_size=2 / grad_acc=2 -> ~268 optimizer steps/epoch; 5000 steps needs ~19 epochs
+  max_steps: 5000
+  use_clip_grad_norm: false  # TP-incompatible; both trainers reject use_clip_grad_norm=true under TP
+  clip_grad_norm_max_norm: 1.0
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.00003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
+
+device_config:
+  enable_tp: true
+  enable_ddp: true
+  mesh_shape: [2, 4]  # 8 devices total. axis 0 = "dp" (size 2), axis 1 = "tp" (size 4), per auto_context.cpp assignment order
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

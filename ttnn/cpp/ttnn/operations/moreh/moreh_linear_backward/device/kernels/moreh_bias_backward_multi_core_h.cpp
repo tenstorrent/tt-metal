@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -14,24 +16,27 @@ void kernel_main() {
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
+    DataflowBuffer dfb_in0_obj(cb_in0);
     constexpr auto cb_scaler = tt::CBIndex::c_1;
+    DataflowBuffer dfb_scaler_obj(cb_scaler);
     constexpr auto cb_mask_h_w = tt::CBIndex::c_2;
+    DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);
     constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
     constexpr auto cb_intermed1 = tt::CBIndex::c_25;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
     binary_op_init_common(cb_in0, cb_in0, cb_out0);
-    cb_wait_front(cb_scaler, onetile);
+    dfb_scaler_obj.wait_front(onetile);
 
     if (do_mask_h || do_mask_w) {
-        cb_wait_front(cb_mask_h_w, onetile * 2);
+        dfb_mask_h_w_obj.wait_front(onetile * 2);
     }
 
     uint32_t num_tiles = batch_num * Ht;
     for (uint32_t wt = 0; wt < Wt_per_core; ++wt) {
-        bool enable_reload = false;
         uint32_t num_tile_done = 0;
         for (uint32_t b = 0; b < batch_num; ++b) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -40,10 +45,9 @@ void kernel_main() {
                 bool last_out = (num_tile_done == num_tiles - 1);
                 bool do_mask = (do_mask_h && last_row) || (do_mask_w && last_col);
 
-                // get tile from reader
-                cb_wait_front(cb_in0, onetile);
-
                 if (do_mask) {
+                    // get tile from reader and apply mask
+                    dfb_in0_obj.wait_front(onetile);
                     tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format_srca(cb_in0);
@@ -73,65 +77,38 @@ void kernel_main() {
                     tile_regs_commit();
 
                     tile_regs_wait();
-                    cb_reserve_back(cb_intermed0, onetile);
+                    dfb_intermed0_obj.reserve_back(onetile);
 #if defined FP32_DEST_ACC_EN
                     pack_reconfig_data_format(cb_intermed0);
 #endif
                     pack_tile(dst0, cb_intermed0);
-                    cb_push_back(cb_intermed0, onetile);
+                    dfb_intermed0_obj.push_back(onetile);
                     tile_regs_release();
+
+                    dfb_in0_obj.pop_front(onetile);
                 }
 
-                tile_regs_acquire();
-                if (enable_reload) {
-                    cb_wait_front(cb_intermed1, onetile);
-#if defined FP32_DEST_ACC_EN
-                    reconfig_data_format_srca(cb_intermed1);
-#endif
-                    copy_tile_to_dst_init_short(cb_intermed1);
-                    copy_tile(cb_intermed1, 0, 0);
-                    cb_pop_front(cb_intermed1, onetile);
-                }
-
+                const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
+                const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
+                const auto reduce_accum = compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done);
                 if (do_mask) {
-                    cb_wait_front(cb_intermed0, onetile);
-                }
-
-                auto cb_reduce = (do_mask) ? (cb_intermed0) : (cb_in0);
-#if defined FP32_DEST_ACC_EN
-                reconfig_data_format(cb_reduce, cb_scaler);
-#endif
-                reduce_init(cb_reduce, cb_scaler, cb_out0);
-                reduce_tile(cb_reduce, cb_scaler, 0, 0, 0);
-                reduce_uninit();
-
-                if (do_mask) {
-                    cb_pop_front(cb_intermed0, onetile);
-                }
-
-                cb_pop_front(cb_in0, onetile);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                if (last_out) {
-                    cb_reserve_back(cb_out0, onetile);
-#if defined FP32_DEST_ACC_EN
-                    pack_reconfig_data_format(cb_out0);
-#endif
-                    pack_tile(0, cb_out0);
-                    cb_push_back(cb_out0, onetile);
-
+                    if (last_out) {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_intermed0, cb_scaler, cb_out0>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    } else {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_intermed0, cb_scaler, cb_intermed1>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    }
                 } else {
-                    cb_reserve_back(cb_intermed1, onetile);
-#if defined FP32_DEST_ACC_EN
-                    pack_reconfig_data_format(cb_intermed1);
-#endif
-                    pack_tile(0, cb_intermed1);
-                    cb_push_back(cb_intermed1, onetile);
+                    if (last_out) {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_in0, cb_scaler, cb_out0>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    } else {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_in0, cb_scaler, cb_intermed1>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    }
                 }
-                tile_regs_release();
 
-                enable_reload = true;
                 num_tile_done++;
             }
         }

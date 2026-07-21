@@ -2,14 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <bit>
+#include <map>
 #include <optional>
 #include <string>
 #include <cmath>
@@ -67,58 +73,21 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
-// Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
-// fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
-// Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
-// Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
-bool can_use_streaming_compute(
-    bool is_causal,
-    bool use_provided_mask,
-    bool use_attention_sink,
-    const std::optional<uint32_t>& sliding_window_size,
-    bool is_chunked,
-    bool fp32_dest_acc_en,
-    uint32_t qk_out_subblock_h,
-    uint32_t Sk_chunk_t,
-    uint32_t dst_size,
-    uint32_t padded_Sk,
-    uint32_t Sk,
-    uint32_t Sq_chunk_t) {
-    if (is_causal || use_provided_mask || use_attention_sink) {
-        return false;
-    }
-    if (sliding_window_size.value_or(0) != 0 || is_chunked || fp32_dest_acc_en) {
-        return false;
-    }
-    if (qk_out_subblock_h > 2 || Sk_chunk_t % (dst_size / qk_out_subblock_h) != 0) {
-        return false;
-    }
-    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
-    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    if (Sq_chunk_t / qk_out_subblock_h <= 1) {
-        return false;
-    }
-    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
-    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
-    return !streaming_mask_unsupported;
-}
+// Streaming compute (v2) handles every SDPA variant; only fp32 dest-accumulate falls back to the
+// legacy compute kernel.
+bool can_use_streaming_compute(bool fp32_dest_acc_en) { return !fp32_dest_acc_en; }
 
-// Check whether all data formats used by the compute kernel are uniform (allows skipping reconfigs).
-bool check_uniform_dataformat(
-    const Tensor& q,
-    const Tensor& k,
-    const Tensor& v,
-    const Tensor& out,
-    const std::optional<Tensor>& attn_mask,
-    bool use_streaming_compute) {
-    const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
-    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
-    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(v.dtype());
-    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(out.dtype());
-    const tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
-    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
-    return (q_df == k_df && q_df == v_df && q_df == out_df && q_df == mask_df && q_df == im_df);
+uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
+    uint32_t tiles = 1;  // neginf
+    if (has_sliding_window) {
+        tiles += kSlidingWindowEdgeTiles;
+    } else if (is_causal) {
+        tiles++;  // causal diagonal
+    }
+    if (has_k_partial_mask) {
+        tiles++;  // partial K tile
+    }
+    return tiles;
 }
 
 // Compute the largest granularity that evenly divides both DHt and vDHt (up to dst_size).
@@ -138,6 +107,31 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
+// Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
+// Apply PagedCacheGeometryOverride only when !use_mla: MLA never passes overrides (validated
+// upstream), and applying num_kv_heads to V under MLA would skip the elems/block check.
+struct EffectiveKvGeometry {
+    uint32_t nkh = 0;
+    uint32_t nvh = 0;
+    uint32_t block_size = 0;
+};
+
+EffectiveKvGeometry resolve_effective_kv_geometry(
+    const ttnn::operations::transformer::PagedCacheGeometryOverride& geo,
+    bool use_mla,
+    uint32_t k_num_heads,
+    uint32_t v_num_heads,
+    uint32_t k_block_size) {
+    if (use_mla || !geo.active()) {
+        return {k_num_heads, v_num_heads, k_block_size};
+    }
+    return {
+        geo.num_kv_heads.value_or(k_num_heads),
+        geo.num_kv_heads.value_or(v_num_heads),
+        geo.block_size.value_or(k_block_size),
+    };
+}
+
 // Chunked prefill parameters collected from page table layout.
 struct ChunkedParams {
     uint32_t chunked_q_chunk_offset = 0;
@@ -152,7 +146,7 @@ ChunkedParams compute_chunked_params(
     bool is_chunked,
     bool is_chunked_legacy,
     bool flexible_chunked,
-    const std::optional<uint32_t>& chunk_start_idx,
+    const std::optional<int64_t>& chunk_start_idx,
     const std::optional<Tensor>& page_table,
     uint32_t k_seq_dim,
     std::size_t q_chunk_size) {
@@ -182,8 +176,15 @@ ChunkedParams compute_chunked_params(
 
 }  // namespace
 
-SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
-    const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
+ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Windowed (block-diagonal) attention reuses the regular reader/writer/compute kernels. The mask is
+    // synthesized on-device in the writer from cu_window_seqlens (reader streams Q/K/V only) and consumed
+    // by the compute via the provided-mask path. Like regular SDPA it honors the streaming-vs-standard
+    // selection: streaming kernel when fp32_dest_acc_en is false (Blackhole default), standard otherwise.
+    const bool is_windowed = operation_attributes.is_windowed;
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
@@ -198,7 +199,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const bool is_causal = operation_attributes.is_causal;
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
-    auto program_config = operation_attributes.program_config;
+    const auto& program_config = operation_attributes.program_config;
     const bool use_mla = operation_attributes.use_mla;
     const bool mla_kv_overlap = use_mla && !tensor_args.v.has_value();
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(input_tensor_q.logical_shape()[3]);
@@ -220,8 +221,17 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
-    const uint32_t NKH = k_shape[1];
-    const uint32_t NVH = v_shape[1];
+    // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride): when
+    // the paged K/V cache was allocated for a different layer's view, the reader must address it
+    // with this call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than
+    // the cache's declared shape. Unset ⇒ the cache's own num_kv_heads / block_size. The reader
+    // computes physical tile ids manually from these as compile-time args
+    // (dataflow_common.hpp virtual_seq_tile_id_to_physical_tile_id).
+    const auto kv_geo = resolve_effective_kv_geometry(
+        operation_attributes.paged_cache_geometry, use_mla, k_shape[1], v_shape[1], k_shape[2]);
+    const uint32_t NKH = kv_geo.nkh;
+    const uint32_t NVH = kv_geo.nvh;
+    const uint32_t effective_kv_block_size = kv_geo.block_size;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -237,7 +247,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // For flexible chunked: max prefix length = page_table num_pages * block_size (from K/V layout).
     uint32_t max_prefix_tokens_flexible = 0;
     if (is_chunked && flexible_chunked) {
-        const uint32_t block_size_for_sk = k_shape[2];
+        const uint32_t block_size_for_sk = effective_kv_block_size;
         const uint32_t max_blocks = page_table.value().padded_shape()[1];
         max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
     }
@@ -255,16 +265,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     */
 
     // Calculate padded sequence length
-    const uint32_t padded_Sq = std::ceil((float)Sq / q_chunk_size) * q_chunk_size;
-    const uint32_t padded_Sk = std::ceil((float)Sk / k_chunk_size) * k_chunk_size;
+    const uint32_t padded_Sq = std::ceil(static_cast<float>(Sq) / q_chunk_size) * q_chunk_size;
+    const uint32_t padded_Sk = std::ceil(static_cast<float>(Sk) / k_chunk_size) * k_chunk_size;
 
     const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
     const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
 
-    const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
-    const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
+    const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / TILE_HEIGHT);
+    const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / TILE_HEIGHT);
     /*
     For non-causal case with Q/K padding:
     - If user provides a mask: reader reads unpadded mask and fills padded K positions with -inf
@@ -280,6 +290,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const bool use_provided_mask = attn_mask.has_value();
     const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
     const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
+    // Windowed mode synthesizes the mask in the writer; the compute consumes it through the provided-mask
+    // path even though there is no attn_mask tensor (and the reader does not read one).
+    const bool compute_use_provided_mask = use_provided_mask || is_windowed;
+    // Windowed masks are complete dense masks synthesized from cu_window_seqlens. They already cover padding
+    // positions outside the final boundary, so the generic generated-padding-mask paths must stay disabled.
+    const bool generated_padding_mask = use_padded_mask && !is_windowed;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -306,13 +322,19 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     const auto chunked = compute_chunked_params(
-        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
-    uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
+        is_chunked,
+        is_chunked_legacy,
+        flexible_chunked,
+        chunk_start_idx,
+        page_table,
+        effective_kv_block_size,
+        q_chunk_size);
+    const uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
     const uint32_t block_size = chunked.block_size;
     const uint32_t block_size_t = chunked.block_size_t;
     [[maybe_unused]] const uint32_t max_blocks_per_seq = chunked.max_blocks_per_seq;
     const uint32_t page_table_stick_size = chunked.page_table_stick_size;
-    tt::DataFormat page_table_df = tt::DataFormat::Int32;
+    const tt::DataFormat page_table_df = tt::DataFormat::Int32;
     // Log page table info
     log_debug(tt::LogOp, "is_chunked: {}", is_chunked);
     if (is_chunked) {
@@ -322,8 +344,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         log_debug(tt::LogOp, "page_table_stick_size: {}", page_table_stick_size);
         log_debug(tt::LogOp, "page_table_df: {}", page_table_df);
     }
-
-    Program program = CreateProgram();
 
     IDevice* device = input_tensor_q.device();
 
@@ -335,6 +355,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
+    // page_table and chunk_start_idx must be BufferBindings (not raw address writes);
+    // otherwise their addresses go stale on descriptor cache hits.
+    auto* page_table_buffer = is_chunked ? page_table.value().buffer() : nullptr;
+    auto* chunk_start_idx_buffer = flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr;
 
     auto* out0_buffer = output_tensor.buffer();
 
@@ -344,7 +368,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                      : device->compute_with_storage_grid_size();
     const bool exp_approx_mode = get_exp_approx_mode(program_config);
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
@@ -353,31 +377,30 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
+    TT_FATAL(num_cores > 0, "SDPA requires a non-empty core grid; got num_cores=0.");
 
-    TT_FATAL(
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
-        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
-        num_cores);
+    // Global Q scheduling is the single-chip default: distribute the flat B*NQH*q_num_chunks
+    // Q-chunk space evenly across cores. Pair-distribute when causal + even q_num_chunks so every
+    // core gets balanced light/heavy work after the shared zigzag remap (CT 31/24/34 to kernels).
+    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    const bool global_q_pair_distribute = is_causal && (q_num_chunks % 2 == 0);
+    uint32_t global_q_base_chunks_per_core = 0;
+    uint32_t global_q_cores_doing_extra = 0;
+    uint32_t global_q_extra_chunks_per_core = 0;
+    if (global_q_pair_distribute) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        global_q_base_chunks_per_core = (total_pairs / num_cores) * 2;
+        global_q_cores_doing_extra = total_pairs % num_cores;
+        global_q_extra_chunks_per_core = 2;
+    } else {
+        global_q_base_chunks_per_core = total_q_chunks / num_cores;
+        global_q_cores_doing_extra = total_q_chunks % num_cores;
+        global_q_extra_chunks_per_core = 1;
+    }
+    const uint32_t max_global_q_chunks_per_core =
+        global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
 
-    log_debug(tt::LogOp, "Parallelization scheme:");
-    log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
-    log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
-    log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
-
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
-    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
-    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
-
-    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
-
-    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
+    const uint32_t q_buffer_factor = (max_global_q_chunks_per_core > 1) ? 2 : 1;
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -386,31 +409,36 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(
-        is_causal,
-        use_provided_mask,
-        use_attention_sink,
-        sliding_window_size,
-        is_chunked,
-        fp32_dest_acc_en,
-        qk_out_subblock_h,
-        Sk_chunk_t,
-        dst_size,
-        padded_Sk,
-        Sk,
-        Sq_chunk_t);
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
 
-    const bool lightweight_mask = use_streaming_compute && use_padded_mask;
+    const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
+    // A user-provided dense mask on the streaming path takes its own per-chunk apply
+    // (apply_provided_mask_streaming) and must win over the structured lightweight palette: forcing
+    // lightweight_mask false (via !use_provided_mask below) routes cb_mask_in sizing/dtype to the
+    // full Sq×Sk provided-mask branch instead of the 1–4-tile palette.
+    const bool lightweight_causal = is_causal && !use_provided_mask && !is_windowed && !has_sliding_window;
+    const bool lightweight_streaming_mask = use_streaming_compute && !use_provided_mask && !is_windowed &&
+                                            (is_causal || has_sliding_window || generated_padding_mask);
+    const bool lightweight_mask = lightweight_causal || lightweight_streaming_mask;
+    // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
+    // Not used for a dense provided mask (the reader neginf-fills padded positions in the mask).
+    const uint32_t k_partial_col =
+        (use_streaming_compute && generated_padding_mask && !use_provided_mask && (Sk % TILE_HEIGHT != 0))
+            ? (Sk % TILE_HEIGHT)
+            : 0;
+    const bool lw_partial_active = (k_partial_col > 0);
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = lightweight_mask ? 1 : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t mask_tiles = lightweight_mask
+                              ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
+                              : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
-    uint32_t out0_t = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
 
     // log all values
@@ -419,7 +447,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
     log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
     log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
@@ -438,6 +465,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
+    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp).
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
+    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
@@ -476,11 +513,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale.value_or(1.0f));
+
+    const bool use_zigzag_balancing = is_causal;
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
@@ -498,18 +533,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       Sk_chunk_t,
                                                       k_num_chunks,
                                                       num_cores,
-                                                      (std::uint32_t)is_causal,
-                                                      (std::uint32_t)use_provided_mask,
-                                                      (std::uint32_t)broadcast_provided_mask_batch,
-                                                      (std::uint32_t)broadcast_provided_mask_heads,
-                                                      (std::uint32_t)use_padded_mask,
-                                                      (uint32_t)is_chunked,
+                                                      static_cast<uint32_t>(is_causal),
+                                                      static_cast<uint32_t>(use_provided_mask),
+                                                      static_cast<uint32_t>(broadcast_provided_mask_batch),
+                                                      static_cast<uint32_t>(broadcast_provided_mask_heads),
+                                                      static_cast<uint32_t>(generated_padding_mask),
+                                                      static_cast<uint32_t>(is_chunked),
                                                       block_size_t,
                                                       page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink,
-                                                      (std::uint32_t)use_mla,
-                                                      (std::uint32_t)mla_kv_overlap,
-                                                      qk_out_subblock_h};
+                                                      static_cast<uint32_t>(use_attention_sink),
+                                                      static_cast<uint32_t>(use_mla),
+                                                      static_cast<uint32_t>(mla_kv_overlap),
+                                                      qk_out_subblock_h,
+                                                      sliding_window_size.value_or(0),
+                                                      static_cast<uint32_t>(use_streaming_compute)};
 
     // Placeholder semaphore IDs for KV chain forwarding (will be filled later if enabled)
     // Add these BEFORE TensorAccessorArgs to keep indexing consistent with kernel expectations
@@ -518,6 +555,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -526,19 +564,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
+    TensorAccessorArgs(flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
-    // Create semaphores for KV chain forwarding BEFORE kernel compilation (non-causal only)
-    // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
+    // Set up semaphore IDs for KV chain forwarding (non-causal only).
+    // In the descriptor pattern, semaphore IDs are explicit sequential integers
+    // matching the order they are pushed into desc.semaphores below.
     uint32_t sender_semaphore_id = 0;
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
     if (!is_causal) {
-        sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
-        receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
-        valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
+        sender_semaphore_id = 0;
+        receiver_semaphore_id = 1;
+        valid_semaphore_id = 2;
 
         // Update the placeholder compile-time args with actual semaphore IDs
         reader_compile_time_args[sem_args_offset + 0] = sender_semaphore_id;
@@ -568,20 +607,26 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         Sk_chunk_t,
         k_num_chunks,
         packed_identity_scalar,
-        scale_union.u,
+        scale_packed,
         num_cores,
-        (std::uint32_t)is_causal,
-        (std::uint32_t)use_provided_mask,
-        (std::uint32_t)use_padded_mask,
-        (uint32_t)is_chunked,
+        static_cast<uint32_t>(is_causal),
+        static_cast<uint32_t>(use_provided_mask),
+        static_cast<uint32_t>(generated_padding_mask),
+        static_cast<uint32_t>(is_chunked),
         sliding_window_size.value_or(0),
-        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
+        static_cast<uint32_t>(lightweight_mask),       // arg 20: lightweight mask
+        static_cast<uint32_t>(use_streaming_compute),  // arg 21: row-grouped cb_out drain
+        out_out_subblock_h,                            // arg 22: drain group height
+        k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
+        static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
     };
 
+    // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
+    // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-
-    const bool uniform_dataformat = check_uniform_dataformat(
-        input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
+    TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -608,46 +653,47 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         out_in1_num_subblocks,
         out_num_blocks,
         num_cores,
-        (std::uint32_t)is_causal,
-        (std::uint32_t)use_provided_mask,
-        (std::uint32_t)use_padded_mask,
-        (uint32_t)is_chunked,
-        scale_union.u,
+        static_cast<uint32_t>(is_causal),
+        static_cast<uint32_t>(compute_use_provided_mask),
+        static_cast<uint32_t>(generated_padding_mask),
+        static_cast<uint32_t>(is_chunked),
+        scale_packed,
         sliding_window_size.value_or(0),
-        (std::uint32_t)use_attention_sink,
-        (std::uint32_t)use_streaming_compute,  // arg 30
-        valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
-        (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
+        static_cast<std::uint32_t>(use_attention_sink),
+        static_cast<std::uint32_t>(use_streaming_compute),  // arg 30
+        valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
+        k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
     };
 
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    std::map<std::string, std::string> defines_map;
+    defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
+    defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+    defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
+    defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+    defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
-    std::map<std::string, std::string> defines;
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel =
-        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
-    if (balanced_q_parallel) {
-        defines["BALANCED_Q_PARALLEL"] = "1";
-    }
+    KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
-    log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
-
-    // NOTE: CreateKernel calls are deferred until after chain construction so that
+    // NOTE: Kernel descriptors are appended to the program descriptor after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
 
-    // Create circular buffers
+    // ---- Circular buffers ----
+
+    ProgramDescriptor desc;
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
+    // Windowed mask is generated on-device. Float16_b so it works on both the streaming path (which does
+    // not decode block-float masks) and the standard path; windowed_mask_gen.hpp fills the right format.
+    tt::DataFormat mask_df =
+        is_windowed ? tt::DataFormat::Float16_b : select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -658,7 +704,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
     uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
     uint32_t out_tile_size = tt::tile_size(out_df);
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
@@ -673,140 +718,135 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    sdpa_cb::CBIds cb_ids;
+    uint32_t next_cb_index = 0;
+    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+        const uint32_t cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size_bytes * num_pages,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size_bytes,
+            }}},
+        });
+        return cb_index;
+    };
+    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format);
+    };
 
-    CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
-    // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
+    cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
+    cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
-    // Only create mask buffer if it's going to be used
-    if (use_provided_mask or is_causal or use_padded_mask) {
-        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+    const bool needs_mask_cb =
+        use_provided_mask || is_causal || generated_padding_mask || sliding_window_size.value_or(0) > 0 || is_windowed;
+    // Only create mask buffer if it's going to be used.
+    if (needs_mask_cb) {
+        // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
-        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
-        auto c_in3_config =
-            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
-                .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in3_config);
+        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
+        cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
     }
 
-    // identity scalar input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in5_config);
-    // identity column input
-    auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
+    // Windowed: 1-tile CB holding cu_window_seqlens, loaded once by the writer. When NOT windowed, fall
+    // back to a valid CB id (q_in): the writer's windowed block is gated by `if constexpr`, but in a
+    // non-template function the discarded branch is still compiled, so get_tile_size/get_dataformat on
+    // this id must be well-formed (an inactive id would constexpr-fault on unpack_tile_size[-1]).
+    tt::tt_metal::Buffer* cu_window_buffer = nullptr;
+    uint32_t cu_window_seqlens_eles = 0;
+    cb_ids.cu_window_seqlens = cb_ids.q_in;
+    if (is_windowed) {
+        const auto& cu = tensor_args.cu_window_seqlens.value();
+        tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
+        cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+        cu_window_buffer = cu.buffer();
+        cu_window_seqlens_eles = cu.logical_shape()[-1];
+    }
+
+    cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
     if (is_chunked) {
-        auto c_in6_config = CircularBufferConfig(page_table_stick_size, {{tt::CBIndex::c_6, page_table_df}})
-                                .set_page_size(tt::CBIndex::c_6, page_table_stick_size);
-        CreateCircularBuffer(program, core_grid, c_in6_config);
+        cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
-        auto c_chunk_start_compute_config =
-            CircularBufferConfig(chunk_start_idx_page_size, {{tt::CBIndex::c_8, tt::DataFormat::Int32}})
-                .set_page_size(tt::CBIndex::c_8, chunk_start_idx_page_size);
-        CreateCircularBuffer(program, core_grid, c_chunk_start_compute_config);
-        auto c_chunk_start_writer_config =
-            CircularBufferConfig(chunk_start_idx_page_size, {{tt::CBIndex::c_9, tt::DataFormat::Int32}})
-                .set_page_size(tt::CBIndex::c_9, chunk_start_idx_page_size);
-        CreateCircularBuffer(program, core_grid, c_chunk_start_writer_config);
+        cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
+        cb_ids.chunk_start_idx_writer = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
     }
 
-    // Create attention sink buffer if provided
     if (use_attention_sink) {
         tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
         uint32_t sink_tile_size = tt::tile_size(sink_df);
-        // cb_attention_sink (CBIndex::c_4)
         log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
         log_debug(tt::LogOp, "sink_tile_size: {}", sink_tile_size);
         log_debug(tt::LogOp, "sink_df: {}", sink_df);
-        auto c_in4_config = CircularBufferConfig(attention_sink_tiles * sink_tile_size, {{tt::CBIndex::c_4, sink_df}})
-                                .set_page_size(tt::CBIndex::c_4, sink_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in4_config);
+        cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: 1-tile recip scratch CB (c_4) for normalize_row_streaming.
+    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
-    // Safe: gating excludes use_attention_sink (which also uses c_4).
     if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_4, im_df}})
-                                          .set_page_size(tt::CBIndex::c_4, im_tile_size);
-        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
     }
 
-    // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed0_config);
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
-    // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed1_config);
+    const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
+    const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
+    const auto compute_cb_compile_time_args = cb_ids.compute_compile_time_args();
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
+    compute_compile_time_args.insert(
+        compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
-    // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed2_config);
-
-    // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed3_config);
-
-    // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed4_config);
-
-    // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed5_config);
-
-    // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed6_config);
-
-    // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
-
-    // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-
-    CreateCircularBuffer(program, core_grid, c_out0_config);
-
-    // Note: Semaphores for KV chain forwarding are now created earlier (before kernel compilation)
-    // to ensure the actual semaphore IDs are available in the compile-time args
-
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t mask_addr = attn_mask.has_value() ? mask_buffer->address() : 0;
-    uint32_t attention_sink_addr = attention_sink.has_value() ? attention_sink_buffer->address() : 0;
-    uint32_t out_addr = out0_buffer->address();
+    // Semaphores for KV chain forwarding (non-causal only).
+    // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
+    if (!is_causal) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sender_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid,
+            .initial_value = INVALID,
+        });
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = receiver_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid,
+            .initial_value = INVALID,
+        });
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = valid_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid,
+            .initial_value = VALID,
+        });
+    }
 
     uint32_t num_phases = 1;
     uint32_t read_offset = 0;
     uint32_t write_offset = 0;
+
+    // Defense-in-depth: kernels place global_q runtime args past the max phase_2 slot,
+    // but the host-side compute/writer arg packing only zeros the phase_2 slots when
+    // num_phases==1. Any future change that raises num_phases on this path must rethink
+    // the layout — assert early so the failure is loud rather than a slot reinterpretation.
+    TT_FATAL(num_phases == 1, "Single-chip SDPA assumes num_phases == 1 under global Q scheduling");
 
     // Build chain topology for KV forwarding (non-causal only)
     std::vector<CoreWork> core_work(num_cores);
@@ -815,7 +855,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked) {
+    if (!is_causal && !is_chunked && !has_sliding_window) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
@@ -827,44 +867,54 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-            uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-            uint32_t local_batch_end = local_batch_start + batch_per_core;
-            uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-            uint32_t local_nh_end = local_nh_start + nh_per_core;
-            uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-            uint32_t local_q_end = local_q_start + q_per_core;
-
-            // Clamp to max values
-            local_batch_start = std::min(local_batch_start, B);
-            local_batch_end = std::min(local_batch_end, B);
-            local_nh_start = std::min(local_nh_start, NQH);
-            local_nh_end = std::min(local_nh_end, NQH);
-            local_q_start = std::min(local_q_start, q_num_chunks);
-            local_q_end = std::min(local_q_end, q_num_chunks);
-
             auto& work = core_work[i];
             work.logical_core = core;
             work.physical_core = device->worker_core_from_logical_core(core);
 
-            // Track each (batch, head, q_chunk_range) this core handles
-            for (uint32_t b = local_batch_start; b < local_batch_end; ++b) {
-                for (uint32_t h = local_nh_start; h < local_nh_end; ++h) {
-                    uint32_t q_count = local_q_end - local_q_start;
-                    if (q_count > 0) {
-                        work.head_work.push_back(CoreHeadWork{
-                            .batch = b,
-                            .head = h,
-                            .q_chunk_start = local_q_start,
-                            .q_chunk_count = q_count,
-                        });
-
-                        uint32_t head_id = (b * NQH) + h;
-                        if (head_id < head_segments.size()) {
-                            head_segments[head_id].push_back(HeadSegmentRef{
-                                .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                        }
-                    }
+            auto push_head_work = [&](uint32_t nb, uint32_t nh, uint32_t q_start, uint32_t q_count) {
+                if (q_count == 0) {
+                    return;
                 }
+                work.head_work.push_back(CoreHeadWork{
+                    .batch = nb,
+                    .head = nh,
+                    .q_chunk_start = q_start,
+                    .q_chunk_count = q_count,
+                });
+                const uint32_t head_id = (nb * NQH) + nh;
+                if (head_id < head_segments.size()) {
+                    head_segments[head_id].push_back(HeadSegmentRef{
+                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                }
+            };
+
+            // Walk the core's [g_start, g_start + g_count) linear range and split into
+            // contiguous (nb, nq, q_chunk_range) segments. Non-causal here (chain section is
+            // !is_causal), so the zigzag remap is off and the decompose is identity.
+            uint32_t g_start = i * global_q_base_chunks_per_core +
+                               std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+            uint32_t g_count = global_q_base_chunks_per_core +
+                               ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
+            if (g_start >= total_q_chunks) {
+                g_start = total_q_chunks;
+                g_count = 0;
+            } else if (g_start + g_count > total_q_chunks) {
+                g_count = total_q_chunks - g_start;
+            }
+            work.global_q_start = g_start;
+            work.global_q_count = g_count;
+
+            uint32_t cursor = g_start;
+            const uint32_t g_end = g_start + g_count;
+            while (cursor < g_end) {
+                const uint32_t nb = cursor / (NQH * q_num_chunks);
+                const uint32_t nq = (cursor / q_num_chunks) % NQH;
+                const uint32_t q_in_head = cursor % q_num_chunks;
+                const uint32_t remaining_in_head = q_num_chunks - q_in_head;
+                const uint32_t remaining_in_range = g_end - cursor;
+                const uint32_t span = std::min(remaining_in_head, remaining_in_range);
+                push_head_work(nb, nq, q_in_head, span);
+                cursor += span;
             }
 
             if (!work.head_work.empty()) {
@@ -1222,11 +1272,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                // When the injector is geometrically inside the mcast rect (not at min or max X),
-                // the hardware counts it as a destination slot, so num_dests must include it.
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                const uint32_t mcast_num_dests = num_receivers;
 
                 // Configure injector
                 auto& injector_chain = core_chain_info[injector_idx];
@@ -1265,7 +1311,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogOp,
             "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
             mcast_chains,
@@ -1275,82 +1321,79 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
-    // Create kernels (deferred until after chain construction for mcast_enabled flag)
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+    // ---- Kernels (deferred until after chain construction for mcast_enabled flag) ----
 
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = defines;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.defines = defines;
+    writer_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = compute_compile_time_args;
+    compute_desc.defines = defines;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
-        uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
+        // Global Q scheduling per-core range: contiguous slice of the flat (B, NQH, q_num_chunks) space.
+        uint32_t global_q_start = i * global_q_base_chunks_per_core +
+                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+        uint32_t global_q_count =
+            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
+        if (global_q_start >= total_q_chunks) {
+            global_q_start = total_q_chunks;
+            global_q_count = 0;
+        } else if (global_q_start + global_q_count > total_q_chunks) {
+            global_q_count = total_q_chunks - global_q_start;
+        }
 
-        // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NQH);
-        local_nh_end = std::min(local_nh_end, NQH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
-
-        // log the above
-        log_debug(tt::LogOp, "core: {}", i);
-        log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
-        log_debug(tt::LogOp, "local_batch_start: {}", local_batch_start);
-        log_debug(tt::LogOp, "local_batch_end: {}", local_batch_end);
-        log_debug(tt::LogOp, "local_nh_start: {}", local_nh_start);
-        log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
-        log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
-        log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
+        log_debug(
+            tt::LogOp,
+            "core: {} x={} y={} global_q_start={} global_q_count={}",
+            i,
+            core.x,
+            core.y,
+            global_q_start,
+            global_q_count);
 
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
 
-        std::vector<uint32_t> reader_args = {
-            q_addr,
-            k_addr,
-            v_addr,
-            mask_addr,
-            is_chunked ? page_table.value().buffer()->address() : 0,
-            attention_sink_addr,
-            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0,
-            i,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end,
-            num_phases,
-            chunked_q_chunk_offset,
-            read_offset  // read_offset
-        };
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(q_buffer);
+        reader_args.push_back(k_buffer);
+        reader_args.push_back(v_buffer);
+        reader_args.push_back(mask_buffer);
+        reader_args.push_back(page_table_buffer);
+        reader_args.push_back(attention_sink_buffer);
+        reader_args.push_back(chunk_start_idx_buffer);
+        reader_args.push_back(i);
+        reader_args.push_back(num_phases);
+        reader_args.push_back(chunked_q_chunk_offset);
+        reader_args.push_back(read_offset);  // read_offset
 
         // Add chain metadata for non-causal case
         if (!is_causal) {
@@ -1370,125 +1413,43 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             reader_args.push_back(chain.mcast_sender_wait);
         }
 
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
+        // Global-Q tail (read by kernel after chain block when non-causal, immediately when causal).
+        reader_args.push_back(global_q_start);
+        reader_args.push_back(global_q_count);
+
+        reader_desc.emplace_runtime_args(core, reader_args);
+
+        writer_desc.emplace_runtime_args(
             core,
-            {out_addr,
+            {out0_buffer,
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             num_phases,
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),
-             chunked_q_chunk_offset,
-             write_offset});  // write_offset
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
+             num_phases,                                       // 2
+             static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 3
+             chunked_q_chunk_offset,                           // 4: phase_1
+             write_offset,                                     // 5
+             0u,                                               // 6: phase_2 chunk_start (unused, num_phases==1)
+             0u,                                               // 7: phase_2 write_offset (unused, num_phases==1)
+             global_q_start,                                   // 8
+             global_q_count,                                   // 9
+             cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
+             cu_window_seqlens_eles});                         // 11: window count + 1
+
+        compute_desc.emplace_runtime_args(
             core,
             {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             num_phases,
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),
-             chunked_q_chunk_offset});
+             num_phases,                                       // 1
+             static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 2
+             chunked_q_chunk_offset,                           // 3: phase_1
+             0u,                                               // 4: phase_2 chunked offset (unused, num_phases==1)
+             global_q_start,                                   // 5
+             global_q_count});                                 // 6
     }
 
-    return cached_program_t{
-        std::move(program),
-        {
-            .reader_kernels_id = reader_kernels_id,
-            .writer_kernels_id = writer_kernels_id,
-            .compute_kernels_id = compute_kernels_id,
-            .grid_size = grid_size,
-            .num_cores = num_cores,
-            .is_chunked = is_chunked,
-            .q_chunk_size = q_chunk_size,
-            .use_mla = use_mla,
-        }};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void SDPAProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SDPAParams& operation_attributes,
-    const SDPAInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
-    const bool is_chunked = operation_attributes.chunk_start_idx.has_value() || flexible_chunked;
-    std::size_t q_chunk_size =
-        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
-
-    auto* q_buffer = tensor_args.q.buffer();
-    auto* k_buffer = tensor_args.k.buffer();
-    auto* v_buffer = tensor_args.v.value_or(tensor_args.k).buffer();
-    auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
-    auto* attention_sink_buffer =
-        tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
-
-    auto* out0_buffer = tensor_return_value.buffer();
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
-    uint32_t attention_sink_addr = attention_sink_buffer != nullptr ? attention_sink_buffer->address() : 0;
-    uint32_t out_addr = out0_buffer->address();
-
-    uint32_t page_table_addr = 0;
-    uint32_t chunked_q_chunk_offset = 0;
-    uint32_t chunk_start_idx_addr = 0;
-    const uint32_t use_chunk_start_idx_tensor = flexible_chunked ? 1 : 0;
-    if (is_chunked) {
-        page_table_addr = tensor_args.page_table.value().buffer()->address();
-        if (!flexible_chunked) {
-            // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
-            chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
-        } else {
-            chunk_start_idx_addr = operation_attributes.chunk_start_idx_tensor.value().buffer()->address();
-        }
-    }
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
-    auto& compute_args_by_core = GetRuntimeArgs(program, shared_vars.compute_kernels_id);
-
-    const auto& grid_size = shared_vars.grid_size;
-    const auto num_cores = shared_vars.num_cores;
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-        auto& compute_args = compute_args_by_core[core.x][core.y];
-
-        reader_args[0] = q_addr;
-        reader_args[1] = k_addr;
-        reader_args[2] = v_addr;
-        reader_args[3] = mask_addr;
-        reader_args[4] = page_table_addr;
-        reader_args[5] = attention_sink_addr;
-        reader_args[6] = chunk_start_idx_addr;
-        reader_args[15] = chunked_q_chunk_offset;
-
-        writer_args[0] = out_addr;
-        writer_args[9] = use_chunk_start_idx_tensor;
-        writer_args[10] = chunked_q_chunk_offset;
-
-        compute_args[8] = use_chunk_start_idx_tensor;
-        compute_args[9] = chunked_q_chunk_offset;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

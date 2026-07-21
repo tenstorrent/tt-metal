@@ -118,8 +118,8 @@ void kernel_main() {
 
         const uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         const uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-        noc_async_read_tile(i, a, cb_in0_addr);
-        noc_async_read_tile(i, b, cb_in1_addr);
+        noc_async_read_page(i, a, cb_in0_addr);
+        noc_async_read_page(i, b, cb_in1_addr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
 
@@ -194,7 +194,7 @@ void kernel_main() {
         cb_wait_front(cb_out, 1);
 
         const uint32_t cb_out_addr = get_read_ptr(cb_out);
-        noc_async_write_tile(i, c, cb_out_addr);
+        noc_async_write_page(i, c, cb_out_addr);
 
         noc_async_write_barrier();
 
@@ -495,8 +495,8 @@ inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
+        vSMag16 whole_v = convert<vSMag16>(v, RoundMode::Nearest);
+        v -= convert<vFloat>(whole_v, RoundMode::Nearest);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
         v_if(whole_v & 1) { v = -v; }

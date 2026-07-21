@@ -59,8 +59,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     if (unpack_to_dest)
     {
@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
+            _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -117,9 +117,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_square.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -136,13 +136,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    const int num_sfpu_iterations = params.TEST_FACE_R_DIM >> 1; // SFP_ROWS == 2
-
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
+    init_square();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_square_, params.DST_INDEX + i, num_sfpu_iterations);
+        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_square, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
@@ -190,8 +189,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, num_tiles_per_pack);
-    _llk_pack_(params.DST_INDEX, 0);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+    _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

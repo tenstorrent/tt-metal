@@ -7,41 +7,39 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
-using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void init_fmod(const uint value, const uint recip) {
-    // load vConstFloatPrgm0 = value
-    _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
-    // load vConstFloatPrgm1 = recip
-    _sfpu_load_config32_(0xD, (recip >> 16) & 0xFFFF, recip & 0xFFFF);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstFloatPrgm0 = Converter::as_float(value);
+    sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_fmod(const uint value, const uint recip) {
+inline void calculate_fmod() {
     // SFPU microcode
-    vFloat s = vConstFloatPrgm0;
-    vFloat recip_val = vConstFloatPrgm1;
-    s = sfpi::abs(s);
-    recip_val = sfpi::abs(recip_val);
+    sfpi::vFloat s = sfpi::abs(sfpi::vConstFloatPrgm0);
+    sfpi::vFloat recip_val = sfpi::abs(sfpi::vConstFloatPrgm1);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-        vFloat v = sfpi::abs(val);
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat v = sfpi::abs(val);
 
         vFloat quotient;
-        vInt exp = exexp(v * recip_val);
-        v_if(exp < 0) { quotient = vConst0; }
+        vInt exp = sfpi::exexp(v * recip_val);
+        v_if(exp < 0) { quotient = 0.0f; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
-            quotient =
-                reinterpret<vFloat>(shft((shft(reinterpret<vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+            quotient = sfpi::as<sfpi::vFloat>(
+                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
         }
         v_else { quotient = v * recip_val; }
         v_endif
@@ -52,7 +50,7 @@ inline void calculate_fmod(const uint value, const uint recip) {
         v_endif;
         v = v - quotient * s;
 
-        v = setsgn(v, val);
+        v = sfpi::copysgn(v, val);
 
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
@@ -64,8 +62,8 @@ inline void calculate_fmod(const uint value, const uint recip) {
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 

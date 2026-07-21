@@ -17,9 +17,7 @@ Updated to use refactored TestFactory and MeshConfig patterns:
 - Passes mesh_config to create_tt_model for proper sharding
 """
 
-import json
 import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -27,20 +25,18 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
+from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    copy_host_to_device,
-    get_padded_prefill_len,
-    preprocess_inputs_prefill,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -123,7 +119,7 @@ def prepare_gpt_oss_generator_args(
 
     for submesh in submesh_devices:
         # Use GPT-OSS create_tt_model directly!
-        use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1
+        use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1 and throughput_experts_supported_on_arch()
         logger.info(f"Creating GPT-OSS model for submesh {submesh} with throughput experts: {use_throughput}")
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
@@ -178,18 +174,12 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize(
-    "mesh_shape",
-    [
-        # LoudBox (1×8) - Single device, low latency
-        (1, 8),
-        # Galaxy (4×8) - Multi-device mesh, higher throughput
-        (4, 8),
-    ],
-    ids=["mesh_1x8", "mesh_4x8"],
-)
-@run_for_wormhole_b0()
+# run_in_ci=True selects the variants that fire under CI=true; everything else
+# is skipped in setup. Long-sequence prefill variants (prefill_1k / 64k / 128k)
+# are kept out of CI because runner availability is limited and we only want
+# the canonical prefill_128 sanity to run on every push. Local / release
+# invocations can still target them explicitly with -k.
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
@@ -225,7 +215,7 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
-            True,  # run_in_ci
+            False,  # run_in_ci
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -310,7 +300,7 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             False,  # stop_at_eos
-            True,  # run_in_ci
+            False,  # run_in_ci
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -327,7 +317,7 @@ def prepare_gpt_oss_generator_args(
             False,  # users_row_sharded
             False,  # long_context_mode
             False,  # stop_at_eos
-            True,  # run_in_ci
+            False,  # run_in_ci
         ),
         # Batch 128
         (
@@ -406,6 +396,37 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
+        # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
+        (
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts: list of 8 files, one per sweep step
+            1,  # data_parallel
+            1,  # batch_size
+            8,  # repeat_batches (one per seqlen step)
+            128 * 1024,  # max_seq_len (single-row meshes cap at 64k via is_seqlen_sweep guard)
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace (avoid trace memory issues at 128k)
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            # run_in_ci=False: the GPT-OSS e2e pipeline runs this demo file without a -k filter, so a
+            # CI-enabled seqlen-sweep case would be collected by the regular e2e job and fail. GPT-OSS is
+            # descoped from the sweep pipeline pending #48533; keep this case out of CI until re-scoped
+            # (the sweep pipeline will select it explicitly via -k "seqlen-sweep").
+            False,  # run_in_ci
+        ),
     ],
     ids=[
         "prefill_128",
@@ -420,13 +441,13 @@ def prepare_gpt_oss_generator_args(
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
+        "seqlen-sweep",
     ],
 )
 @parametrize_mesh_with_fabric()
 def test_gpt_oss_demo(
     mesh_device,
     device_params,
-    mesh_shape,
     input_prompts,
     data_parallel,
     batch_size,
@@ -447,26 +468,36 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    mesh_shape = tuple(mesh_device.shape)
+    test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+    # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
+    actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
     if mesh_shape[0] == 1:
         if batch_size > 1:
             pytest.skip(
                 f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
             )
-        elif max_seq_len > 64 * 1024:
+        elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
+            # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
+    if is_blackhole() and batch_size > 1:
+        pytest.skip(
+            f"Batch size {batch_size} demo skipped on Blackhole: throughput experts are not supported, "
+            "only batch=1 low-latency experts run on this arch."
+        )
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
     if os.environ.get("CI", None) and not run_in_ci:
         config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
-    logger.info(f"Using mesh config: {mesh_config}, model config: {config}")
+    logger.debug(f"Using mesh config: {mesh_config}, model config: {config}")
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
@@ -492,13 +523,17 @@ def test_gpt_oss_demo(
     num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
     users_per_row = global_batch_size // mesh_device.shape[0]
 
-    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
+    seqlen_sweep_files = None
+    if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step during repeat_batch_prompts construction
+        seqlen_sweep_files = input_prompts
+        real_prompts = None  # not used; each step loads its own prompts
+    elif isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
         real_prompts = input_prompts * num_real_users
     elif isinstance(input_prompts, str):  # Inputs from file
         real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
     else:
         raise ValueError(
-            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
+            f"Invalid input prompts: {input_prompts}. Expected a list of prompts, a single-item list, or a string path to a json file."
         )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
@@ -517,7 +552,7 @@ def test_gpt_oss_demo(
         mesh_device=mesh_device,
         global_batch_size=global_batch_size,
         optimizations=optimizations,
-        max_seq_len=max_seq_len,
+        max_seq_len=actual_max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
@@ -543,6 +578,19 @@ def test_gpt_oss_demo(
         enable_log_probs=[enable_log_probs] * SAMPLING_BATCH_SIZE,
         num_logprobs=[num_logprobs] * SAMPLING_BATCH_SIZE,
     )
+
+    # On-device sampling is disabled when per-device padded vocab exceeds the 64K
+    # cap (e.g. tp=1 on a single Blackhole card → 262K-padded vocab). In that case
+    # fall back to host-side sampling. Only greedy is supported for the fallback.
+    on_device_sampling_supported = all(getattr(m, "sampling", None) is not None for m in model)
+    if not on_device_sampling_supported:
+        assert greedy, (
+            "On-device sampling is unavailable on this mesh (per-device vocab > 64K) "
+            "and the host-side fallback only supports greedy decoding. "
+            f"Got temperature={sampling_params['temperature']}."
+        )
+        assert not enable_log_probs, "Host-side sampling fallback does not support logprobs."
+        logger.info("On-device sampling unavailable; using host-side greedy argmax for decode.")
 
     # Prepare input prompts
     logger.info(f"Reading inputs...")
@@ -582,13 +630,33 @@ def test_gpt_oss_demo(
 
     # Create repeat batches (like tt-transformers)
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+    if is_seqlen_sweep:
+        # Load each seqlen step from its own file; skip steps exceeding the mesh's seqlen cap.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384).
+        from pathlib import Path
+
+        for sweep_file in seqlen_sweep_files:
+            label = Path(sweep_file).stem.split("_")[-1]  # e.g. "16k"
+            if not (label.endswith("k") and label[:-1].isdigit()):
+                continue
+            step_len = int(label[:-1]) * 1024
+            if step_len > actual_max_seq_len:
+                logger.info(
+                    f"Seqlen sweep step ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
+                )
+                continue
+            step_prompts, _ = load_inputs(sweep_file, num_real_users, instruct=False)
+            repeat_batch_prompts.append(step_prompts)
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
 
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
-    logger.info(f"Page table: {page_table}")
+    logger.debug(f"Page table: {page_table}")
 
     # Main inference loop for repeat batches (like tt-transformers)
     for batch_idx, input_prompts_batch in enumerate(repeat_batch_prompts):
@@ -691,301 +759,44 @@ def test_gpt_oss_demo(
 
             logger.info(f"Prefill finished for {num_real_users} real users")
         elif users_row_sharded:
-            # Row-parallel batched prefill: process 4 users at once (one per mesh row)
-            # This gives ~4x speedup over sequential per-user prefill
-            num_rows = mesh_device.shape[0]
-            users_per_row_prefill = global_batch_size // num_rows
-            users_per_row_per_iter = 1  # Users each mesh row processes per prefill iteration
-            # Increasing above 1 requires model changes:
-            #   - attention/prefill.py: relax batch_size!=1 check, loop paged_fill_cache
-            #   - model.py:process_output_prefill_batched: extract multiple logits per row
-            assert users_per_row_prefill % users_per_row_per_iter == 0
-            num_prefill_iters = users_per_row_prefill // users_per_row_per_iter
-            model_id = 0  # data_parallel=1, single model
+            # Row-parallel batched prefill through generator infrastructure
+            logger.info("Starting row-parallel batched prefill through generator...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=warmup_prefill,
+                sampling_params=device_sampling_params,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Row-parallel prefill compilation done")
 
-            prefilled_token = torch.zeros(global_batch_size, dtype=torch.long)
+            # Clear KV caches before timed run
+            for i in range(len(model)):
+                for layer_obj in model[i].layers:
+                    k_cache, v_cache = layer_obj.self_attn.layer_past
+                    ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                    ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-            if enable_prefill_trace:
-                # === TRACED BATCHED PREFILL ===
-                # Trace captures device program once, then replays with input buffer updates.
-                # Eliminates per-iteration host dispatch overhead.
-
-                # Uniform padded_len for all users (required for tracing: fixed tensor shapes)
-                max_padded_len = max(get_padded_prefill_len(int(decoding_pos[uid])) for uid in range(global_batch_size))
-                block_size = page_params["page_block_size"]
-                max_num_blocks = (max_padded_len + block_size - 1) // block_size
-
-                # Compute fixed get_last_token for trace (all users must be in same 32-token tile)
-                all_last_idxs = [int(decoding_pos[uid]) - 1 for uid in range(global_batch_size)]
-                fixed_get_last_token = (min(all_last_idxs) // 32) * 32
-                max_tile_start = (max(all_last_idxs) // 32) * 32
-                if fixed_get_last_token != max_tile_start:
-                    logger.warning(
-                        f"Users span multiple 32-token tiles ({fixed_get_last_token} vs {max_tile_start}), "
-                        f"using get_last_token=-1 (slower)"
-                    )
-                    fixed_get_last_token = -1
-
-                def _prepare_batch_host(user_indices):
-                    """Prepare host-side tokens + page_table for a batch of users."""
-                    tokens_list, pt_list, last_idxs = [], [], []
-                    for uid in user_indices:
-                        plen = int(decoding_pos[uid])
-                        toks = torch.cat(
-                            [
-                                input_tokens_prefill_pt[uid : uid + 1, :plen],
-                                torch.zeros(1, max_padded_len - plen, dtype=torch.long),
-                            ],
-                            dim=-1,
-                        )
-                        tokens_list.append(toks)
-                        pt_list.append(page_table[uid : uid + 1, :max_num_blocks])
-                        last_idxs.append(plen - 1)
-                    return (torch.cat(tokens_list, dim=0), torch.cat(pt_list, dim=0), last_idxs)
-
-                # --- Warmup (compilation) ---
-                logger.info("Starting traced row-parallel prefill warmup (compilation)...")
-                warmup_indices = [
-                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
-                ]
-                tokens_w, pt_w, last_w = _prepare_batch_host(warmup_indices)
-                tokens_w = tokens_w.reshape(num_rows, -1)  # [num_rows, N*S] for batch>1 concat
-
-                host_out = model[model_id].prepare_inputs_prefill(
-                    tokens_w, page_table=pt_w, trace_enabled=True, batched_prefill=True
-                )
-                rot_global = host_out[1]  # device-resident, fixed across iterations
-                rot_local = host_out[2]  # None
-                host_inputs = (host_out[0], host_out[3], host_out[4])  # tokens, pt, cpt
-
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-                dev_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-                transformed = model[model_id].transform_and_embed_prefill_inputs_device(*dev_inputs)
-                tt_logits = model[model_id].ttnn_prefill_forward(
-                    transformed[0],
-                    rot_mats_global=rot_global,
-                    rot_mats_local=rot_local,
-                    user_id=0,
-                    page_table=transformed[1],
-                    get_last_token=fixed_get_last_token,
-                    kv_cache=tt_kv_cache[model_id],
-                    batch_size=users_per_row_per_iter,
-                )
-
-                if fixed_get_last_token == -1:
-                    warmup_results = model[model_id].process_output_prefill_batched(
-                        tt_logits,
-                        last_w,
-                        users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=max_padded_len,
-                    )
-                else:
-                    warmup_results = model[model_id].process_output_prefill_batched(
-                        tt_logits,
-                        [idx % 32 for idx in last_w],
-                        users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=32,
-                    )
-                for row, uid in enumerate(warmup_indices):
-                    prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-                logger.info("Finished traced row-parallel prefill warmup")
-
-                # Clear KV caches (warmup wrote to them)
-                for i in range(len(model)):
-                    for layer_obj in model[i].layers:
-                        k_cache, v_cache = layer_obj.self_attn.layer_past
-                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
-
-                # --- Trace capture ---
-                logger.info("Capturing prefill trace...")
-                iter0_indices = [
-                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
-                ]
-                tokens_0, pt_0, last_0 = _prepare_batch_host(iter0_indices)
-                tokens_0 = tokens_0.reshape(num_rows, -1)
-                host_out = model[model_id].prepare_inputs_prefill(
-                    tokens_0, page_table=pt_0, trace_enabled=True, batched_prefill=True
-                )
-                host_inputs = (host_out[0], host_out[3], host_out[4])
-
-                trace_dev_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                # Embed tokens on-device inside the trace (without deallocating input buffer,
-                # since we need to update it between trace executions)
-                tokens_embd = ttnn.embedding(
-                    trace_dev_inputs[0],
-                    model[model_id].embedding_weight,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                )
-                if len(tokens_embd.shape) == 3:
-                    tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-                tt_out_trace = model[model_id].ttnn_prefill_forward(
-                    tokens_embd,
-                    rot_mats_global=rot_global,
-                    rot_mats_local=rot_local,
-                    user_id=0,
-                    page_table=trace_dev_inputs[1],
-                    get_last_token=fixed_get_last_token,
-                    kv_cache=tt_kv_cache[model_id],
-                    batch_size=users_per_row_per_iter,
-                )
-                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-                logger.info("Prefill trace captured")
-
-                # --- Execute trace for all iterations ---
-                logger.info(
-                    f"Starting traced row-parallel prefill ({num_prefill_iters} iters, "
-                    f"{users_per_row_per_iter} user/row/iter, {global_batch_size} users)..."
-                )
-                profiler.start(f"inference_prefill", iteration=batch_idx)
-                for iter_idx in range(num_prefill_iters):
-                    user_indices = [
-                        row * users_per_row_prefill + iter_idx * users_per_row_per_iter + u
-                        for row in range(num_rows)
-                        for u in range(users_per_row_per_iter)
-                    ]
-                    tokens_i, pt_i, last_i = _prepare_batch_host(user_indices)
-                    tokens_i = tokens_i.reshape(num_rows, -1)
-                    host_out = model[model_id].prepare_inputs_prefill(
-                        tokens_i, page_table=pt_i, trace_enabled=True, batched_prefill=True
-                    )
-                    host_inputs = (host_out[0], host_out[3], host_out[4])
-                    copy_host_to_device(host_inputs, device_tensors=trace_dev_inputs, mesh_device=mesh_device)
-                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-
-                    if fixed_get_last_token == -1:
-                        row_results = model[model_id].process_output_prefill_batched(
-                            tt_out_trace,
-                            last_i,
-                            users_per_row=users_per_row_per_iter,
-                            seq_len_per_user=max_padded_len,
-                        )
-                    else:
-                        row_results = model[model_id].process_output_prefill_batched(
-                            tt_out_trace,
-                            [idx % 32 for idx in last_i],
-                            users_per_row=users_per_row_per_iter,
-                            seq_len_per_user=32,
-                        )
-                    for row, uid in enumerate(user_indices):
-                        prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
-                    if iter_idx % 8 == 0:
-                        logger.info(f"  Traced prefill batch {iter_idx+1}/{num_prefill_iters}")
-                profiler.end(f"inference_prefill", iteration=batch_idx)
-
-                ttnn.release_trace(mesh_device, trace_id)
-                logger.info(f"Traced row-parallel prefill finished ({num_prefill_iters} iterations)")
-
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            prefill_result = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+                sampling_params=device_sampling_params,
+            )
+            if isinstance(prefill_result, tuple):
+                prefilled_token = prefill_result[0].squeeze(-1)
             else:
-                # === NON-TRACED BATCHED PREFILL ===
-
-                # Helper to run one batched prefill iteration
-                def _run_batched_prefill_iter(iter_idx, user_indices):
-                    batch_tokens_list = []
-                    batch_page_tables = []
-                    batch_last_token_idxs = []
-
-                    for uid in user_indices:
-                        prefill_len = int(decoding_pos[uid])
-                        padded_len = get_padded_prefill_len(prefill_len)
-                        user_tokens = torch.cat(
-                            [
-                                input_tokens_prefill_pt[uid : uid + 1, :prefill_len],
-                                torch.zeros(1, padded_len - prefill_len, dtype=torch.long),
-                            ],
-                            dim=-1,
-                        )
-                        batch_tokens_list.append(user_tokens)
-                        block_size = page_params["page_block_size"]
-                        num_blocks_needed = (padded_len + block_size - 1) // block_size
-                        batch_page_tables.append(page_table[uid : uid + 1, :num_blocks_needed])
-                        batch_last_token_idxs.append(prefill_len - 1)
-
-                    tokens_stacked = torch.cat(batch_tokens_list, dim=0)  # [total_users, padded_len]
-                    page_table_stacked = torch.cat(batch_page_tables, dim=0)  # [total_users, num_blocks]
-                    padded_len = tokens_stacked.shape[1]
-
-                    # Reshape tokens for batch>1: concatenate per-row users along seq dim
-                    tokens_for_model = tokens_stacked.reshape(num_rows, -1)  # [num_rows, N*padded_len]
-
-                    (tokens_embd, rot_mats_global, rot_mats_local, page_table_tt, _) = model[
-                        model_id
-                    ].prepare_inputs_prefill(
-                        tokens_for_model,
-                        page_table=page_table_stacked,
-                        batched_prefill=True,
-                    )
-
-                    # Use get_last_token if all users' last tokens fall in the same 32-token tile
-                    min_tile = (min(batch_last_token_idxs) // 32) * 32
-                    max_tile = (max(batch_last_token_idxs) // 32) * 32
-                    get_last_token_val = min_tile if min_tile == max_tile else -1
-                    tt_logits = model[model_id].ttnn_prefill_forward(
-                        tokens_embd,
-                        rot_mats_global=rot_mats_global,
-                        rot_mats_local=rot_mats_local,
-                        user_id=0,  # Must be 0: each device sees page_table[0] after row-sharding
-                        page_table=page_table_tt,
-                        get_last_token=get_last_token_val,
-                        kv_cache=tt_kv_cache[model_id],
-                        batch_size=users_per_row_per_iter,
-                    )
-
-                    if get_last_token_val == -1:
-                        adjusted_last_idxs = batch_last_token_idxs
-                        seq_len_for_output = padded_len
-                    else:
-                        adjusted_last_idxs = [idx % 32 for idx in batch_last_token_idxs]
-                        seq_len_for_output = 32
-                    row_results = model[model_id].process_output_prefill_batched(
-                        tt_logits,
-                        adjusted_last_idxs,
-                        users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=seq_len_for_output,
-                    )
-                    return row_results
-
-                # Warmup: compile with first batch
-                logger.info("Starting row-parallel prefill warmup...")
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-                warmup_user_indices = [
-                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
-                ]
-                warmup_results = _run_batched_prefill_iter(0, warmup_user_indices)
-                for row, uid in enumerate(warmup_user_indices):
-                    prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-                logger.info("Finished row-parallel prefill warmup")
-
-                # Clear KV caches before real prefill (warmup wrote to them)
-                for i in range(len(model)):
-                    for layer_obj in model[i].layers:
-                        k_cache, v_cache = layer_obj.self_attn.layer_past
-                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
-
-                # Real prefill
-                logger.info(
-                    f"Starting row-parallel batched prefill ({num_prefill_iters} iters, "
-                    f"{users_per_row_per_iter} user/row/iter, {global_batch_size} users)..."
-                )
-                profiler.start(f"inference_prefill", iteration=batch_idx)
-                for iter_idx in range(num_prefill_iters):
-                    user_indices = [
-                        row * users_per_row_prefill + iter_idx * users_per_row_per_iter + u
-                        for row in range(num_rows)
-                        for u in range(users_per_row_per_iter)
-                    ]
-                    row_results = _run_batched_prefill_iter(iter_idx, user_indices)
-                    for row, uid in enumerate(user_indices):
-                        prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
-                    if iter_idx % 8 == 0:
-                        logger.info(f"  Prefilled batch {iter_idx+1}/{num_prefill_iters}")
-                profiler.end(f"inference_prefill", iteration=batch_idx)
-                logger.info(f"Row-parallel batched prefill finished ({num_prefill_iters} iterations)")
+                prefilled_token = torch.argmax(prefill_result, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info("Row-parallel batched prefill finished")
 
         else:
             # Standard sequential prefill (batch_size < num_rows)
@@ -1049,15 +860,28 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Decode forward with on-device sampling
-            out_tok, _ = generator.decode_forward(
-                out_tok,
-                current_pos,
-                enable_trace=enable_decode_trace,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                sampling_params=device_sampling_params,
-            )
+            # Decode forward — on-device sampling when available, host-side
+            # greedy argmax otherwise (1×1 Blackhole, etc.)
+            if on_device_sampling_supported:
+                out_tok, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_decode_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    sampling_params=device_sampling_params,
+                )
+            else:
+                # decode_forward returns (logits, log_probs) when sampling_params=None.
+                logits, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=enable_decode_trace,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    sampling_params=None,
+                )
+                out_tok = torch.argmax(logits, dim=-1).view(-1)
 
             if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)
@@ -1171,27 +995,31 @@ def test_gpt_oss_demo(
         tt_device_name = "GLX" if tt_device_name == "TG" else tt_device_name  # TG is old nomenclature of 4U galaxy.
         model_name = model_args[0].model_name
         model_device_key = f"{tt_device_name}_{model_name}"
-
-        with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
-            perf_targets = json.load(f)
-        prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
+        sku = get_current_device_sku_name()
         targets = {}
-        if (
-            f"batch_{batch_size}" in perf_targets["targets"]
-            and f"prefill_{prefill_pad_length}" in perf_targets["targets"][f"batch_{batch_size}"]
-            and model_device_key in perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]
-        ):
-            targets = {
-                "prefill_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["TTFT"],
-                "decode_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["decode_tok_s"],
-                "decode_t/s/u": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                    model_device_key
-                ]["decode_tok_s_u"],
-            }
+        resolved_perf_targets = resolve_perf_targets(
+            model_name=model_name,
+            sku=sku,
+            batch_size=global_batch_size,
+            seq_len=max(prefill_lens),
+        )
+        if resolved_perf_targets:
+            if resolved_perf_targets.get("prefill_t/s") is not None:
+                targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+            if resolved_perf_targets.get("decode_t/s") is not None:
+                targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+            if resolved_perf_targets.get("decode_t/s/u") is not None:
+                targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+            if not targets:
+                logger.warning(
+                    f"No centralized perf targets found for {model_device_key} "
+                    f"(batch={global_batch_size}, seq_len={max(prefill_lens)})"
+                )
+        else:
+            logger.warning(
+                f"No centralized perf targets found for {model_device_key} "
+                f"(batch={global_batch_size}, seq_len={max(prefill_lens)})"
+            )
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
@@ -1224,9 +1052,10 @@ def test_gpt_oss_demo(
         )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_name,
+            run_type="demo_perf",
+            ml_model_name=model_args[0].base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
@@ -1234,65 +1063,17 @@ def test_gpt_oss_demo(
             output_sequence_length=num_tokens_generated_decode[0],
         )
 
-        # check measurements against CI performance targets
-        logger.info(
-            f"Checking measurements against CI performance targets for {model_name} on {tt_device_name} for padded prefill length {prefill_pad_length}"
-        )
-        # Only call verify_perf if the model_device_key exists in the targets
-        if f"batch_{batch_size}" in perf_targets["ci"] and False:
-            if f"prefill_{prefill_pad_length}" in perf_targets["ci"][f"batch_{batch_size}"]:
-                if model_device_key in perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]:
-                    perf_config = perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
-                        model_device_key
-                    ]
-
-                    # Parse TTFT target with tolerance
-                    current_ttft_target = perf_config["TTFT"]
-                    if isinstance(current_ttft_target, list):
-                        ttft_tolerance = current_ttft_target[1]
-                        current_ttft_target = current_ttft_target[0]
-                    else:
-                        ttft_tolerance = 1.15  # Default 15% tolerance
-
-                    # Parse decode_tok_s_u target with tolerance
-                    decode_tsu_target = perf_config["decode_tok_s_u"]
-                    if isinstance(decode_tsu_target, list):
-                        decode_tolerance = decode_tsu_target[1]
-                        decode_tsu_target = decode_tsu_target[0]
-                    else:
-                        decode_tolerance = 1.15  # Default 15% tolerance
-
-                    # Verify prefill performance with prefill-specific tolerance
-                    prefill_targets = {
-                        "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
-                    }
-                    verify_perf(
-                        measurements,
-                        prefill_targets,
-                        high_tol_percentage=ttft_tolerance,
-                        expected_measurements={k: True for k in prefill_targets.keys()},
-                    )
-
-                    # Verify decode performance with decode-specific tolerance
-                    decode_targets = {
-                        "decode_t/s/u": decode_tsu_target,
-                        "decode_t/s": decode_tsu_target * global_batch_size,  # calculate from per-user rate
-                    }
-                    verify_perf(
-                        measurements,
-                        decode_targets,
-                        high_tol_percentage=decode_tolerance,
-                        expected_measurements={k: True for k in decode_targets.keys()},
-                    )
-                else:
-                    logger.warning(
-                        f"No CI performance targets found for model {model_name} on device {tt_device_name} for prefill length {prefill_pad_length}. Skipping performance verification."
-                    )
-            else:
-                logger.warning(
-                    f"No CI performance targets found for prefill length {prefill_pad_length}. Skipping performance verification."
-                )
+        if targets:
+            verify_perf(
+                measurements,
+                expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in targets},
+                model_name=model_name,
+                sku=sku,
+                batch_size=global_batch_size,
+                seq_len=max(prefill_lens),
+            )
         else:
-            logger.warning(
-                f"No CI performance targets found for batch size {batch_size}. Skipping performance verification."
+            logger.info(
+                "Skipping in-demo verify_perf checks for GPT-OSS due to missing centralized SKU/targets. "
+                "Performance validation remains enforced by centralized target validation in CI."
             )

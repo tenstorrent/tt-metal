@@ -1,5 +1,9 @@
 set(IMPL_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/umd_dram_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_api/temp_quasar_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
@@ -16,6 +20,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device_util.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
@@ -28,6 +33,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
@@ -39,12 +46,17 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/float8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mx_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp6.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_params.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
@@ -54,12 +66,21 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptor_patching.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_rpc_client.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_service.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/jit_compile_server_controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jit_server/remote_compile_coordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/memory_stats_shm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/shm_tracking_processor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/update_allocator_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
@@ -67,9 +88,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/service/service_core_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_telemetry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_cq_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/system_memory_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
@@ -77,6 +101,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/realtime_profiler_tracy_handler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp
@@ -120,4 +145,20 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )
+
+if(TT_METAL_USE_EMULE)
+    list(
+        APPEND
+        IMPL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
+    )
+endif()

@@ -34,6 +34,7 @@ struct ReduceScatterDeviceOperation {
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
+        const bool use_l1_small_for_semaphores = false;
     };
 
     struct tensor_args_t {
@@ -80,7 +81,8 @@ struct ReduceScatterDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 }  // namespace ttnn::operations::ccl
 
@@ -98,5 +100,6 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool use_l1_small_for_semaphores = false);
 }  // namespace ttnn::prim

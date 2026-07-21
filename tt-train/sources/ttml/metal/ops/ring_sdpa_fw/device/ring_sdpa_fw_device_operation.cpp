@@ -32,16 +32,16 @@ RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::comput
                   tt::tt_metal::TensorLayout(
                       tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
 
-    // Handle intermediates spec - shape is (B, H, S, 64)
+    // Handle intermediates spec - shape is (B, H, S, 32) = 1 FP32 tile wide (logsumexp)
     auto query_shape = tensor_args.query.logical_shape();
     auto [batch, heads, seq_len, dim] = query_shape.to_array_4D();
     ttnn::TensorSpec intermediates_spec =
         tensor_args.preallocated_intermediates.has_value()
             ? tensor_args.preallocated_intermediates->tensor_spec()
             : ttnn::TensorSpec(
-                  ttnn::Shape{batch, heads, seq_len, 64U},
+                  ttnn::Shape{batch, heads, seq_len, 32U},
                   tt::tt_metal::TensorLayout(
-                      tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+                      ttnn::DataType::FLOAT32, tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
 
     return {output_spec, intermediates_spec};
 }
