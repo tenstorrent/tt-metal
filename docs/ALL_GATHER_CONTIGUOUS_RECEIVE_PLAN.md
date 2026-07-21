@@ -1,5 +1,12 @@
 # Native all-gather: contiguous receive plan
 
+> Current qualification status (2026-07-21): the high-bandwidth bank-fanout
+> receiver and cross-ERISC terminal-offload path is qualified after fixing its
+> per-bank tail accounting. Full 65,536-row/device BF16 and scaled-FP8 output
+> checks pass, repeated large perf fixtures complete without hangs, and both
+> formats exceed 92 GB/s on Galaxy-compatible links. Older experiment tables
+> below remain historical unless identified as current qualification.
+
 ## Summary
 
 Improve small-row all-gather by changing the collective implementation, not the
@@ -247,26 +254,20 @@ The small-transfer crossover also does not justify automatic selection.  At
 0.059 ms, while receiver p90 was worse (0.063 versus 0.061 ms).  The difference
 is below the 3% retention gate.
 
-The reproducible command shape is:
+The old forced direct/receiver experiment used private environment controls
+that have since been removed. The supported reproducible command now exercises
+the automatic production policy:
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_FABRIC_CONFIG=ring \
-TTNN_AG_PERF_MESH_SHAPE=8x1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_direct \
-TTNN_EXPECT_RECEIVER_L1=0 \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
   -k 'sparse_mla_row_perf and fp8' -q -s
 ```
 
-Repeat with `TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver` and
-`TTNN_EXPECT_RECEIVER_L1=1` for the receiver half of the A/B.  Replace `fp8`
-with `bf16` for the BF16 pair.  The automatic-path assertions used `auto` with
-expected values zero for BF16 and one for production-size FP8.
+Replace `fp8` with `bf16` for the BF16 case. Historical forced-path A/B
+measurements remain useful evidence, but their private controls are no longer
+part of the executable interface.
 
 #### Torus-Y proxy control and automatic-policy boundary
 
@@ -1029,21 +1030,18 @@ scripts/run_safe_pytest.sh \
   -k 'test_all_gather_fabric_2d_row_major_2k_pages' -q -s
 ```
 
-Use the realtime device profiler for isolated measurements; keep every
-environment variable in the result record:
+Use the realtime device profiler for isolated measurements. The test fixes the
+8x1 ring geometry, 65,536 rows per device, three samples, and both dtypes:
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
   -k 'sparse_mla_row_perf' -q -s
 ```
 
-The exact performance command and environment variables must be copied into
-the result row; a timing without its command is not a reusable measurement.
+Copy the exact performance command and revision into the result row; a timing
+without them is not a reusable measurement.
 
 ### Result record template
 

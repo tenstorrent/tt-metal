@@ -1,0 +1,829 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sparse MLA All-Gather — From Native CCL to Dual-NoC Delivery</title>
+  <style>
+    :root {
+      --bg: #071018;
+      --panel: #0d1b26;
+      --panel-2: #102534;
+      --ink: #edf7fb;
+      --muted: #9cb5c2;
+      --cyan: #35d6e7;
+      --blue: #4d8cff;
+      --purple: #ad7cff;
+      --green: #62df9a;
+      --amber: #ffbe55;
+      --red: #ff6b75;
+      --grid: #1d3543;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .34);
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--ink); }
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body::before {
+      content: ""; position: fixed; inset: 0; pointer-events: none;
+      background:
+        radial-gradient(circle at 16% 18%, rgba(53,214,231,.12), transparent 26%),
+        radial-gradient(circle at 86% 84%, rgba(173,124,255,.10), transparent 28%),
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+      background-size: auto, auto, 34px 34px, 34px 34px;
+    }
+    .deck { width: 100%; height: 100%; position: relative; }
+    .slide {
+      position: absolute; inset: 0; display: none; padding: 4.3vh 5vw 4.8vh;
+      grid-template-rows: auto 1fr auto; gap: 2.2vh; opacity: 0;
+    }
+    .slide.active { display: grid; opacity: 1; animation: slideIn .34s ease-out; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+    .eyebrow { color: var(--cyan); font-size: 1.05vw; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(44px, 5.25vw, 88px); line-height: .98; letter-spacing: -.055em; max-width: 14ch; }
+    h2 { font-size: clamp(30px, 3.25vw, 56px); line-height: 1.04; letter-spacing: -.035em; }
+    h3 { font-size: clamp(18px, 1.55vw, 28px); line-height: 1.18; }
+    p, li, td, th { font-size: clamp(14px, 1.08vw, 20px); line-height: 1.42; }
+    .subhead { color: var(--muted); font-size: clamp(18px, 1.55vw, 28px); line-height: 1.4; max-width: 52em; }
+    .small { font-size: clamp(11px, .82vw, 15px); color: var(--muted); line-height: 1.35; }
+    .tiny { font-size: clamp(9px, .66vw, 12px); color: var(--muted); }
+    .accent { color: var(--cyan); }
+    .green { color: var(--green); }
+    .amber { color: var(--amber); }
+    .red { color: var(--red); }
+    .purple { color: var(--purple); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .footer { display: flex; justify-content: space-between; align-items: end; color: #708b99; font-size: .72vw; }
+    .footer code { color: #87a5b4; }
+    .slide-no { font-variant-numeric: tabular-nums; }
+    .hero { display: grid; grid-template-columns: 1.12fr .88fr; gap: 4vw; align-items: center; }
+    .hero-copy { display: grid; gap: 2.1vh; align-content: center; }
+    .kicker { display: inline-flex; gap: .7em; align-items: center; color: var(--muted); font-size: 1vw; }
+    .kicker::before { content: ""; width: 28px; height: 2px; background: var(--cyan); }
+    .panel {
+      background: linear-gradient(145deg, rgba(16,37,52,.96), rgba(9,24,34,.92));
+      border: 1px solid rgba(151,198,218,.16); border-radius: 18px; box-shadow: var(--shadow);
+      padding: 1.5vw;
+    }
+    .panel.flat { box-shadow: none; background: rgba(10,27,38,.72); }
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2vw; }
+    .cards.two { grid-template-columns: repeat(2, 1fr); }
+    .cards.four { grid-template-columns: repeat(4, 1fr); }
+    .metric { padding: 1.35vw; display: grid; gap: .45vh; align-content: start; }
+    .metric .value { font-size: clamp(31px, 3.1vw, 56px); line-height: 1; font-weight: 780; letter-spacing: -.05em; }
+    .metric .label { color: var(--muted); font-size: .88vw; text-transform: uppercase; letter-spacing: .1em; }
+    .metric .context { color: #bfd1da; font-size: .88vw; line-height: 1.35; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6vw; min-height: 0; }
+    .split.wide-left { grid-template-columns: 1.25fr .75fr; }
+    .split.wide-right { grid-template-columns: .78fr 1.22fr; }
+    .stack { display: grid; gap: 1.1vh; align-content: start; }
+    ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: .85vh; }
+    ul.clean li { position: relative; padding-left: 1.35em; }
+    ul.clean li::before { content: ""; position: absolute; left: 0; top: .55em; width: .52em; height: .52em; border-radius: 2px; background: var(--cyan); }
+    ul.clean li.warn::before { background: var(--amber); }
+    ul.clean li.bad::before { background: var(--red); }
+    .pill { display: inline-flex; border: 1px solid rgba(53,214,231,.32); background: rgba(53,214,231,.08); color: #bcf7fc; border-radius: 999px; padding: .34em .7em; font-size: .76vw; }
+    .pills { display: flex; gap: .55vw; flex-wrap: wrap; }
+    table { width: 100%; border-collapse: collapse; }
+    th { color: var(--muted); text-align: left; font-weight: 650; border-bottom: 1px solid #29404d; padding: .55em .6em; font-size: .82vw; }
+    td { padding: .55em .6em; border-bottom: 1px solid rgba(41,64,77,.62); font-size: .88vw; }
+    table.tuning td.mono { font-size: .70vw; overflow-wrap: anywhere; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    tr:last-child td { border-bottom: 0; }
+    .row-highlight td { background: rgba(53,214,231,.065); }
+    .flow-svg { width: 100%; height: 100%; min-height: 280px; overflow: visible; }
+    .flow-line { fill: none; stroke: var(--cyan); stroke-width: 4; stroke-linecap: round; stroke-dasharray: 10 12; }
+    .active .flow-line { animation: dash 1.1s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -44; } }
+    .node { fill: #102b3b; stroke: #3c6679; stroke-width: 2; rx: 14; }
+    .node.hot { fill: #17333f; stroke: var(--cyan); }
+    .node.purple { fill: #241f3c; stroke: var(--purple); }
+    .node.amber { fill: #382d1d; stroke: var(--amber); }
+    .svg-title { fill: var(--ink); font: 700 18px system-ui, sans-serif; }
+    .svg-label { fill: var(--muted); font: 500 13px system-ui, sans-serif; }
+    .svg-mini { fill: #b8ced8; font: 500 11px ui-monospace, monospace; }
+    .chart { display: grid; gap: .85vh; align-content: center; }
+    .bar-row { display: grid; grid-template-columns: 10.5em 1fr 5.5em; gap: .75em; align-items: center; }
+    .bar-track { height: 1.65em; border-radius: 7px; background: #0a151d; overflow: hidden; border: 1px solid #1d3440; }
+    .bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: 6px; }
+    .bar.purple-bar { background: linear-gradient(90deg, #7756dc, var(--purple)); }
+    .bar.green-bar { background: linear-gradient(90deg, #2eb978, var(--green)); }
+    .active .bar { animation: grow .7s .12s ease-out forwards; }
+    @keyframes grow { to { width: var(--w); } }
+    .bar-value { font-weight: 750; font-variant-numeric: tabular-nums; text-align: right; }
+    .timeline { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1vw; position: relative; align-items: start; padding-top: 1.6vh; }
+    .timeline::before { content: ""; position: absolute; left: 4%; right: 4%; top: 2.5em; height: 2px; background: #315160; }
+    .milestone { position: relative; display: grid; gap: .55vh; padding-top: 3em; }
+    .milestone::before { content: ""; position: absolute; top: 1.55em; left: .1em; width: 1.15em; height: 1.15em; border-radius: 50%; background: var(--bg); border: 3px solid var(--cyan); z-index: 2; }
+    .milestone .commit { color: var(--cyan); font: 650 .76vw ui-monospace, monospace; }
+    .milestone p { font-size: .84vw; color: var(--muted); }
+    .fragment { opacity: .16; transform: translateY(4px); transition: opacity .26s, transform .26s; }
+    .fragment.visible { opacity: 1; transform: none; }
+    .callout { border-left: 4px solid var(--cyan); background: rgba(53,214,231,.07); padding: .8em 1em; border-radius: 0 10px 10px 0; }
+    .callout.warn { border-color: var(--amber); background: rgba(255,190,85,.07); }
+    .callout.redline { border-color: var(--red); background: rgba(255,107,117,.07); }
+    .codebox { background: #050b10; border: 1px solid #203642; border-radius: 12px; padding: 1em; overflow: hidden; }
+    pre { margin: 0; color: #bfe3ec; font-size: .73vw; line-height: 1.48; white-space: pre-wrap; }
+    .ring-wrap { position: relative; min-height: 480px; }
+    .ring-svg { width: 100%; height: 100%; }
+    .ring-device { fill: #102532; stroke: #36596a; stroke-width: 2; }
+    .ring-device.active-device { stroke: var(--cyan); stroke-width: 3; }
+    .packet-dot { fill: var(--cyan); filter: drop-shadow(0 0 7px rgba(53,214,231,.85)); }
+    .packet-dot.back { fill: var(--purple); filter: drop-shadow(0 0 7px rgba(173,124,255,.85)); }
+    .noc-shell { display: grid; grid-template-columns: 1fr 14em; gap: 1.2vw; min-height: 0; }
+    .noc-map-wrap { position: relative; min-height: 0; height: 68vh; }
+    .noc-grid {
+      position: absolute; inset: 0; display: grid; grid-template-columns: repeat(17, 1fr); grid-template-rows: repeat(12, 1fr);
+      gap: 2px; padding: 2px; border-radius: 12px; background: #18303c;
+    }
+    .core { position: relative; display: grid; place-items: center; border-radius: 4px; background: #0c1a22; color: #6d8793; font: 600 .52vw ui-monospace, monospace; overflow: hidden; }
+    .core.tensix { background: #10303a; color: #9edbe0; }
+    .core.eth { background: #2a2142; color: #d1bbff; border: 1px solid #7259a2; }
+    .core.dram { background: #352c1d; color: #ffd487; border: 1px solid #8b6a31; }
+    .core.router { background: #17232b; color: #728794; }
+    .core.arc { background: #3a2027; color: #ffb1b7; }
+    .core.pcie { background: #173125; color: #9ef0bb; }
+    .core.selected { outline: 2px solid var(--cyan); outline-offset: -2px; z-index: 2; }
+    .noc-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .noc-path0 { fill: none; stroke: var(--cyan); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 12 10; }
+    .noc-path1 { fill: none; stroke: var(--purple); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 12 10; }
+    .active .noc-path0 { animation: dash 1.05s linear infinite; }
+    .active .noc-path1 { animation: dash .88s linear infinite reverse; }
+    .legend { display: grid; gap: .55em; align-content: start; }
+    .legend-item { display: grid; grid-template-columns: 1.1em 1fr; gap: .55em; align-items: center; color: var(--muted); font-size: .77vw; }
+    .swatch { width: 1em; height: 1em; border-radius: 3px; background: #10303a; }
+    .swatch.eth { background: #7259a2; } .swatch.dram { background: #8b6a31; }
+    .swatch.router { background: #354550; } .swatch.arc { background: #a64857; }
+    .swatch.pcie { background: #3d9d64; } .swatch.noc0 { background: var(--cyan); }
+    .swatch.noc1 { background: var(--purple); }
+    .protocol { display: grid; grid-template-columns: repeat(6, 1fr); gap: .7vw; align-items: stretch; }
+    .protocol-step { position: relative; min-height: 8em; padding: 1em .8em; border: 1px solid #294653; background: #0b1c26; border-radius: 12px; display: grid; gap: .35em; align-content: center; text-align: center; }
+    .protocol-step:not(:last-child)::after { content: "→"; position: absolute; right: -.72em; top: 42%; color: var(--cyan); z-index: 4; font-size: 1.4vw; }
+    .protocol-step strong { color: var(--cyan); font-size: 1vw; }
+    .protocol-step span { color: var(--muted); font-size: .75vw; }
+    .waterfall { display: grid; grid-template-columns: repeat(6, 1fr); gap: .8vw; height: 42vh; align-items: end; border-bottom: 1px solid #31505f; padding: 0 1vw; }
+    .wf { height: var(--h); background: linear-gradient(180deg, var(--cyan), #1e7385); border-radius: 9px 9px 0 0; position: relative; min-height: 2em; }
+    .wf.purple-wf { background: linear-gradient(180deg, var(--purple), #6143a3); }
+    .wf span { position: absolute; left: 50%; transform: translateX(-50%); white-space: nowrap; }
+    .wf .v { top: -2em; font-weight: 750; font-size: 1.02vw; }
+    .wf .l { bottom: -4.2em; width: 9em; text-align: center; color: var(--muted); font-size: .72vw; white-space: normal; }
+    .overview .slide { display: grid; opacity: 1; position: relative; width: 32vw; height: 18vw; min-height: 220px; padding: 1.2vw; transform: scale(.92); overflow: hidden; border: 1px solid #294653; border-radius: 12px; background: var(--bg); cursor: pointer; }
+    .overview .deck { display: flex; flex-wrap: wrap; gap: 1vw; padding: 1vw; overflow: auto; align-content: flex-start; }
+    .overview .slide h2 { font-size: 1.5vw; }
+    .overview .slide > :not(header):not(.footer) { opacity: .52; }
+    .overview body, body.overview { overflow: auto; }
+    .notes { display: none; position: fixed; right: 1vw; bottom: 3.3vh; width: 32vw; max-height: 42vh; overflow: auto; background: #02070beF; border: 1px solid #365563; border-radius: 12px; padding: 1em; color: #d6e8ef; z-index: 20; box-shadow: var(--shadow); font-size: .85vw; }
+    body.show-notes .slide.active .notes { display: block; }
+    .navhint { position: fixed; left: 50%; bottom: 1.1vh; transform: translateX(-50%); color: #4e6875; font-size: .65vw; z-index: 30; }
+    .progress { position: fixed; left: 0; bottom: 0; height: 3px; width: 0; background: linear-gradient(90deg, var(--cyan), var(--purple)); z-index: 40; transition: width .25s; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .bar { width: var(--w); } }
+    @media print {
+      html, body { overflow: visible; background: #071018; }
+      .deck { height: auto; }
+      .slide { display: grid !important; opacity: 1 !important; position: relative; width: 13.333in; height: 7.5in; page-break-after: always; padding: .42in .55in; }
+      .progress, .navhint, .notes { display: none !important; }
+      .fragment { opacity: 1; transform: none; }
+      .bar { width: var(--w); }
+    }
+  </style>
+</head>
+<body>
+<main class="deck" id="deck">
+
+  <section class="slide active" data-title="Title">
+    <header><div class="eyebrow">Sparse MLA · Blackhole · Galaxy-rate 8-device ring</div></header>
+    <div class="hero">
+      <div class="hero-copy">
+        <h1>All-gather,<br><span class="accent">end to end</span></h1>
+        <p class="subhead">How a cherry-picked native collective became a persistent, prefix-aware Sparse MLA path—and why the last bandwidth step required changing Fabric terminal delivery.</p>
+        <div class="pills"><span class="pill">native CCL</span><span class="pill">receiver L1</span><span class="pill">bank-striped DRAM</span><span class="pill">dual ERISC / dual NoC</span></div>
+      </div>
+      <div class="panel" style="padding:2vw">
+        <div class="cards two">
+          <div class="metric"><div class="label">Old composite BF16</div><div class="value red">28.745<span style="font-size:.45em"> ms</span></div><div class="context">broadcast + concat<br>18.134 GB/s</div></div>
+          <div class="metric"><div class="label">Galaxy-rate FP8 ring</div><div class="value green">3.465<span style="font-size:.45em"> ms</span></div><div class="context">one native CCL<br>91.927 GB/s effective RX</div></div>
+        </div>
+        <div class="callout" style="margin-top:1.2em"><strong>8.30× latency reduction</strong> from historical BF16 composite to the Galaxy-rate scaled-FP8 target; this includes both collective and format changes.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Branch: <code>pjosipovic/sparse-mla-new-all-gather</code></span><span class="slide-no"></span></footer>
+    <aside class="notes">The headline intentionally separates the complete product journey from isolated mechanism attribution. The 28.745 ms baseline is origin/main BF16 composite on the original P150 link configuration. The 3.465 ms number is the post-cleanup 64,640-row/rank FP8 run after flashing the Galaxy-rate board configuration.</aside>
+  </section>
+
+  <section class="slide" data-title="Executive summary">
+    <header><div class="eyebrow">Executive summary</div><h2>Three layers of work—each removed a different ceiling</h2></header>
+    <div class="cards">
+      <article class="panel metric fragment"><div class="label">1 · Operation</div><div class="value">3.34×</div><h3>Composite → native</h3><div class="context">BF16: 28.745 → 8.600 ms. One all-gather device operation replaces broadcast + concat.</div></article>
+      <article class="panel metric fragment"><div class="label">2 · Data path</div><div class="value">55.7<span style="font-size:.45em"> GB/s</span></div><h3>Receiver L1 + bank runs</h3><div class="context">Persistent output, L1-small controls, ~14 KiB payloads, grouped credits, and per-link DRAM-bank ownership.</div></article>
+      <article class="panel metric fragment"><div class="label">3 · Galaxy validation</div><div class="value green">91.9<span style="font-size:.45em"> GB/s</span></div><h3>Near physical ingress</h3><div class="context">Combined output reaches 91.9% of the configured 100 GB/s four-link ingress ceiling.</div></article>
+    </div>
+    <footer class="footer"><span>Measurements are effective receive bandwidth, not raw wire rate</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="What was cherry-picked">
+    <header><div class="eyebrow">Starting point · PR #48301</div><h2>The cherry-pick gave us the native collective—not the optimized MLA path</h2></header>
+    <div class="split wide-left">
+      <div class="panel">
+        <div class="timeline" style="grid-template-columns:repeat(5,1fr)">
+          <div class="milestone fragment"><div class="commit">8057155</div><h3>Native AG</h3><p>Squashed PR #48301: new <span class="mono">ttnn.all_gather</span> implementation.</p></div>
+          <div class="milestone fragment"><div class="commit">4d21bca</div><h3>Perf tests</h3><p>Move Sparse MLA CCL perf coverage off the composite path.</p></div>
+          <div class="milestone fragment"><div class="commit">47ef0c6</div><h3>Persistence</h3><p>Persistent DRAM output and reusable L1-small synchronization.</p></div>
+          <div class="milestone fragment"><div class="commit">6ed64f0</div><h3>Model</h3><p>Main MLA cache gather switches to native all-gather.</p></div>
+          <div class="milestone fragment"><div class="commit">2b5ff02</div><h3>Indexer</h3><p>Indexer gather and row-major top-k index path follow.</p></div>
+        </div>
+      </div>
+      <div class="stack">
+        <div class="callout"><strong>Foundation retained</strong><br>Native direct/multicast implementations, a single CCL API, and reusable output support.</div>
+        <div class="callout warn"><strong>Work still required</strong><br>Prefix slicing, row-major packed pages, topology fixes, receiver staging, deadlock-safe credits, packet amortization, and Fabric terminal delivery.</div>
+        <p class="small">The cherry-picked commit is large—79 files, +6487/−4778—while the final cleaned terminal-delivery commit is deliberately scoped to 20 files, +520/−61.</p>
+      </div>
+    </div>
+    <footer class="footer"><span>Git sources: <code>805715518c3</code> through <code>783ffdcac33</code></span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Dispatch topology">
+    <header><div class="eyebrow">Operation topology</div><h2>One native device op replaces a two-program composite</h2></header>
+    <div class="split">
+      <div class="panel stack">
+        <h3 class="red">Historical composite</h3>
+        <svg class="flow-svg" viewBox="0 0 700 350" aria-label="Composite all-gather diagram">
+          <rect class="node amber" x="30" y="120" width="170" height="90"/><text class="svg-title" x="115" y="155" text-anchor="middle">AllBroadcast</text><text class="svg-label" x="115" y="180" text-anchor="middle">device program #1</text>
+          <path class="flow-line" d="M205 165 H330"/>
+          <rect class="node amber" x="335" y="120" width="150" height="90"/><text class="svg-title" x="410" y="155" text-anchor="middle">Concat</text><text class="svg-label" x="410" y="180" text-anchor="middle">device program #2</text>
+          <path class="flow-line" d="M490 165 H615"/>
+          <rect class="node" x="520" y="240" width="150" height="65"/><text class="svg-label" x="595" y="267" text-anchor="middle">temporary buffers</text><text class="svg-mini" x="595" y="288" text-anchor="middle">extra lifetime + traffic</text>
+        </svg>
+        <div class="metric"><div class="value red">28.745 ms</div><div class="context">26.086 ms broadcast + 2.658 ms concat</div></div>
+      </div>
+      <div class="panel stack">
+        <h3 class="green">Native all-gather</h3>
+        <svg class="flow-svg" viewBox="0 0 700 350" aria-label="Native all-gather diagram">
+          <rect class="node hot" x="70" y="110" width="250" height="110"/><text class="svg-title" x="195" y="153" text-anchor="middle">ttnn.all_gather</text><text class="svg-label" x="195" y="180" text-anchor="middle">one device program</text><text class="svg-mini" x="195" y="202" text-anchor="middle">direct or receiver-L1 policy</text>
+          <path class="flow-line" d="M325 165 H570"/>
+          <rect class="node" x="485" y="110" width="160" height="110"/><text class="svg-title" x="565" y="153" text-anchor="middle">Persistent</text><text class="svg-label" x="565" y="180" text-anchor="middle">output allocation</text>
+        </svg>
+        <div class="metric"><div class="value green">8.600 ms</div><div class="context">Native BF16 direct path · 3.34× faster</div></div>
+      </div>
+    </div>
+    <footer class="footer"><span>The optimized receiver is a kernel implementation inside the existing CCL program—not another model op</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Sparse MLA semantics">
+    <header><div class="eyebrow">Model integration</div><h2>Move only the populated cache prefix, directly into reusable output</h2></header>
+    <div class="split wide-right">
+      <div class="stack">
+        <div class="panel"><h3>Main MLA</h3><ul class="clean"><li>Native cache-prefix gather</li><li><span class="mono">batch_slice_idx</span> selects user/layer</li><li><span class="mono">valid_gather_extent</span> limits populated rows</li><li>Persistent interleaved DRAM output</li></ul></div>
+        <div class="panel"><h3>Indexer</h3><ul class="clean"><li>Native index-cache prefix gather</li><li>Row-major top-k indices</li><li>No tiled conversion before AG</li></ul></div>
+        <div class="panel"><h3>Cache format</h3><p class="small">512 latent values packed as E4M3 with one FP32 scale per 128 values; 64 RoPE values remain BF16. A 656 B logical row occupies a 704 B aligned page.</p></div>
+      </div>
+      <svg class="flow-svg panel" viewBox="0 0 900 560" aria-label="Sparse MLA cache prefix gather">
+        <defs><linearGradient id="cacheg" x1="0" x2="1"><stop stop-color="#173546"/><stop offset="1" stop-color="#0e202c"/></linearGradient></defs>
+        <text class="svg-title" x="60" y="55">Allocated KV cache</text>
+        <rect x="60" y="85" width="250" height="400" rx="14" fill="url(#cacheg)" stroke="#41677a" stroke-width="2"/>
+        <rect x="62" y="87" width="246" height="235" rx="12" fill="rgba(53,214,231,.22)" stroke="#35d6e7"/>
+        <text class="svg-title" x="185" y="195" text-anchor="middle">valid prefix</text><text class="svg-label" x="185" y="220" text-anchor="middle">512K cached + 5K live</text>
+        <text class="svg-label" x="185" y="405" text-anchor="middle">unpopulated capacity</text>
+        <path class="flow-line" d="M320 205 C420 205 420 205 515 205"/>
+        <rect class="node hot" x="520" y="120" width="180" height="170"/><text class="svg-title" x="610" y="170" text-anchor="middle">Native AG</text><text class="svg-label" x="610" y="200" text-anchor="middle">slice + valid extent</text><text class="svg-mini" x="610" y="230" text-anchor="middle">no padded suffix traffic</text>
+        <path class="flow-line" d="M705 205 H790"/>
+        <rect class="node" x="720" y="340" width="150" height="110"/><text class="svg-title" x="795" y="380" text-anchor="middle">Persistent</text><text class="svg-label" x="795" y="406" text-anchor="middle">DRAM output</text>
+      </svg>
+    </div>
+    <footer class="footer"><span>Key commits: <code>1594fc1</code>, <code>b0067e7</code>, <code>06e455c</code>, <code>af372a4</code></span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Workload and roofline">
+    <header><div class="eyebrow">Canonical long-cache geometry</div><h2>517,120 global rows on an 8-device ring</h2></header>
+    <div class="split wide-left">
+      <div class="ring-wrap panel"><svg id="ringSvg" class="ring-svg" viewBox="0 0 900 560" aria-label="Animated eight-device bidirectional ring"></svg></div>
+      <div class="stack">
+        <div class="cards two">
+          <div class="panel metric"><div class="label">Rows / rank</div><div class="value">64,640</div><div class="context">(512,000 cached + 5,120 live) / 8</div></div>
+          <div class="panel metric"><div class="label">Remote fraction</div><div class="value">7/8</div><div class="context">effective receive bytes per rank</div></div>
+        </div>
+        <div class="panel"><table><tr><th>Format</th><th class="num">Page</th><th class="num">Useful receive</th></tr><tr><td>BF16</td><td class="num">1152 B</td><td class="num">~521 MB/rank</td></tr><tr><td>Scaled FP8</td><td class="num">704 B</td><td class="num">~319 MB/rank</td></tr></table></div>
+        <div class="callout"><strong>Configured physical ingress ceiling: 100 GB/s</strong><br><span class="small">Galaxy-rate bundle 19.10.99.0 configures 200 Gb/s = 25 GB/s per link per direction. Four active receive links × 25 GB/s = 100 GB/s into one rank.</span></div>
+      </div>
+    </div>
+    <footer class="footer"><span>Current LoudBox firmware emulates Galaxy link rate; it does not reproduce the full Galaxy Torus-Y topology</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Galaxy bandwidth accounting">
+    <header><div class="eyebrow">Measured after Galaxy-rate firmware + tt-smi reset</div><h2>Ingress is the all-gather roofline; full-duplex “total” is not</h2></header>
+    <div class="split wide-left">
+      <div class="panel">
+        <svg class="flow-svg" viewBox="0 0 980 520" aria-label="Galaxy-rate directional bandwidth accounting">
+          <defs><marker id="bwArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#35d6e7"/></marker><marker id="bwArrowPurple" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#ad7cff"/></marker></defs>
+          <rect class="node" x="385" y="180" width="210" height="150"/><text class="svg-title" x="490" y="225" text-anchor="middle">One rank</text><text class="svg-label" x="490" y="255" text-anchor="middle">four receive links</text><text class="svg-mini" x="490" y="286" text-anchor="middle">two planes × two directions</text>
+          <path d="M80 105 C220 105 270 205 375 220" fill="none" stroke="#35d6e7" stroke-width="7" marker-end="url(#bwArrow)"/><path d="M80 415 C220 415 270 305 375 290" fill="none" stroke="#35d6e7" stroke-width="7" marker-end="url(#bwArrow)"/>
+          <path d="M900 105 C760 105 710 205 605 220" fill="none" stroke="#35d6e7" stroke-width="7" marker-end="url(#bwArrow)"/><path d="M900 415 C760 415 710 305 605 290" fill="none" stroke="#35d6e7" stroke-width="7" marker-end="url(#bwArrow)"/>
+          <text class="svg-title" x="75" y="72">25 GB/s RX</text><text class="svg-title" x="720" y="72">25 GB/s RX</text><text class="svg-title" x="75" y="475">25 GB/s RX</text><text class="svg-title" x="720" y="475">25 GB/s RX</text>
+          <path d="M375 248 H145" fill="none" stroke="#ad7cff" stroke-width="4" stroke-dasharray="12 8" marker-end="url(#bwArrowPurple)"/><path d="M605 262 H835" fill="none" stroke="#ad7cff" stroke-width="4" stroke-dasharray="12 8" marker-end="url(#bwArrowPurple)"/>
+          <text class="svg-label" x="490" y="365" text-anchor="middle">TX can overlap RX at another 100 GB/s</text><text class="svg-mini" x="490" y="395" text-anchor="middle">200 GB/s RX+TX sum ≠ 200 GB/s receive capacity</text>
+        </svg>
+      </div>
+      <div class="stack">
+        <div class="panel"><table><tr><th>Quantity</th><th class="num">Galaxy-rate result</th></tr><tr><td>Physical link, one direction</td><td class="num">200 Gb/s = 25 GB/s</td></tr><tr><td>Four-link physical ingress</td><td class="num green">100 GB/s</td></tr><tr><td>Four-link physical egress</td><td class="num">100 GB/s</td></tr><tr><td>RX + TX full-duplex sum</td><td class="num">200 GB/s</td></tr></table></div>
+        <div class="panel"><table><tr><th>Measured quantity</th><th class="num">Result</th></tr><tr><td>Raw unidirectional, mean/link</td><td class="num">174.601 Gb/s</td></tr><tr><td>Raw bidirectional, mean/direction</td><td class="num">177.098 Gb/s</td></tr><tr><td>Four-link raw-payload extrapolation</td><td class="num">≈88.55 GB/s</td></tr><tr><td>Native AG effective receive</td><td class="num green">91.91–92.39 GB/s</td></tr></table></div>
+        <div class="callout warn"><strong>Do not equate the last two rows.</strong><br><span class="small">Raw tests count link payload; CCL effective RX divides seven useful remote shards by device-program time and excludes Fabric headers. Their few-percent difference is measurement/accounting, not bandwidth above line rate.</span></div>
+      </div>
+    </div>
+    <footer class="footer"><span>Full duplex means simultaneous 100 GB/s ingress and 100 GB/s egress—not a 200 GB/s all-gather receive roof</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Galaxy-rate validation">
+    <header><div class="eyebrow">Exact 512K sequence · 8×1 ring · combined receiver-to-DRAM</div><h2>FP16 and FP8 converge on the same Galaxy-rate bandwidth</h2></header>
+    <div class="split wide-left">
+      <div class="panel"><table><tr><th>Format</th><th class="num">Rows/rank</th><th class="num">Useful RX/rank</th><th class="num">Median</th><th class="num">Effective RX</th></tr><tr><td>BF16</td><td class="num">65,536</td><td class="num">528.482 MB</td><td class="num">5.720 ms</td><td class="num green">92.391 GB/s</td></tr><tr><td>Scaled FP8</td><td class="num">65,536</td><td class="num">322.961 MB</td><td class="num">3.514 ms</td><td class="num green">91.914 GB/s</td></tr><tr><td>Production FP8</td><td class="num">64,640</td><td class="num">318.546 MB</td><td class="num">3.465 ms</td><td class="num green">91.927 GB/s</td></tr></table></div>
+      <div class="stack">
+        <div class="cards two"><div class="panel metric"><div class="label">Physical utilization</div><div class="value green">≈92%</div><div class="context">effective RX / 100 GB/s configured ingress</div></div><div class="panel metric"><div class="label">FP8 speedup</div><div class="value green">1.63×</div><div class="context">5.720 / 3.514; tracks byte reduction</div></div></div>
+        <div class="callout"><strong>Firmware sensitivity:</strong><br>Production FP8 was 3.476 ms / 91.629 GB/s before the rate change and 3.465 ms / 91.927 GB/s after it—statistically unchanged because the CCL was already below 100 GB/s.</div>
+        <div class="panel small"><strong>Raw deployment-test note:</strong> data movement completed, but its board-type threshold still expects an ordinary 400 Gb/s P150 and therefore flags the intentional ≈177 Gb/s result as a bandwidth failure.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Firmware bundle 19.10.99.0 installed on all eight devices; measurements taken after <code>tt-smi -r</code></span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Galaxy-rate MLA blocks">
+    <header><div class="eyebrow">Scaled-FP8 MLA block proxy after Galaxy-rate flash</div><h2>The optimized long AG holds; other collectives expose modest system impact</h2></header>
+    <div class="split wide-left">
+      <div class="panel"><table><tr><th>SP=4 × TP=2 proxy</th><th class="num">Pre-flash</th><th class="num">Galaxy-rate</th><th class="num">Block change</th></tr><tr><td>DeepSeek warm</td><td class="num">10.049 ms</td><td class="num">10.102 ms</td><td class="num">+0.5%</td></tr><tr><td>DeepSeek cold</td><td class="num">96.111 ms</td><td class="num">96.036 ms</td><td class="num green">−0.1%</td></tr><tr><td>DeepSeek long</td><td class="num">23.178 ms</td><td class="num">23.740 ms</td><td class="num amber">+2.4%</td></tr><tr><td>GLM warm</td><td class="num">7.719 ms</td><td class="num">7.953 ms</td><td class="num amber">+3.0%</td></tr><tr><td>GLM cold</td><td class="num">73.521 ms</td><td class="num">74.210 ms</td><td class="num">+0.9%</td></tr><tr><td>GLM long</td><td class="num">17.686 ms</td><td class="num">18.055 ms</td><td class="num amber">+2.1%</td></tr></table></div>
+      <div class="stack">
+        <div class="cards two"><div class="panel metric"><div class="label">DeepSeek range</div><div class="value">−0.1–2.4%</div><div class="context">block regression across warm/cold/long</div></div><div class="panel metric"><div class="label">GLM range</div><div class="value">0.9–3.0%</div><div class="context">more collective-sensitive</div></div></div>
+        <div class="panel"><h3>Why anything moves</h3><ul class="clean"><li>two TP <span class="mono">AllGatherAsync</span> phases remain per forward</li><li><span class="mono">ReduceScatterMinimalAsync</span> remains link-sensitive</li><li>the 8×1 tuned native AG itself stayed ≈91.9 GB/s</li></ul></div>
+        <div class="callout warn"><strong>Proxy boundary:</strong><br>SP=4 exercises a longer local ring than SP=2, but it is not Galaxy SP=8 × TP=4. The pre-flash rows are the closest saved artifacts, not a same-commit firmware A/B.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>All warm/cold/long post-flash cases passed; actual four-ring Galaxy block timing remains required</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Why receiver L1">
+    <header><div class="eyebrow">First major redesign</div><h2>Terminate Fabric into Tensix L1, then drain locally to DRAM</h2></header>
+    <div class="split wide-left">
+      <svg class="flow-svg panel" viewBox="0 0 1100 560" aria-label="Receiver L1 data path">
+        <rect class="node amber" x="40" y="205" width="145" height="100"/><text class="svg-title" x="112" y="245" text-anchor="middle">Source DRAM</text><text class="svg-label" x="112" y="272" text-anchor="middle">bank-owned runs</text>
+        <path class="flow-line" d="M190 255 H285"/>
+        <rect class="node" x="290" y="190" width="160" height="130"/><text class="svg-title" x="370" y="232" text-anchor="middle">Sender</text><text class="svg-label" x="370" y="258" text-anchor="middle">Tensix DM</text><text class="svg-mini" x="370" y="285" text-anchor="middle">~14 KiB packet</text>
+        <path class="flow-line" d="M455 255 H565"/>
+        <rect class="node purple" x="570" y="190" width="150" height="130"/><text class="svg-title" x="645" y="232" text-anchor="middle">Fabric</text><text class="svg-label" x="645" y="258" text-anchor="middle">ERISC router</text><text class="svg-mini" x="645" y="285" text-anchor="middle">ring forward + local</text>
+        <path class="flow-line" d="M725 255 H815"/>
+        <rect class="node hot" x="820" y="120" width="220" height="130"/><text class="svg-title" x="930" y="162" text-anchor="middle">Receiver Tensix L1</text><text class="svg-label" x="930" y="188" text-anchor="middle">source × slot staging</text><text class="svg-mini" x="930" y="215" text-anchor="middle">ordinary L1 payload</text>
+        <path class="flow-line" d="M930 255 V365"/>
+        <rect class="node amber" x="820" y="370" width="220" height="105"/><text class="svg-title" x="930" y="410" text-anchor="middle">Persistent DRAM</text><text class="svg-label" x="930" y="438" text-anchor="middle">BRISC/NOC0 + NCRISC/NOC1</text>
+      </svg>
+      <div class="stack">
+        <div class="panel"><h3>Why it helps</h3><ul class="clean"><li>Fabric packet targets one contiguous L1 slot</li><li>Receiver owns final DRAM address generation</li><li>Multiple slots preserve overlap</li><li>No extra Fabric client on receiver core</li></ul></div>
+        <div class="panel"><h3>Memory contract</h3><table><tr><td>Payload staging</td><td class="num">ordinary Tensix L1</td></tr><tr><td>Produced/consumed semaphores</td><td class="num">L1-small</td></tr><tr><td>Final output</td><td class="num">persistent DRAM</td></tr></table></div>
+        <div class="callout warn"><strong>Important:</strong> ERISC does not write final DRAM in the retained path. ERISC delivers into Tensix L1; Tensix data-movement RISCs perform the DRAM drain.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Commit: <code>40f0a74d006</code> · receiver staging and persistent-output policy</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Bank ownership">
+    <header><div class="eyebrow">Packet and DRAM scheduling</div><h2>Two links × four owned banks × four receiver cores per link</h2></header>
+    <div class="split">
+      <div class="panel stack">
+        <h3>Previous schedule</h3>
+        <div class="cards four" style="gap:.45vw">
+          <div class="metric panel flat"><div class="label">B0</div><div class="value" style="font-size:2vw">L0</div></div><div class="metric panel flat"><div class="label">B1</div><div class="value" style="font-size:2vw">L1</div></div><div class="metric panel flat"><div class="label">B2</div><div class="value" style="font-size:2vw">L0</div></div><div class="metric panel flat"><div class="label">B3</div><div class="value" style="font-size:2vw">L1</div></div>
+          <div class="metric panel flat"><div class="label">B4</div><div class="value" style="font-size:2vw">L0</div></div><div class="metric panel flat"><div class="label">B5</div><div class="value" style="font-size:2vw">L1</div></div><div class="metric panel flat"><div class="label">B6</div><div class="value" style="font-size:2vw">L0</div></div><div class="metric panel flat"><div class="label">B7</div><div class="value" style="font-size:2vw">L1</div></div>
+        </div>
+        <p class="small">A single receiver stream per link serializes all four physical banks and creates a long dependency chain.</p>
+      </div>
+      <div class="panel stack">
+        <h3 class="green">Retained interleaved schedule</h3>
+        <table><tr><th>Link</th><th>Owned banks</th><th>Receiver mapping</th></tr><tr><td class="accent">L0</td><td>0, 2, 4, 6</td><td>R0→B0, R1→B2, R2→B4, R3→B6</td></tr><tr><td class="purple">L1</td><td>1, 3, 5, 7</td><td>R0→B1, R1→B3, R2→B5, R3→B7</td></tr></table>
+        <div class="protocol" style="grid-template-columns:repeat(4,1fr)"><div class="protocol-step"><strong>run 0</strong><span>one bank/link</span></div><div class="protocol-step"><strong>run 1</strong><span>next bank/link</span></div><div class="protocol-step"><strong>run 2</strong><span>next bank/link</span></div><div class="protocol-step"><strong>run 3</strong><span>next bank/link</span></div></div>
+        <p class="small">Maximum legal batches: 12 BF16 rows or 20 FP8 rows (~14 KiB). Group-six credits overlap acknowledgement latency with payload work.</p>
+      </div>
+    </div>
+    <footer class="footer"><span>Commit: <code>58557020b47</code> · FP8 50.4 → 55.7 GB/s</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Receiver protocol">
+    <header><div class="eyebrow">Correctness-critical protocol</div><h2>A receiver slot is reusable only after every dependent action completes</h2></header>
+    <div class="stack" style="align-content:center">
+      <div class="protocol">
+        <div class="protocol-step fragment"><strong>1 · reserve</strong><span>sender waits for slot credit</span></div>
+        <div class="protocol-step fragment"><strong>2 · receive</strong><span>Fabric payload lands in receiver L1</span></div>
+        <div class="protocol-step fragment"><strong>3 · notify</strong><span>produced sequence becomes visible</span></div>
+        <div class="protocol-step fragment"><strong>4 · drain</strong><span>Tensix writes persistent DRAM output</span></div>
+        <div class="protocol-step fragment"><strong>5 · consume</strong><span>BRISC/NCRISC finish the window</span></div>
+        <div class="protocol-step fragment"><strong>6 · credit</strong><span>slot returns to sender</span></div>
+      </div>
+      <div class="split" style="margin-top:2vh">
+        <div class="callout"><strong>Deadlock fixes</strong><br>Separate initialization and completion epochs; independent forward/backward produced sequences; grouped credits; exact wraparound ordering.</div>
+        <div class="callout warn"><strong>Performance trap</strong><br>A fused payload+atomic originally waited synchronously for terminal local-NoC completion before the router could progress.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Safe pytest + tt-triage were used for every hang; no <code>--dev</code> build</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Fabric bottleneck">
+    <header><div class="eyebrow">Why Fabric changes became necessary</div><h2>Both payload copies were sharing ERISC1’s NOC1</h2></header>
+    <div class="split wide-left">
+      <svg class="flow-svg panel" viewBox="0 0 1000 560" aria-label="Shared NOC1 bottleneck">
+        <rect class="node purple" x="70" y="180" width="210" height="190"/><text class="svg-title" x="175" y="225" text-anchor="middle">ERISC1</text><text class="svg-label" x="175" y="252" text-anchor="middle">receiver owner</text><text class="svg-mini" x="175" y="283" text-anchor="middle">packet decode / order</text><text class="svg-mini" x="175" y="304" text-anchor="middle">slot + credit state</text>
+        <path class="flow-line" style="stroke:var(--purple)" d="M285 230 H600"/>
+        <rect class="node" x="610" y="150" width="250" height="110"/><text class="svg-title" x="735" y="192" text-anchor="middle">Downstream ERISC</text><text class="svg-label" x="735" y="220" text-anchor="middle">ring forward copy</text>
+        <path class="flow-line" style="stroke:var(--purple)" d="M285 320 H600"/>
+        <rect class="node hot" x="610" y="300" width="250" height="110"/><text class="svg-title" x="735" y="342" text-anchor="middle">Receiver Tensix L1</text><text class="svg-label" x="735" y="370" text-anchor="middle">terminal local copy</text>
+        <text class="svg-title" x="450" y="125" text-anchor="middle" fill="#ad7cff">NOC1 ≈ 43.2 GB/s</text>
+        <text class="svg-label" x="450" y="455" text-anchor="middle">two copies on one NoC → ≈21.6 GB/s per active stream</text>
+      </svg>
+      <div class="stack">
+        <div class="panel metric"><div class="label">Measured aggregate fit</div><div class="value">≈86.4<span style="font-size:.45em"> GB/s</span></div><div class="context">Four active ingress streams × ~21.6 GB/s.</div></div>
+        <div class="panel"><h3>Attribution ruled out simpler explanations</h3><ul class="clean"><li>zero downstream/admission blocking</li><li>credit command construction &lt;0.1 ms</li><li>receiver drain mostly overlapped</li><li>fixed 1D route decoding gained only ~0.5%</li></ul></div>
+        <div class="callout redline"><strong>Unsafe experiment:</strong> assigning NOC0 directly to ERISC1 hung. Blackhole two-ERISC mode binds ERISC ownership to NoC ownership.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>1.35 GHz × 32 B/cycle = 43.2 GB/s per NoC</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Physical Blackhole NoC map">
+    <header><div class="eyebrow">Physical chip view</div><h2>Blackhole 17×12 NoC grid—every core type</h2></header>
+    <div class="noc-shell">
+      <div class="noc-map-wrap panel flat">
+        <div class="noc-grid" id="nocGrid" aria-label="Blackhole physical NoC core grid"></div>
+        <svg class="noc-overlay" viewBox="0 0 1700 1200" preserveAspectRatio="none" aria-hidden="true">
+          <defs><marker id="arrow0" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#35d6e7"/></marker><marker id="arrow1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#ad7cff"/></marker></defs>
+          <path class="noc-path1" marker-end="url(#arrow1)" d="M150 150 H430 V350"/>
+          <path class="noc-path0" marker-end="url(#arrow0)" d="M150 150 V470 H430 V350"/>
+          <path class="noc-path0" marker-end="url(#arrow0)" d="M430 350 H70 V250" style="stroke-width:3;opacity:.7"/>
+        </svg>
+      </div>
+      <div class="legend panel flat">
+        <h3>Physical resources</h3>
+        <div class="legend-item"><span class="swatch"></span><span>Tensix worker (14×10 physical)</span></div>
+        <div class="legend-item"><span class="swatch eth"></span><span>Ethernet (14; dual RISC-V, 512 KB L1)</span></div>
+        <div class="legend-item"><span class="swatch dram"></span><span>DRAM endpoint (8 banks × 3 endpoints)</span></div>
+        <div class="legend-item"><span class="swatch router"></span><span>Router-only</span></div>
+        <div class="legend-item"><span class="swatch arc"></span><span>ARC</span></div>
+        <div class="legend-item"><span class="swatch pcie"></span><span>PCIe</span></div>
+        <hr style="border:0;border-top:1px solid #294653;width:100%">
+        <div class="legend-item"><span class="swatch noc0"></span><span>NOC0: ERISC0 terminal L1 copy; Tensix BRISC drain</span></div>
+        <div class="legend-item"><span class="swatch noc1"></span><span>NOC1: ERISC1 ring forward; Tensix NCRISC drain</span></div>
+        <p class="tiny">Core positions are exact from <span class="mono">blackhole_140_arch.yaml</span>. Highlighted routes are schematic Manhattan paths; actual routing and mirrored coordinates are hardware-defined.</p>
+      </div>
+    </div>
+    <footer class="footer"><span>Selected example: ETH (1,1) → receiver Tensix (4,3) → DRAM endpoint</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Dual ERISC design">
+    <header><div class="eyebrow">Qualified Fabric design · automatically enabled</div><h2>The cross-ERISC path now passes full-size qualification</h2></header>
+    <div class="split wide-left">
+      <svg class="flow-svg panel" viewBox="0 0 1100 610" aria-label="Cross-ERISC terminal offload">
+        <rect x="45" y="45" width="1010" height="510" rx="24" fill="#0a1821" stroke="#365565" stroke-width="2"/>
+        <text class="svg-title" x="75" y="85">One Blackhole Ethernet core · shared 512 KB L1</text>
+        <rect class="node purple" x="90" y="145" width="265" height="260"/><text class="svg-title" x="222" y="190" text-anchor="middle">ERISC1 · receiver owner</text><text class="svg-label" x="222" y="220" text-anchor="middle">decode + ordering</text><text class="svg-label" x="222" y="245" text-anchor="middle">NOC1 downstream forward</text><text class="svg-label" x="222" y="270" text-anchor="middle">slot + credits</text><text class="svg-label" x="222" y="295" text-anchor="middle">deferred notification</text>
+        <rect class="node hot" x="430" y="180" width="240" height="190"/><text class="svg-title" x="550" y="220" text-anchor="middle">Depth-4 descriptor ring</text><text class="svg-mini" x="550" y="253" text-anchor="middle">payload L1 address</text><text class="svg-mini" x="550" y="276" text-anchor="middle">size + destination</text><text class="svg-mini" x="550" y="299" text-anchor="middle">published / completed seq</text><text class="svg-mini" x="550" y="322" text-anchor="middle">queue-index TRID</text>
+        <rect class="node" x="750" y="145" width="265" height="260"/><text class="svg-title" x="882" y="190" text-anchor="middle">ERISC0 · sender owner</text><text class="svg-label" x="882" y="220" text-anchor="middle">services queue between passes</text><text class="svg-label" x="882" y="245" text-anchor="middle">NOC0 terminal L1 copy</text><text class="svg-label" x="882" y="270" text-anchor="middle">TRID flush</text><text class="svg-label" x="882" y="295" text-anchor="middle">publish completion sequence</text>
+        <path class="flow-line" style="stroke:var(--purple)" d="M360 240 H425"/>
+        <path class="flow-line" d="M675 280 H745"/>
+        <path class="flow-line" d="M750 345 H675"/>
+        <path class="flow-line" style="stroke:var(--purple)" d="M430 345 H360"/>
+        <text class="svg-mini" x="392" y="225" text-anchor="middle">publish</text><text class="svg-mini" x="710" y="265" text-anchor="middle">consume</text><text class="svg-mini" x="710" y="380" text-anchor="middle">complete</text>
+        <path class="flow-line" style="stroke:var(--purple)" d="M220 410 V500 H60"/><text class="svg-label" x="150" y="530" text-anchor="middle">NOC1 → next ERISC</text>
+        <path class="flow-line" d="M885 410 V500 H1030"/><text class="svg-label" x="950" y="530" text-anchor="middle">NOC0 → receiver Tensix L1</text>
+      </svg>
+      <div class="stack">
+        <div class="panel"><h3>Safety invariants</h3><ul class="clean"><li>ERISC1 remains sole receiver-order owner</li><li>header + payload stay live until both copies finish</li><li>notification waits for terminal copy completion</li><li>slot credit cannot race payload reuse</li></ul></div>
+        <div class="panel metric"><div class="label">Qualified depth</div><div class="value">4</div><div class="context">Enabled automatically on Blackhole two-ERISC 1D rings.</div></div>
+        <div class="callout"><strong>Final gate passed:</strong><br>The interleaved receiver tail-index bug was fixed. BF16 and scaled-FP8 pass full 65,536-row/device output checks, followed by five repeated perf fixtures per format without hangs.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Ordinary Fabric packets remain unchanged; only marked terminal writes use the shared queue</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Deferred notification">
+    <header><div class="eyebrow">The prerequisite Fabric fix</div><h2>Notification follows payload completion—without blocking packet service</h2></header>
+    <div class="split">
+      <div class="panel stack">
+        <h3 class="red">Before: synchronous fused service</h3>
+        <div class="protocol" style="grid-template-columns:repeat(4,1fr)"><div class="protocol-step"><strong>write</strong><span>terminal payload</span></div><div class="protocol-step"><strong>wait</strong><span>local TRID flush</span></div><div class="protocol-step"><strong>atomic</strong><span>produced sem</span></div><div class="protocol-step"><strong>retire</strong><span>receiver slot</span></div></div>
+        <div class="metric"><div class="value red">4.098 ms</div><div class="context">Deferred combined versus 5.719 ms control: 28.3% lower latency.</div></div>
+      </div>
+      <div class="panel stack">
+        <h3 class="green">After: issue, progress, complete</h3>
+        <div class="protocol" style="grid-template-columns:repeat(4,1fr)"><div class="protocol-step"><strong>issue</strong><span>write with slot TRID</span></div><div class="protocol-step"><strong>progress</strong><span>router services packets</span></div><div class="protocol-step"><strong>poll</strong><span>ordinary completion state</span></div><div class="protocol-step"><strong>notify</strong><span>atomic + retire</span></div></div>
+        <div class="callout"><strong>Header-scoped behavior</strong><br>The defer bit occupies existing padding; unrelated fused writes preserve immediate semantics.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Deferred notification moved the bottleneck to terminal local-NoC completion—making dual-NoC offload actionable</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Performance ladder">
+    <header><div class="eyebrow">Historical pre-flash scaled-FP8 ladder</div><h2>Performance progress before final correctness qualification</h2></header>
+    <div class="waterfall">
+      <div class="wf purple-wf" style="--h:92%"><span class="v">6.319 ms</span><span class="l">native receiver baseline<br>50.4 GB/s</span></div>
+      <div class="wf purple-wf" style="--h:83%"><span class="v">5.715 ms</span><span class="l">bank runs + packets + credits<br>55.7 GB/s</span></div>
+      <div class="wf" style="--h:79%"><span class="v">5.400 ms</span><span class="l">scoped flush / credit ordering<br>59.8 GB/s · L1 sink</span></div>
+      <div class="wf" style="--h:60%"><span class="v">4.098 ms</span><span class="l">deferred notification<br>78.8 GB/s · combined</span></div>
+      <div class="wf" style="--h:52%"><span class="v">3.531 ms</span><span class="l">depth-4 dual-NoC offload<br>91.5 GB/s · combined</span></div>
+      <div class="wf" style="--h:51%"><span class="v">3.476 ms</span><span class="l">pre-flash production shape<br>91.6 GB/s effective RX</span></div>
+    </div>
+    <footer class="footer"><span>The later tail fix qualified the fan-out/offload combination at the full 65,536-row/device geometry</span><span class="slide-no"></span></footer>
+    <aside class="notes">Do not treat every adjacent bar as a strict same-geometry A/B. The exact contribution slides provide the controlled comparisons. This slide is the chronological engineering ladder.</aside>
+  </section>
+
+  <section class="slide" data-title="Fabric contribution">
+    <header><div class="eyebrow">Controlled pre-flash contribution</div><h2>Fabric changes provide the majority of the retained bandwidth gain</h2></header>
+    <div class="split">
+      <div class="panel stack">
+        <h3>1 · Deferred notification</h3>
+        <div class="chart">
+          <div class="bar-row"><span>control combined</span><div class="bar-track"><div class="bar purple-bar" style="--w:100%"></div></div><span class="bar-value">5.719 ms</span></div>
+          <div class="bar-row"><span>deferred combined</span><div class="bar-track"><div class="bar" style="--w:71.7%"></div></div><span class="bar-value">4.098 ms</span></div>
+        </div>
+        <div class="cards two"><div class="metric panel flat"><div class="label">Latency</div><div class="value green">−28.3%</div></div><div class="metric panel flat"><div class="label">Bandwidth</div><div class="value green">+39.5%</div></div></div>
+        <p class="small">Removes the synchronous local-TRID wait from fused packet service while preserving completion ordering.</p>
+      </div>
+      <div class="panel stack">
+        <h3>2 · Cross-ERISC terminal offload</h3>
+        <div class="chart">
+          <div class="bar-row"><span>mean A control</span><div class="bar-track"><div class="bar purple-bar" style="--w:100%"></div></div><span class="bar-value">3.785 ms</span></div>
+          <div class="bar-row"><span>depth-4 combined</span><div class="bar-track"><div class="bar green-bar" style="--w:93.3%"></div></div><span class="bar-value">3.531 ms</span></div>
+        </div>
+        <div class="cards two"><div class="metric panel flat"><div class="label">Latency</div><div class="value green">−6.7%</div></div><div class="metric panel flat"><div class="label">Historical sink</div><div class="value green">102.3 GB/s</div></div></div>
+        <p class="small">Splits NOC1 ring forwarding from NOC0 terminal Tensix-L1 delivery without violating ERISC ownership.</p>
+      </div>
+    </div>
+    <footer class="footer"><span>Both steps clear performance and final correctness/forward-progress qualification</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Cost of avoiding Fabric changes">
+    <header><div class="eyebrow">Historical pre-flash architecture decision</div><h2>How much performance did Fabric changes recover?</h2></header>
+    <div class="split">
+      <div class="panel stack">
+        <div class="eyebrow" style="color:var(--amber)">Boundary A · no new Fabric protocol</div>
+        <h3>Stop after the CCL-side bank/packet/credit work</h3>
+        <div class="chart">
+          <div class="bar-row"><span>CCL-only FP8</span><div class="bar-track"><div class="bar purple-bar" style="--w:60.8%"></div></div><span class="bar-value">55.743 GB/s</span></div>
+          <div class="bar-row"><span>pre-flash final FP8</span><div class="bar-track"><div class="bar green-bar" style="--w:100%"></div></div><span class="bar-value">91.629 GB/s</span></div>
+        </div>
+        <div class="cards two"><div class="metric panel flat"><div class="label">Latency left</div><div class="value amber">2.239 ms</div><div class="context">5.715 → 3.476 ms</div></div><div class="metric panel flat"><div class="label">Bandwidth left</div><div class="value amber">35.886 GB/s</div><div class="context">Current path is 64.4% higher BW</div></div></div>
+        <div class="callout warn"><strong>Decision:</strong> avoiding all Fabric changes gives up roughly <strong>39% of final FP8 bandwidth</strong> and makes the isolated collective about <strong>64% slower</strong> than the current path.</div>
+      </div>
+      <div class="panel stack">
+        <div class="eyebrow" style="color:var(--cyan)">Boundary B · avoid only cross-ERISC offload</div>
+        <h3>Keep deferred notification; leave both copies on NOC1</h3>
+        <table><tr><th>Controlled 65,536-row A/B</th><th class="num">No offload</th><th class="num">Depth 4</th><th class="num">Cost avoided?</th></tr><tr><td>FP8 combined latency</td><td class="num">3.785 ms</td><td class="num">3.531 ms</td><td class="num amber">+7.2% slower</td></tr><tr><td>FP8 effective BW</td><td class="num">85.327</td><td class="num">91.454</td><td class="num amber">−6.127 GB/s</td></tr><tr><td>BF16 combined latency</td><td class="num">6.222 ms</td><td class="num">5.394 ms</td><td class="num amber">+15.4% slower</td></tr><tr><td>BF16 effective BW</td><td class="num">84.934</td><td class="num">97.981</td><td class="num amber">−13.047 GB/s</td></tr></table>
+        <div class="callout"><strong>What the final Fabric change bought on the original links:</strong><br>6.7% lower controlled FP8 latency, 13.3% lower BF16 latency, and a transport-only result above the later Galaxy-rate 100 GB/s ingress ceiling.</div>
+        <p class="small">Boundary A compares the same 64,640-row production geometry but spans both retained Fabric steps. Boundary B is the strict A/B/A attribution for cross-ERISC offload at 65,536 rows/rank.</p>
+      </div>
+    </div>
+    <footer class="footer"><span>These controlled contribution numbers predate the Galaxy-rate firmware; they explain the mechanism, not the current roofline</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="BF16 contribution">
+    <header><div class="eyebrow">Pre-flash format independence</div><h2>The dual-NoC Fabric change improves BF16 too</h2></header>
+    <div class="split wide-left">
+      <div class="panel chart" style="padding:2vw">
+        <div class="bar-row"><span>pre-offload BF16</span><div class="bar-track" style="height:2.4em"><div class="bar purple-bar" style="--w:100%"></div></div><span class="bar-value">6.222 ms</span></div>
+        <div class="bar-row"><span>depth-4 BF16</span><div class="bar-track" style="height:2.4em"><div class="bar green-bar" style="--w:86.7%"></div></div><span class="bar-value">5.394 ms</span></div>
+        <div class="cards two" style="margin-top:2vh"><div class="metric panel flat"><div class="label">Latency reduction</div><div class="value green">13.3%</div></div><div class="metric panel flat"><div class="label">BW increase</div><div class="value green">15.4%</div></div></div>
+      </div>
+      <div class="stack">
+        <div class="panel metric"><div class="label">Final BF16</div><div class="value">5.393 ms</div><div class="context">97.989 GB/s effective receive bandwidth.</div></div>
+        <div class="callout"><strong>Why:</strong> terminal delivery is packet-transport work, not dtype-specific math. BF16 moves more bytes and benefits at least as much from splitting the two NoC copies.</div>
+        <div class="callout warn"><strong>Distinction:</strong> the earlier automatic 8×1 policy kept BF16 on direct/unicast because the first receiver design regressed it. The later bank-striped + Fabric path changed that performance equation.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Controlled BF16 A/B at 65,536 rows/rank on the original P150 link configuration</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="What remains">
+    <header><div class="eyebrow">Galaxy-rate bottleneck</div><h2>The configured links now set the first-order ceiling</h2></header>
+    <div class="cards three">
+      <div class="panel metric"><div class="label">Physical ingress</div><div class="value">100 GB/s</div><div class="context">Four configured 200 Gb/s receive links.</div></div>
+      <div class="panel metric"><div class="label">Raw link payload</div><div class="value">≈88.55 GB/s</div><div class="context">Four-link extrapolation from bidirectional deployment test.</div></div>
+      <div class="panel metric"><div class="label">Qualified AG</div><div class="value green">≈92 GB/s</div><div class="context">BF16 and scaled FP8 on the Galaxy-compatible link configuration.</div></div>
+    </div>
+    <div class="split" style="margin-top:1vh">
+      <div class="panel"><h3>What is still actionable</h3><ul class="clean"><li>retain the tail-correctness regression gate</li><li>monitor repeated 65,536-row forward progress</li><li>measure four simultaneous SP=8 rings under TP=4</li><li>validate on a physical Galaxy</li></ul></div>
+      <div class="panel"><h3>Historical headroom result</h3><p>The original 400 Gb/s configuration reached 102.265 GB/s in an L1-only sink and ≈92 GB/s combined. That proved the Fabric mechanism; it is not the current physical roofline.</p><div class="callout warn" style="margin-top:1em">At Galaxy rate, an optimization cannot produce sustained all-gather receive bandwidth above 100 GB/s. Any such report must be an accounting or timing mismatch.</div></div>
+    </div>
+    <footer class="footer"><span>The isolated correctness and forward-progress gates are closed; concurrent Galaxy rings remain</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Rejected experiments">
+    <header><div class="eyebrow">TDD experiment ledger</div><h2>Most ideas were removed; only measured wins survived cleanup</h2></header>
+    <div class="split">
+      <div class="panel"><table><tr><th>Experiment</th><th>Observed result</th><th>Decision</th></tr><tr><td>Full-duplex route ownership</td><td>structural penalty / correctness complexity</td><td class="red">removed</td></tr><tr><td>Local admission metadata</td><td>zero measured admission blocking</td><td class="red">removed</td></tr><tr><td>Chained credits</td><td>deadlock / no retained gain</td><td class="red">removed</td></tr><tr><td>Fixed 1D decode</td><td>~0.5%</td><td class="red">below gate</td></tr><tr><td>ERISC1 → NOC0</td><td>hardware hang</td><td class="red">unsafe</td></tr><tr><td>Receiver write coalescing</td><td>monotonic regression</td><td class="red">removed</td></tr><tr><td>ERISC0 terminal offload</td><td>~50% BW gain on Galaxy-rate links</td><td class="green">retained</td></tr></table></div>
+      <div class="stack">
+        <div class="panel"><h3>Iteration discipline</h3><ol style="margin:.6em 0 0;padding-left:1.2em"><li>small exact-output test</li><li>forced receiver/descriptor wrap</li><li>full-size isolated A/B/A</li><li>retain only &gt;3% median gain</li><li>release build + opt-out topology</li></ol></div>
+        <div class="callout"><strong>Cleanup result</strong><br>Final Fabric commit reduced from 32 files, +4585/−301 to 20 files, +520/−61. Telemetry, attribution scripts, dead paths, and rejected controls were removed.</div>
+        <div class="panel small"><span class="mono">scripts/run_safe_pytest.sh</span> guarded every hardware test. <span class="mono">tt-triage</span> diagnosed hangs. <span class="mono">--dev</span> was intentionally avoided because it increases firmware code size and enables watcher/LLK assertions.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Backup of broad experiment commit: <code>backup/ring-all-gather-pre-cleanup-2ecc4ea</code></span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Correctness and scope">
+    <header><div class="eyebrow">Safety envelope</div><h2>Optimized where proven; unchanged everywhere else</h2></header>
+    <div class="cards four">
+      <div class="panel metric"><div class="label">Sparse MLA</div><div class="value green">39/39</div><div class="context">BF16/scaled-FP8 across 2×4 and 4×2.</div></div>
+      <div class="panel metric"><div class="label">Row-major matrix</div><div class="value green">11/11</div><div class="context">Focused schedule and geometry coverage.</div></div>
+      <div class="panel metric"><div class="label">Reuse</div><div class="value green">20×</div><div class="context">Repeated per dtype without stale epochs.</div></div>
+      <div class="panel metric"><div class="label">Build</div><div class="value green">PASS</div><div class="context"><span class="mono">./build_metal.sh --release</span></div></div>
+    </div>
+    <div class="split" style="margin-top:1vh">
+      <div class="panel"><h3>Current env-free safety policy</h3><div class="pills" style="margin-top:1em"><span class="pill">bank fan-out on</span><span class="pill">terminal depth 4</span><span class="pill">automatic selection</span></div><p class="small" style="margin-top:1em">The policy is selected from topology and page geometry; no application tuning knob is required.</p></div>
+      <div class="panel"><h3>Verified boundary</h3><p>The 8×1 65,536-row/device exact-output test passes for BF16 and scaled FP8. Ten repeated large perf fixtures complete without timeout or triage.</p><div class="callout warn" style="margin-top:1em">Actual Galaxy routing and four concurrent SP rings remain later gates.</div></div>
+    </div>
+    <footer class="footer"><span>Current cleaned commit: <code>783ffdcac33</code></span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Historical model-level receiver gains">
+    <header><div class="eyebrow">Historical experiment · same-build A/B/A · SP=4 × TP=2</div><h2>The model saw the receiver speedup before the later qualification failure</h2></header>
+    <div class="split wide-left">
+      <div class="panel"><table><tr><th>Model / case</th><th class="num">BF16 E2E</th><th class="num">FP8 E2E</th><th class="num">BF16 CCL</th><th class="num">FP8 CCL</th></tr><tr><td>DeepSeek warm</td><td class="num">+0.47%</td><td class="num green">+4.40%</td><td class="num">+10.34%</td><td class="num green">+36.55%</td></tr><tr><td>GLM warm</td><td class="num">+0.35%</td><td class="num green">+5.58%</td><td class="num">+10.95%</td><td class="num green">+36.51%</td></tr><tr><td>DeepSeek long</td><td class="num green">+3.99%</td><td class="num green">+12.13%</td><td class="num green">+13.67%</td><td class="num green">+42.42%</td></tr><tr><td>GLM long</td><td class="num green">+5.11%</td><td class="num green">+15.69%</td><td class="num green">+13.76%</td><td class="num green">+42.63%</td></tr></table></div>
+      <div class="stack">
+        <div class="callout"><strong>Measurement validity at the time</strong><br>Automatic legs asserted one receiver program; forced-direct legs asserted zero. Program and CCL counts were identical between arms.</div>
+        <div class="panel"><h3>No hidden extra op</h3><p class="small">DeepSeek retained five CCL programs and GLM four. The receiver changes kernels inside one CCL program; they do not dispatch another user-visible collective.</p></div>
+        <div class="panel"><h3>Why FP8 gains more</h3><p class="small">The smaller page reduces payload and makes fixed packet/credit overhead more visible; the receiver and Fabric changes specifically remove those fixed costs. BF16 already amortizes them over more bytes.</p></div>
+      </div>
+    </div>
+    <footer class="footer"><span>These model numbers remain historical; the isolated 8×1 receiver path is now requalified</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Full product journey">
+    <header><div class="eyebrow">Historical main BF16 → target scaled FP8</div><h2>Complete code-state gain—not only all-gather</h2></header>
+    <div class="split wide-left">
+      <div class="panel"><table><tr><th>Model</th><th>Case</th><th class="num">Main BF16</th><th class="num">Target FP8</th><th class="num">Reduction</th><th class="num">Speedup</th></tr><tr><td>DeepSeek</td><td>warm</td><td class="num">9.384</td><td class="num">7.460</td><td class="num green">20.50%</td><td class="num">1.258×</td></tr><tr><td>DeepSeek</td><td>cold</td><td class="num">88.144</td><td class="num">70.198</td><td class="num green">20.36%</td><td class="num">1.256×</td></tr><tr><td>DeepSeek</td><td>long</td><td class="num">19.276</td><td class="num">13.229</td><td class="num green">31.37%</td><td class="num">1.457×</td></tr><tr><td>GLM</td><td>warm</td><td class="num">8.105</td><td class="num">5.913</td><td class="num green">27.05%</td><td class="num">1.371×</td></tr><tr><td>GLM</td><td>cold</td><td class="num">83.116</td><td class="num">59.400</td><td class="num green">28.53%</td><td class="num">1.399×</td></tr><tr><td>GLM</td><td>long</td><td class="num">17.504</td><td class="num">11.135</td><td class="num green">36.38%</td><td class="num">1.572×</td></tr></table></div>
+      <div class="stack">
+        <div class="callout warn"><strong>Do not attribute this entire table to AG.</strong><br>It includes native all-gather, direct prefix selection, indexer changes, mixed-format KV caches, Sparse SDPA work, and model integration.</div>
+        <div class="panel"><h3>What AG explains directly</h3><ul class="clean"><li>fewer dispatched device ops</li><li>less prefix traffic</li><li>lower collective duration</li><li>persistent output reuse</li></ul></div>
+        <div class="panel"><h3>What format/model work adds</h3><ul class="clean"><li>smaller main KV pages</li><li>less sparse-SDPA traffic</li><li>cache contract and migration changes</li></ul></div>
+      </div>
+    </div>
+    <footer class="footer"><span>Historical pre-flash LoudBox SP=2 × TP=4 comparison; use the Galaxy-rate slides for current link-roofline claims</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Current architecture summary">
+    <header><div class="eyebrow">Where we landed · qualification complete</div><h2>The env-free 8×1 ring policy</h2></header>
+    <div class="hero">
+      <div class="stack">
+        <div class="panel"><h3>All-gather policy</h3><ul class="clean"><li>native row-major all-gather</li><li>persistent interleaved DRAM output</li><li>slice and valid-prefix support</li><li>main MLA and indexer migrated</li></ul></div>
+        <div class="panel"><h3>Large-ring selection</h3><ul class="clean"><li>bank-striped receiver fan-out</li><li>depth-4 cross-ERISC terminal offload</li><li>pipelined group-6 credits</li><li>no all-gather environment controls</li><li>unsupported topologies compile offload out</li></ul></div>
+        <div class="panel"><h3>Qualification evidence</h3><ul class="clean"><li>BF16 65,536 rows/device: exact pass</li><li>scaled FP8 65,536 rows/device: tight pass</li><li>five repeated fixtures per format</li><li>BF16: 92.465 GB/s</li><li>scaled FP8: 92.026 GB/s</li></ul></div>
+      </div>
+      <div class="panel" style="display:grid;place-items:center;padding:2vw">
+        <div style="text-align:center"><div class="eyebrow">Canonical full slab</div><div style="font-size:6vw;font-weight:820;letter-spacing:-.06em;line-height:1;margin:.12em 0" class="green">Qualified</div><div style="font-size:2vw;font-weight:700">above 90 GB/s for both formats</div><div class="subhead" style="font-size:1.25vw;margin-top:.7em">65,536 rows/device · exact output<br>safe runner · no timeout or triage trigger</div></div>
+      </div>
+    </div>
+    <footer class="footer"><span>All eight devices report bundle 19.10.99.0; current numbers stop at the last passing qualification gate</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Automatic production policy">
+    <header><div class="eyebrow">No all-gather tuning environment or API knobs</div><h2>The qualified mechanism is selected automatically</h2></header>
+    <div class="split wide-left">
+      <div class="panel"><table class="tuning"><tr><th>Automatic decision</th><th>Resolved behavior</th><th>Reason</th></tr><tr><td>Large Sparse-MLA ring</td><td>bank-owned receiver</td><td>Validated for the production 8×1 page geometries.</td></tr><tr><td>Bank-owned fan-out</td><td>four receivers/link</td><td>One receiver owns each assigned DRAM bank.</td></tr><tr><td>Cross-ERISC terminal offload</td><td>depth 4</td><td>Restores ~92 GB/s while preserving completion ordering.</td></tr><tr><td>Experiment controls</td><td>removed</td><td>No hidden process environment changes program semantics.</td></tr><tr><td>Other topologies</td><td>offload compiled out</td><td>The queue is enabled only on supported Blackhole two-ERISC rings.</td></tr></table></div>
+      <div class="stack">
+        <div class="panel"><h3>Current qualification result</h3><table><tr><th>Case</th><th>Result</th></tr><tr><td>65,536 rows/device · BF16</td><td class="green">exact · 92.465 GB/s</td></tr><tr><td>65,536 rows/device · scaled FP8</td><td class="green">tight · 92.026 GB/s</td></tr><tr><td>Repeated large perf fixtures</td><td class="green">10/10 pass</td></tr></table></div>
+        <div class="callout"><strong>One policy:</strong><br>both formats use the same qualified mechanism; no dtype-specific environment settings remain.</div>
+        <div class="callout"><strong>Published current result:</strong><br>both formats exceed 92 GB/s effective receive bandwidth on Galaxy-compatible firmware.</div>
+      </div>
+    </div>
+    <footer class="footer"><span>Production code no longer reads any all-gather tuning environment variables</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="BF16 versus FP8">
+    <header><div class="eyebrow">Same qualified policy, different byte count</div><h2>BF16 and scaled FP8 are not separately tuned</h2></header>
+    <div class="split">
+      <div class="panel"><table class="tuning"><tr><th>Property</th><th>BF16</th><th>scaled FP8</th></tr><tr><td>Aligned row/page</td><td class="mono">1152 B</td><td class="mono">704 B</td></tr><tr><td>Batch rows</td><td>12</td><td>20</td></tr><tr><td>Bank-owned fan-out</td><td class="green">on</td><td class="green">on</td></tr><tr><td>Terminal offload</td><td class="green">depth 4</td><td class="green">depth 4</td></tr><tr><td>External AG knobs</td><td>none</td><td>none</td></tr></table></div>
+      <div class="stack">
+        <div class="callout"><strong>Why one policy?</strong><br>The byte count changes the maximum rows per packet, while topology, bank ownership, credits, drain, and offload remain identical.</div>
+        <div class="callout warn"><strong>Remaining gate:</strong><br>validate four concurrent SP=8 rings under TP=4 on a physical Galaxy.</div>
+      </div>
+    </div>
+    <div class="callout" style="align-self:end"><strong>Selection is semantic, not dtype-based:</strong> full, sliced, and partial-prefix gathers remain on qualified native paths.</div>
+    <footer class="footer"><span>The only format-specific input here is the aligned byte count</span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Reproduction">
+    <header><div class="eyebrow">Reproduce the isolated result</div><h2>Safe-runner command and review map</h2></header>
+    <div class="split wide-left">
+      <div class="codebox"><pre># Precondition: bundle 19.10.99.0 on all 8 devices; tt-smi -r completed
+TT_METAL_DEVICE_PROFILER=1 \
+scripts/run_safe_pytest.sh \
+  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py::test_all_gather_fabric_1d_sparse_mla_row_perf \
+  -q -s</pre></div>
+      <div class="stack">
+        <div class="panel"><h3>Review entry points</h3><table><tr><td>Policy / cores</td><td class="mono">all_gather_multicast_factory.cpp</td></tr><tr><td>Receiver drain</td><td class="mono">multicast_receiver_writer.cpp</td></tr><tr><td>Packet defer bit</td><td class="mono">fabric_edm_packet_header.hpp</td></tr><tr><td>ERISC queue</td><td class="mono">ring_terminal_offload.hpp</td></tr><tr><td>Router service</td><td class="mono">fabric_erisc_router.cpp</td></tr></table></div>
+        <div class="panel"><h3>Key commits</h3><table><tr><td class="mono">8057155</td><td>PR #48301 native AG</td></tr><tr><td class="mono">40f0a74</td><td>receiver L1 staging</td></tr><tr><td class="mono">5855702</td><td>large-ring pipeline</td></tr><tr><td class="mono">783ffdc</td><td>clean Fabric terminal delivery</td></tr></table></div>
+      </div>
+    </div>
+    <footer class="footer"><span>Build first: <code>./build_metal.sh --release</code> · never use <code>--dev</code> · verify firmware provenance with <code>tt-smi -s</code></span><span class="slide-no"></span></footer>
+  </section>
+
+  <section class="slide" data-title="Next steps">
+    <header><div class="eyebrow">Next engineering gate</div><h2>Isolated correctness and bandwidth are done; Galaxy concurrency remains</h2></header>
+    <div class="cards">
+      <div class="panel metric fragment"><div class="label">1 · Protocol</div><div class="value green">Done</div><div class="context">Tail-correct fan-out and repeated full-size forward progress.</div></div>
+      <div class="panel metric fragment"><div class="label">2 · Isolated ring</div><div class="value green">92 GB/s</div><div class="context">Qualified for BF16 and scaled FP8 on Galaxy-compatible links.</div></div>
+      <div class="panel metric fragment"><div class="label">3 · Product topology</div><div class="value">Galaxy</div><div class="context">Validate four concurrent SP=8 rings under TP=4 and actual routing.</div></div>
+    </div>
+    <div class="callout" style="align-self:end"><strong>Decision rule:</strong> never trade exact output or forward progress for bandwidth. Keep the isolated gates in place while extending validation to concurrent Galaxy rings.</div>
+    <footer class="footer"><span>End</span><span class="slide-no"></span></footer>
+  </section>
+
+</main>
+<div class="navhint">←/→ navigate · space reveals · O overview · N notes · F fullscreen</div>
+<div class="progress" id="progress"></div>
+
+<script>
+(() => {
+  const slides = [...document.querySelectorAll('.slide')];
+  let index = Math.max(0, Math.min(slides.length - 1, Number(location.hash.slice(1)) - 1 || 0));
+  let overview = false;
+
+  function fragmentsFor(slide) { return [...slide.querySelectorAll('.fragment')]; }
+  function show(i, resetFragments = true) {
+    index = (i + slides.length) % slides.length;
+    slides.forEach((s, n) => s.classList.toggle('active', n === index));
+    if (resetFragments) fragmentsFor(slides[index]).forEach(f => f.classList.remove('visible'));
+    location.hash = String(index + 1);
+    document.getElementById('progress').style.width = `${((index + 1) / slides.length) * 100}%`;
+    slides.forEach((s, n) => {
+      const counter = s.querySelector('.slide-no');
+      if (counter) counter.textContent = `${String(n + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}`;
+    });
+  }
+  function forward() {
+    const hidden = fragmentsFor(slides[index]).find(f => !f.classList.contains('visible'));
+    if (hidden) hidden.classList.add('visible'); else show(index + 1);
+  }
+  function backward() {
+    const visible = fragmentsFor(slides[index]).filter(f => f.classList.contains('visible'));
+    if (visible.length) visible.at(-1).classList.remove('visible'); else show(index - 1, false);
+  }
+  function toggleOverview() {
+    overview = !overview;
+    document.body.classList.toggle('overview', overview);
+    if (!overview) show(index, false);
+    else slides.forEach(s => s.classList.remove('active'));
+  }
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight','PageDown',' '].includes(e.key)) { e.preventDefault(); forward(); }
+    else if (['ArrowLeft','PageUp'].includes(e.key)) { e.preventDefault(); backward(); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key.toLowerCase() === 'o') toggleOverview();
+    else if (e.key.toLowerCase() === 'n') document.body.classList.toggle('show-notes');
+    else if (e.key.toLowerCase() === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  });
+  slides.forEach((slide, n) => slide.addEventListener('click', () => { if (overview) { index = n; toggleOverview(); } }));
+  let touchX = null;
+  document.addEventListener('touchstart', e => touchX = e.touches[0].clientX, {passive:true});
+  document.addEventListener('touchend', e => { if (touchX === null) return; const d = e.changedTouches[0].clientX - touchX; if (Math.abs(d) > 45) d < 0 ? forward() : backward(); touchX = null; }, {passive:true});
+
+  function buildRing() {
+    const svg = document.getElementById('ringSvg');
+    if (!svg) return;
+    const cx = 450, cy = 275, r = 205;
+    const pts = Array.from({length:8}, (_,i) => ({x:cx+r*Math.cos(-Math.PI/2+i*Math.PI/4), y:cy+r*Math.sin(-Math.PI/2+i*Math.PI/4)}));
+    const path = pts.map((p,i) => `${i?'L':'M'} ${p.x} ${p.y}`).join(' ') + ' Z';
+    svg.innerHTML = `<defs><path id="ringPath" d="${path}"/><path id="ringPathBack" d="${[...pts].reverse().map((p,i)=>`${i?'L':'M'} ${p.x} ${p.y}`).join(' ')} Z"/></defs>
+      <path d="${path}" fill="none" stroke="#294857" stroke-width="12"/>
+      <path d="${path}" fill="none" stroke="#35d6e7" stroke-width="2" stroke-dasharray="8 12"/>
+      ${pts.map((p,i)=>`<g><circle class="ring-device ${i===0?'active-device':''}" cx="${p.x}" cy="${p.y}" r="42"/><text class="svg-title" x="${p.x}" y="${p.y+6}" text-anchor="middle">D${i}</text></g>`).join('')}
+      <circle class="packet-dot" r="8"><animateMotion dur="4.6s" repeatCount="indefinite"><mpath href="#ringPath"/></animateMotion></circle>
+      <circle class="packet-dot back" r="8"><animateMotion dur="4.1s" repeatCount="indefinite"><mpath href="#ringPathBack"/></animateMotion></circle>
+      <text class="svg-title" x="450" y="262" text-anchor="middle">8 × P150</text><text class="svg-label" x="450" y="290" text-anchor="middle">bidirectional 1D ring</text>`;
+  }
+
+  function buildNoCGrid() {
+    const grid = document.getElementById('nocGrid');
+    if (!grid) return;
+    const key = (x,y) => `${x},${y}`;
+    const arc = new Set([key(8,0)]);
+    const pcie = new Set([key(2,0),key(11,0)]);
+    const dramGroups = [
+      [[0,0],[0,1],[0,11]], [[0,2],[0,10],[0,3]], [[0,9],[0,4],[0,8]], [[0,5],[0,7],[0,6]],
+      [[9,0],[9,1],[9,11]], [[9,2],[9,10],[9,3]], [[9,9],[9,4],[9,8]], [[9,5],[9,7],[9,6]]
+    ];
+    const dram = new Map(); dramGroups.forEach((group,b) => group.forEach((p,s) => dram.set(key(...p), `D${b}.${s}`)));
+    const ethPts = [[1,1],[16,1],[2,1],[15,1],[3,1],[14,1],[4,1],[13,1],[5,1],[12,1],[6,1],[11,1],[7,1],[10,1]];
+    const eth = new Map(); ethPts.forEach((p,i)=>eth.set(key(...p),`E${i}`));
+    const worker = new Set(); for (let y=2;y<=11;y++) [...Array(7)].forEach((_,i)=>worker.add(key(i+1,y))); for (let y=2;y<=11;y++) [...Array(7)].forEach((_,i)=>worker.add(key(i+10,y)));
+    const router = new Set([[1,0],[3,0],[4,0],[5,0],[6,0],[7,0],[10,0],[12,0],[13,0],[14,0],[15,0],[16,0],...[...Array(11)].map((_,i)=>[8,i+1])].map(p=>key(...p)));
+    for (let y=0;y<12;y++) for (let x=0;x<17;x++) {
+      const k=key(x,y), el=document.createElement('div'); el.className='core'; el.title=`physical (${x},${y})`;
+      if (arc.has(k)) { el.classList.add('arc'); el.textContent='ARC'; }
+      else if (pcie.has(k)) { el.classList.add('pcie'); el.textContent='PCIe'; }
+      else if (dram.has(k)) { el.classList.add('dram'); el.textContent=dram.get(k); }
+      else if (eth.has(k)) { el.classList.add('eth'); el.textContent=eth.get(k); }
+      else if (worker.has(k)) { el.classList.add('tensix'); el.textContent='T'; }
+      else if (router.has(k)) { el.classList.add('router'); el.textContent='R'; }
+      if (k===key(1,1) || k===key(4,3) || k===key(0,2)) el.classList.add('selected');
+      grid.appendChild(el);
+    }
+  }
+  buildRing(); buildNoCGrid(); show(index);
+})();
+</script>
+</body>
+</html>

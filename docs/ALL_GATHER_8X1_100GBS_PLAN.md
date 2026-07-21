@@ -1,5 +1,12 @@
 # 8x1 sparse-MLA all-gather bandwidth plan
 
+> Current qualification status (2026-07-21): the receiver-tail accounting fix
+> closes the final correctness gate. The env-free bank-fanout and depth-4
+> terminal-offload policy passes full 65,536-row/device BF16 and scaled-FP8
+> output checks and reaches 92.465 and 92.026 GB/s respectively on the
+> Galaxy-compatible link configuration. The remaining product gate is four
+> concurrent SP=8 rings on a physical Galaxy.
+
 ## Objective
 
 Move the native all-gather for the production long sparse-MLA geometry closer
@@ -73,19 +80,11 @@ performance change is not retained merely because it happens to avoid a hang.
 - Retention gate: at least 3% median improvement, no material p90 regression,
   exact output correctness, and repeated stability.
 
-Canonical environment shared by isolated measurements:
+Canonical isolated measurement (the geometry and production policy are fixed by
+the test; only the standard device profiler is enabled externally):
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_MESH_SHAPE=8x1 \
-TTNN_AG_PERF_FABRIC_CONFIG=ring \
-TTNN_AG_PERF_ROWS_PER_DEVICE=64640 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_BATCH_ROWS=max \
-TTNN_ALL_GATHER_RECEIVER_NOTIFY_MODE=fused \
-TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE=window \
-TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION=1 \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
   -k sparse_mla_row_perf -q -s
@@ -312,8 +311,8 @@ windowing only after the credit stall is removed or substantially reduced.
 
 ### 2026-07-19: proactive grouped-credit implementation, first result
 
-- Added a `pipelined` receiver-credit policy and a configurable
-  `TTNN_ALL_GATHER_RECEIVER_CREDIT_GROUP_BATCHES` control.
+- Added the `pipelined` receiver-credit policy, with its group size selected
+  internally from the validated schedule.
 - The receiver publishes one consumed sequence per completed group; source
   workers proxy every ready group to all destinations without waiting for slot
   reuse.  A source blocks only when it reaches a slot whose group credit has

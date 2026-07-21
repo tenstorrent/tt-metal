@@ -1,5 +1,12 @@
 # Sparse MLA all-gather performance
 
+> Qualification update (2026-07-21): the env-free production path is now
+> qualified at 65,536 rows/device. Full-output BF16 and scaled-FP8 checks pass
+> with maximum-size tail packets, and five repeated perf fixtures per format
+> completed without a safe-run timeout or triage trigger. The interleaved
+> receiver tail-accounting bug is fixed and depth-4 terminal offload is enabled
+> automatically only on supported Blackhole two-ERISC rings.
+
 Measured on the LoudBox SP=2 × TP=4 proxy with the realtime profiler. The current
 implementation includes native `ttnn.all_gather` in MLA and the indexer, plus
 row-major top-k-index gathering. It additionally gathers sparse-MLA KVPE directly
@@ -36,6 +43,28 @@ historical A/B uses main's supported SP=2 × TP=4 topology on both sides.
 
 ## Latest isolated 8×1 ring bandwidth
 
+The final 65,536-row/device qualification on Galaxy-compatible Ethernet
+firmware (bundle 19.10.99) measures the complete 512K-global-row gather. These
+are matched realtime-profiler measurements of the same automatic policy, with
+terminal offload disabled only for the diagnostic baseline:
+
+| Format | Terminal offload | Median (ms) | Effective receive BW | Exact output |
+|---|---|---:|---:|---|
+| BF16, 1152-B page | disabled | 8.685 | 60.852 GB/s | pass |
+| BF16, 1152-B page | depth 4 | 5.715 | 92.465 GB/s | pass |
+| scaled FP8, 704-B page | disabled | 5.271 | 61.275 GB/s | pass |
+| scaled FP8, 704-B page | depth 4 | 3.509 | 92.026 GB/s | pass |
+
+The production policy is bank-owned/interleaved receiver fanout, maximum packet
+batches (12 BF16 rows or 20 FP8 rows), pipelined group-6 credits, dual-RISC
+receiver drain, fused notification, 12 slots, and depth-4 terminal offload.
+
+At the Galaxy-compatible 100 GB/s ingress ceiling, the final BF16 result reaches
+92.5% and scaled FP8 reaches 92.0%. Relative to the 200 GB/s physical line-rate
+ceiling, they reach 46.2% and 46.0%, respectively.
+
+## Historical pre-final tuning measurements
+
 Seven-sample steady-state measurements use persistent DRAM output, L1-small
 semaphores, and the dtype-specific automatic path. The 64,640-row case is the
 canonical long sparse-MLA geometry: `(512,000 cached + 5,120 live) / 8 SP`.
@@ -70,8 +99,8 @@ devices at half bandwidth, 25 GB/s per link. Therefore:
 
 - current enabled/modelled ceiling: `4 × 25 = 100 GB/s`;
 - physical line-rate ceiling: `4 × 50 = 200 GB/s`;
-- BF16 reaches 60.6% of the current ceiling (30.3% of physical line rate);
-- scaled FP8 reaches 49.7% of the current ceiling (24.9% of physical line rate).
+- the historical BF16 tuning point reached 60.6% of the current ceiling;
+- the historical scaled-FP8 tuning point reached 49.7% of the current ceiling.
 
 At the production long shape, scaled FP8 finishes 26.5% faster even though its
 reported GB/s is lower: it moves 61.1% as many bytes as BF16 but takes 73.5% as
@@ -180,13 +209,13 @@ Validation after that lifetime correction:
 - the release build passes with `./build_metal.sh --release`; every pytest
   invocation uses `scripts/run_safe_pytest.sh`, and no `--dev` build was used.
 
-Commands used for the B and A legs (replace `force_direct`/`0` with `auto`/`1`):
+Historical forced-path A/B commands were removed with the experimental tuning
+environment variables. Current measurements exercise the production automatic
+policy and report the selected path in the test output:
 
 ```bash
 DS_PERF_MESH_SHAPE=4x2 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_direct \
-TTNN_EXPECT_RECEIVER_L1=0 \
-DS_PERF_CSV=sp4_matrix_direct.csv \
+DS_PERF_CSV=sp4_matrix_automatic.csv \
 scripts/run_safe_pytest.sh \
   models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py \
   -m perf -k '(warm or long) and not dense' -q -s

@@ -1,5 +1,11 @@
 # All-gather Tensix receiver: implementation and iteration plan
 
+> Current qualification status (2026-07-21): the interleaved receiver tail bug
+> is fixed, and the env-free bank-fanout plus depth-4 terminal-offload policy is
+> qualified at 65,536 rows/device for BF16 and scaled FP8. Both full-output
+> cases pass, followed by five repeated perf fixtures per format without a
+> timeout or triage trigger. This file retains the earlier experiment record.
+
 ## Purpose
 
 This document defines the next phase of the native all-gather work for small,
@@ -134,8 +140,7 @@ these results.  A larger explicit request is rejected before dispatch.
 
 ### Per-RISC attribution result
 
-Attribution is opt-in through
-`TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION=1`.  Each participating RISC accumulates
+During the attribution experiment, each participating RISC accumulated
 32-bit wrap-safe timestamp deltas and emits each aggregate once at kernel exit.
 The intervals overlap across cores and RISCs; they must never be added into an
 operation latency.  `scripts/analyze_all_gather_attribution.py` selects the
@@ -314,8 +319,8 @@ make bank order the native ownership order of the link pipeline.
 
 ### Static bank-owned command-coalescing result
 
-The bank-owned implementation separates scheduling from the three command
-sites with `TTNN_ALL_GATHER_BANK_OWNED_COALESCE=none|source|source_local|all`.
+The bank-owned experiment separated scheduling from its three command sites
+so each coalescing stage could be attributed independently.
 Every leg was run in a separate process with persistent output and the same
 receiver protocol.  Lower latency is faster.
 
@@ -1316,9 +1321,8 @@ meet N3.3's gate under the measured role balance, so no production code or
 environment control was added.  Proceed to the placement-only N3.4 sweep.
 
 **N3.4 result: accepted for FP8 on the reference 4x2 path on 2026-07-18.**
-The isolated perf harness accepts an inclusive four-core rectangle through
-`TTNN_AG_PERF_CORE_RECT`, implemented with the existing public sub-core-grid
-argument.  Nine parser/validation cases pass.  Screening moved the unchanged
+The isolated perf harness used the existing public sub-core-grid argument to
+screen inclusive four-core rectangles. Screening moved the unchanged
 two sender/receiver pairs among horizontal and vertical logical-core ranges:
 
 | Logical core rectangle | BF16 median | FP8 median | Result versus automatic screen |
@@ -1394,7 +1398,7 @@ with unambiguous signs.
 ### Phase 5: evaluate dual-RISC drain on one receiver core
 
 **Status: implemented and measured behind
-`TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS=2`.  Accepted as an FP8 candidate;
+The two-drain-RISC variant was accepted as an FP8 candidate;
 rejected as the BF16 default.**
 
 **Prerequisite:** Attribution shows that receiver issue/drain occupies the
@@ -1674,160 +1678,59 @@ scripts/run_safe_pytest.sh \
 
 The selector covers both BF16 and FP8 combined selection cases.
 
-### Isolated direct baseline
+### Isolated automatic policy
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_direct \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
   -k 'sparse_mla_row_perf' -q -s
 ```
 
-### Isolated automatic receiver
-
-```bash
-TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=auto \
-scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
-  -k 'sparse_mla_row_perf' -q -s
-```
-
-The result must record the effective values of:
-
-- `TTNN_ALL_GATHER_RECEIVER_STAGE_MODE`;
-- `TTNN_ALL_GATHER_RECEIVER_SLOTS`;
-- `TTNN_ALL_GATHER_RECEIVER_BATCH_ROWS`;
-- `TTNN_ALL_GATHER_RECEIVER_NOTIFY_MODE`; and
-- `TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE`.
+The test fixes the 8x1 ring geometry, production-sized tensor, both dtypes,
+and sample count. It prints the automatically selected schedule, batch size,
+credit policy, drain count, and effective receive bandwidth.
 
 ### Bank-owned correctness and A/B/A gate
 
-The experimental schedule switch is `TTNN_ALL_GATHER_BANK_OWNED_LINKS=1`.
-`TTNN_ALL_GATHER_BANK_OWNED_COALESCE` independently selects `none`, `source`,
-`source_local`, or `all`; all four stages are implemented.
-`TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY=divisor|max_tail` selects R8/R16 or
-R12/R20 in the host factory and is printed by the perf test.  These controls
-are diagnostic, not production APIs.  The completed experiment can be
-reproduced by first running focused correctness:
+The bank-owned schedule, coalescing stages, and run policy were once private
+experiment controls. Those controls have been removed: the validated schedule
+is selected internally and unsupported geometries use the established path.
+Run focused correctness with:
 
 ```bash
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver \
-TTNN_ALL_GATHER_BANK_OWNED_LINKS=1 \
-TTNN_ALL_GATHER_BANK_OWNED_COALESCE=source_local \
-TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY=max_tail \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
-  -k 'test_all_gather_fabric_2d_bank_owned_schedule' -q -s
+  -k 'test_all_gather_fabric_1d_large_ring_correctness' -q -s
 ```
 
-Then run each timing leg in a separate process so the program cache cannot
-reuse a differently compiled policy:
-
-```bash
-# A: exact-divisor bank-owned control
-TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver \
-TTNN_ALL_GATHER_BANK_OWNED_LINKS=1 \
-TTNN_ALL_GATHER_BANK_OWNED_COALESCE=source_local \
-TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY=divisor \
-scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
-  -k 'sparse_mla_row_perf' -q -s
-
-# B: maximum-run tail candidate; every other setting is identical
-TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver \
-TTNN_ALL_GATHER_BANK_OWNED_LINKS=1 \
-TTNN_ALL_GATHER_BANK_OWNED_COALESCE=source_local \
-TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY=max_tail \
-scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
-  -k 'sparse_mla_row_perf' -q -s
-
-# A again: repeat the exact-divisor command unchanged.
-```
-
-Before timing B, run its focused correctness selector once and then 20 times.
-With `TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION=1`, verify the exact source, local,
-Fabric-payload, receiver-write, and credit counts.  Disable attribution for the
-acceptance timing.  Discard the session if the two A medians differ by more
-than 3%.  If `max_tail/source_local` wins, hold `max_tail` fixed and run a
-second `source_local/all/source_local` A/B/A to determine whether larger
-payloads move receiver coalescing back onto the critical path.  Finally compare
-the best static mode against the accepted automatic receiver in
-automatic/static/automatic order; the production keep gate remains 3%.
-
-The recorded outcome is: max-tail wins inside the static path, `all` loses to
-`source_local`, and max-tail/source-local loses to automatic.  These commands
-are retained for reproduction and attribution, not as the next optimization
-queue.
-
-### Drain-only attribution
-
-This is a diagnostic mode.  It writes unspecified L1 contents to the
-persistent output and therefore measures timing only; it must not be used for
-output correctness.
-
-```bash
-TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver \
-TTNN_ALL_GATHER_RECEIVER_STAGE_MODE=drain_only \
-scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
-  -k 'sparse_mla_row_perf' -q -s
-```
+The historical A/B/A legs used now-removed private controls. The supported
+timing command is the automatic-policy command above. The recorded outcome of
+the historical experiment was that maximum-tail won inside the static path,
+full receiver coalescing lost to source-plus-local coalescing, and the best
+static combination still lost to the automatic receiver.
 
 ### Per-RISC cycle attribution
 
-Attribution requires the realtime profiler.  Run the test to completion first;
-the device CSV is materialized when the mesh closes.  Analyze it afterward in
-a separate command:
+Attribution was used during development to compare overlapping reader, writer,
+and receiver critical paths. Its private runtime controls and drain-only mode
+were removed with the experiment interface. The retained fixed benchmark emits
+the operation-level timing used for acceptance.
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver \
-TTNN_ALL_GATHER_RECEIVER_STAGE_MODE=combined \
-TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION=1 \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
   -k 'sparse_mla_row_perf' -q -s
-
-scripts/analyze_all_gather_attribution.py --samples 7
 ```
-
-The test prints `AG_ATTRIBUTION_READY` with normalized runtime IDs.  Pass
-those IDs through `--runtime-ids` when the profiler CSV contains unrelated AG
-runs.  Attribution records from reader, writer, and receiver roles overlap;
-compare their critical paths but do not sum them.
 
 ### Active dual-RISC receiver experiment
 
-The first gate JIT-compiles both receiver kernels and checks the focused BF16
-combined path:
+Dual-RISC drain is part of the automatic large-ring schedule and has no
+external control. Check the focused BF16 and FP8 paths with:
 
 ```bash
 TT_METAL_DEVICE_PROFILER=1 \
-TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS=2 \
 scripts/run_safe_pytest.sh \
   tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
   -k 'sparse_mla_selection_paths and bf16_batch_slice_partial_extent_receiver' \
@@ -1835,27 +1738,7 @@ scripts/run_safe_pytest.sh \
 ```
 
 If that passes, run the corresponding FP8 selector and then the combined
-BF16/FP8 selector 20 times.  Do not begin timing after a one-off pass.
-
-Clean combined timing, with attribution disabled, is:
-
-```bash
-TT_METAL_DEVICE_PROFILER=1 \
-TTNN_RUN_AG_ISOLATED_PERF=1 \
-TTNN_AG_PERF_ROWS_PER_DEVICE=32768 \
-TTNN_AG_PERF_SAMPLES=7 \
-TTNN_ALL_GATHER_RECEIVER_L1_MODE=force_receiver \
-TTNN_ALL_GATHER_RECEIVER_STAGE_MODE=combined \
-TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS=2 \
-scripts/run_safe_pytest.sh \
-  tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py \
-  -k 'sparse_mla_row_perf' -q -s
-```
-
-Repeat with `TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS=1` in a separate process for
-the control, and use A/B/A ordering.  Then repeat both RISC counts with
-`TTNN_ALL_GATHER_RECEIVER_STAGE_MODE=drain_only`.  Only after clean timing may
-attribution be enabled to explain the result.
+BF16/FP8 selector 20 times. Do not begin timing after a one-off pass.
 
 ### Sparse MLA functional and performance
 
