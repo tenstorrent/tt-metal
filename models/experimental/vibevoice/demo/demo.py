@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VibeVoice TTNN demo — run on-device inference and compare against website golden audio.
+VibeVoice TTNN demo — run on-device inference and write the generated audio.
 
-Defaults to the shortest golden clip with a local text script (1p_CH2EN /
-resources/text/1p_Ch2EN.txt vs resources/golden/1p_CH2EN.wav from
-https://microsoft.github.io/VibeVoice/).
+Text-driven: pass a script with --text <path>, or --demo <id> as a shortcut for
+resources/text/<id>.txt. With neither, the default script (1p_vibevoice.txt) is used.
 
 This script runs TT inference only (no HuggingFace reference model).
 
@@ -30,7 +29,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -38,13 +36,7 @@ from typing import Optional
 import torch
 import ttnn
 
-from models.experimental.vibevoice.common.golden_audio_utils import (
-    MINIMAL_GOLDEN_DEMO_ID,
-    download_golden_demo,
-    get_golden_demo,
-    minimal_golden_demo,
-    text_path_for_demo,
-)
+from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, TEXT_EXAMPLES_DIR
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
 from models.experimental.vibevoice.common.resource_utils import (
     DEMO_VOICE_CLONES,
@@ -69,20 +61,6 @@ def _write_wav(path: Path, audio_1d: torch.Tensor) -> None:
     sf.write(str(path), audio_1d.detach().to(torch.float32).numpy(), SR)
 
 
-def _load_wav(path: Path) -> torch.Tensor:
-    import soundfile as sf
-
-    data, file_sr = sf.read(str(path), dtype="float32")
-    if data.ndim > 1:
-        data = data.mean(axis=1)
-    wav = torch.tensor(data, dtype=torch.float32)
-    if file_sr != SR:
-        import torchaudio
-
-        wav = torchaudio.functional.resample(wav.unsqueeze(0), file_sr, SR).squeeze(0)
-    return wav
-
-
 def _demo_output_paths(out_dir: Path, demo_id: str) -> dict[str, Path]:
     """Per-demo output layout: ``{out_dir}/{demo_id}/{demo_id}_*.wav``."""
     demo_dir = out_dir / demo_id
@@ -90,42 +68,17 @@ def _demo_output_paths(out_dir: Path, demo_id: str) -> dict[str, Path]:
     return {
         "dir": demo_dir,
         "tt": demo_dir / f"{demo_id}_tt.wav",
-        "golden": demo_dir / f"{demo_id}_golden.wav",
         "script": demo_dir / f"{demo_id}_script.txt",
         "meta": demo_dir / f"{demo_id}_meta.json",
     }
 
 
-def _compare_audio(golden: torch.Tensor, tt: torch.Tensor) -> dict:
-    dur_g = golden.numel() / SR
-    dur_t = tt.numel() / SR
-    n = min(golden.numel(), tt.numel())
-    prefix_rms = (golden[:n] - tt[:n]).pow(2).mean().sqrt().item()
-    log_mel_l1 = float("nan")
-    try:
-        import torchaudio
-
-        mel = torchaudio.transforms.MelSpectrogram(sample_rate=SR, n_fft=1024, hop_length=256, n_mels=80)
-        lm_g = torch.log(mel(golden[:n]) + 1e-5)
-        lm_t = torch.log(mel(tt[:n]) + 1e-5)
-        log_mel_l1 = (lm_g - lm_t).abs().mean().item()
-    except (ImportError, OSError):
-        pass
-    return {
-        "golden_sec": dur_g,
-        "tt_sec": dur_t,
-        "duration_ratio": dur_t / dur_g if dur_g > 0 else float("nan"),
-        "prefix_rms": prefix_rms,
-        "log_mel_l1": log_mel_l1,
-    }
-
-
 def main() -> int:
-    ap = argparse.ArgumentParser(description="VibeVoice TTNN demo vs website golden audio")
+    ap = argparse.ArgumentParser(description="VibeVoice TTNN demo")
     ap.add_argument(
         "--demo",
         default=None,
-        help=f"Golden demo id (default: shortest with text, usually {MINIMAL_GOLDEN_DEMO_ID})",
+        help="Script id — shortcut for resources/text/<id>.txt (e.g. 4p_climate_45min)",
     )
     ap.add_argument(
         "--output_dir",
@@ -153,7 +106,7 @@ def main() -> int:
         help="Max AR steps ≈ max_length_times × prefill token length (HF default: 2)",
     )
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--text", default=None, help="Custom script path (overrides --demo text)")
+    ap.add_argument("--text", default=None, help="Custom script path (overrides --demo)")
     ap.add_argument(
         "--voice",
         nargs="+",
@@ -189,17 +142,11 @@ def main() -> int:
 
     if args.text:
         text_path = Path(args.text)
-        if not text_path.is_file():
-            print(f"[demo_ttnn] ERROR: text file not found: {text_path}", file=sys.stderr)
-            return 1
-        demo_id = text_path.stem
-        demo_entry = None
-        golden_wav = None
+    elif args.demo:
+        text_path = TEXT_EXAMPLES_DIR / f"{args.demo}.txt"
     else:
-        demo_entry = get_golden_demo(args.demo) if args.demo else minimal_golden_demo()
-        demo_id = demo_entry.id
-        golden_wav = download_golden_demo(demo_id)
-        text_path = text_path_for_demo(demo_id)
+        text_path = Path(DEFAULT_TXT_PATH)
+    demo_id = text_path.stem
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -211,11 +158,13 @@ def main() -> int:
         print(f"[demo_ttnn] ERROR: {exc}", file=sys.stderr)
         return 1
 
+    if not text_path.is_file():
+        print(f"[demo_ttnn] ERROR: text file not found: {text_path}", file=sys.stderr)
+        return 1
+
     script = load_script(text_path)
     paths = _demo_output_paths(out_dir, demo_id)
     paths["script"].write_text(script + "\n", encoding="utf-8")
-    if golden_wav is not None:
-        shutil.copy2(golden_wav, paths["golden"])
 
     use_voice_cloning = False
     voice_mapping: Optional[list[dict[str, str]]] = None
@@ -243,11 +192,7 @@ def main() -> int:
         voice_samples, voice_mapping = build_voice_samples(script, voice_preset_demo_id(demo_id))
 
     print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}", flush=True)
-    if demo_entry is not None:
-        print(f"[demo_ttnn] {demo_entry.website_title} ({demo_entry.website_section})", flush=True)
     print(f"[demo_ttnn] output dir: {paths['dir']}", flush=True)
-    if golden_wav is not None:
-        print(f"[demo_ttnn] golden reference → {paths['golden']}", flush=True)
     print("[demo_ttnn] TT-only inference (no HuggingFace reference model)", flush=True)
     if use_voice_cloning:
         print("[demo_ttnn] voice cloning enabled (on-device speech prefill):", flush=True)
@@ -377,18 +322,10 @@ def main() -> int:
         )
 
     tt_path = paths["tt"]
-    golden_out = paths["golden"]
     _write_wav(tt_path, tt_speech)
-
-    metrics: dict = {}
-    if golden_wav is not None:
-        golden = _load_wav(golden_wav)
-        metrics = _compare_audio(golden, tt_speech)
 
     meta = {
         "demo_id": demo_id,
-        "website_title": demo_entry.website_title if demo_entry else None,
-        "website_section": demo_entry.website_section if demo_entry else None,
         "text_file": text_path.name,
         "voice_cloning": use_voice_cloning,
         "voice_mapping": voice_mapping,
@@ -403,9 +340,7 @@ def main() -> int:
         "max_length_times": args.max_length_times,
         "max_new_tokens": args.max_new_tokens,
         "tt_wav": str(tt_path),
-        "golden_wav": str(golden_out),
         "script_copy": str(paths["script"]),
-        **metrics,
     }
     paths["meta"].write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
@@ -413,25 +348,7 @@ def main() -> int:
         f"[demo_ttnn] TT: {tt_gen.numel()} AR tokens, {tt_speech.numel() / SR:.2f}s → {tt_path}",
         flush=True,
     )
-    if metrics:
-        mel_msg = (
-            f"log-mel L1={metrics['log_mel_l1']:.4f}"
-            if metrics["log_mel_l1"] == metrics["log_mel_l1"]
-            else f"prefix RMS={metrics['prefix_rms']:.4f}"
-        )
-        print(
-            f"[demo_ttnn] Golden: {metrics['golden_sec']:.2f}s → {golden_out}\n"
-            f"[demo_ttnn] Compare (prefix {min(golden.numel(), tt_speech.numel())/SR:.2f}s): "
-            f"{mel_msg}  duration ratio={metrics['duration_ratio']:.3f}"
-        )
-        if abs(metrics["duration_ratio"] - 1.0) > 0.05:
-            print(
-                "[demo_ttnn] note: duration differs from golden — website audio used a fixed Microsoft "
-                "demo run; TT free-running LM may stop at a different EOS step."
-            )
-        print(f"[demo_ttnn] DONE → {tt_path.name}  vs  {golden_out.name}  under {paths['dir']}/", flush=True)
-    else:
-        print(f"[demo_ttnn] DONE → {tt_path.name}  under {paths['dir']}/", flush=True)
+    print(f"[demo_ttnn] DONE → {tt_path.name}  under {paths['dir']}/", flush=True)
     return 0
 
 

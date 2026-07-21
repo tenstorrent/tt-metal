@@ -66,14 +66,15 @@ pytest models/experimental/vibevoice/tests/pcc/ -v
 ## TTNN demo (on device)
 
 `demo/demo.py` runs on-device TTNN inference (no HuggingFace reference model) and writes
-`{output_dir}/{demo_id}/{demo_id}_tt.wav` next to the website golden clip. Multi-speaker demos
-auto-enable voice cloning from `resources/voices/`.
+`{output_dir}/{demo_id}/{demo_id}_tt.wav`. It is text-driven: `--text <path>` for a custom script,
+or `--demo <id>` as a shortcut for `resources/text/<id>.txt`. Multi-speaker demos auto-enable
+voice cloning from `resources/voices/`.
 
 ```bash
 export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
 export ARCH_NAME=wormhole_b0 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml   # or blackhole
 
-# Default demo (shortest golden clip, eager — no trace)
+# Default demo (default script, eager — no trace)
 python models/experimental/vibevoice/demo/demo.py
 
 # Multi-speaker demo, cap the AR loop at 32 tokens, verbose stage/timing logs
