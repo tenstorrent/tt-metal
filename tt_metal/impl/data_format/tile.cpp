@@ -69,14 +69,19 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape
 
 uint32_t Tile::get_tile_size(const DataFormat& format) const {
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
     uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
+    // For block-float formats the tile is [exponent section | mantissa data]. The exponent section keeps its L1
+    // alignment (the hardware packer/unpacker place mantissas at that fixed offset), and we round the whole tile up to
+    // DRAM alignment by adding trailing padding *after* the mantissa. This keeps every tile both L1- and DRAM-aligned
+    // without shifting the exp/mantissa boundary.
     switch (format) {
         case DataFormat::Bfp2:
-        case DataFormat::Bfp2_b: return (tile_hw / 4) + aligned_exp_size;
+        case DataFormat::Bfp2_b: return tt::round_up((tile_hw / 4) + aligned_exp_size, dram_alignment);
         case DataFormat::Bfp4:
-        case DataFormat::Bfp4_b: return (tile_hw / 2) + aligned_exp_size;
+        case DataFormat::Bfp4_b: return tt::round_up((tile_hw / 2) + aligned_exp_size, dram_alignment);
         case DataFormat::Bfp8:
-        case DataFormat::Bfp8_b: return tile_hw + aligned_exp_size;
+        case DataFormat::Bfp8_b: return tt::round_up(tile_hw + aligned_exp_size, dram_alignment);
         case DataFormat::MxFp4:
         case DataFormat::MxFp6P:
         case DataFormat::MxFp6R:
