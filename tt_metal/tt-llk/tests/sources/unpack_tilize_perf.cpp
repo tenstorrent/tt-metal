@@ -117,15 +117,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        const bool TILIZE              = true;
-        bool skip_bh_tilize_workaround = _llk_math_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
+        const bool TILIZE = true;
         // copy srca to dest
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             is_int_fpu_en,
-            llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math, skip_bh_tilize_workaround);
+            llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -140,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            const std::uint32_t NUM_DVALIDS = _llk_unpack_tilize_num_dvalids_wrapper_(formats.unpack_A_src, TILE_CNT, TILE_NUM_FACES);
+            const std::uint32_t NUM_DVALIDS = _llk_unpack_tilize_num_dvalids_wrapper_(TILE_CNT, TILE_NUM_FACES);
             if constexpr (!unpack_to_dest)
             {
                 _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * NUM_DVALIDS);

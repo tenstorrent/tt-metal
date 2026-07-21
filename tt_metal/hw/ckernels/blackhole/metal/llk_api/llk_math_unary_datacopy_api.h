@@ -56,9 +56,8 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
 
-    // Always false: FP8 inline path and non-8-bit MOP both emit 1 SetDvalid per tile.
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        num_faces, dst_format, false /* skip_bh_tilize_workaround */);
+        num_faces, dst_format);
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
