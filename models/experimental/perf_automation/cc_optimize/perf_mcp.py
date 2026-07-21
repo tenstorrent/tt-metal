@@ -198,14 +198,21 @@ _TRACE_SAFE_HINT = (
     "new output per call; (3) use override_runtime_args on the cached program instead of baking "
     "buffer_address() into a freshly-built descriptor; (4) warm up the op once BEFORE begin_trace_capture "
     "so compilation never lands in the traced region. KEEP FIXING IN ISOLATION until it traces clean — "
-    "there is no attempt limit; only a cleanly-MEASURED result advances the ladder. Author a single-op "
-    "trace test (build inputs once -> warm-up -> begin/end_trace_capture -> execute_trace -> assert PCC vs "
-    "the stock op), run it STANDALONE, THEN wire it into the model and call measure_candidate ONCE"
+    "there is no attempt limit; only a cleanly-MEASURED result advances the ladder. STRUCTURE the "
+    "single-op isolation test to turn a silent hang into a SIGNAL: (a) run the kernel EAGER first (no "
+    "trace) and assert PCC vs the stock op — an eager failure is a MATH bug with a real error; proceed "
+    "only past a clean eager run; (b) then trace it, PRINTING a stage marker (EAGER_OK / WARMUP / "
+    "BEGIN_CAPTURE / RUN_OP / END_CAPTURE / REPLAY / DONE) before each stage under a hard subprocess "
+    "timeout, so a hang localizes to the LAST printed stage; then wire it into the model and "
+    "measure_candidate ONCE"
 )
 _ISOLATE_FIRST = (
-    " Before integrating, VALIDATE IN ISOLATION: author a standalone single-op trace test (warm-up + "
-    "begin/end_trace_capture + execute_trace + PCC vs the stock op), run it STANDALONE, and fix it there "
-    "cheaply until it traces clean; only then wire it into the model and measure_candidate ONCE."
+    " Before integrating, VALIDATE IN ISOLATION with a standalone single-op test structured to turn a "
+    "hang into a SIGNAL: (1) run the kernel EAGER first (no trace) + assert PCC vs the stock op — an eager "
+    "failure is a MATH/kernel bug with a real error to fix; proceed only past a clean eager run; (2) then "
+    "trace it, PRINTING a stage marker (EAGER_OK / WARMUP / BEGIN_CAPTURE / RUN_OP / END_CAPTURE / REPLAY "
+    "/ DONE) before each stage under a hard timeout, so a hang localizes to the LAST printed stage. Fix in "
+    "isolation until it traces clean; only then wire it into the model and measure_candidate ONCE."
 )
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)

@@ -42,7 +42,16 @@ def test_author_reason_instructs_isolation_first(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
     _, rung, reason = ladder(_op(), "MatmulDeviceOperation", [])
     assert rung == "tt-lang"
-    assert "ISOLATION" in reason and "STANDALONE" in reason
+    assert "ISOLATION" in reason and "EAGER first" in reason
+
+
+def test_feedback_instructs_eager_first_and_stage_capture(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
+    _, _, author = ladder(_op(), "MatmulDeviceOperation", [])
+    assert "EAGER first" in author and "BEGIN_CAPTURE" in author
+    assert "localizes to the LAST printed stage" in author
+    _, _, wedge = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", 1, wedged=True))
+    assert "EAGER first" in wedge and "RUN_OP" in wedge
 
 
 def test_wedged_ttlang_holds_indefinitely_never_cpp(monkeypatch):
