@@ -167,16 +167,17 @@ any D, no L1-scratch. Result: `conv1d_op` PCC 1.0; layer PCC byte-identical to t
   fixture applies fabric via `set_fabric`. `reduce_scatter_minimal_async` needs 3 semaphores (own set);
   `all_gather_async` needs 2 — used all-gather+sum for the all-reduce. `test_fabric_probe.py` is a kept
   board-health probe.
-- **Fused-op trigger FIRED (measured).** Single-device recurrent layer wall-clock: **T=256 → 3.84 s,
-  T=640 → 4.73 s per forward** (7–15 ms/token, host-dispatch-bound token loop). A cold scenario (11
-  forwards) ≈ 52 s; × warm/cold/long × before/after = minutes/run → **dev-loop-breaking.** Per the
-  user's rule ("if slow, implement fused op immediately"), the chunked/fused prefill op moves ahead of
-  the perf harness. Token-by-token recurrence is unusable for prefill perf.
-- **Next (re-ordered):** (1) chunked KDA prefill op — composed ttnn, matmul-based (collapse the
-  640-iter token loop to ~10 chunk-iters; mirror experimental `chunk_gated_delta_rule_seq`, adapt
-  scalar→diagonal gate), validate PCC vs torch `naive_chunk_kda`; (2) wire it into the mesh layer;
-  (3) real SP sequence-sharding + state-scan; (4) perf harness before/after vs the ROOFLINE targets.
-  A true single fused C++ kernel is a larger follow-up; the composed chunked op is the dev-loop unblock.
+- **Fused-op trigger — investigated and RETRACTED (measurement error).** A first probe reported
+  "4.7 s/forward at T=640" and I called it dev-loop-breaking. That was a **single un-warmed forward
+  including per-shape kernel JIT compile**. Re-measured with warmup: **cold 1.0 s, warm 637 ms/forward
+  at T=640** (~1 ms/token, host-dispatch-bound; the profiler-reported *device* time is far smaller).
+  A full perf pass (warm + cold-11 + long × before/after) is ~20–30 s — **not** a dev-loop blocker
+  (user: "a couple of minutes is not a blocker at this stage"). Lesson: never conclude perf from a cold,
+  single-sample forward — warm up and take min-of-N (my own warm/cold rule).
+- **Plan (original ordering restored):** (1) perf harness — realtime profiler, warm/cold/long, box-scaled,
+  before (single-device) vs after (TP `(2,4)`), per-op-group breakdown vs ROOFLINE targets; (2) real SP
+  sequence-sharding + state-scan; (3) fused chunk op as a **perf-phase optimization** (removes dispatch
+  overhead + efficient kernels) — a real win but not a blocker.
 
 ## Backlog
 
