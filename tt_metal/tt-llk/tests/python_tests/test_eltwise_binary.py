@@ -101,13 +101,14 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
     """
     Filter tile dimensions based on transpose and broadcast constraints:
     - Transpose only works for 32x32 tiles
-    - 32x16 tiles are not supported for Column or Row broadcast
+    - Narrow single-face-column tiles (32x16, 1x16) are not supported for
+      Column or Row broadcast. 16x16 remains valid for broadcast.
     """
     if transpose_srca == Transpose.Yes:
         return [[32, 32]]
 
     if broadcast_type in (BroadcastType.Column, BroadcastType.Row):
-        return [td for td in ALL_TILE_DIMENSIONS if td != [32, 16]]
+        return [td for td in ALL_TILE_DIMENSIONS if td not in ([32, 16], [1, 16])]
 
     return ALL_TILE_DIMENSIONS
 
@@ -520,7 +521,7 @@ def test_eltwise_binary_bfp4_b(
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     input_dimensions=[[512, 32]],
     output_dimensions=[[128, 32]],
-    tile_dimensions=[[32, 32], [16, 32]],
+    tile_dimensions=[[32, 32], [16, 32], [1, 16]],
 )
 def test_eltwise_binary_dest_reuse(
     reuse_dest_type,

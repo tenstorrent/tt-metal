@@ -12,6 +12,7 @@ infrastructure. A tile is composed of faces arranged in a grid:
 
 Example layouts:
     - 16x16 tile: 1 face of 16x16  (num_faces_r=1, num_faces_c=1)
+    - 1x16 tile:  1 face of 1x16   (num_faces_r=1, num_faces_c=1)
     - 32x32 tile: 4 faces of 16x16 (num_faces_r=2, num_faces_c=2)
     - 32x16 tile: 2 faces of 16x16 (num_faces_r=2, num_faces_c=1)
     - 8x32 tile:  2 faces of 8x16  (num_faces_r=1, num_faces_c=2)
@@ -86,6 +87,7 @@ SRCS_SLICE_32B_ELEMENT_COUNT = SRCS_SLICE_32B_ROW_DIM * SRCS_SLICE_COL_DIM  # 64
 # All supported tile dimensions as (rows, cols) tuples
 SUPPORTED_TILE_SIZES = [
     (16, 16),
+    (1, 16),
     (1, 32),
     (2, 32),
     (4, 32),
@@ -126,6 +128,7 @@ def get_tile_params(tile_dimensions):
 
     Supported tile dimensions:
     - [16, 16] -> face_r_dim=16, num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
+    - [1, 16]  -> face_r_dim=1,  num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
     - [1, 32]  -> face_r_dim=1,  num_faces=2, num_faces_r_dim=1, num_faces_c_dim=2
     - [2, 32]  -> face_r_dim=2,  num_faces=2, num_faces_r_dim=1, num_faces_c_dim=2
     - [4, 32]  -> face_r_dim=4,  num_faces=2, num_faces_r_dim=1, num_faces_c_dim=2
