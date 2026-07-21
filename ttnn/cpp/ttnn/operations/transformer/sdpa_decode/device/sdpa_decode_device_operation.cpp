@@ -151,6 +151,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
     }
 
+    if (operation_attributes.paged_cache_geometry.block_size.has_value()) {
+        TT_FATAL(
+            operation_attributes.paged_cache_geometry.block_size.value() > 0,
+            "PagedCacheGeometryOverride.block_size must be > 0");
+    }
     if (operation_attributes.paged_cache_geometry.num_kv_heads.has_value()) {
         TT_FATAL(
             tensor_args.page_table_tensor.has_value(),
@@ -169,6 +174,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         // Wrap must align with block boundaries (otherwise a wrapped position would split
         // across two physical blocks and the kernel can't address it). Pull
         // effective_block_size from the same fallback the program factory uses.
+        // block_size>0 is already enforced above when the override is set.
         const uint32_t effective_block_size = operation_attributes.paged_cache_geometry.block_size.value_or(k_shape[2]);
         TT_FATAL(
             modulo % effective_block_size == 0,

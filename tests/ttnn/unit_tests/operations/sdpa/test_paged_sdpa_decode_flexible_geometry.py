@@ -354,6 +354,37 @@ def test_negative_byte_count_mismatch(device, expect_error):
         )
 
 
+def test_negative_zero_block_size_rejected(device, expect_error):
+    """``block_size=0`` must TT_FATAL before any modulo/division (e.g. cache_position_modulo %)."""
+    torch.manual_seed(5)
+    B = 2
+    num_kv_heads = 1
+    num_q_heads = 1
+    alloc_block_size = 64
+    head_dim = 256
+    max_num_blocks = 4
+
+    k_tt, _ = _alloc_paged_cache_on_device(max_num_blocks, num_kv_heads, alloc_block_size, head_dim, device)
+    v_tt, _ = _alloc_paged_cache_on_device(max_num_blocks, num_kv_heads, alloc_block_size, head_dim, device)
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(B, 2)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    cur_pos_tt = ttnn.Tensor(torch.zeros(B, dtype=torch.int32), ttnn.int32).to(device)
+    q = torch.zeros(1, B, num_q_heads, head_dim).bfloat16().float()
+    q_padded = torch.nn.functional.pad(q, (0, 0, 0, 32 - num_q_heads), "constant", 0)
+    q_tt = ttnn.Tensor(q_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    with expect_error(RuntimeError, "block_size must be > 0"):
+        ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_tt,
+            k_tt,
+            v_tt,
+            page_table_tensor=page_table_tt,
+            cur_pos_tensor=cur_pos_tt,
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=0),
+            cache_position_modulo=alloc_block_size,  # would divide-by-zero without the guard
+        )
+
+
 # ── Asymmetric num_kv_heads tests ──────────────────────────────────────────
 
 

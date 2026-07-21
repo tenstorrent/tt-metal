@@ -243,6 +243,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         if (has_geometry_override) {
             TT_FATAL(!use_mla, "PagedCacheGeometryOverride is not supported with multi-latent attention");
         }
+        if (geo.block_size.has_value()) {
+            TT_FATAL(geo.block_size.value() > 0, "PagedCacheGeometryOverride.block_size must be > 0");
+        }
+        if (geo.num_kv_heads.has_value()) {
+            TT_FATAL(geo.num_kv_heads.value() > 0, "PagedCacheGeometryOverride.num_kv_heads must be > 0");
+        }
         const uint32_t nkv = geo.num_kv_heads.value_or(nkv_cache);
         const uint32_t k_page_size = geo.block_size.value_or(k_page_size_cache);
         if (!use_mla) {
