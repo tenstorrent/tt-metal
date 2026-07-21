@@ -5,6 +5,7 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
@@ -133,6 +134,15 @@ namespace {
 //     device. A single device has no cross-device consistency to break, and an unharvested multi-device
 //     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster) {
+    // Opt-out (re-added after #48527 dropped TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES and
+    // auto-enabled this). On firmware >= 19.12.0 with unharvested DRAM, Metal's fast-dispatch device
+    // init loads DRAM-core firmware onto the spare DRAM-RISC cores the disaggregation migration DRISC
+    // needs -> DRISC "did not reach RUNNING". The prefill model does not use the DRAM-core /
+    // tensor-prefetcher path, so set TT_METAL_DISABLE_DRAM_PROGRAMMABLE_CORES=1 there to free the cores.
+    if (const char* off = std::getenv("TT_METAL_DISABLE_DRAM_PROGRAMMABLE_CORES");
+        off != nullptr && off[0] == '1') {
+        return false;
+    }
     FirmwareCapabilityRequest req;
     req.dram_programmable_cores = true;
     FirmwareCapabilityResult res;
