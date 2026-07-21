@@ -27,8 +27,6 @@ set(TTNN_OP_POOL_SRCS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_POOL_NANOBIND_SRCS
-    generic/generic_pools_nanobind.cpp
     grid_sample/grid_sample_nanobind.cpp
     rotate/rotate_nanobind.cpp
-    upsample/upsample_nanobind.cpp
 )
