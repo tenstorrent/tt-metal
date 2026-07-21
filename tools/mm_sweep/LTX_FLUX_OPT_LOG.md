@@ -258,3 +258,70 @@ serially does receive-4-partials + accumulate + write-all-output while leaves id
 Prototyping H1/H2 is the next step. Instrumentation (DIAG_ZONES) is committed + mask-0 byte-identical
 (regression gate). **PAUSING for review per goal before prototyping** (esp. H2 reopens a previously-rejected
 direction — worth a steer). Artifacts: ltxflux_sweep_256x2048x1024.json, zone_parse.py, this log.
+
+### [DEEP-1 REV2] 256x2048x1024 — corrected timeline (per review feedback)
+Fixes: harness reads "risc" (not per_risc_us); failed sweep cfg (2,1,6,1,2) classified = TRANSIENT (reruns ok,
+77us non-competitive); added compute-side zones + raw absolute-timestamp artifact (zone_raw_256x2048x1024.json,
+800 core-zone series). Perturbation with compute zones = +0.6%.
+
+**Compute-side decomposition (TRISC per-core; the missing piece).** Regular start/end zones around the k-loop
+waits (SumN accumulators do NOT flush for the compute kernel; K_num_blocks small so per-block markers cheap):
+| TRISC | median us | max us |
+|---|---|---|
+| matmul (residual) | 9.1 | 14.4 |
+| in0-wait (ring exposed to compute) | 4.9 | 8.4 |
+| in1-wait | 1.4 | 7.3 |
+=> the coarse Z_RING (11us) is NOT all exposed: only ~4.9us of in0-ring latency is exposed as COMPUTE stall;
+in1 read is largely hidden (1.4us). Whole-phase duration != exposed headroom (confirmed).
+
+**Per-role timeline + wall accounting (from absolute timestamps).** Roles: 32 readers (Z_IN1READ) / 32 slaves;
+27 split-K roots / 37 leaves. The WALL (~22.3us) is gated by ROOT cores: writer(NCRISC) does Z_RING(~11us)
+THEN Z_PHASE2 reduce+output(~9us) SEQUENTIALLY. Root Z_PHASE2 med 9.0us vs leaf 4.8us (+4.2us root tail).
+Reader Z_IN1READ (~13us) OVERLAPS the writer and is not the tail. Accounted wall ~= ring(11) + root
+reduce/output(9) + startup ~= 22us.
+
+**Refined hypotheses (ceilings need the NCRISC sub-zone breakdown — next increment):**
+- H-A: **reduction/output root tail** extends the wall ~4-5us beyond compute (root Z_PHASE2 9us, +4.2us vs
+  leaf; root ends the wall). NOT "add a per-block output pipeline" (already exists). Need Z_PHASE2 sub-zones
+  (partial-recv-wait / out_cb-wait / output-issue+flush) to locate the recoverable sub-component.
+- H-B: **in0-ring on the critical path AND exposed** (~4.9us compute in0-wait; ring is the sequential first
+  half of the root path). Reopen in0 ONLY with a NOT-already-tested mechanism (scatter/exchange/repl/chunk
+  all rejected ON THIS SHAPE). Need ring sub-zones (inject / recv-wait / forward) to bound the recoverable.
+
+**Status: NOT prototyping.** Next: NCRISC ring + reduction sub-zones -> numerical ceilings + precise
+experiments, then report. Artifacts: zone_raw_256x2048x1024.json, zone_parse.py, ltxflux_sweep_256x2048x1024.json.
+
+### [DEEP-1 REV3] 256x2048x1024 — reduction sub-zone breakdown (numerical ceilings)
+Added writer PHASE2 sub-zones (DIAG_ZONES): Z_P2_RECVWAIT (wait upstream partial), Z_P2_OUTWAIT (wait
+compute block), Z_P2_OUTWRITE (root DRAM output issue+flush). ROOT cores (16, is_top), per-iter med:
+| root sub-zone | med us | max us |
+|---|---|---|
+| Z_PHASE2 (total) | 9.38 | 12.51 |
+| **Z_P2_RECVWAIT** | **7.1** | 10.46 |
+| Z_P2_OUTWAIT | 0.76 | 0.76 |
+| Z_P2_OUTWRITE | 0.89 | 1.43 |
+=> **The root's reduction tail is WAIT-bound (7.1us waiting for the Pk=4 chain), NOT output-write-bound
+(0.9us).** This REFUTES the earlier H1 (overlap output write — the write is only 0.9us). Also DIFFERENT from
+the deep-K shapes where reduction was WORK-bound (there the prior reduction-tree rejection mechanism applied);
+here it is chain-WAIT/latency-bound, a regime the prior rejection did NOT cover.
+
+**Accounted wall model (root core, ~22.5us wall):** ring(~11us, overlaps compute matmul+in0-wait) THEN
+Z_PHASE2 = RECVWAIT(7.1) + OUTWAIT(0.8) + OUTWRITE(0.9) ~= 9us. Compute (TRISC) ~17us (matmul 9 + in0-wait
+4.9 + in1-wait 1.4 + pack/oh ~1.7). Wall ~= compute-end + reduction-chain-drain, with RECVWAIT the dominant
+post-compute critical-path component.
+
+**Ranked realizable hypotheses (numerical ceilings + precise experiments):**
+- **H-A (LEAD): split-K reduction-chain RECVWAIT = 7.1us on the root** (dominant Z_PHASE2 component, on the
+  post-compute critical path). Ceiling: up to ~7us if the root did not serialize on chain propagation.
+  EXPERIMENT A1 (diagnostic first, no prod change): instrument RECVWAIT by chain position (bottom/middle/
+  root) — if RECVWAIT grows with position => propagation-latency (a shallower/tree reduction or fewer hops
+  helps); if uniform+large => upstream compute-imbalance (balance/faster-finish helps); if forward-BW =>
+  large out_blk forwards (coalesce/smaller granularity). EXPERIMENT A2 (only if A1 shows propagation): A/B a
+  2-level tree for Pk=4 (2 hops vs 3) — reopens reduction-tree with NEW evidence (wait-bound, not work-bound;
+  prior rejection was work-bound on deep-K). Predicted zone: shrink Z_P2_RECVWAIT.
+- **H-B: in0-ring exposed to compute = 4.9us** (TRISC in0-wait). Ceiling ~4.9us. EXPERIMENT B1: ring
+  sub-zones (inject / recv-wait / forward) to locate the exposed latency; only propose an in0 change if it is
+  a mechanism NOT already tested on this shape (scatter/exchange/repl/chunk all rejected here).
+
+**Status: diagnosis complete with numerical ceilings + experiments. NO prototype.** Lead = H-A (A1 diagnostic
+next). Artifacts: zone_raw_256x2048x1024.json, LTX_FLUX_OPT_LOG.md.
