@@ -400,22 +400,42 @@ TensorPrefetcherManager::TensorPrefetcherManager(
 TensorPrefetcherManager::~TensorPrefetcherManager() { stop(); }
 
 void TensorPrefetcherManager::enumerate_dram_senders() {
+    TT_FATAL(!devices_.empty(), "Tensor prefetcher requires at least one device");
     const auto context_id = mesh_device_->impl().get_context_id();
-    const auto& soc_desc = MetalContext::instance(context_id)
-                               .get_cluster()
-                               .get_soc_desc(mesh_device_->get_view().get_devices().front()->id());
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(devices_.front()->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     num_banks_ = num_banks;
-    sender_logical_cores_.clear();
-    sender_logical_cores_.reserve(2 * num_banks);
-    for (uint32_t b = 0; b < num_banks; ++b) {
-        // Two senders per bank: the free subchannel then the NOC1-endpoint subchannel.
-        // A queued GCB may use the primary only or both; PREFETCH fan-out targets its mapping.
-        for (const CoreCoord& core : mesh_device_->impl().dram_sender_logical_cores(b)) {
-            sender_logical_cores_.push_back(core);
+
+    sender_logical_cores_by_device_.assign(devices_.size(), {});
+    for (uint32_t d = 0; d < devices_.size(); ++d) {
+        const uint32_t device_num_banks = cluster.get_soc_desc(devices_[d]->id()).get_num_dram_views();
+        TT_FATAL(
+            device_num_banks == num_banks_,
+            "Tensor prefetcher requires the same DRAM bank count on every device: reference device {} has {}, "
+            "device {} has {}",
+            devices_.front()->id(),
+            num_banks_,
+            devices_[d]->id(),
+            device_num_banks);
+
+        auto& device_senders = sender_logical_cores_by_device_[d];
+        device_senders.reserve(2 * num_banks_);
+        for (uint32_t b = 0; b < num_banks_; ++b) {
+            // Two stable roles per bank: the free subchannel then the NOC1-endpoint
+            // subchannel. Their logical coordinates may differ across harvested devices.
+            const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(devices_[d], b);
+            TT_FATAL(
+                bank_senders.size() == 2,
+                "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
+                b,
+                devices_[d]->id(),
+                bank_senders.size());
+            device_senders.insert(device_senders.end(), bank_senders.begin(), bank_senders.end());
         }
     }
-    num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
+
+    num_senders_ = static_cast<uint32_t>(sender_logical_cores_by_device_.front().size());
 }
 
 std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_gcb(
@@ -423,17 +443,19 @@ std::vector<uint32_t> TensorPrefetcherManager::sender_indices_for_gcb(
     const auto& mapping = gcb.sender_receiver_core_mapping();
     TT_FATAL(!mapping.empty(), "Tensor prefetcher: GCB sender mapping must not be empty");
 
+    // GCB sender coordinates are the canonical (reference-device) mapping; match against it.
+    const std::vector<CoreCoord>& canonical_senders = sender_logical_cores_by_device_.front();
     std::vector<uint32_t> sender_indices;
     sender_indices.reserve(mapping.size());
     for (const auto& [sender, _receivers] : mapping) {
-        const auto it = std::find(sender_logical_cores_.begin(), sender_logical_cores_.end(), sender);
+        const auto it = std::find(canonical_senders.begin(), canonical_senders.end(), sender);
         TT_FATAL(
-            it != sender_logical_cores_.end(),
+            it != canonical_senders.end(),
             "Tensor prefetcher: GCB sender core ({}, {}) is not one of the {} provisioned DRAM sender cores",
             sender.x,
             sender.y,
             num_senders_);
-        sender_indices.push_back(static_cast<uint32_t>(std::distance(sender_logical_cores_.begin(), it)));
+        sender_indices.push_back(static_cast<uint32_t>(std::distance(canonical_senders.begin(), it)));
     }
     return sender_indices;
 }
@@ -450,10 +472,11 @@ void TensorPrefetcherManager::allocate_sockets() {
     auto mesh_device_sp = mesh_device_->shared_from_this();
     const uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
-    for (auto* device : devices_) {
+    for (uint32_t d = 0; d < devices_.size(); ++d) {
+        IDevice* device = devices_[d];
         const MeshCoordinate device_coord = mesh_device_->get_view().find_device(device->id());
         for (uint32_t s = 0; s < num_senders_; ++s) {
-            const CoreCoord sender_logical = sender_logical_cores_[s];
+            const CoreCoord sender_logical = sender_logical_cores_by_device_[d][s];
             // Uniform L1 layout per DRAM core: only one socket lives on each core
             // (the one for that core's own sender). Use the same offsets carved by
             // start() — socket_config_l1_addr_ then socket_data_l1_addr_.
@@ -484,7 +507,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
         auto program = std::make_unique<Program>();
 
         for (uint32_t s = 0; s < num_senders_; ++s) {
-            const CoreCoord sender_logical = sender_logical_cores_[s];
+            const CoreCoord sender_logical = sender_logical_cores_by_device_[d][s];
 
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
@@ -514,8 +537,18 @@ void TensorPrefetcherManager::start() {
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
+        ">= 19.12.0.0");
 
+    // Populate devices_ once before resolving sender slots: every device can map the
+    // same bank/role to a different logical DRAM core under heterogeneous harvesting.
+    // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
+    devices_.clear();
+    device_index_by_coord_.clear();
+    for (auto* device : mesh_device_->get_view().get_devices()) {
+        const uint32_t d = static_cast<uint32_t>(devices_.size());
+        devices_.push_back(device);
+        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
+    }
     enumerate_dram_senders();
 
     // DRISC L1 layout: the kernel working region (above the GCB zone) is now
@@ -574,16 +607,6 @@ void TensorPrefetcherManager::start() {
     ring_half_ = stage_ring_size_ / 2;
     stage_third_ = stage_ring_size_ / 3;
 
-    // Populate devices_ list once; both allocate_sockets and build_and_launch_programs use it.
-    // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
-    devices_.clear();
-    device_index_by_coord_.clear();
-    for (auto* device : mesh_device_->get_view().get_devices()) {
-        const uint32_t d = static_cast<uint32_t>(devices_.size());
-        devices_.push_back(device);
-        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
-    }
-
     allocate_sockets();
     build_and_launch_programs(stage_ring_base_, stage_ring_size_);
 
@@ -630,7 +653,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     if (krow_compatible_mapping) {
         for (const auto& [sender, _receivers] : mapping) {
             const uint32_t bank = static_cast<uint32_t>(sender.x);
-            if (bank >= num_banks_ || primary_bank_seen[bank] || sender != sender_logical_cores_[2 * bank]) {
+            if (bank >= num_banks_ || primary_bank_seen[bank] ||
+                sender != sender_logical_cores_by_device_.front()[2 * bank]) {
                 krow_compatible_mapping = false;
                 break;
             }
@@ -1036,10 +1060,11 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     std::vector<DeviceMemoryAddress> targets;
     targets.reserve(target_devices.size() * num_senders_);
     for (const auto& coord : target_devices) {
-        IDevice* device = devices_[device_index_by_coord_.at(coord)];
+        const uint32_t device_index = device_index_by_coord_.at(coord);
+        IDevice* device = devices_[device_index];
         for (uint32_t s = 0; s < num_senders_; ++s) {
-            const CoreCoord virtual_core =
-                device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
+            const CoreCoord virtual_core = device->virtual_core_from_logical_core(
+                sender_logical_cores_by_device_[device_index][s], CoreType::DRAM);
             targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
         }
     }
@@ -1203,7 +1228,7 @@ void TensorPrefetcherManager::stop() {
     programs_.clear();
     devices_.clear();
     device_index_by_coord_.clear();
-    sender_logical_cores_.clear();
+    sender_logical_cores_by_device_.clear();
     trace_requests_.clear();
     num_senders_ = 0;
     active_ = false;

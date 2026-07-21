@@ -37,10 +37,9 @@ class GlobalCircularBuffer;
 struct TensorPrefetcherConfig {};
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
-// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0 and
-// either no harvested DRAM channels or a single device). When this returns false,
-// StartTensorPrefetcher would TT_FATAL, so callers (e.g. tests) can use this
-// to skip rather than fail.
+// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
+// When this returns false, StartTensorPrefetcher would TT_FATAL, so callers
+// (e.g. tests) can use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
@@ -98,7 +97,7 @@ struct TensorPrefetcherInput {
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
-//     >= 19.12.0.0 and either no harvested DRAM channels or a single device).
+//     >= 19.12.0.0).
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
