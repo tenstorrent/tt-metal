@@ -48,6 +48,7 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
         bd_val.f.y_dim = pack_tile_face_r_dim[i];
         bd_val.f.z_dim = pack_tile_num_faces[i];
 
+        ckernel::trisc::validate_buffer_desc<ckernel::trisc::L1AccessMode::Continuous>(bd_val);
         ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
     }
 
