@@ -175,18 +175,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         return w, b
 
     def ada_chunks(adazero):
-        """Split AdaLayerNormZero.linear (C -> 6C) into six (C, C) matmuls + bias.
-        Left replicated (not TP-sharded) in this pass -- see module docstring."""
+        """AdaLayerNormZero.linear (C -> 6C): keep it as ONE fused matmul and slice
+        the six modulation params from the output. On the launch-bound path this is
+        1 matmul launch instead of 6 (the split M=32 modulation matmuls were ~24 of
+        the dominant launches). Left replicated (not TP-sharded) -- see docstring."""
         L = adazero.linear
         C = int(L.out_features) // 6
-        w = L.weight.detach()
-        b = L.bias.detach() if L.bias is not None else None
-        ws, bs = [], []
-        for i in range(6):
-            ws.append(f32(w[i * C : (i + 1) * C, :].t()))
-            bs.append(f32(b[i * C : (i + 1) * C].reshape(1, C)) if b is not None else None)
+        w = f32(L.weight.detach().t())  # (Cin, 6C)
+        b = f32(L.bias.detach().reshape(1, -1)) if L.bias is not None else None  # (1, 6C)
         eps = float(getattr(adazero.norm, "eps", 1e-6))
-        return ws, bs, eps, C
+        return w, b, eps, C
 
     def rms_w(norm):
         w = getattr(norm, "weight", None)
@@ -293,16 +291,17 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # the prior manual mean/multiply/rsqrt/multiply sequence it replaces).
         return ttnn.rms_norm(x, epsilon=rms_eps, weight=w, compute_kernel_config=compute_config)
 
-    def _adazero(x, temb, ws, bs, eps):
+    def _adazero(x, temb, w, b, eps):
         s = ttnn.silu(temb)
-        parts = []
-        for w, b in zip(ws, bs):
-            if b is not None:
-                p = ttnn.linear(s, w, bias=b, compute_kernel_config=compute_config)
-            else:
-                p = ttnn.matmul(s, w, compute_kernel_config=compute_config)
-            parts.append(p)  # each (B, C)
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = parts
+        # ONE fused (C -> 6C) matmul (bias in epilogue), then slice the 6 params.
+        if b is not None:
+            p = ttnn.linear(s, w, bias=b, compute_kernel_config=compute_config)
+        else:
+            p = ttnn.matmul(s, w, compute_kernel_config=compute_config)
+        Bp = int(p.shape[0])
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+            ttnn.slice(p, (0, i * C), (Bp, (i + 1) * C)) for i in range(6)
+        )
         B = int(x.shape[0])
         nx = ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)  # no affine
         scale_r = ttnn.reshape(scale_msa, (B, 1, C))
