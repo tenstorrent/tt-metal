@@ -38,11 +38,11 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 cb_in,
                 cb_scaler,
                 cb_out,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 block_shape,
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
@@ -52,11 +52,11 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_COL,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 cb_in,
                 cb_scaler,
                 cb_out,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 block_shape,
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
@@ -68,11 +68,11 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::MAX,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 cb_in,
                 cb_scaler,
                 cb_out,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 block_shape,
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
@@ -82,11 +82,11 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::MAX,
                 ReduceDim::REDUCE_COL,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 cb_in,
                 cb_scaler,
                 cb_out,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 block_shape,
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
