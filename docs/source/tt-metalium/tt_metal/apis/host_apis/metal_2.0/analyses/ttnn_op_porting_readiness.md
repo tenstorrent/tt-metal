@@ -12,7 +12,7 @@ Google Sheet — *"Operations analysis"*, owned by Diego (`dgomez@tenstorrent.co
 https://docs.google.com/spreadsheets/d/1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy8jw/edit?usp=sharing
 
 - **File ID:** `1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy8jw`
-- Access is through the **claude.ai Google Drive MCP connector**. The human authorizes it once — see [`../human/user_orientation.md`](../human/user_orientation.md) → *Google Drive MCP setup*. You **cannot** authorize it from inside a session.
+- Access is through the **claude.ai Google Drive MCP connector**. The human authorizes it once — see [`../human/READ_ME_FIRST.md`](../human/READ_ME_FIRST.md) → *Google Drive MCP setup*. You **cannot** authorize it from inside a session.
 
 ## Fetch it (do this every run)
 
@@ -72,6 +72,6 @@ Notes:
 
 ## Troubleshooting
 
-- **"requires authorization" / "token expired":** the human hasn't authorized — or needs to re-authorize — the Google Drive connector. Point them to [`../human/user_orientation.md`](../human/user_orientation.md) → *Google Drive MCP setup*. It's a claude.ai account-level action; it cannot be done from inside the session.
+- **"requires authorization" / "token expired":** the human hasn't authorized — or needs to re-authorize — the Google Drive connector. Point them to [`../human/READ_ME_FIRST.md`](../human/READ_ME_FIRST.md) → *Google Drive MCP setup*. It's a claude.ai account-level action; it cannot be done from inside the session.
 - **File not found / permission denied:** the sheet isn't shared with the human's Google account. Ask the owner (Diego) to broaden the share.
 - **Tool name not found when you call it:** load its schema first (step 1); until then it's deferred and uncallable.
