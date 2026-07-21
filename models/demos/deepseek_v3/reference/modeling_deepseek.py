@@ -62,7 +62,14 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from transformers.utils.import_utils import is_torch_fx_available
+
+try:
+    from transformers.utils.import_utils import is_torch_fx_available
+except ImportError:
+
+    def is_torch_fx_available():
+        return hasattr(torch, "fx")
+
 
 from .configuration_deepseek import DeepseekV3Config
 from .reference_utils import topk_bitonic

@@ -244,8 +244,8 @@ def run_demo(
             bspm_budget=bspm_budget,
         )
 
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        if my_mesh_id == 0 and not launch_only:
+        my_stage_idx = model_pipeline.pipeline.my_stage_idx
+        if my_stage_idx == 0 and not launch_only:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             messages = [{"role": "user", "content": prompt}]
             prompt = tokenizer.apply_chat_template(
@@ -265,18 +265,23 @@ def run_demo(
             logger.debug(f"Encoded prompt: {prompt_ids}")
 
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
-                prompt_token_ids=prompt_ids,
-                max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
-                think_token_ids=[think_open_id[0], think_close_id[0]],
-                return_generated_tokens=True,
-            )
+            try:
+                generated_tokens = model_pipeline.run_inference(
+                    prompt_token_ids=prompt_ids,
+                    max_new_tokens=iterations,
+                    eos_token_id=tokenizer.eos_token_id,
+                    think_token_ids=[think_open_id[0], think_close_id[0]],
+                    return_generated_tokens=True,
+                )
+            finally:
+                model_pipeline.stop_host_loopback_output_forwarder()
             assert generated_tokens is not None
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+        elif not launch_only:
+            model_pipeline.run_host_loopback_output_forwarder()
 
-        if launch_only and my_mesh_id == 0:
+        if launch_only and my_stage_idx == 0:
             # Keep process/pipeline alive until user interrupts
             # Only runs on mesh 0, all other processes wait for a barrier
             logger.info("Pipeline launched; keeping sockets alive until interrupted.")

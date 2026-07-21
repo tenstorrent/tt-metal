@@ -609,8 +609,8 @@ class Pipeline:
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         self._block.write_token(token_tensor)
 
-    def read_output(self, output_tensor: ttnn.Tensor) -> None:
-        self._block.read_output(output_tensor)
+    def read_output(self, output_tensor: ttnn.Tensor):
+        return self._block.read_output(output_tensor)
 
     def export_host_socket_descriptors(self, prefix: str) -> None:
         self._block.export_host_socket_descriptors(prefix)
@@ -632,12 +632,12 @@ class Pipeline:
              to L1 but no core observes it yet: they are all blocked at the
              iteration gate (``persistent_next_iter_sem``) or mid-iteration.
           3. Barrier — all ranks have written their termination flags.
-          4. Stage 0 pushes a dummy token and drains the round-trip result.
-             The token naturally triggers ``persistent_next_iter_sem`` via the
-             pipeline's socket/d2d flow, providing both the gate release AND
-             the data payload.  All cores complete this final iteration
-             together, loop back to the top-of-loop termination check, see the
-             flag, and break.
+          4. Stage 0 pushes a dummy token and the pipeline block drains the
+             round-trip result. The token naturally triggers
+             ``persistent_next_iter_sem`` via the pipeline's socket/d2d flow,
+             providing both the gate release AND the data payload.  All cores
+             complete this final iteration together, loop back to the
+             top-of-loop termination check, see the flag, and break.
           5. Barrier — non-stage-0 ranks wait for the dummy round-trip.
              (No ``synchronize_device`` here: d2d/host_io kernels are still
              running and would block.)
@@ -657,6 +657,9 @@ class Pipeline:
 
         if self._pipeline_block.is_first_pipeline_stage():
             self._pipeline_block.push_dummy_token()
+        if hasattr(self._pipeline_block, "drain_dummy_roundtrip"):
+            self._pipeline_block.drain_dummy_roundtrip()
+        elif self._pipeline_block.is_first_pipeline_stage():
             self._pipeline_block.drain_dummy_output()
 
         ttnn.distributed_context_barrier()

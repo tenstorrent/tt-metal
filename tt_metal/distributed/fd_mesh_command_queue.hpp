@@ -29,7 +29,6 @@ namespace tt::tt_metal::distributed {
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshCoreDataReadDescriptor;
-
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
@@ -145,6 +144,37 @@ private:
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
+    // Tracks FD work whose ordering must not be bypassed by simulator direct writes.
+    DispatchArray<std::atomic<bool>> pending_ordered_work_{};
+
+#if defined(TT_UMD_BUILD_SIMULATION)
+    struct DeferredDirectWrite {
+        uint64_t order = 0;
+        std::shared_ptr<Buffer> shard_view;
+        std::vector<uint8_t> payload;
+        BufferRegion region;
+        std::optional<CoreRangeSet> logical_core_filter;
+    };
+
+    std::mutex deferred_direct_write_mutex_;
+    std::vector<DeferredDirectWrite> deferred_direct_writes_;
+    std::atomic<uint64_t> next_deferred_direct_write_order_ = 0;
+    std::atomic<uint64_t> deferred_direct_write_bytes_ = 0;
+    bool flushing_deferred_direct_writes_ = false;
+#endif
+
+    void mark_pending_ordered_work(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void clear_pending_ordered_work(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    bool has_pending_ordered_work() const;
+    std::vector<SubDeviceId> pending_ordered_sub_device_ids() const;
+#if defined(TT_UMD_BUILD_SIMULATION)
+    bool try_defer_direct_write(
+        std::shared_ptr<Buffer> shard_view,
+        const void* src,
+        const BufferRegion& region,
+        const CoreRangeSet* logical_core_filter);
+    void flush_deferred_direct_writes_nolock();
+#endif
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
@@ -197,6 +227,7 @@ protected:
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void drain_deferred_writes_nolock() override;
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

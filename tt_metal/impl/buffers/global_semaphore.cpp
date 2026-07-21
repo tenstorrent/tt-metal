@@ -92,6 +92,11 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
     } else {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
+            // In a multi-host mesh, shards at coords owned by another rank/process are remote;
+            // each rank only writes its own local shards (skip remote to avoid throwing on access).
+            if (!mesh_buffer->device()->is_local(coord)) {
+                continue;
+            }
             tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
         }
     }

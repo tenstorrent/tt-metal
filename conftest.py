@@ -479,6 +479,12 @@ def set_fabric(
 ):
     import ttnn
 
+    if fabric_config is True:
+        if ttnn.device.is_blackhole():
+            fabric_config = ttnn.FabricConfig.FABRIC_2D
+        else:
+            fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_X
+
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
         if reliability_mode is None:
@@ -711,7 +717,7 @@ def bh_2d_mesh_device_context(device_params):
         )
     elif ttnn.get_num_devices() == 32:
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(4, 8),
+            mesh_shape=ttnn.MeshShape(8, 4),
             **updated_device_params,
         )
     else:

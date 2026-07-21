@@ -144,4 +144,9 @@ def get_supported_trace_region_size(request, mesh_device):
 
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
     base_model_name = base_model_name_from_env()
-    return trace_region_size_dict.get(base_model_name, {}).get(device_name_based_on_dp, None)
+    if base_model_name:
+        base_model_name_upper = base_model_name.upper()
+        for key in trace_region_size_dict:
+            if key.upper() == base_model_name_upper:
+                return trace_region_size_dict[key].get(device_name_based_on_dp, None)
+    return None

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -86,6 +88,7 @@ class RotarySetup:
         rot_tensors = self.get_rot_mats_table()
         self.cos_matrix = rot_tensors["cos_matrix"]
         self.sin_matrix = rot_tensors["sin_matrix"]
+        self._sync_if_simulator()
 
         num_cores = find_largest_divisor(batch_size_per_row, device.core_grid.num_cores)
         self.batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
@@ -105,6 +108,7 @@ class RotarySetup:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        self._sync_if_simulator()
         self.transformation_mat = ttnn.from_torch(
             trans_mat,
             device=device,
@@ -113,8 +117,10 @@ class RotarySetup:
             memory_config=trans_mat_mem_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
+        self._sync_if_simulator()
 
         prefill_trans_mat_torch = get_rot_transformation_mat()
+        self._sync_if_simulator()
         self.transformation_mat_prefill = ttnn.from_torch(
             prefill_trans_mat_torch,
             device=device,
@@ -123,6 +129,11 @@ class RotarySetup:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
+        self._sync_if_simulator()
+
+    def _sync_if_simulator(self):
+        if os.environ.get("TT_METAL_SIMULATOR"):
+            ttnn.synchronize_device(self.device)
 
     def _position_idxs_to_tensor(self, position_idxs, *, dtype, on_host: bool = False):
         """Map decode position ids to the row-sharded mesh layout used by DeepSeek decode."""
@@ -194,6 +205,7 @@ class RotarySetup:
             cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
             sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
 
+        self._sync_if_simulator()
         cos_matrix = ttnn.from_torch(
             cos_matrix_torch,
             device=self.device,
@@ -201,6 +213,7 @@ class RotarySetup:
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
+        self._sync_if_simulator()
         sin_matrix = ttnn.from_torch(
             sin_matrix_torch,
             device=self.device,
@@ -208,6 +221,7 @@ class RotarySetup:
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
+        self._sync_if_simulator()
 
         if seq_len is not None:
             return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": self.transformation_mat_prefill}
@@ -238,14 +252,21 @@ class RotarySetup:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         embedding_layout = ttnn.TILE_LAYOUT
+        self._sync_if_simulator()
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, dim]
+        self._sync_if_simulator()
         sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, dim]
+        self._sync_if_simulator()
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
+        self._sync_if_simulator()
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
+        self._sync_if_simulator()
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
+        self._sync_if_simulator()
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
+        self._sync_if_simulator()
 
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
             cos = cos[:, : self.batch_size_per_row, :, :]
@@ -260,7 +281,9 @@ class RotarySetup:
         )
 
         cos = ttnn.to_memory_config(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+        self._sync_if_simulator()
         sin = ttnn.to_memory_config(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+        self._sync_if_simulator()
 
         if return_rot_idxs:
             return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs

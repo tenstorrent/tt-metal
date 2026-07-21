@@ -28,9 +28,14 @@ from models.demos.deepseek_v3_b1.model import (
     DecodeResult,
     DeepSeekV3,
     TokenType,
+    create_output_buffer,
     page_size_bytes,
     to_spec_input,
 )
+
+_HOST_LOOPBACK_CONTROL_TAG = 73101
+_HOST_LOOPBACK_READ_CMD = b"R"
+_HOST_LOOPBACK_STOP_CMD = b"S"
 
 
 class ModelPipeline:
@@ -182,13 +187,14 @@ class ModelPipeline:
         self.pipeline.setup_and_run()
 
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
+        self._output_buffer = create_output_buffer(self._page_size_datums)
         self.position_id: int | None = None
         self._in_thinking_phase = False
         self.model: DeepSeekV3 | None = None
         if self.pipeline.my_stage_idx == 0:
             self.model = DeepSeekV3(
                 write_fn=self.pipeline.write_token,
-                read_fn=self.pipeline.read_output,
+                read_fn=self._read_pipeline_output,
                 batch_size=1,
                 pipeline_depth=config.num_stages,
             )
@@ -197,6 +203,62 @@ class ModelPipeline:
                 self.pipeline.export_host_socket_descriptors(io_socket_descriptor_prefix)
 
         logger.info(f"Created ModelPipeline for stage {self.pipeline.my_stage_idx}.")
+
+    def _pipeline_block(self):
+        return getattr(self.pipeline, "_pipeline_block", None)
+
+    def _uses_host_loopback(self) -> bool:
+        block = self._pipeline_block()
+        return block is not None and getattr(block, "_loopback_mode", None) == "host"
+
+    def _host_loopback_rank(self, stage_idx: int) -> int:
+        block = self._pipeline_block()
+        assert block is not None
+        return block._stages[stage_idx].rank
+
+    def _request_host_loopback_output(self) -> None:
+        if not self._uses_host_loopback() or self.pipeline.my_stage_idx != 0:
+            return
+        dest = self._host_loopback_rank(self.pipeline._pipeline_block.num_procs - 1)
+        if dest == int(ttnn.distributed_context_get_rank()):
+            return
+        from ttnn._ttnn.multi_device import send_bytes
+
+        send_bytes(_HOST_LOOPBACK_READ_CMD, dest, _HOST_LOOPBACK_CONTROL_TAG)
+
+    def _read_pipeline_output(self, output_tensor: ttnn.Tensor):
+        self._request_host_loopback_output()
+        return self.pipeline.read_output(output_tensor)
+
+    def run_host_loopback_output_forwarder(self) -> None:
+        """Serve rank-0 host-loopback read requests on the last pipeline stage."""
+        block = self._pipeline_block()
+        if not self._uses_host_loopback() or block is None or not block.is_last_stage or block.is_pipeline_start:
+            return
+
+        from ttnn._ttnn.multi_device import recv_bytes
+
+        source = self._host_loopback_rank(0)
+        logger.info("Serving host-loopback D2H output requests")
+        while True:
+            cmd = recv_bytes(1, source, _HOST_LOOPBACK_CONTROL_TAG)
+            if cmd == _HOST_LOOPBACK_READ_CMD:
+                self.pipeline.read_output(self._output_buffer)
+            elif cmd == _HOST_LOOPBACK_STOP_CMD:
+                logger.info("Host-loopback output forwarder stopped")
+                return
+            else:
+                raise RuntimeError(f"Unknown host-loopback output command: {cmd!r}")
+
+    def stop_host_loopback_output_forwarder(self) -> None:
+        if not self._uses_host_loopback() or self.pipeline.my_stage_idx != 0:
+            return
+        dest = self._host_loopback_rank(self.pipeline._pipeline_block.num_procs - 1)
+        if dest == int(ttnn.distributed_context_get_rank()):
+            return
+        from ttnn._ttnn.multi_device import send_bytes
+
+        send_bytes(_HOST_LOOPBACK_STOP_CMD, dest, _HOST_LOOPBACK_CONTROL_TAG)
 
     def prefill_forward(self, tokens: list[int]) -> list[DecodeResult]:
         """Prefill prompt tokens and return the DecodeResults from the last prompt token's outputs."""
@@ -237,6 +299,9 @@ class ModelPipeline:
             user_id=0,
             position_id=self.position_id,
             token_type=TokenType.BASE,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            probability_mass_threshold=self.top_p,
         )
         result = self.model.read_result()
         self.position_id += 1

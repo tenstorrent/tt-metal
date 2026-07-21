@@ -98,7 +98,13 @@ class DecodeResult:
     p_scores: list[float] | None = None
 
 
-def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
+def _output_page_to_torch(output_buffer: ttnn.Tensor | torch.Tensor) -> torch.Tensor:
+    if isinstance(output_buffer, torch.Tensor):
+        return output_buffer
+    return ttnn.to_torch(output_buffer)
+
+
+def parse_output_page(output_buffer: ttnn.Tensor | torch.Tensor) -> DecodeResult:
     """Parse a DeepseekMetadata output page into a structured DecodeResult.
 
     The output buffer is 64 uint32 words (256 bytes) laid out as:
@@ -106,7 +112,7 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
       words 16-47 : p_indices[32]  (uint32)
       words 48-63 : p_scores[32]   (bf16 packed as uint16)
     """
-    raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
+    raw = _output_page_to_torch(output_buffer).to(torch.int32).flatten()
 
     p_indices = None
     p_scores = None
@@ -192,7 +198,7 @@ class DeepSeekV3:
     def __init__(
         self,
         write_fn: Callable[[ttnn.Tensor], None],
-        read_fn: Callable[[ttnn.Tensor], None],
+        read_fn: Callable[[ttnn.Tensor], ttnn.Tensor | torch.Tensor | None],
         batch_size: int = 1,
         pipeline_depth: int = 1,
     ) -> None:
@@ -220,6 +226,10 @@ class DeepSeekV3:
         self._position: int = 0
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
+
+    def _read_output_page(self) -> ttnn.Tensor | torch.Tensor:
+        received = self._read_fn(self._output_buffer)
+        return received if received is not None else self._output_buffer
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
         """
@@ -256,7 +266,7 @@ class DeepSeekV3:
 
         # Phase 2: overlap — drain outputs and issue remaining writes in steady state
         while write_idx < len(prompt_tokens):
-            self._read_fn(self._output_buffer)
+            self._read_output_page()
             read_count += 1
             self._write_fn(prompt_tokens[write_idx])
             write_idx += 1
@@ -264,15 +274,15 @@ class DeepSeekV3:
         # Phase 3: drain remaining outputs; save the last output
         last_results: list[DecodeResult] = []
         while read_count < total_reads:
-            self._read_fn(self._output_buffer)
+            output_page = self._read_output_page()
             read_count += 1
             if read_count > total_reads - 1:
-                last_results.append(parse_output_page(self._output_buffer))
+                last_results.append(parse_output_page(output_page))
 
         self._position += len(prompt_tokens)
         return last_results
 
-    def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor | torch.Tensor:
         """
         Single decode step: send input via write_fn, receive output via read_fn.
         Returns the output tensor. Increments position.
@@ -289,9 +299,9 @@ class DeepSeekV3:
         ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
         padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
         self._write_fn(padded_input)
-        self._read_fn(self._output_buffer)
+        output_page = self._read_output_page()
         self._position += 1
-        return self._output_buffer
+        return output_page
 
     def write_input(
         self,
@@ -320,8 +330,7 @@ class DeepSeekV3:
 
     def read_result(self) -> DecodeResult:
         """Read one output page from the pipeline and return the parsed DecodeResult."""
-        self._read_fn(self._output_buffer)
-        return parse_output_page(self._output_buffer)
+        return parse_output_page(self._read_output_page())
 
     @property
     def position(self) -> int:

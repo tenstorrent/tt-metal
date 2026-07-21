@@ -540,14 +540,21 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
 
     // ==================== Per-sender reader kernels ====================
     // Each sender gets its own reader kernel with per-sender idle core count baked in.
-    auto reader_defines = fabric_defines;
+    std::map<std::string, std::string> reader_defines;
+    if (operation_attributes.axis.has_value()) {
+        reader_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
     reader_defines["IS_TILE_LAYOUT"] = "1";
+    auto reader_compile_time_args = compile_time_args;
+    reader_compile_time_args[31] = 0;  // src_mesh_id: unused by reader
+    reader_compile_time_args[32] = 0;  // src_chip_id: unused by reader
+    reader_compile_time_args[35] = 0;  // linearized_mesh_coord is a runtime arg for reader
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     reader_kernel_ids.reserve(num_cores);
     for (uint32_t s = 0; s < num_cores; s++) {
         uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
         uint32_t total_workers = k_s + 1;  // idle cores + sender itself
-        auto per_sender_compile_args = compile_time_args;
+        auto per_sender_compile_args = reader_compile_time_args;
         per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id (receive buf)
         per_sender_compile_args.push_back(
             detail::get_aligned_page_size(output_tensor));  // aligned_row_major_input_page_size
@@ -751,6 +758,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
 
         // Inter-core sync args for reader
+        reader_runtime_args.push_back(linearized_mesh_coord);
         reader_runtime_args.push_back(data_ready_semaphore_ids[core_idx]);
         reader_runtime_args.push_back(start_semaphore_ids[core_idx]);
         reader_runtime_args.push_back(addr_ready_semaphore_id);
@@ -1119,7 +1127,9 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(compile_time_args);
 
-    // Both reader and writer get fabric defines so the reader can compute routes
+    // Writer fabric setup still needs coordinate-specific compile-time defines. The reader only needs the local
+    // linearized coordinate as a value, so keep its compile args coordinate-neutral to improve JIT reuse across mesh
+    // coordinates.
     std::map<std::string, std::string> fabric_defines;
     if (operation_attributes.num_links > 0) {
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
@@ -1129,6 +1139,14 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
+    std::map<std::string, std::string> reader_defines;
+    if (operation_attributes.axis.has_value()) {
+        reader_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
+    auto reader_compile_time_args = compile_time_args;
+    reader_compile_time_args[31] = 0;  // src_mesh_id: unused by reader
+    reader_compile_time_args[32] = 0;  // src_chip_id: unused by reader
+    reader_compile_time_args[35] = 0;  // linearized_mesh_coord is a runtime arg for reader
 
     // Single reader kernel shared across all senders; store one handle per sender for
     // uniform override_runtime_arguments iteration between tile and row-major paths.
@@ -1140,8 +1158,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
-            .compile_args = compile_time_args,
-            .defines = fabric_defines});
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids(num_cores, reader_kernel_id);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -1156,7 +1174,23 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
             .defines = fabric_defines});
 
     // Runtime args: all cores process all tokens, experts split round-robin
-    std::vector<uint32_t> base_runtime_args = {
+    std::vector<uint32_t> reader_base_runtime_args = {
+        input_tensor.buffer()->address(),
+        indices_tensor.buffer()->address(),
+        weights_tensor.buffer()->address(),
+        offsets_tensor.buffer()->address(),
+        output_tensor.buffer()->address(),
+        metadata_tensor.buffer()->address(),
+        dispatch_table_tensor.buffer()->address(),
+        (uint32_t)cross_device_semaphore.address(),
+        (uint32_t)init_semaphore.address(),
+        0,                            // token_start_idx (all tokens)
+        (uint32_t)tokens_per_device,  // token_end_idx (all tokens)
+        0,                            // dispatch_core_idx (set per core)
+        num_cores,                    // num_dispatch_cores
+        linearized_mesh_coord,
+    };
+    std::vector<uint32_t> writer_base_runtime_args = {
         input_tensor.buffer()->address(),
         indices_tensor.buffer()->address(),
         weights_tensor.buffer()->address(),
@@ -1174,8 +1208,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
 
     uint32_t core_idx = 0;
     for (const auto& sender_core : sender_cores) {
-        std::vector<uint32_t> reader_runtime_args = base_runtime_args;
-        std::vector<uint32_t> writer_runtime_args = base_runtime_args;
+        std::vector<uint32_t> reader_runtime_args = reader_base_runtime_args;
+        std::vector<uint32_t> writer_runtime_args = writer_base_runtime_args;
 
         reader_runtime_args[11] = core_idx;
         writer_runtime_args[11] = core_idx;
@@ -1313,10 +1347,13 @@ void DispatchProgramFactory::override_runtime_arguments(
     const DispatchInputs& tensor_args,
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value) {
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
+    const auto* mesh_device = tensor_args.input_tensor.device();
+    const auto& mesh_view = mesh_device->get_view();
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& writer_kernel_id = shared_variables.writer_kernel_id;
         const auto& cores = shared_variables.cores;
+        const uint32_t linearized_mesh_coord = ccl::common::get_linearized_index(range.start_coord(), mesh_view);
 
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
@@ -1336,6 +1373,7 @@ void DispatchProgramFactory::override_runtime_arguments(
             reader_runtime_args.at(6) = tensor_args.expert_dispatch_table_tensor.buffer()->address();
             reader_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
             reader_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
+            reader_runtime_args.at(13) = linearized_mesh_coord;
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.indices_tensor.buffer()->address();

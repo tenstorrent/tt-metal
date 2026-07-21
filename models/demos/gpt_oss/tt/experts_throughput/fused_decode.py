@@ -28,6 +28,7 @@ The existing decode_forward (dense flow) is unchanged; this module adds an alter
 path that the ThroughputExperts class can route to when fused_config is provided.
 """
 
+import os
 from math import prod
 
 import ttnn
@@ -42,6 +43,8 @@ def fused_decode_forward(
     config: ThroughputExpertConfig,
     fused_config: FusedMoeGptConfig,
     mesh_device,
+    mesh_config=None,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """Fused decode: all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
 
@@ -94,6 +97,9 @@ def fused_decode_forward(
     else:
         scores_rm = topk_expert_scores
     tt_scores_copy = ttnn.reshape(scores_rm, (tokens_per_device, 1, 1, K_sel))
+    if os.environ.get("GPT_OSS_SCORE_COPY_MEMORY") == "DRAM":
+        tt_scores_copy_dram = ttnn.to_memory_config(tt_scores_copy, ttnn.DRAM_MEMORY_CONFIG)
+        tt_scores_copy = tt_scores_copy_dram
 
     # Reshape indices for dispatch: [M, K] TILE -> [M, 1, 1, K] ROW_MAJOR L1
     # IMPORTANT: output to L1 to match dispatch output alignment (16B vs DRAM 32B)
@@ -142,6 +148,22 @@ def fused_decode_forward(
         cross_device_semaphore=fused_config.dispatch_semaphore,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
     )
+    if os.environ.get("GPT_OSS_A2A_OUTPUT_PROBE") == "1":
+        indices_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_indices)[0])
+        scores_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_scores)[0])
+        sparse_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sparse)[0])
+        indices_int = indices_torch.int()
+        print(
+            "GPT_OSS_A2A_OUTPUT_PROBE "
+            f"indices_shape={tuple(indices_torch.shape)} indices_min={int(indices_int.min().item())} "
+            f"indices_max={int(indices_int.max().item())} first_indices={indices_int.reshape(-1, K_sel)[0].tolist()} "
+            f"scores_shape={tuple(scores_torch.shape)} scores_min={float(scores_torch.min().item()):.8f} "
+            f"scores_max={float(scores_torch.max().item()):.8f} "
+            f"first_scores={[float(x) for x in scores_torch.reshape(-1, K_sel)[0].tolist()]} "
+            f"sparse_shape={tuple(sparse_torch.shape)} sparse_min={float(sparse_torch.min().item()):.8f} "
+            f"sparse_max={float(sparse_torch.max().item()):.8f}",
+            flush=True,
+        )
 
     ttnn.deallocate(hidden_states)
 
@@ -160,6 +182,21 @@ def fused_decode_forward(
         w2_tensor=fused_config.tt_w2,
         cluster_axis=cluster_axis,
     )
+    if os.environ.get("GPT_OSS_MOE_GPT_OUTPUT_PROBE") == "1":
+        counts = ttnn.to_torch(ttnn.get_device_tensors(moe_gpt_outputs[0])[0]).int()
+        activations = ttnn.to_torch(ttnn.get_device_tensors(moe_gpt_outputs[1])[0]).int()
+        token_maps = ttnn.to_torch(ttnn.get_device_tensors(moe_gpt_outputs[2])[0]).int()
+        dense_output = ttnn.to_torch(ttnn.get_device_tensors(moe_gpt_outputs[4])[0])
+        print(
+            "GPT_OSS_MOE_GPT_OUTPUT_PROBE "
+            f"counts_shape={tuple(counts.shape)} counts_min={int(counts.min().item())} "
+            f"counts_max={int(counts.max().item())} counts_first={counts.flatten()[:16].tolist()} "
+            f"activations_shape={tuple(activations.shape)} activations_first={activations.flatten()[:32].tolist()} "
+            f"token_maps_shape={tuple(token_maps.shape)} token_maps_first={token_maps.flatten()[:32].tolist()} "
+            f"dense_shape={tuple(dense_output.shape)} dense_min={float(dense_output.min().item()):.8f} "
+            f"dense_max={float(dense_output.max().item()):.8f}",
+            flush=True,
+        )
     # ------------------------------------------------------------------
     # Step 3: selective_reduce_combine
     # With the K-indexed fix (upstream #38542), the combine writer uses the
@@ -227,13 +264,18 @@ def fused_decode_forward(
     ttnn.deallocate(tt_weighted)
     tt_sum = ttnn.typecast(tt_sum, ttnn.bfloat8_b)
 
-    tt_output = ttnn.all_reduce(
-        tt_sum,
-        num_links=fused_config.num_links,
-        topology=ttnn.Topology.Ring,
-        cluster_axis=1,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    ttnn.deallocate(tt_sum)
+    if mesh_config is not None and ccl_manager is not None:
+        from .decode import apply_allreduce
+
+        tt_output = apply_allreduce(tt_sum, mesh_config, ccl_manager, config.hidden_size)
+    else:
+        tt_output = ttnn.all_reduce(
+            tt_sum,
+            num_links=fused_config.num_links,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(tt_sum)
 
     return tt_output  # [1, 1, tokens_per_device, H]

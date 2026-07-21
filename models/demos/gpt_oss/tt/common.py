@@ -45,6 +45,11 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    import os
+
+    num_layers_env = os.getenv("NUM_LAYERS")
+    if num_layers_env is not None:
+        num_layers = int(num_layers_env)
     # Override num_layers if provided (useful for quick testing with fewer layers)
     if num_layers is not None:
         gpt_oss_model_args.hf_config.num_hidden_layers = num_layers

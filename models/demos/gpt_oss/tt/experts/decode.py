@@ -3,12 +3,39 @@
 
 """Decode forward pass for experts (seq_len=1)."""
 
+import os
+
 import ttnn
 from models.demos.gpt_oss.config import Mode
 
 from .config import ExpertConfig, ProgramConfig
 from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
 from .weights import ExpertWeights
+
+
+def _debug_sync(mesh_device, label):
+    if os.environ.get("GPT_OSS_EXPERT_STAGE_SYNC_DEBUG") == "1":
+        print(f"GPT_OSS_EXPERT_STAGE_SYNC_DEBUG before {label}", flush=True)
+        ttnn.synchronize_device(mesh_device)
+        print(f"GPT_OSS_EXPERT_STAGE_SYNC_DEBUG after {label}", flush=True)
+
+
+def _debug_tensor(label, tensor):
+    if os.environ.get("GPT_OSS_EXPERT_TENSOR_META_DEBUG") != "1":
+        return
+    fields = []
+    for name in ("shape", "padded_shape"):
+        try:
+            fields.append(f"{name}={getattr(tensor, name)}")
+        except Exception as exc:
+            fields.append(f"{name}=<err:{exc}>")
+    for name in ("layout", "get_dtype", "memory_config"):
+        try:
+            value = getattr(tensor, name)
+            fields.append(f"{name}={value() if callable(value) else value}")
+        except Exception as exc:
+            fields.append(f"{name}=<err:{exc}>")
+    print(f"GPT_OSS_EXPERT_TENSOR_META_DEBUG {label}: " + " ".join(fields), flush=True)
 
 
 def decode_forward(
@@ -59,7 +86,21 @@ def decode_forward(
     # EP-specific routing remap for sparsity
     if ep > 1:
         sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), 4, 4, 0)
-        routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
+        routing_weights_source = sparsity
+        if (
+            os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_RESHAPE") == "1"
+            and batch_size == 1
+            and seq_len == 1
+        ):
+            routing_weights_source = ttnn.reshape(sparsity, (config.num_experts, 1))
+        elif (
+            os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_FINAL_SHAPE") == "1"
+            and batch_size == 1
+            and seq_len == 1
+        ):
+            routing_weights_source = ttnn.reshape(sparsity, (batch_size, config.num_experts, 1))
+        routing_weights = ttnn.tilize_with_zero_padding(routing_weights_source, use_multicore=True)
+    _debug_sync(mesh_device, "routing")
 
     num_experts_per_tok = config.num_experts_per_tok // ep
     output_tile = ttnn.Tile([32, 32])
@@ -77,11 +118,13 @@ def decode_forward(
         ),
         dtype=activation_dtype,
     )
+    _debug_sync(mesh_device, "gate_sparse_matmul")
     # Note: reshape/transpose operations return views - do not deallocate originals
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     gate = ttnn.transpose(gate, 1, 2)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
     gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
+    _debug_sync(mesh_device, "gate_postprocess")
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -96,18 +139,22 @@ def decode_forward(
         ),
         dtype=activation_dtype,
     )
-    hidden_states.deallocate(True)
+    _debug_sync(mesh_device, "up_sparse_matmul")
+    if os.environ.get("GPT_OSS_EXPERT_KEEP_INTERMEDIATES") != "1":
+        hidden_states.deallocate(True)
     # Note: reshape/transpose operations return views - do not deallocate originals
     up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     up = ttnn.transpose(up, 1, 2)
     up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
     up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
+    _debug_sync(mesh_device, "up_postprocess")
 
     # Apply SwiGLU activation (consumes gate and up internally)
     down_input = apply_swiglu(gate, up, config)
     # Note: transpose/reshape operations return views - do not deallocate originals
     down_input = ttnn.transpose(down_input, 1, 0)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    _debug_sync(mesh_device, "swiglu")
     # Down projection
     down = ttnn.sparse_matmul(
         down_input,
@@ -122,24 +169,62 @@ def decode_forward(
         ),
         dtype=activation_dtype,
     )
+    _debug_sync(mesh_device, "down_sparse_matmul")
 
-    down_input.deallocate(True)
-    sparsity.deallocate(True)
+    if os.environ.get("GPT_OSS_EXPERT_KEEP_INTERMEDIATES") != "1":
+        down_input.deallocate(True)
+        sparsity.deallocate(True)
     # Apply bias and routing weights
     # Note: permute/reshape operations return views - do not deallocate originals
     next_states = ttnn.permute(down, (0, 2, 1, 3))
     next_states = ttnn.reshape(next_states, (batch_size, config.num_experts, config.hidden_size))
+    _debug_sync(mesh_device, "down_output_view")
     next_states = ttnn.add(next_states, weights.down_proj_bias, output_tensor=next_states)
-    routing_weights = ttnn.permute(routing_weights, (1, 0))
-    routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
+    _debug_sync(mesh_device, "down_bias")
+    if os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_RESHAPE") == "1" and batch_size == 1 and seq_len == 1:
+        routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
+    elif (
+        os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_FINAL_SHAPE") == "1"
+        and batch_size == 1
+        and seq_len == 1
+    ):
+        pass
+    elif os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_RESHAPE") == "1" and batch_size == 1 and seq_len == 1:
+        routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
+    elif os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_ROWMAJOR_RESHAPE") == "1" and batch_size == 1 and seq_len == 1:
+        routing_weights = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
+        _debug_tensor("routing_weights_rowmajor", routing_weights)
+        routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
+        _debug_tensor("routing_weights_rowmajor_reshape", routing_weights)
+        routing_weights = ttnn.to_layout(routing_weights, ttnn.TILE_LAYOUT)
+        _debug_tensor("routing_weights_rowmajor_retilize", routing_weights)
+    else:
+        if os.environ.get("GPT_OSS_EXPERT_ROUTING_WEIGHTS_NORMALIZE") == "DRAM":
+            routing_weights = ttnn.to_memory_config(routing_weights, ttnn.DRAM_MEMORY_CONFIG)
+            routing_weights = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG)
+        _debug_tensor("routing_weights_before_permute", routing_weights)
+        routing_weights = ttnn.permute(routing_weights, (1, 0))
+        _debug_tensor("routing_weights_after_permute", routing_weights)
+        routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
+        _debug_tensor("routing_weights_after_reshape", routing_weights)
+    _debug_sync(mesh_device, "routing_weights_view")
 
-    next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
+    if os.environ.get("GPT_OSS_EXPERT_SKIP_ROUTING_MUL") == "1":
+        pass
+    elif os.environ.get("GPT_OSS_EXPERT_ROUTING_MUL_OUT_OF_PLACE") == "1":
+        old_next_states = next_states
+        next_states = ttnn.mul(next_states, routing_weights)
+        old_next_states.deallocate(True)
+    else:
+        next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
     routing_weights.deallocate(True)
+    _debug_sync(mesh_device, "routing_weighted")
 
     # Reduce across experts
     next_states = ttnn.sum(next_states, dim=1)
     # Note: unsqueeze_to_4D typically returns a view, so we don't deallocate the sum result
     next_states = ttnn.unsqueeze_to_4D(next_states)
+    _debug_sync(mesh_device, "expert_sum")
 
     # Expert parallel communication
     if ep > 1:

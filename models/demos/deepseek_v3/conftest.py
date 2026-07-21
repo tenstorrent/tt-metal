@@ -170,6 +170,19 @@ def hf_config(model_path):
 
 @pytest.fixture(scope="session")
 def state_dict(model_path):
+    # In the simulator there is usually no checkpoint staged. The module_path=None
+    # ("-None-") test cases generate random reference weights internally (see
+    # generate_reference_io) and never read this fixture's tensors, so under
+    # DEEPSEEK_V3_DUMMY_WEIGHTS=1 return a no-op stand-in instead of failing the
+    # safetensors load. Select the -None- cases (e.g. -k "None").
+    if os.getenv("DEEPSEEK_V3_DUMMY_WEIGHTS") == "1":
+
+        class _NoCheckpointStateDict:
+            def clear_cache(self):
+                pass
+
+        yield _NoCheckpointStateDict()
+        return
     yield load_state_dict(model_path, "")
 
 

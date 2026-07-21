@@ -449,7 +449,7 @@ def skip_known_decoder_moe_failure(
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (8, 4)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])
 @pytest.mark.parametrize(
@@ -1083,7 +1083,7 @@ def test_decoder(
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (8, 4)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])
 @pytest.mark.parametrize(
