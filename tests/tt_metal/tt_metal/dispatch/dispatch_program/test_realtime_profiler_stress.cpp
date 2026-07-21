@@ -90,14 +90,14 @@ constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 // host/device correlation test tolerates (see test_realtime_profiler.py
 // :: test_host_device_correlation, "startup_race_threshold") and the same
 // value the production Tracy handler uses to distinguish "benign" from
-// "noisy" skips (see realtime_profiler_tracy_handler.cpp,
+// "noisy" skips (see realtime_profiler_tracy_consumer.cpp,
 // kStartupRaceThreshold).
 constexpr uint64_t kStartupRaceSlackCycles = 100'000;
 
 // Hard upper bound on the fraction of records that can come back with
 // end_timestamp < start_timestamp before this test fails. The production
 // host receiver already silently skips any such record on the Tracy path
-// (see realtime_profiler_tracy_handler.cpp:HandleRecord), so a tiny number
+// (see realtime_profiler_tracy_consumer.cpp:HandleRecord), so a tiny number
 // of these is tolerated by the live system; we only want this test to flag
 // a *regression* where the corruption rate balloons (e.g. an off-by-one in
 // rt_ring_full leading to systemic slot reuse). Empirically the live

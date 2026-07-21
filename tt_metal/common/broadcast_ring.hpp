@@ -69,7 +69,7 @@ public:
 
     ~BroadcastRing() {
         TT_FATAL(
-            active_readers_.load(std::memory_order_relaxed) == 0,
+            active_readers_.load(std::memory_order_acquire) == 0,
             "BroadcastRing readers must be destroyed before the ring");
     }
 
@@ -253,6 +253,11 @@ public:
          */
         [[nodiscard]] uint64_t dropped() const noexcept { return dropped_; }
 
+        /** @brief Returns true when at least one published item remains unread. */
+        [[nodiscard]] bool has_data() const noexcept {
+            return cursor_ < shared_state_->head.load(std::memory_order_acquire);
+        }
+
         Reader(const Reader&) = delete;
         Reader& operator=(const Reader&) = delete;
         Reader(Reader&& other) noexcept :
@@ -289,7 +294,9 @@ public:
 
         void release() noexcept {
             if (active_readers_ != nullptr) {
-                active_readers_->fetch_sub(1, std::memory_order_relaxed);
+                if (active_readers_->fetch_sub(1, std::memory_order_release) == 1) {
+                    active_readers_->notify_all();
+                }
                 active_readers_ = nullptr;
             }
         }
@@ -316,6 +323,19 @@ public:
     /** @brief Creates a reader at the current end of the stream; it sees only items published after this call. */
     [[nodiscard]] Reader make_reader() const noexcept {
         return Reader(&shared_state_, view(), shared_state_.head.load(std::memory_order_acquire), &active_readers_);
+    }
+
+    /**
+     * @brief Blocks until every reader has been destroyed.
+     *
+     * The caller must prevent new readers from being created before calling this method.
+     */
+    void wait_until_no_readers() const noexcept {
+        uint32_t count = active_readers_.load(std::memory_order_acquire);
+        while (count != 0) {
+            active_readers_.wait(count, std::memory_order_acquire);
+            count = active_readers_.load(std::memory_order_acquire);
+        }
     }
 
 private:

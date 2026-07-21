@@ -6,4 +6,5 @@ set(UNIT_TESTS_MISC_SRC
     test_executor.cpp
     test_stable_hash.cpp
     test_broadcast_ring.cpp
+    test_realtime_profiler_service.cpp
 )

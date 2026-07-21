@@ -70,42 +70,4 @@ std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_
     return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-    ProgramRealtimeProfilerCallback callback) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramRealtimeProfilerCallback(
-        std::move(callback));
-}
-
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeProfilerCallback(handle);
-}
-
-bool IsProgramRealtimeProfilerActive() {
-    return tt::tt_metal::MetalContext::instance().data_collector()->IsRealtimeProfilerActive();
-}
-
-void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerActivated(chip_id);
-}
-
-void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
-}
-
 }  // namespace tt
-
-// Public experimental API — delegates to the internal tt:: functions.
-namespace tt::tt_metal::experimental {
-
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-    ProgramRealtimeProfilerCallback callback) {
-    return tt::RegisterProgramRealtimeProfilerCallback(std::move(callback));
-}
-
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::UnregisterProgramRealtimeProfilerCallback(handle);
-}
-
-bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
-
-}  // namespace tt::tt_metal::experimental

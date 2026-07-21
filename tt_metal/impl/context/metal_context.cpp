@@ -53,6 +53,8 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
+#include "realtime_profiler/realtime_profiler_service.hpp"
+#include "realtime_profiler/realtime_profiler_tracy_consumer.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_core_manager.hpp>
@@ -266,6 +268,10 @@ void MetalContext::initialize(
     }
 
     data_collector_ = std::make_unique<DataCollector>();
+    realtime_profiler_service_ = std::make_unique<RealtimeProfilerService>();
+#if defined(TRACY_ENABLE)
+    realtime_profiler_service_->register_consumer(std::make_unique<RealtimeProfilerTracyConsumer>(context_id_));
+#endif
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -329,6 +335,7 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    realtime_profiler_service_.reset();
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();

@@ -50,6 +50,6 @@ Same pattern is used in tests, e.g. [`tests/ttnn/tracy/matmul_workload.py`](../.
 
 ## Tracy default support
 
-Metal wires a **`RealtimeProfilerTracyHandler`** that also registers on the same callback list. Records are pushed into Tracy’s Tenstorrent **device** timeline (per-chip context, calibration, program zones, optional sync-check markers). Your custom callbacks still run; you do not replace Tracy, you add alongside it.
+Metal wires a **`RealtimeProfilerTracyConsumer`** through the same context-wide service. Records are pushed into Tracy’s Tenstorrent **device** timeline (per-chip context, calibration, program zones, optional sync-check markers). Your custom callbacks still run; you do not replace Tracy, you add alongside it.
 
 For Tracy usage and the GUI, see [MetalProfiler](../MetalProfiler/metal-profiler.md) and the [Tracy profiler docs](../../docs/source/tt-metalium/tools/tracy_profiler.rst).

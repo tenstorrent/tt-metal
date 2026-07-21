@@ -172,6 +172,18 @@ void py_device_module_types(nb::module_& m_device) {
             "frequency",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
             "Device clock frequency (cycles per ns)")
+        .def_prop_ro(
+            "device_cycle_offset",
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return record.clock_sync.device_cycle_offset;
+            },
+            "Device-to-host clock offset; host_ns = (timestamp - device_cycle_offset) / frequency")
+        .def_prop_ro(
+            "sync_error_ns",
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return record.clock_sync.sync_error_ns;
+            },
+            "Estimated error mapping this record's device time to host time (ns)")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
         .def_prop_ro(
             "kernel_sources",

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 #include "hostdev/realtime_profiler_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
@@ -59,49 +60,62 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     }
 }
 
-// Handle sync requests from host: capture device timestamp and enqueue
-// a sync marker record into the ring buffer for the NCRISC pusher.
+// Handle a host sync request: capture one device wall-clock timestamp and enqueue a sync marker for the NCRISC
+// pusher. One-shot (no spin loop): dispatch_s hands off program timestamps through the double-buffered
+// PUSH_A/PUSH_B state and never waits on this core, so any stall here silently drops those records. Blocking until
+// the host clears the request would drop a burst of records on every periodic sync; instead we capture at most one
+// timestamp per host write and return immediately, and the main loop re-checks on its next pass.
 __attribute__((noinline)) void realtime_profiler_sync() {
-    DPRINT("REALTIME: entering sync\n");
+    uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
+    if (host_time == 0) {
+        return;
+    }
+
+    while (rt_ring_full(ring_buffer)) {
+        invalidate_l1_cache();
+    }
 
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
+    tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(slot_addr);
 
-    uint32_t sync_count = 0;
-    while (rt_profiler_msg->sync_request) {
-        invalidate_l1_cache();
+    uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
 
-        uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
-        if (host_time > 0) {
-            DPRINT("REALTIME: sync got host_time={}\n", host_time);
+    // Publish device_time to L1 before the token ACK, so once the host observes the token it can read a stable
+    // device_time directly (no dependence on the slower FIFO sync marker for re-anchoring).
+    rt_profiler_msg->sync_ack_device_time[0] = time_lo;
+    rt_profiler_msg->sync_ack_device_time[1] = time_hi;
 
-            // Spin until ring buffer has space
-            while (rt_ring_full(ring_buffer)) {
-                invalidate_l1_cache();
-            }
-
-            uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
-            tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(slot_addr);
-
-            uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-            uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-
-            l1_data[0] = time_hi;
-            l1_data[1] = time_lo;
-            l1_data[2] = host_time;
-            l1_data[3] = REALTIME_PROFILER_SYNC_MARKER_ID;
-            l1_data[4] = 0;
-            l1_data[5] = 0;
-            l1_data[6] = 0;
-            l1_data[7] = 0;
-
-            ring_buffer->write_index++;
-
-            rt_profiler_msg->sync_host_timestamp = 0;
-            sync_count++;
-            DPRINT("REALTIME: sync pushed count={}\n", sync_count);
-        }
+    // NOC-write the token straight to the host's pinned ACK word (device->host, bypassing the record FIFO) so the host
+    // times the round trip by polling its own memory. Stage it in sync_request as the L1 source; Blackhole PCIe uses
+    // the 64-bit noc_wwrite_with_state form (mirrors socket_notify_receiver).
+    rt_profiler_msg->sync_request = host_time;
+    if (rt_profiler_msg->sync_ack_pcie_xy_enc != 0) {
+        const uint64_t ack_pcie_addr = (static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_hi) << 32) |
+                                       static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_lo);
+        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index,
+            reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
+            rt_profiler_msg->sync_ack_pcie_xy_enc,
+            ack_pcie_addr,
+            sizeof(uint32_t),
+            1);
+        noc_async_write_barrier();
     }
-    DPRINT("REALTIME: exiting sync, total={}\n", sync_count);
+
+    l1_data[0] = time_hi;
+    l1_data[1] = time_lo;
+    l1_data[2] = host_time;
+    l1_data[3] = REALTIME_PROFILER_SYNC_MARKER_ID;
+    l1_data[4] = 0;
+    l1_data[5] = 0;
+    l1_data[6] = 0;
+    l1_data[7] = 0;
+
+    ring_buffer->write_index++;
+    rt_profiler_msg->sync_host_timestamp = 0;
 }
 
 void kernel_main() {
@@ -120,12 +134,7 @@ void kernel_main() {
         RealtimeProfilerState state = static_cast<RealtimeProfilerState>(rt_profiler_msg->realtime_profiler_state);
 
         switch (state) {
-            case REALTIME_PROFILER_STATE_IDLE:
-                if (rt_profiler_msg->sync_request) {
-                    DPRINT("REALTIME: sync_request detected!\n");
-                    realtime_profiler_sync();
-                }
-                continue;
+            case REALTIME_PROFILER_STATE_IDLE: realtime_profiler_sync(); continue;
 
             case REALTIME_PROFILER_STATE_PUSH_A:
                 realtime_profiler_read_and_enqueue(true);

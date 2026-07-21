@@ -18,8 +18,13 @@
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
 // IsProgramRealtimeProfilerActive().
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <iostream>
+#include <map>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -40,6 +45,11 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_host_clock.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -418,6 +428,127 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     }
     EXPECT_GT(trace_records, 0u) << "No records observed for the trace-replayed program (runtime_id=" << kTraceRuntimeId
                                  << ")";
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
+// Independent host/device sync-accuracy check. The Tracy SYNC_CHECK markers are a self-consistency check — their host
+// and device endpoints are both derived from the same calibration, so they coincide by construction and cannot reveal
+// a wrong mapping. This test instead brackets each program's on-device execution between two host-clock reads and
+// asserts the record's device->host mapping — reconstructed solely from the record's own device_cycle_offset and
+// frequency — lands inside that independently-measured host window. A mis-signed/mis-scaled offset, a wrong clock
+// domain, or a stale anchor would push the record outside the window. This is only possible because the affine mapping
+// now rides on the record itself.
+TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::mutex records_mu;
+    std::vector<ProgramRealtimeRecord> records;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecordBatch& batch) {
+            std::lock_guard<std::mutex> lk(records_mu);
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+
+    // One fixed kernel source for every program so the JIT ELF is compiled once (during warm-up) and reused; this
+    // keeps each measured dispatch window free of multi-second kernel-compilation time.
+    const std::string fixed_src = make_sanity_kernel_source(/*runtime_id=*/0);
+
+    auto enqueue_blocking = [&](uint32_t runtime_id) {
+        Program program = CreateProgram();
+        CreateKernelFromString(
+            program,
+            fixed_src,
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        CreateKernelFromString(
+            program,
+            fixed_src,
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        CreateKernelFromString(program, fixed_src, all_cores, ComputeConfig{});
+        program.set_runtime_id(static_cast<uint64_t>(runtime_id));
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    };
+
+    // Warm up the JIT cache; runtime_id 1 is not placed in the window map.
+    enqueue_blocking(/*runtime_id=*/1);
+
+    struct HostWindow {
+        int64_t before_ticks;
+        int64_t after_ticks;
+    };
+    std::map<uint32_t, HostWindow> windows;
+    constexpr uint32_t kFirstMeasured = 2;
+    constexpr uint32_t kNumMeasured = 8;
+    for (uint32_t runtime_id = kFirstMeasured; runtime_id < kFirstMeasured + kNumMeasured; ++runtime_id) {
+        const int64_t before = realtime_profiler_host_timestamp();
+        enqueue_blocking(runtime_id);  // blocks until the program completes on device
+        const int64_t after = realtime_profiler_host_timestamp();
+        windows[runtime_id] = {before, after};
+    }
+
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    const double host_ns_per_tick = realtime_profiler_host_ns_per_tick();
+    // Generous bound: it covers host-clock read jitter and the gap between the bracketing reads and the actual
+    // dispatch/completion. The check catches a fundamentally wrong mapping (off by ms and up), not µs-level skew.
+    constexpr double kSlackNs = 2'000'000.0;
+
+    int checked = 0;
+    double worst_outside_ns = 0.0;
+    double min_freq = 0.0;
+    double max_freq = 0.0;
+    std::lock_guard<std::mutex> lk(records_mu);
+    for (const auto& rec : records) {
+        auto it = windows.find(rec.runtime_id);
+        if (it == windows.end() || rec.frequency <= 0.0) {
+            continue;
+        }
+        min_freq = (checked == 0) ? rec.frequency : std::min(min_freq, rec.frequency);
+        max_freq = (checked == 0) ? rec.frequency : std::max(max_freq, rec.frequency);
+        const double host_start_ns =
+            (static_cast<double>(rec.start_timestamp) - static_cast<double>(rec.clock_sync.device_cycle_offset)) /
+            rec.frequency;
+        const double host_end_ns =
+            (static_cast<double>(rec.end_timestamp) - static_cast<double>(rec.clock_sync.device_cycle_offset)) /
+            rec.frequency;
+        const double before_ns = static_cast<double>(it->second.before_ticks) * host_ns_per_tick;
+        const double after_ns = static_cast<double>(it->second.after_ticks) * host_ns_per_tick;
+
+        EXPECT_GE(host_start_ns, before_ns - kSlackNs)
+            << "runtime_id=" << rec.runtime_id << ": record host start " << host_start_ns
+            << "ns precedes the dispatch window start " << before_ns << "ns";
+        EXPECT_LE(host_end_ns, after_ns + kSlackNs)
+            << "runtime_id=" << rec.runtime_id << ": record host end " << host_end_ns
+            << "ns follows the dispatch window end " << after_ns << "ns";
+
+        worst_outside_ns = std::max({worst_outside_ns, before_ns - host_start_ns, host_end_ns - after_ns});
+        ++checked;
+    }
+
+    EXPECT_GT(checked, 0) << "No RT records matched a measured dispatch window";
+    // <= 0 means every record mapped strictly inside its window; a small positive value is measurement jitter.
+    std::cout << "[ SYNC ] checked " << checked
+              << " record(s); worst excursion outside dispatch window = " << worst_outside_ns
+              << "ns (<= 0 means fully inside); record frequency = [" << min_freq << ", " << max_freq << "] GHz"
+              << std::endl;
 
     EXPECT_TRUE(mesh_device->close());
 }

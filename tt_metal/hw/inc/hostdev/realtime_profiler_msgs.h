@@ -37,6 +37,16 @@ struct realtime_profiler_msg_t {
     struct realtime_profiler_timestamp_t kernel_end_b;
     volatile uint32_t sync_request;
     volatile uint32_t sync_host_timestamp;
+    // Host pinned-memory ACK slot: after capturing WALL_CLOCK the device NOC-writes the handshake token here (a direct
+    // device->host write that bypasses the record FIFO), so the host times the round trip by polling its own memory
+    // instead of reading device L1. Filled by the host at init.
+    volatile uint32_t sync_ack_pcie_xy_enc;
+    volatile uint32_t sync_ack_host_addr_lo;
+    volatile uint32_t sync_ack_host_addr_hi;
+    // Device WALL_CLOCK [lo, hi] captured at the same instant as the ACK token, stored in L1 each sync. The host reads
+    // it directly (UMD/TLB) once it observes the token, so re-anchoring uses the fast ACK path (RTT via the pinned
+    // token poll + this device timestamp) instead of the slower FIFO sync marker, which lags under record-push load.
+    volatile uint32_t sync_ack_device_time[2];
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;
