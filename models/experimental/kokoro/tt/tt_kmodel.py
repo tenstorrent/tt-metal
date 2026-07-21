@@ -298,9 +298,7 @@ class TTKModel:
         # queues (device must be opened with num_command_queues=2). Default path keeps Trace B on CQ0.
         self._two_trace = trace and os.environ.get("KOKORO_TRACE_A") == "1"
         self._trace_mgr = (
-            TraceManager(device, cq_id=1, sync_replay=True)
-            if self._two_trace
-            else (TraceManager(device) if trace else None)
+            TraceManager(device, cq_id=0) if self._two_trace else (TraceManager(device) if trace else None)
         )
         # Trace A (prosody→duration + ASR TextEncoder): the fixed-shape T_tokens device region that
         # runs BEFORE the duration readback splits the pipeline. Captured once per identical input
@@ -308,14 +306,14 @@ class TTKModel:
         # bit-for-bit on a repeat call, so BERT + prosody + the ASR encoder's ~480 BiLSTM dispatches
         # stop running eagerly. Full-length path only (the padded path uploads masks mid-graph).
         #
-        # OPT-IN (KOKORO_TRACE_A=1), DEFAULT OFF: keeping Trace A's captured trace + persistent buffers
-        # alive while the decoder (Trace B) does fresh allocations and its own capture/replay in the
-        # SAME forward corrupts the decoder trace ("Allocating device buffers is unsafe due to the
-        # existence of an active trace") — the decoder replay then hangs on-device. Trace A capture +
-        # replay + prosody themselves are verified correct (bit-identical, 17.88× in
-        # tests/test_tt_prosody_asr_trace.py); the unsolved piece is co-existing with Trace B, which
-        # needs an allocation-ordering redesign (pre-allocate all persistent buffers for both traces,
-        # no interleaved eager allocation). Off by default so the decoder-only trace path is unchanged.
+        # OPT-IN (KOKORO_TRACE_A=1), DEFAULT OFF. Trace A and Trace B coexist safely because
+        # :meth:`_device_forward_two_trace` PREPARES both graphs (allocating every persistent buffer +
+        # warming the programs) while NO trace is resident, and only then captures both back-to-back —
+        # a persistent buffer allocated while the other trace is live can land on that trace's freed
+        # intermediate addresses and be clobbered on replay (previously a decoder-replay hang). Both
+        # traces are on CQ0 (capture is bound to the CQ it began on; A->B are sequential across a host
+        # duration readback so a 2nd CQ buys no overlap). Off by default; the decoder-only trace path
+        # (``trace=True`` without KOKORO_TRACE_A) is unchanged.
         self._trace_mgr_a = TraceManager(device, cq_id=0) if self._two_trace else None
 
     # ------------------------------------------------------------------
@@ -867,12 +865,21 @@ class TTKModel:
             round(float(speed), 6),
             hash(s_pred_cpu.detach().cpu().contiguous().numpy().tobytes()),
         )
-        dur_c, d_nlc_p, t_en_p = self._trace_mgr_a.run(
-            key_a, {"s_pred": s_pred_tt, "keep_mask": keep_mask}, _trace_a_region
-        )
+        inputs_a = {"s_pred": s_pred_tt, "keep_mask": keep_mask}
+        first = not self._trace_mgr_a.has(key_a)
 
-        # ---- host alignment (the pipeline split) ----
-        pred_dur = ttnn.to_torch(dur_c).long().squeeze()
+        # ---- Get the duration that sizes Trace B. On the first call Trace A is only PREPARED
+        # (eager warmup — no trace resident yet) so Trace B's persistent buffers can be allocated
+        # before either trace is captured; on later calls Trace A is replayed. ----
+        if first:
+            dur_w, d_nlc_w, t_en_w = self._trace_mgr_a.prepare(key_a, inputs_a, _trace_a_region)
+            pred_dur = ttnn.to_torch(dur_w).long().squeeze()
+        else:
+            self._trace_mgr_a.replays += 1
+            dur_c, d_nlc_p, t_en_p = self._trace_mgr_a.execute(key_a, inputs_a)
+            pred_dur = ttnn.to_torch(dur_c).long().squeeze()
+
+        # ---- host alignment (the pipeline split; deterministic in the duration => same every call) ----
         pred_dur_cpu = pred_dur.clone()
         aln_cpu = _build_alignment(pred_dur)
         t_mel = int(aln_cpu.shape[2])
@@ -889,7 +896,6 @@ class TTKModel:
         )
 
         rng_tt = None
-        inputs_b = {"d_nlc": d_nlc_p, "t_en": t_en_p, "aln": aln_tt, "s_pred": s_pred_tt, "s_style": s_style_tt}
         if deterministic:
             from models.experimental.kokoro.m_source_rng import (
                 deallocate_m_source_rng_tt,
@@ -901,9 +907,6 @@ class TTKModel:
             dim = int(gen.params.m_source.sinegen.dim)
             rng_cpu = make_zero_m_source_rng(B, T_har, dim)
             rng_tt = upload_m_source_rng(rng_cpu, dev, memory_config=mc)
-            inputs_b["rand_ini"] = rng_tt.rand_ini
-            inputs_b["sinegen_noise"] = rng_tt.sinegen_noise
-            inputs_b["source_noise"] = rng_tt.source_noise
 
         def _folded_fwd(pb: dict) -> ttnn.Tensor:
             # Clone persistent inputs (the trace reuses pb across replays; en/F0N/asr + decoder consume).
@@ -949,10 +952,32 @@ class TTKModel:
             # decoder consumes (deallocates) asr_nlc/F0/N; clone the persistent style.
             return decoder(asr_nlc, F0, N, ttnn.clone(pb["s_style"]), memory_config=mc, **kwargs)
 
-        # Drain CQ0 (Trace A execute + all the uploads above) before the decoder trace runs on CQ1.
+        def _inputs_b(d_nlc_in, t_en_in) -> dict:
+            d = {"d_nlc": d_nlc_in, "t_en": t_en_in, "aln": aln_tt, "s_pred": s_pred_tt, "s_style": s_style_tt}
+            if deterministic:
+                d["rand_ini"] = rng_tt.rand_ini
+                d["sinegen_noise"] = rng_tt.sinegen_noise
+                d["source_noise"] = rng_tt.source_noise
+            return d
+
+        # Two-phase capture so NO persistent buffer of either trace is allocated while the other trace
+        # is resident (that hazard clobbers the decoder trace on replay -> hang). On the first call:
+        # (1) Trace B is PREPARED now (its persistent buffers allocated + decoder warmed) while Trace A
+        # is only prepared, so no trace is live; (2) both traces are then captured back-to-back; (3) the
+        # capture-call outputs are produced by executing A (real d_nlc/t_en) then B. Prepare uses A's
+        # warmup outputs (values irrelevant to warmup; only shapes matter).
         ttnn.synchronize_device(dev)
         key_b = (int(T), int(dec_len))
-        audio_full = ttnn.clone(self._trace_mgr.run(key_b, inputs_b, _folded_fwd))
+        if first:
+            warm_b = self._trace_mgr.prepare(key_b, _inputs_b(d_nlc_w, t_en_w), _folded_fwd)
+            self._trace_mgr._free(warm_b)
+            self._trace_mgr_a._free((dur_w, d_nlc_w, t_en_w))  # A warmup outputs no longer needed
+            self._trace_mgr_a.capture(key_a, _trace_a_region)
+            self._trace_mgr.capture(key_b, _folded_fwd)
+            dur_c, d_nlc_p, t_en_p = self._trace_mgr_a.execute(key_a, inputs_a)  # capture-call A output
+        else:
+            self._trace_mgr.replays += 1
+        audio_full = ttnn.clone(self._trace_mgr.execute(key_b, _inputs_b(d_nlc_p, t_en_p)))
         if dec_len != t_mel:
             bl = int(audio_full.shape[-1])
             real_len = bl * t_mel // dec_len

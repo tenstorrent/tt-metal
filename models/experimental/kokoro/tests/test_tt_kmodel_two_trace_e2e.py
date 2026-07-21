@@ -2,12 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full end-to-end validation of the TWO-TRACE path (Trace A prosody+ASR on CQ0 + folded decoder
-Trace B on CQ1). Long text, capture then replay, bit-identical + torch-reference PCC.
+"""Full end-to-end validation of the TWO-TRACE path (Trace A prosody+ASR + folded decoder Trace B,
+both on CQ0). Long text, capture then replay, bit-identical replay + bounded (non-garbage) audio.
 
 Trace A (prosody->duration + ASR TextEncoder, T_tokens) and the decoder Trace B (en/F0N/asr + decoder,
-T_aligned) coexist on SEPARATE command queues (a second trace on the same CQ hangs the decoder replay).
-Sets ``KOKORO_TRACE_A=1`` itself and opens the device with ``num_command_queues=2``.
+T_aligned) coexist on the SAME command queue. ``TTKModel._device_forward_two_trace`` PREPARES both
+graphs (allocating all persistent buffers + warming programs) while no trace is resident, then captures
+both back-to-back — otherwise a persistent buffer allocated while the other trace is live is clobbered
+on replay (a decoder-replay hang). Sets ``KOKORO_TRACE_A=1`` itself and opens with num_command_queues=2.
 
 Run (cold first run recompiles ~800 kernels for the 2-CQ config, so allow a long timeout)::
 
@@ -29,7 +31,7 @@ from models.experimental.kokoro.reference.model import KModel
 from models.experimental.kokoro.tests.test_tt_kmodel_pcc import _find_checkpoint, _phonemize
 from models.experimental.kokoro.tt.tt_kmodel import KokoroConfig, TTKModel, preprocess_tt_kmodel
 
-_TRACE_REGION_SIZE = 1_200_000_000
+_TRACE_REGION_SIZE = 2_000_000_000
 _L1_SMALL_SIZE = 98304
 # ~499 phonemes as a SINGLE KPipeline chunk (verified via KPipeline af_heart): stays under the
 # PLBERT context cap (512 - 2 BOS/EOS = 510 phonemes max), so the whole passage is one forward.
@@ -90,6 +92,15 @@ def test_tt_kmodel_two_trace_capture_then_replay(device):
     assert audio1.shape == audio2.shape, (audio1.shape, audio2.shape)
     assert torch.isfinite(audio2).all(), "replayed audio has NaN/Inf"
 
+    # Amplitude sanity gate: the earlier CQ/allocation bugs left the decoder trace output uninitialised
+    # (saturated white noise: |mean|~0.74, clipping at |x|~1.0). Correct speech is quiet and unclipped
+    # (this passage: |mean|~0.03, max~0.52). Guard both so a regression to garbage fails loudly instead
+    # of passing the bit-identical-replay check on two identically-broken buffers. Bounds are generous.
+    abs_mean = audio2.abs().mean().item()
+    abs_max = audio2.abs().max().item()
+    assert abs_mean < 0.30, f"replayed audio looks like noise, not speech (|mean|={abs_mean:.4f}, want <0.30)"
+    assert abs_max <= 0.999, f"replayed audio is clipping/saturated (max|x|={abs_max:.4f})"
+
     _, parity = comp_pcc(audio1, audio2, pcc=0.0)
     speedup = cap_s / rep_s if rep_s > 0 else float("inf")
     print(
@@ -104,8 +115,7 @@ def test_tt_kmodel_two_trace_capture_then_replay(device):
 
     # Dump both the captured (out1) and replayed (out2) audio to wavs for listening. ON BY DEFAULT;
     # set KOKORO_TRACE_WAV=0 to disable, or =/path/stem.wav for a custom location (out1/out2 derived
-    # from the stem). Done BEFORE the bit-exact assertion so the wavs are still written when the
-    # two-trace path diverges (the whole point right now — listen to out1/out2 to hear the corruption).
+    # from the stem). Written before the bit-exact assertion so the wavs survive even if replay diverges.
     wav_env = os.environ.get("KOKORO_TRACE_WAV", "1")
     if wav_env and wav_env not in ("0", "false", "False"):
         import soundfile as sf
