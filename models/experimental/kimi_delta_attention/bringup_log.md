@@ -210,6 +210,23 @@ away *because* of un-fusion. Fused chunk op (task 14) collapses ~9000 kernels �
 that overhead; it's the precondition for reaching the 60%/40% targets. TP-sharding benefit (relative)
 is the trustworthy signal now; absolute-vs-roofline waits on fusion.
 
+### Phase 8→9 — perf loop iteration 1: chunked prefill op (fuse the token-loop)
+
+**Analysis (prior):** recurrence launch-bound — ~14 700 tiny kernels/forward at T=640, 0.10% compute util,
+~1030× off roofline. **Improvement:** `chunk_kda_ttnn` (matmul-based chunked, intra-chunk batched over
+chunks + Neumann-doubling inverse; only the NT≈10 cross-chunk state scan loops). PCC vs torch
+`naive_chunk_kda` = **0.9999993** (HV=8, K=V=128, T=256, NT=4). **Re-analysis** (recurrence op alone,
+production dims, realtime profiler on (8,1)):
+
+| T | recurrent (token-loop) | chunked | gain |
+|---|---|---|---|
+| 640 | 78.7 ms / 14 695 kernels | 5.25 ms / **371 kernels** | **15.0× faster, 39.6× fewer kernels** |
+| 256 | 31.4 ms / 5 879 | 2.13 ms / 173 | 14.7× / 34× |
+
+Kernel count collapsed 14 695→371 as intended. Still ~14 µs/kernel × 371 → chunk is *less* launch-bound
+but not yet fused into one kernel; next loop iterations: wire into the layer + re-measure full before/after;
+then reduce the 371 (fuse NT loop / bigger chunk / C++ kernel) toward the ~44 µs compute roofline.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
