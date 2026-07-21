@@ -31,6 +31,7 @@ the pretrained axis); and a Blackhole mesh for the device side. Skips cleanly if
 
 import pytest
 import torch
+import tracy
 from loguru import logger
 
 import ttnn
@@ -50,7 +51,6 @@ _FABRIC_1D = {
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("ctx_len", [5120], ids=["ctx5k"])
 @pytest.mark.parametrize("fc_mode", ["sliced", "concat"], ids=["sliced", "concat"])
-@pytest.mark.parametrize("seq_parallel", [False, True], ids=["seq_repl", "seq_par"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -72,7 +72,6 @@ def test_dflash_device_vs_hf_pcc(
     topology,
     ctx_len,
     fc_mode,
-    seq_parallel,
     use_pretrained,
     drafter_cfg,
     drafter_state_dict,
@@ -110,15 +109,14 @@ def test_dflash_device_vs_hf_pcc(
         num_links=num_links,
         topology=topology,
         fc_mode=fc_mode,
-        seq_parallel=seq_parallel,
     )
     hidden_shard = [None, None]
     hidden_shard[tp_axis] = 3  # tap hidden TP-sharded on the hidden dim
-    if seq_parallel:
-        hidden_shard[sp_axis] = 2  # ALSO SP-shard the tap on seq → each chip taps its own [seq/sp] slice
+    hidden_shard[sp_axis] = 2  # ALSO SP-shard the tap on seq → each chip taps its own [seq/sp] slice
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_shard)
 
     drafter.reset()
+    tracy.signpost("dflash start")
     for j, tid in enumerate(cfg.target_layer_ids):
         h_j = ctx[:, :, j * H : (j + 1) * H].to(torch.bfloat16).reshape(1, 1, ctx_len, H)
         h_tt = ttnn.from_torch(
@@ -132,11 +130,11 @@ def test_dflash_device_vs_hf_pcc(
         drafter.tap(h_tt, tid)
     drafter.write_kv_cache()
     ttnn.synchronize_device(mesh_device)
+    tracy.signpost("dflash end")
 
-    # seq_parallel: cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1) → full
+    # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1) → full
     # [num_layers, kv_heads, ctx_len, head_dim] directly (the host[:num_layers] slice is then a no-op).
-    # Phase-1: SP-replicated → concat stacks 8 copies on dim0, take the first replica.
-    read_dims = (2, 1) if seq_parallel else (0, 1)
+    read_dims = (2, 1)
 
     def _read(cache):
         host = ttnn.to_torch(
