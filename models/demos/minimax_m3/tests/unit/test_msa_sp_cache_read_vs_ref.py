@@ -5,13 +5,14 @@
 
 The multi-chunk MSA read path (`msa_sp_attention`): the accumulated K/V/index_k live in the
 SP cache in DeepSeek block-cyclic order (chip r holds [chunk0_r, chunk1_r, ...]); the op AllGathers them
-to full block-cyclic context, REORDERS to natural token order (transpose of the chip/chunk axes), then
-runs the indexer (per-device chunk_offset) + sparse_sdpa for the current chunk's queries.
+to full block-cyclic context and hands that straight to the indexer + sparse_sdpa_msa, which remap each
+natural block-id to its physical (block-cyclic) block IN-KERNEL (block_cyclic_* args, #49490/#48772) — no
+host untilize→transpose→tilize reorder — for the current chunk's queries.
 
 This is the cache-fed sibling of test_msa_sp_chunked_vs_ref (which fed CONTIGUOUS context directly). The
-ONLY new element vs that validated test is the block-cyclic → natural reorder, so this isolates it:
-identical inputs, but K/V/index_k are arranged block-cyclic (as the cache stores them) and read via
-`msa_sp_attention`; compared to the same gather-everything golden (`msa_sp_attention_gather_all`).
+ONLY new element vs that validated test is the block-cyclic layout, so this isolates it: identical inputs,
+but K/V/index_k are arranged block-cyclic (as the cache stores them) and read via `msa_sp_attention` with
+the ops' in-kernel block-cyclic remap.
 """
 
 import pytest
@@ -91,8 +92,8 @@ def test_msa_sp_cache_read(mesh_device, device_params, chunk_local, n_prior, res
     )
 
     # cache-read: current chunk query (contiguous), accumulated K/V/index_k BLOCK-CYCLIC (cache layout).
-    # Exercises the multi-chunk block-cyclic gather+reorder + per-device mesh-coord cluster_axis causality
-    # (device r's current-chunk queries start at global cached_len + r*chunk_local).
+    # Exercises the multi-chunk block-cyclic gather + in-kernel remap + per-device mesh-coord cluster_axis
+    # causality (device r's current-chunk queries start at global cached_len + r*chunk_local).
     out_b = msa_sp_attention(
         shard(q, True),
         shard_bc(k, True),
@@ -129,15 +130,17 @@ def test_msa_sp_cache_read_ndshard_pcc(mesh_device, device_params, chunk_local, 
     Two runs of the SAME op on the SAME logical inputs, differing ONLY in how the accumulated context
     reaches ``msa_sp_attention``:
       GOLDEN  — a plain CONTIGUOUS SP shard of the block-cyclic-permuted context (``shard_bc``). The
-                gather+reorder ``to_memory_config(DRAM)`` on a contiguous shard is well-defined, so this
-                is the known-good natural-order answer (matches ``test_msa_sp_chunked_vs_ref``).
+                gather (``to_memory_config(DRAM)`` + AllGather) on a contiguous shard is well-defined, so
+                this is the known-good answer (matches ``test_msa_sp_chunked_vs_ref``); the ops' in-kernel
+                block-cyclic remap turns it back to natural token order.
       CACHE   — the REAL path: write each chunk into the actual ``NdShardSpec(ROUND_ROBIN_1D, 32-tok/bank)``
                 cache via ``update_padded_kv_cache`` (``write_kv_chunk``/``write_index_k_chunk``), then
                 ``ttnn.slice`` the slot and read via ``msa_sp_attention`` (exactly what prefill.py does).
 
-    The ONLY difference is the on-device cache layout, so a low PCC pins the bug on the round-robin
-    NdShard -> interleaved reorder scramble. Cache is bf16 (not the default bf8) to isolate the reorder
-    from quantization. This is the fast (~16s, no galaxy) fix-iteration harness for the reorder.
+    Both feed the identical in-kernel block-cyclic remap, so the ONLY difference is the on-device cache
+    layout: a low PCC pins the bug on the round-robin NdShard -> interleaved scramble. Cache is bf16 (not
+    the default bf8) to isolate the cache layout from quantization. This is the fast (~16s) fix-iteration
+    harness for the block-cyclic cache read.
     """
     from models.common.utility_functions import comp_pcc
     from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches, write_index_k_chunk, write_kv_chunk
