@@ -481,18 +481,17 @@ def test_smollm3_sp_bias_cached(*, mesh_device):
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 90000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
     indirect=["device_params"],
 )
-def test_fibo_wrapper_traced(*, mesh_device):
-    """Trace fidelity: the traced encode_prompt (capture then replay) reproduces the untraced path.
+def test_fibo_wrapper_encode(*, mesh_device):
+    """Wrapper ``encode_prompt`` fidelity: the stacked-and-split readback matches HF on the JSON prompt.
 
-    Tracing replays the identical captured device program, so its output must match the untraced
-    forward. Validated directly (traced vs untraced), independent of prompt length -- the encoder's own
-    vs-HF accuracy is covered by test_smollm3_encoder_sp (~0.9997 for realistic prompts, dipping only
-    for pathologically short ones where a few real tokens sit among the 1024-bucket padding). Uses one
-    wrapper (single weight load) toggling ``_use_trace``: all untraced encodes run first, then the
-    traced ones, so no untraced op desyncs the captured trace's ping-pong state.
+    Exercises the whole-mesh SP x TP wrapper end to end (tokenize -> padded 1024 bucket -> device forward
+    -> SP-sharded readback -> host-derived ``prompt_embeds``). Runs the full prompt and a truncated half
+    through the shared 1024 bucket (different real lengths, same bucket), then checks the full-prompt
+    output against HF. ``len(hidden) == len(ref.hidden_states)`` (the transformer-block count follows from
+    ``build_text_encoder_layers``).
     """
     from pathlib import Path
 
@@ -509,39 +508,29 @@ def test_fibo_wrapper_traced(*, mesh_device):
     except Exception as e:
         pytest.skip(f"FIBO unavailable: {e}")
 
-    # FIBO's realistic structured-JSON caption (full = capture; truncated half = replay with new inputs).
     json_path = Path(__file__).resolve().parents[2] / "models" / "bria_fibo" / "fibo_vlm_prompt.json"
     if not json_path.is_file():
         pytest.skip(f"JSON prompt fixture missing: {json_path}")
     json_prompt = json_path.read_text().strip()
-    prompts = (json_prompt, json_prompt[: len(json_prompt) // 2])
 
     ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
     wrapper = SmolLM3TextEncoderWrapper(
-        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=pc, pad_buckets=(1024,), use_trace=True
+        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=pc, pad_buckets=(1024,)
     )
 
-    wrapper._use_trace = False
-    refs = [wrapper.encode_prompt(p) for p in prompts]  # untraced, before any capture
-    wrapper._use_trace = True
-    outs = [wrapper.encode_prompt(p) for p in prompts]  # 1st captures, 2nd replays with new inputs
+    # Full prompt + a truncated half exercise different real lengths through the shared 1024 bucket.
+    outs = [wrapper.encode_prompt(p) for p in (json_prompt, json_prompt[: len(json_prompt) // 2])]
+    for embeds, hidden in outs:
+        assert embeds.ndim == 3 and embeds.shape[0] == 1
+        assert len(hidden) > 0
 
-    for (ref_embeds, ref_hidden), (embeds, hidden) in zip(refs, outs):
-        assert list(embeds.shape) == list(ref_embeds.shape)
-        assert len(hidden) == len(ref_hidden)
-        assert_quality(ref_embeds.float(), embeds.float(), pcc=0.999, relative_rmse=0.05)
-
-    assert set(wrapper._tracers) == {1024}
-    assert wrapper._tracers[1024].trace_captured
-
-    # Consolidation correctness: the stacked-and-split readback (+ host-derived prompt_embeds) must still
-    # match HF on the realistic prompt. len == transformer-block count after build_text_encoder_layers.
+    # The stacked-and-split readback (+ host-derived prompt_embeds) must match HF on the realistic prompt.
     hf = _load_hf_smollm3()
     ids = wrapper.tokenizer([json_prompt], add_special_tokens=True, return_tensors="pt").input_ids
     with torch.no_grad():
         ref = hf.model(input_ids=ids, output_hidden_states=True)
     ref_embeds = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
-    embeds, hidden = outs[0]  # traced, full JSON prompt
+    embeds, hidden = outs[0]
     assert len(hidden) == len(ref.hidden_states)
     assert list(embeds.shape) == list(ref_embeds.shape)
     assert_quality(ref_embeds, embeds.float(), pcc=0.99, relative_rmse=0.2)

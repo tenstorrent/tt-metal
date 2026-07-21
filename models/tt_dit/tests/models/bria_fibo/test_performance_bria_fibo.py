@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-demand perf dev-harness for ``BriaFiboPipeline`` (NOT a CI perf gate).
+"""On-demand perf dev-harness for ``BriaFiboPipeline``.
 
 Builds the pipeline, does one warmup pass + N measured passes driving the pipeline's own stage methods
 (``_encode`` / ``_prepare`` / ``_denoise`` / ``_decode_latents``), times each with boundary device syncs,
-and logs a per-stage wall-clock breakdown (seconds + %, denoise it/s, images/s). Approach B from
-``docs/superpowers/specs/2026-07-09-fibo-perf-harness-design.md``: measures the real code path (host
-wall-clock, no ``on_event`` / CI-assert).
+and logs a per-stage wall-clock breakdown (seconds + %, denoise it/s, images/s).
 
 Three tests share one ``_perf_breakdown`` helper:
 * ``test_fibo_pipeline_perf_breakdown`` -- a short free-text prompt, both untraced and traced (gs=5.0, CFG on).
@@ -17,10 +15,7 @@ Three tests share one ``_perf_breakdown`` helper:
 * ``test_fibo_pipeline_device_profile`` -- a single-step, single-run untraced pass, Tracy-signposted, for
   a device-op perf CSV (see the device-profile command below).
 
-The helper honors the CFG gate (``guidance_scale > 1``): at gs<=1 it skips the uncond branch, so the
-measured cost reflects what ``BriaFiboPipeline.__call__`` actually does at that guidance_scale.
-
-Run the wall-clock breakdown (not collected into CI perf):
+Run the wall-clock breakdown:
   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \\
     python_env/bin/python -m pytest \\
     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py -v -s
@@ -286,7 +281,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
 
 
 # Run the 4x8 Galaxy wall-clock breakdown for the JSON prompt (-k "mesh_device1" selects the 4x8 mesh;
-# append ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table:
+# append ' and traced' or ' and untraced' to -k for a single variant):
 #   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
 #     python_env/bin/python -m pytest \
 #     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_perf_breakdown_json \
@@ -300,14 +295,14 @@ def test_fibo_pipeline_perf_breakdown_json(
 ):
     """Per-stage wall-clock breakdown for FIBO's intended structured-JSON prompt (gs=5.0, production CFG).
 
-    Reads the committed ``fibo_vlm_prompt.json`` (a real VLM text->JSON caption) and feeds it to the
-    pipeline as the raw prompt string -- the same handoff the VLM->image e2e test uses. This is the
-    realistic production input (a longer prompt -> more prompt tokens than the free-text case). Sanity-only
-    asserts; use ``-s`` to see the breakdown.
+    Reads the committed ``fibo_vlm_prompt.json`` (a real VLM text->JSON caption) and feeds
+    it to the pipeline as the raw prompt string. This is the realistic production input
+    (a longer prompt -> more prompt tokens than the free-text case).
     """
+
     if not _JSON_PROMPT_PATH.is_file():
         pytest.skip(f"JSON prompt fixture missing: {_JSON_PROMPT_PATH}")
-    json_prompt = _JSON_PROMPT_PATH.read_text().strip()  # drop the fixture's trailing newline
+    json_prompt = _JSON_PROMPT_PATH.read_text().strip()
 
     pipe = _build_pipe(mesh_device, height, width)
     _perf_breakdown(
@@ -340,11 +335,9 @@ def test_fibo_encode_perf(*, mesh_device):
     ``(cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states)``. On the 4x8 Galaxy the encoder
     runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to the fixed 1024 bucket)
     is sharded across the SP axis (all-gather K/V per attention layer) and Q/K/V/O are tensor-parallel on the
-    TP axis. The encoder device forward is captured as a ttnn trace (the warmup pass captures it at the 1024
-    bucket; the measured passes replay it). Measured ~0.53 s/encode (pos+neg), down from ~12.5 s untraced:
-    the trace removes host op-dispatch (device forward is only ~14 ms) and the hidden-state readback reads
-    only the SP shards from one TP row via get_device_tensors (~0.6 s) instead of the mesh composer over all
-    32 devices (~10 s). Positive prompt is FIBO's intended structured-JSON caption (the committed
+    TP axis. The encoder forward runs UNTRACED (the encoder trace was removed); the encode is dominated by
+    host op-dispatch. The hidden-state readback reads only the SP shards from one TP row via
+    get_device_tensors (~0.6 s) instead of the mesh composer over all 32 devices (~10 s). Positive prompt is FIBO's intended structured-JSON caption (the committed
     ``fibo_vlm_prompt.json``, ~833 tokens); negative is a short free-text string. 1 warmup (absorbs op
     compilation) + N measured passes with boundary device syncs; logs encode seconds (avg/min/max) and the
     produced output shapes. Plain pytest -- no Tracy, no signposts, no device-op CSV. Use ``-s`` to see the
@@ -589,7 +582,6 @@ def test_fibo_encode_device_profile(*, mesh_device):
         device=mesh_device,
         ccl_manager=ccl,
         parallel_config=EncoderParallelConfig.from_tuple((mesh_device.shape[1], 1)),
-        use_trace=False,  # profile real per-op timings (this test's device_params has no trace region)
     )
 
     prompt_embeds, hidden_states = _profile_forward(
