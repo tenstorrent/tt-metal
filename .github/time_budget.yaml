@@ -325,11 +325,12 @@ models:
     wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 420
+    bh_sc1: 25
+    bh_quietbox_2: 425
     bh_galaxy: 90
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 208
+    wh_llmbox_perf: 235
     wh_n150: 65
     bh_p150: 20
     bh_quietbox_2: 60
