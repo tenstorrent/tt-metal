@@ -332,8 +332,7 @@ template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
-    uint32_t partial_positions,
-    bool compute_uses_reduce_tile>
+    uint32_t partial_positions>
 FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
     static_assert(
         reduce_dim != ReduceDim::REDUCE_SCALAR,
@@ -350,9 +349,9 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
         "valid_reduce_dim_elements_in_tile = full_dim instead.");
 
     // Tile 0: full fill (every position holds the scaler).
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, full_dim);
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim>(scaler_f, full_dim);
     // Tile 1: partial fill (only the first `partial_positions` of the reduce axis hold the scaler).
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, partial_positions);
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim>(scaler_f, partial_positions);
 }
 
 // =============================================================================
@@ -364,8 +363,7 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t partial_positions,
-    uint32_t reduce_factor,
-    bool compute_uses_reduce_tile>
+    uint32_t reduce_factor>
 FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers() {
     static_assert(
         reduce_dim != ReduceDim::REDUCE_SCALAR,
@@ -381,7 +379,7 @@ FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers() {
         scaler_f = 1.0f;
     }
 
-    prepare_partial_reduce_scalers<cb_id, pool_type, reduce_dim, partial_positions, compute_uses_reduce_tile>(scaler_f);
+    prepare_partial_reduce_scalers<cb_id, pool_type, reduce_dim, partial_positions>(scaler_f);
 }
 
 }  // namespace dataflow_kernel_lib
