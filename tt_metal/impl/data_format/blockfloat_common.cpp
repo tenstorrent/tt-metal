@@ -363,6 +363,11 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
+    // Full tile size in 32-bit words, including any trailing DRAM-alignment padding after the mantissa section
+    // (see Tile::get_tile_size). Each packed tile must occupy exactly this many words so the layout stays
+    // both L1- and DRAM-aligned and matches the device tile size.
+    uint32_t bfp_tile_size_words = (tile.has_value() ? tile->get_tile_size(BfpFormat) : tt::tile_size(BfpFormat)) / 4;
+
     int num_float_in_tile = tile_HW;
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
@@ -383,6 +388,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     }
     int fp32_element_index = 0;
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
+        const size_t tile_start_words = packed_result.size();
         std::vector<uint32_t> packed_data;
         std::vector<uint8_t> exponents_with_padding;
         exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
@@ -447,6 +453,12 @@ std::vector<uint32_t> pack_as_bfp_tiles(
             packed_result.insert(packed_result.end(), packed.begin(), packed.end());
         }
         packed_result.insert(packed_result.end(), packed_data.begin(), packed_data.end());
+
+        // Pad the tile out to the full (DRAM-aligned) tile size with trailing zeros after the mantissa section.
+        const size_t emitted_words = packed_result.size() - tile_start_words;
+        if (emitted_words < bfp_tile_size_words) {
+            packed_result.resize(packed_result.size() + (bfp_tile_size_words - emitted_words), 0);
+        }
     }
 
     return packed_result;

@@ -53,13 +53,14 @@ def dtype_supports_tiny_tile(dtype):
 
 def select_tile(*dtypes, layout=ttnn.TILE_LAYOUT):
     if layout == ttnn.TILE_LAYOUT:
-        return ttnn.Tile((16, 32))
-        # if all(dtype_supports_tiny_tile(dtype) for dtype in dtypes):
-        #     print("Using tiny tile 16 x 32")
-        # else:
-        #     print("Using tile 1 x 32")
-        #     return ttnn.Tile((1, 32))
-    return ttnn.Tile()
+        # return ttnn.Tile((16, 32))
+        if all(dtype_supports_tiny_tile(dtype) for dtype in dtypes):
+            print("Using tiny tile 16 x 32")
+            return ttnn.Tile((16, 32))
+        else:
+            print("Using tile 32 x 32")
+            return ttnn.Tile((16, 32))
+    return None
 
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):

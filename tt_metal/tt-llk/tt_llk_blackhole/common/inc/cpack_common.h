@@ -409,10 +409,10 @@ inline void set_packer_config(
         config.val[i] = 0;
     }
 
-    config.f.exp_section_size =
-        ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
-            ? 0
-            : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
+    config.f.exp_section_size = ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
+                                    ? 0
+                                    : num_faces; // exp section holds one exponent chunk per face; use num_faces even for partial (e.g. 16x32) tiles so the
+                                                 // device layout matches the host pack/unpack, which always emit num_faces exp chunks.
 
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_output_dst_format;
@@ -472,7 +472,7 @@ inline void set_packer_config(
     cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
     // Save to GPR for quick data format reconfig
-    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = num_faces << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
 }
 
@@ -551,7 +551,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>((partial_face ? 1 : num_faces));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>(num_faces);
     }
     else if ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
     {
