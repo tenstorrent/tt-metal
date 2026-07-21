@@ -14,7 +14,6 @@ entrypoints are compiled by the normal device-kernel JIT on first use.
 
 from __future__ import annotations
 
-import os
 import struct
 from dataclasses import dataclass
 
@@ -336,8 +335,9 @@ def _runtime_args(
         global_q_start, global_q_count = plan.global_q_range(core_id)
         coord = (x, y)
 
-        # Since every core owns exactly three complete Q heads, no head spans
-        # cores and every KV chain field remains zero.
+        # Flat per-core Q range (decompose_global_q_index decodes each work item
+        # independently), so KV forwarding chains are never used: every KV chain
+        # field stays zero regardless of batch (B1/B3 have partial heads/core).
         chain_metadata = [0] * 14
         reader_args.append(
             (
@@ -413,18 +413,6 @@ def build_encoder_sdpa_descriptor(
     integration.
     """
     plan = validate_encoder_sdpa_inputs(q, k, v, config)
-    import os as _os
-
-    if _os.environ.get("BGE_SDPA_LOG_CFG", "0") == "1":
-        from loguru import logger as _lg
-
-        _lg.info(
-            f"ENCODER_SDPA cfg: q_chunk={config.q_chunk_size} k_chunk={config.k_chunk_size} "
-            f"score_cb={'bf8' if config.score_cb_bf8 else 'bf16'} fp32_dest={config.fp32_dest_acc_en} "
-            f"full_sync={config.dst_full_sync_en} DST_SIZE={plan.DST_SIZE} "
-            f"q_num_chunks={plan.q_num_chunks} k_num_chunks={plan.k_num_chunks} "
-            f"qk_in1_nsb={plan.qk_in1_num_subblocks} streaming={config.use_streaming}"
-        )
     device = q.device()
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(config.output_shape),
@@ -447,14 +435,26 @@ def build_encoder_sdpa_descriptor(
         # CB depths derive from the plan so q_chunk/k_chunk can be swept.
         # Defaults (q128/k2048): Q=16, K=V=256, QK=256 — identical to the
         # parity-verified sizes. K/V are double-buffered (x2), Q holds 2 chunks.
-        _cb_descriptor(CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
+        _cb_descriptor(
+            CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid
+        ),
         # K/V: either two separate CBs (default) or ONE shared aliased allocation
         # (F4). The aliased path is appended after this list to keep the common
         # ordering intact; see below.
         *(
             [
-                _cb_descriptor(CB_K, plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat4_b, core_grid),
-                _cb_descriptor(CB_V, plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
+                _cb_descriptor(
+                    CB_K,
+                    plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles,
+                    ttnn.bfloat4_b,
+                    core_grid,
+                ),
+                _cb_descriptor(
+                    CB_V,
+                    plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles,
+                    ttnn.bfloat8_b,
+                    core_grid,
+                ),
             ]
             if not plan.config.kv_alias
             else [_aliased_kv_cb_descriptor(plan.kv_alias_total_bytes, core_grid)]
@@ -566,19 +566,17 @@ def bge_encoder_sdpa_experimental(
     Use only from a dedicated parity probe until PCC, device time, repeat-cache,
     and trace replay all match production SDPA.
     """
-    if config.kv_alias and os.environ.get("BGE_F4_ALLOW_LAUNCH", "0") != "1":
-        # Safety gate (reviewer point #5/#6): the kv_alias CB-token ring IS now
+    if config.kv_alias:
+        # Safety gate (reviewer point #5/#6): the kv_alias CB-token ring IS
         # implemented (compute pushes sync tokens on CB_KV_SYNC; reader waits/
         # pops before overwriting shared bytes), but it is UNVALIDATED on silicon
         # and margin-fragile (~11.8KB). A handshake/cadence bug clobbers the
-        # shared L1 and wedges cores. Launching stays BLOCKED until: (a) the
-        # descriptor is compiled and its per-core L1 allocation inspected (fits),
-        # and (b) coordinated board access is arranged. Set BGE_F4_ALLOW_LAUNCH=1
-        # ONLY under those conditions.
+        # shared L1 and wedges cores. Launching stays hard-BLOCKED: validate the
+        # descriptor's per-core L1 allocation and secure coordinated board access
+        # before removing this guard in a dedicated, reviewed change.
         raise NotImplementedError(
-            "kv_alias (F4) launch is gated. The CB-token handshake kernels are "
-            "implemented but UNVALIDATED; compile+inspect L1 and secure board "
-            "time, then set BGE_F4_ALLOW_LAUNCH=1."
+            "kv_alias (F4) launch is gated: the CB-token handshake kernels are "
+            "implemented but UNVALIDATED on silicon and board-hazardous."
         )
     build = build_encoder_sdpa_descriptor(
         q,
