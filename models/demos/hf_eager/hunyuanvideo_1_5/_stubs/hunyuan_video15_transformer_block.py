@@ -166,6 +166,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
         return w, b
 
+    def lin_col_qkv(linears):
+        """Column-parallel FUSED q/k/v: concatenate the three projections into ONE
+        matmul (1 launch instead of 3 on the launch-bound path). To keep column-
+        parallelism correct, interleave the output columns per tp-device group as
+        [q_local | k_local | v_local] so ordinary -1 sharding hands each device its
+        own local heads of q, k and v contiguously; the forward then slices the
+        fused output at the LOCAL inner dim."""
+        g = tp if sharded else 1
+        hloc = heads_total // g
+
+        def _grouped(t2d):  # (out=heads_total*dim_head, C) -> (g, hloc*dim_head, C)
+            return t2d.reshape(heads_total, dim_head, -1).reshape(g, hloc * dim_head, -1)
+
+        wcat = torch.cat([_grouped(m.weight.detach()) for m in linears], dim=1)  # (g, 3*hloc*dim_head, C)
+        wcat = wcat.reshape(g * 3 * hloc * dim_head, -1)  # (3*inner_total, C)
+        w = f32(wcat.t(), mesh_mapper=_mapper(-1))
+        if all(m.bias is not None for m in linears):
+            bcat = torch.cat(
+                [m.bias.detach().reshape(heads_total, dim_head).reshape(g, hloc * dim_head) for m in linears],
+                dim=1,
+            ).reshape(1, -1)
+            b = f32(bcat, mesh_mapper=_mapper(-1))
+        else:
+            b = None
+        return w, b
+
     def lin_row(linear):
         """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
         replicated and is added once, by the caller, after the all-reduce."""
@@ -214,12 +240,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
     ada1_w, ada1_b, ada1_eps, C = ada_chunks(blk.norm1)
     adac_w, adac_b, adac_eps, _ = ada_chunks(blk.norm1_context)
 
-    wq, bq = lin_col(attn.to_q)
-    wk, bk = lin_col(attn.to_k)
-    wv, bv = lin_col(attn.to_v)
-    awq, abq = lin_col(attn.add_q_proj)
-    awk, abk = lin_col(attn.add_k_proj)
-    awv, abv = lin_col(attn.add_v_proj)
+    w_qkv, b_qkv = lin_col_qkv([attn.to_q, attn.to_k, attn.to_v])
+    w_aqkv, b_aqkv = lin_col_qkv([attn.add_q_proj, attn.add_k_proj, attn.add_v_proj])
     wo, bo = lin_row(attn.to_out[0])
     ao_w, ao_b = lin_row(attn.to_add_out)
     nq_w, nk_w = rms_w(attn.norm_q), rms_w(attn.norm_k)
@@ -355,9 +377,12 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             t = ttnn.reshape(t, (B, -1, heads, dim_head))
             return t
 
-        q = _rms(heads_split(_linear(nh, wq, bq)), nq_w)  # (B, Limg, H, D)
-        k = _rms(heads_split(_linear(nh, wk, bk)), nk_w)
-        v = heads_split(_linear(nh, wv, bv))
+        # Fused QKV: one matmul launch, slice the three streams at the LOCAL inner
+        # dim (each device holds [q|k|v] for its local heads).
+        qkv = _linear(nh, w_qkv, b_qkv)  # (B, Limg, 3*inner) local
+        q = _rms(heads_split(ttnn.slice(qkv, (0, 0, 0), (B, Limg, inner))), nq_w)  # (B, Limg, H, D)
+        k = _rms(heads_split(ttnn.slice(qkv, (0, 0, inner), (B, Limg, 2 * inner))), nk_w)
+        v = heads_split(ttnn.slice(qkv, (0, 0, 2 * inner), (B, Limg, 3 * inner)))
 
         # RoPE on the latent stream only (encoder q/k are added un-rotated), matching
         # HunyuanVideo15AttnProcessor2_0 (apply_rotary_emb after norm_q/norm_k).
@@ -366,9 +391,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             q = _apply_rope(q, _cos, _sin)
             k = _apply_rope(k, _cos, _sin)
 
-        eq = _rms(heads_split(_linear(ne, awq, abq)), naq_w)  # (B, Ltxt, H, D)
-        ek = _rms(heads_split(_linear(ne, awk, abk)), nak_w)
-        ev = heads_split(_linear(ne, awv, abv))
+        eqkv = _linear(ne, w_aqkv, b_aqkv)  # (B, Ltxt, 3*inner) local
+        eq = _rms(heads_split(ttnn.slice(eqkv, (0, 0, 0), (B, Ltxt, inner))), naq_w)  # (B, Ltxt, H, D)
+        ek = _rms(heads_split(ttnn.slice(eqkv, (0, 0, inner), (B, Ltxt, 2 * inner))), nak_w)
+        ev = heads_split(ttnn.slice(eqkv, (0, 0, 2 * inner), (B, Ltxt, 3 * inner)))
 
         q = ttnn.permute(q, (0, 2, 1, 3))  # (B, H, Limg, D)
         k = ttnn.permute(k, (0, 2, 1, 3))
