@@ -57,6 +57,9 @@ ProgramDescriptor SortProgramFactorySingleRowSingleCore::create_descriptor(
 
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
     const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    // UInt16 values + 32-bit DEST (from UINT32 indices or FP32 input): enable native half-word fixup
+    // in topk/sort SFPU after debug bit 11 removal (#50215).
+    const bool uint16_in_fp32_dest = is_32_bit_data && input_tensor_cb_data_format == tt::DataFormat::UInt16;
 
     CoreRangeSet core_range;
     if (Ht >= total_number_of_cores) {
@@ -306,6 +309,9 @@ ProgramDescriptor SortProgramFactorySingleRowSingleCore::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_range;
     compute_desc.compile_time_args = std::move(compute_compile_time_args);
+    if (uint16_in_fp32_dest) {
+        compute_desc.defines = {{"TOPK_UINT16_FP32_DEST", "1"}};
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = is_32_bit_data,
         .unpack_to_dest_mode = std::move(unpack_to_dest_mode_vector),
@@ -540,6 +546,8 @@ ProgramDescriptor build_cross_core_program_descriptor(
     // uint32 index tensor support
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
     const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    // UInt16 values + 32-bit DEST: enable native half-word fixup after bit-11 removal (#50215).
+    const bool uint16_in_fp32_dest = is_32_bit_data && input_tensor_cb_data_format == tt::DataFormat::UInt16;
 
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
@@ -885,6 +893,9 @@ ProgramDescriptor build_cross_core_program_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_range;
     compute_desc.compile_time_args = std::move(compute_compile_time_args);
+    if (uint16_in_fp32_dest) {
+        compute_desc.defines = {{"TOPK_UINT16_FP32_DEST", "1"}};
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = is_32_bit_data,
         .unpack_to_dest_mode = std::move(unpack_to_dest_mode_vector),
@@ -1005,6 +1016,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
 
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
     const bool is_32_bit_data = is_32_bit_index || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    // UInt16 values + 32-bit DEST: enable native half-word fixup after bit-11 removal (#50215).
+    const bool uint16_in_fp32_dest = is_32_bit_data && input_tensor_cb_data_format == tt::DataFormat::UInt16;
 
     const uint32_t log2Wt = std::log2(Wt);
 
@@ -1367,6 +1380,9 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_range;
     compute_desc.compile_time_args = std::move(compute_compile_time_args);
+    if (uint16_in_fp32_dest) {
+        compute_desc.defines = {{"TOPK_UINT16_FP32_DEST", "1"}};
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = is_32_bit_data,
         .unpack_to_dest_mode = std::move(unpack_to_dest_mode_vector),
