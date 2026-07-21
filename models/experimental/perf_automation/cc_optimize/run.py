@@ -900,9 +900,11 @@ _BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
 
 
 def _read_board_topology() -> dict | None:
-    """Live-read chip-index -> board-local-chip from tt-smi -s. Two ASICs of an n300 share a board_id;
-    only the one with a real PCI bus_id is resettable, and resetting it resets its remote partner too.
-    Returns {str(chip): local_chip_index} or None. Static per host (board_ids / BDFs don't change)."""
+    """Live-read chip-index -> its board's PCI-resettable chips from tt-smi -s. Chips sharing a board_id
+    are one board; a WHOLE board is reset by resetting every chip on it that has its own PCI bus_id. An
+    n300's remote chip has no bus_id, so its board is {local}; a p300c's two ASICs are each PCIe
+    endpoints, so its board is BOTH (resetting only one half-resets the board and breaks enumeration).
+    Returns {str(chip): [board's resettable chips]} or None. Static per host (board_ids / BDFs fixed)."""
     try:
         tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
         r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
@@ -910,16 +912,16 @@ def _read_board_topology() -> dict | None:
     except Exception:  # noqa: BLE001
         return None
     board_of: dict[int, str] = {}
-    local_of_board: dict[str, int] = {}
+    resettable_of_board: dict[str, list] = {}
     for i, dev in enumerate(di):
         bi = dev.get("board_info") or {}
         bid = bi.get("board_id")
         board_of[i] = bid
         bus = bi.get("bus_id")
         if bid is not None and bus and bus != "N/A":
-            local_of_board.setdefault(bid, i)
-    m = {str(i): local_of_board.get(board_of.get(i)) for i in board_of}
-    m = {k: v for k, v in m.items() if v is not None}
+            resettable_of_board.setdefault(bid, []).append(i)
+    m = {str(i): sorted(resettable_of_board.get(board_of.get(i), [])) for i in board_of}
+    m = {k: v for k, v in m.items() if v}
     return m or None
 
 
@@ -949,14 +951,22 @@ def _board_reset_targets(chip_ids: list[int]) -> str | None:
         m = _read_board_topology()
     if not m:
         return None
-    targets = {m[str(c)] for c in chip_ids if str(c) in m and m[str(c)] is not None}
+    targets: set = set()
+    for c in chip_ids:
+        v = m.get(str(c))
+        if isinstance(v, list):
+            targets.update(int(x) for x in v)
+        elif v is not None:
+            targets.add(int(v))
     return ",".join(str(x) for x in sorted(targets)) if targets else None
 
 
 def _reset_chip_list(devices: str) -> str:
-    """BOARD-AWARE reset target derived from --devices. Explicit ids / 'single' are translated to the
-    PCI-resettable LOCAL chip of each board they live on (so a whole n300 board resets, never half of
-    one). 'all'/'' returns '' so the caller uses a bare `tt-smi -r` (resets every board)."""
+    """BOARD-AWARE reset target derived from --devices: explicit ids / 'single' -> the WHOLE board(s)
+    they live on (every PCI-resettable chip of those boards, so both p300c ASICs reset, never half a
+    board, never other boards). '' when a per-board target can't be determined (all/empty devices, or
+    topology unavailable) so the caller falls back to its full-enumerated reset -- never a partial
+    subset (which wedges device-open)."""
     d = (devices or "").strip().lower()
     if d in ("all", ""):
         return ""
@@ -966,10 +976,7 @@ def _reset_chip_list(devices: str) -> str:
         req = [int(x) for x in d.split(",") if x.strip().isdigit()]
     if not req:
         return ""
-    board = _board_reset_targets(req)
-    if board is not None:
-        return board
-    return ",".join(str(x) for x in req)  # fallback: raw ids if topology probe failed
+    return _board_reset_targets(req) or ""
 
 
 def _reset_devices(devices: str) -> str:
@@ -1000,7 +1007,7 @@ def _reset_devices(devices: str) -> str:
     chips = _reset_chip_list(devices) if d not in ("all", "") else ""
     last = "no reset ran"
     for args in arg_sets:
-        cmd = [tt_smi, "-r", chips] if (chips and args == ["-r"]) else [tt_smi, *args]
+        cmd = [tt_smi, "-r", chips] if (chips and args and args[0] == "-r") else [tt_smi, *args]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
             last = "tt-smi %s rc=%d" % (" ".join(cmd[1:]), r.returncode)

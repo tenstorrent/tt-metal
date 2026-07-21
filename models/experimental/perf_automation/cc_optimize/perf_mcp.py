@@ -75,35 +75,51 @@ _CONSEC_CRASH = {"n": 0}
 _TT_SMI = _shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
 
 
-def _reset_cmds(fallback: list) -> list:
-    """The board/galaxy-aware `tt-smi` reset invocations to try, in order, from the SINGLE SOURCE OF
-    TRUTH (agent.probes._reset_arg_sets — same one run.py's watchdog uses): a non-galaxy host resets
-    the FULL enumerated chip list (`-r 0,1,..,N-1`), never a partial subset that wedges device-open.
-    Falls back to `fallback` only if that source is unavailable."""
-    try:
-        from agent.probes import _reset_arg_sets
-
-        arg_sets = _reset_arg_sets()
-    except Exception:  # noqa: BLE001
-        arg_sets = None
-    return [[_TT_SMI, *a] for a in arg_sets] if arg_sets else [fallback]
+_RUN_MOD = None
 
 
-def _run_reset_cmds(cmds: list, where: str, note: str, timeout: int) -> None:
-    for _cmd in cmds:
+def _run_module():
+    """Load cc_optimize/run.py by path (stdlib-only import, same as optimize.py does) and cache it, so
+    device recovery reuses run.py's board-aware _reset_devices — the SAME per-board reset (whole
+    board(s) of PERF_MCP_DEVICES) run.py's own watchdog uses. None if it can't be loaded."""
+    global _RUN_MOD
+    if _RUN_MOD is None:
         try:
-            r = _sp.run(_cmd, capture_output=True, text=True, timeout=timeout)
-            sys.stderr.write(f"[perf-mcp] {note} via {' '.join(_cmd[1:])} at {where}\n")
-            if r.returncode == 0:
-                return
+            import importlib.util
+
+            _p = Path(__file__).with_name("run.py")
+            _spec = importlib.util.spec_from_file_location("cc_optimize_run_reset", str(_p))
+            _m = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_m)
+            _RUN_MOD = _m
+        except Exception:  # noqa: BLE001
+            _RUN_MOD = False
+    return _RUN_MOD or None
+
+
+def _board_reset(where: str, note: str) -> None:
+    """Recover the device via run.py's board-aware _reset_devices (whole board(s) of PERF_MCP_DEVICES —
+    a single-chip `-r 0` half-resets a p300c and breaks its enumeration), falling back to a single-chip
+    reset only if that path is unavailable."""
+    _mod = _run_module()
+    if _mod is not None:
+        try:
+            status = _mod._reset_devices(os.environ.get("PERF_MCP_DEVICES", "").strip() or "all")
+            sys.stderr.write(f"[perf-mcp] {note}: {status} at {where}\n")
+            return
         except Exception as exc:  # noqa: BLE001
-            sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}: {exc}\n")
+            sys.stderr.write(f"[perf-mcp] board-aware reset unavailable ({exc}) at {where}; single-chip fallback\n")
+    try:
+        _sp.run([_TT_SMI, "-r", "0"], capture_output=True, text=True, timeout=180)
+        sys.stderr.write(f"[perf-mcp] {note} via tt-smi -r 0 (fallback) at {where}\n")
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}: {exc}\n")
 
 
 def _device_recover(where: str) -> None:
-    """Best-effort reset after a likely wedge (2+ consecutive device crashes), using the shared
-    full-enumerated reset (a single-chip `-r 0` half-resets a p300c and breaks its enumeration)."""
-    _run_reset_cmds(_reset_cmds([_TT_SMI, "-r", "0"]), where, "device recovered", 180)
+    """Best-effort reset after a likely wedge (2+ consecutive device crashes), reusing run.py's
+    board-aware per-board reset."""
+    _board_reset(where, "device recovered")
 
 
 def _note_device_crash(where: str) -> None:
@@ -139,7 +155,7 @@ def _is_l1_overflow(msg) -> bool:
 
 
 def _reclaim_mesh(where: str) -> None:
-    _run_reset_cmds(_reset_cmds([_TT_SMI, "-r"]), where, "full-mesh reset (L1 overflow)", 420)
+    _board_reset(where, "full-mesh reset (L1 overflow)")
     _CONSEC_CRASH["n"] = 0
 
 

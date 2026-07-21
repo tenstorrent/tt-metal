@@ -1,4 +1,5 @@
 import importlib.util
+import types
 from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -9,46 +10,39 @@ perf_mcp = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(perf_mcp)
 
 
-def test_reset_cmds_uses_full_enumerated_from_reset_arg_sets(monkeypatch):
-    import agent.probes as P
-
-    monkeypatch.setattr(P, "_reset_arg_sets", lambda: [["-r", "0,1,2,3"]])
-    assert perf_mcp._reset_cmds([perf_mcp._TT_SMI, "-r", "0"]) == [[perf_mcp._TT_SMI, "-r", "0,1,2,3"]]
-
-
-def test_reset_cmds_falls_back_when_source_unavailable(monkeypatch):
-    import agent.probes as P
-
-    def _boom():
-        raise RuntimeError("no probe")
-
-    monkeypatch.setattr(P, "_reset_arg_sets", _boom)
-    fb = [perf_mcp._TT_SMI, "-r", "0"]
-    assert perf_mcp._reset_cmds(fb) == [fb]
-
-
-def test_reset_cmds_preserves_galaxy_arg_sets(monkeypatch):
-    import agent.probes as P
-
-    monkeypatch.setattr(P, "_reset_arg_sets", lambda: [["-glx_reset_auto"], ["-glx_reset"], ["-r", "0,1"]])
-    assert perf_mcp._reset_cmds([perf_mcp._TT_SMI, "-r"]) == [
-        [perf_mcp._TT_SMI, "-glx_reset_auto"],
-        [perf_mcp._TT_SMI, "-glx_reset"],
-        [perf_mcp._TT_SMI, "-r", "0,1"],
-    ]
-
-
-def test_run_reset_cmds_stops_after_first_success(monkeypatch):
+def test_board_reset_delegates_to_run_reset_devices(monkeypatch):
     calls = []
+    fake = types.SimpleNamespace(_reset_devices=lambda d: calls.append(d) or "tt-smi -r 0,1 rc=0")
+    monkeypatch.setattr(perf_mcp, "_run_module", lambda: fake)
+    monkeypatch.setenv("PERF_MCP_DEVICES", "0")
+    perf_mcp._board_reset("where", "device recovered")
+    assert calls == ["0"]
+
+
+def test_board_reset_passes_all_when_devices_unset(monkeypatch):
+    calls = []
+    fake = types.SimpleNamespace(_reset_devices=lambda d: calls.append(d) or "ok")
+    monkeypatch.setattr(perf_mcp, "_run_module", lambda: fake)
+    monkeypatch.delenv("PERF_MCP_DEVICES", raising=False)
+    perf_mcp._board_reset("where", "note")
+    assert calls == ["all"]
+
+
+def test_board_reset_falls_back_to_single_chip_when_run_unavailable(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_run_module", lambda: None)
+    seen = []
 
     class _R:
-        def __init__(self, rc):
-            self.returncode = rc
+        returncode = 0
 
-    def _fake_run(cmd, **kw):
-        calls.append(cmd)
-        return _R(0)
+    monkeypatch.setattr(perf_mcp._sp, "run", lambda cmd, **k: seen.append(cmd) or _R())
+    perf_mcp._board_reset("where", "note")
+    assert seen and seen[0][1:] == ["-r", "0"]
 
-    monkeypatch.setattr(perf_mcp._sp, "run", _fake_run)
-    perf_mcp._run_reset_cmds([["a", "1"], ["b", "2"]], "where", "note", 10)
-    assert calls == [["a", "1"]]
+
+def test_device_recover_and_reclaim_use_board_reset(monkeypatch):
+    calls = []
+    monkeypatch.setattr(perf_mcp, "_board_reset", lambda where, note: calls.append(note))
+    perf_mcp._device_recover("w")
+    perf_mcp._reclaim_mesh("w")
+    assert calls == ["device recovered", "full-mesh reset (L1 overflow)"]

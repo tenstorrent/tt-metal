@@ -396,6 +396,7 @@ def cmd_optimize(args) -> int:
     if _tf:
         print("error: " + _tf)
         return 1
+    os.environ["PERF_MCP_DEVICES"] = (getattr(args, "devices", "") or "").strip()
     if os.environ.get("PERF_MCP_SUPERVISED") != "1":
         _sweep_stale_perf_mcp()
         try:
