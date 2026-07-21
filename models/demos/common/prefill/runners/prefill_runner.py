@@ -50,7 +50,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     resolve_trace_dir,
 )
 
-# NOTE: the pipelined_prefill layer-completion classes (the standalone `_layer_completion` extension)
+# NOTE: the layer_completion classes (the standalone `_layer_completion` extension)
 # are imported lazily at point-of-use — its .so is built only under WITH_PYTHON_BINDINGS and may be
 # absent in a packaged/wheel build, so a top-level import would hard-fail the runner for everyone
 # (including single-rank runs that never touch layer completion).
@@ -254,7 +254,7 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
     """Build the per-layer completion sink the runtime fires once per layer.
 
     Computes a globally-dense ordering key and pushes a full completion
-    into `producer` (a pipelined_prefill.LayerCompletionQueue). The
+    into `producer` (a ttnn._experimental.layer_completion.LayerCompletionQueue). The
     master router re-emits completions strictly in ascending `seq`.
 
     seq = request_id * num_layers + layer_idx — dense across all (request,
@@ -316,9 +316,8 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 class _CompletionCheckConsumer:
     """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
 
-    Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone `_layer_completion`
-    extension (models/demos/common/prefill/runners/pipelined_prefill — NOT part of the ttnn
-    module). The C++ consumer drains the master router's scheduler counter
+    Thin Python wrapper over the C++ LayerCompletionConsumer from the `_layer_completion`
+    extension (ttnn._experimental.layer_completion). The C++ consumer drains the master router's scheduler counter
     channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
     a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
     and starves any Python drain thread, even though the router had already injected every completion.
@@ -331,7 +330,7 @@ class _CompletionCheckConsumer:
     def __init__(self, ack_shm_name: str, *, num_layers: int):
         # Imported here (not at module top) so the runner doesn't hard-fail when the test-only
         # _layer_completion extension is absent; only PREFILL_CHECK_COMPLETIONS=1 runs reach this.
-        from models.demos.common.prefill.runners.pipelined_prefill import LayerCompletionConsumer
+        from ttnn._experimental.layer_completion import LayerCompletionConsumer
 
         self._num_layers = num_layers
         # This consumer only runs in (unbounded) request mode, where the external producer — NOT
@@ -1130,7 +1129,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     #     request_id} completions into a host-local LayerCompletionQueue; a per-host
     #     LayerCompletionRouter forwards them to the master rank, which re-emits them in
     #     global seq order into the SAME counter channel the scheduler connects to. See
-    #     build_layer_completion_sink() and the pipelined_prefill package.
+    #     build_layer_completion_sink() and ttnn._experimental.layer_completion.
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
@@ -1249,7 +1248,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
         # Imported here (not at module top) so single-rank / no-extension builds never need the
         # standalone _layer_completion .so (built only with WITH_PYTHON_BINDINGS).
-        from models.demos.common.prefill.runners.pipelined_prefill import LayerCompletionQueue, LayerCompletionRouter
+        from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 
         # Each rank's router OWNS its own ring, so the name must be per-rank — append _{rank} even to
         # the env override (a single literal would make colocated ranks unlink each other's live ring

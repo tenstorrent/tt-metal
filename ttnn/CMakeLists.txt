@@ -386,9 +386,9 @@ if(WITH_PYTHON_BINDINGS)
     # .. set important linker flags
     nanobind_link_options(ttnn)
 
-    # Standalone `_layer_completion` nanobind extension for the pipelined-prefill layer-completion
-    # aggregation feature. Built here because this is where nanobind tooling is set up; it links only
-    # TT::Metalium and is NOT part of the ttnn module/API. All layer-completion types are included via
+    # `_layer_completion` nanobind extension for the pipelined-prefill layer-completion
+    # aggregation feature. Exposed via ttnn._experimental.layer_completion. Links only
+    # TT::Metalium. All layer-completion types are included via
     # the `tt_metal/api/internal/disaggregation/` surface (`<internal/disaggregation/...>`), resolved
     # through TT::Metalium's PUBLIC `api/` include root — no direct reaches into tt_metal/distributed/.
     add_library(layer_completion_ext SHARED)
@@ -424,7 +424,7 @@ if(WITH_PYTHON_BINDINGS)
         COMMAND
             ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:layer_completion_ext>"
-            "${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill/$<TARGET_FILE_NAME:layer_completion_ext>"
+            "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_experimental/$<TARGET_FILE_NAME:layer_completion_ext>"
     )
 
     install(
