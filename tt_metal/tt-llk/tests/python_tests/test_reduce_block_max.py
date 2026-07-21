@@ -97,9 +97,7 @@ def _run_reduce_block_max(
     )
 
     # Canonical golden: the established fuser oracle for this op. Returns a row-major
-    # tensor with the per-row max in column [0], every other column 0. (In the
-    # compile-producer phase get_golden_generator hands back a stub — the reshape is
-    # deferred until after run() below, where the real result is available.)
+    # tensor with the per-row max in column [0], every other column 0.
     generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
     golden_flat = generate_golden(
         src_A_rowmajor.clone(), block_ct_dim, formats.output_format, dimensions
@@ -149,9 +147,6 @@ def _run_reduce_block_max(
         len(res_from_L1) == ELEMENTS_PER_TILE
     ), f"Expected one {ELEMENTS_PER_TILE}-element output tile, got {len(res_from_L1)}"
 
-    # In the compile-producer phase the golden is a stub (no real reduction to check).
-    if golden_flat.numel() != TILE_DIM * block_ct_dim * TILE_DIM:
-        return
     golden_rowmajor = golden_flat.reshape(TILE_DIM, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
