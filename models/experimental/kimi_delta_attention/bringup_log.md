@@ -179,6 +179,29 @@ any D, no L1-scratch. Result: `conv1d_op` PCC 1.0; layer PCC byte-identical to t
   sequence-sharding + state-scan; (3) fused chunk op as a **perf-phase optimization** (removes dispatch
   overhead + efficient kernels) — a real win but not a blocker.
 
+### Phase 8 — perf: before vs after distribution (realtime profiler, LoudBox)
+
+`test_kda_perf.py` — per-forward device-kernel time (max-across-chips), real KDA head dims (32 heads,
+head_dim 128), FABRIC_2D, realtime profiler (not tracy). before = TP=1 `(8,1)` (all heads/chip, no
+all-reduce); after = TP=4 `(2,4)`. Per-chunk cost = **warm ≡ long** for KDA (fixed-size state); cold =
+N chunks × per-chunk.
+
+**T=640 (box-scaled local chunk), device µs:**
+
+| group | before TP=1 | after TP=4 | Δ |
+|---|---|---|---|
+| matmul | 112 987 | 30 756 | **3.7× sharded** (ideal 4×) |
+| collective | 0 | 26 354 | TP all-reduce added |
+| other (recur/gate/norm) | 104 289 | 59 427 | 1.8× |
+| **total** | **217 276** | **116 538** | **1.87×** |
+
+(T=256: 87 871 → 47 709 µs, 1.84×.) **Distribution validated as a win** (TP shards matmul ~4×).
+**Caveat:** absolutes are inflated by the **un-fused token-loop** (~4500 tiny kernels/forward, each
+paying fixed launch overhead — the "other"/matmul groups are dominated by per-kernel overhead, not
+algorithmic FLOPs; cf. ROOFLINE ideal ~44µs compute). The measurement makes the case for the fused
+chunk op (task 14): collapsing the loop to a handful of kernels removes that overhead. The relative
+TP-sharding benefit is the trustworthy signal; absolute vs the roofline waits on fusion.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
