@@ -78,6 +78,8 @@ void kernel_main() {
         float base_mean = 0.0f;
         float mean_delta_sum = 0.0f;
         float mean_delta_sq_sum = 0.0f;
+        float mean_delta_compensation = 0.0f;
+        float mean_delta_sq_compensation = 0.0f;
         float partial_var_sum = 0.0f;
         bool have_base_mean = false;
 
@@ -93,6 +95,9 @@ void kernel_main() {
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
                 std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
+                float tile_mean_delta_sum = 0.0f;
+                float tile_mean_delta_sq_sum = 0.0f;
+                float tile_var_sum = 0.0f;
                 for (std::uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
                     // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
@@ -105,15 +110,30 @@ void kernel_main() {
                     // population variance of the partial means.
                     if (!have_base_mean) {
                         base_mean = partial_mean;
-                        partial_var_sum = partial_var;
                         have_base_mean = true;
                     } else {
                         const float delta = partial_mean - base_mean;
-                        mean_delta_sum += delta;
-                        mean_delta_sq_sum += delta * delta;
-                        partial_var_sum += partial_var;
+                        tile_mean_delta_sum += delta;
+                        tile_mean_delta_sq_sum += delta * delta;
                     }
+                    tile_var_sum += partial_var;
                 }
+
+                // Compensate once per tile. Volatile intermediates preserve the
+                // rounding steps under the device compiler's floating-point
+                // reassociation without paying that cost for every column.
+                const float mean_delta_adjusted = tile_mean_delta_sum - mean_delta_compensation;
+                volatile float next_mean_delta_sum = mean_delta_sum + mean_delta_adjusted;
+                volatile float mean_delta_roundoff = next_mean_delta_sum - mean_delta_sum;
+                mean_delta_compensation = mean_delta_roundoff - mean_delta_adjusted;
+                mean_delta_sum = next_mean_delta_sum;
+
+                const float mean_delta_sq_adjusted = tile_mean_delta_sq_sum - mean_delta_sq_compensation;
+                volatile float next_mean_delta_sq_sum = mean_delta_sq_sum + mean_delta_sq_adjusted;
+                volatile float mean_delta_sq_roundoff = next_mean_delta_sq_sum - mean_delta_sq_sum;
+                mean_delta_sq_compensation = mean_delta_sq_roundoff - mean_delta_sq_adjusted;
+                mean_delta_sq_sum = next_mean_delta_sq_sum;
+                partial_var_sum += tile_var_sum;
 
                 cb_partial_obj.pop_front(2);
             }
@@ -126,7 +146,10 @@ void kernel_main() {
         constexpr std::uint32_t num_partials = reduce_batch_size * W;
         constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
         const float mean_delta = mean_delta_sum * inv_num_partials;
-        const float means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+        const float raw_means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+        // M2 is non-negative over the reals. Guard against residual rounding
+        // error so std never takes the square root of a negative variance.
+        const float means_m2 = raw_means_m2 < 0.0f ? 0.0f : raw_means_m2;
         const float var_sum = partial_var_sum + means_m2;
         float final_var;
         if constexpr (correction) {

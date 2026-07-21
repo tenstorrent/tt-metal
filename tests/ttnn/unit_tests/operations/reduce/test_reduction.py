@@ -192,6 +192,25 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
     )
 
 
+def test_std_var_fp32_wide_low_variance(device):
+    # The HW writer combines one equal-count partial per column. For sufficiently
+    # wide inputs, directly subtracting the first and second moments of the partial
+    # means can round to a negative M2 even though the input is non-constant.
+    width = 16384
+    torch_input = torch.full((1, 1, 32, width), 1e-4, dtype=torch.float32)
+    torch_input[:, :, :, 0] = 0.0
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=(-2, -1), keepdim=True, correction=0)
+        output = ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=False)
+        actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-15)
+
+
 # Test a 1D, 2D, 3D, and 4D tensor
 @pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
