@@ -218,7 +218,7 @@ D2DStreamConfig make_cfg(
     const ttnn::Shape& global_shape,
     const CoreRange& worker_cores = kWorkerCores,
     uint32_t metadata_size_bytes = 0) {
-    const TensorSpec global_spec(
+    const tt::tt_metal::TensorSpec global_spec(
         global_shape,
         TensorLayout(
             DataType::UINT32,
@@ -240,7 +240,7 @@ D2DStreamConfig make_cfg(
 // H2D socket FIFO / scratch sizing: one tensor page rounded up to a 4 KB floor
 // (mirrors fifo_bytes_for in test_d2d_stream_service.cpp; H2D streams page-by-page,
 // so a page-sized FIFO is correct and keeps L1 use bounded).
-uint32_t fifo_bytes_for(const TensorSpec& spec) {
+uint32_t fifo_bytes_for(const tt::tt_metal::TensorSpec& spec) {
     constexpr uint32_t kMinFifo = 4096u;
     const uint32_t page = static_cast<uint32_t>(spec.compute_page_size_bytes());
     return std::max(kMinFifo, ((page + kMinFifo - 1u) / kMinFifo) * kMinFifo);
@@ -253,7 +253,7 @@ uint32_t fifo_bytes_for(const TensorSpec& spec) {
 // it (same data_ready-sem + consumed-counter shape as a D2D receiver). Metadata off.
 std::unique_ptr<H2DStreamService> make_h2d_service(
     const std::shared_ptr<MeshDevice>& mesh,
-    const TensorSpec& global_spec,
+    const tt::tt_metal::TensorSpec& global_spec,
     const CoreRange& worker_cores = kWorkerCores,
     uint32_t metadata_size_bytes = 0) {
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);

@@ -26,7 +26,7 @@ namespace {
 using TestGraphCaptureArgumentsUntilizeWithUnpadding = TTNNFixtureWithDevice;
 
 TEST_F(TestGraphCaptureArgumentsUntilizeWithUnpadding, UntilizeWithUnpadding) {
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape({1, 10240, 32}),
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), DRAM_MEMORY_CONFIG));
     auto input_tensor = create_device_tensor(tensor_spec, device_);

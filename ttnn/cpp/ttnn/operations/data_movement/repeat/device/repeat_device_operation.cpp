@@ -83,7 +83,7 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
             }
         }
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));

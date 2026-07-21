@@ -48,7 +48,7 @@ SplitDeviceOperation::spec_return_value_t SplitDeviceOperation::compute_output_s
     auto input_shape_array = input_tensor.padded_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
     output_shape_array[args.dim] /= args.num_splits;
-    TensorSpec spec(
+    tt::tt_metal::TensorSpec spec(
         Shape(output_shape_array),
         TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
     return std::vector<tt::tt_metal::TensorSpec>(args.num_splits, spec);

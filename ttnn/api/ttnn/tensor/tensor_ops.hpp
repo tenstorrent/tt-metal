@@ -21,78 +21,74 @@ class Tensor;
 
 namespace ttnn::tensor_ops {
 
-using Tensor = ttnn::Tensor;
-using TensorSpec = tt::tt_metal::TensorSpec;
-using MemoryConfig = tt::tt_metal::MemoryConfig;
-using BufferRegion = tt::tt_metal::BufferRegion;
-using DataType = tt::tt_metal::DataType;
-using Layout = tt::tt_metal::Layout;
-using QueueId = tt::tt_metal::QueueId;
-using TensorTopology = tt::tt_metal::TensorTopology;
-
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
-Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* mesh_device);
-Tensor create_device_tensor(
-    const TensorSpec& tensor_spec,
+ttnn::Tensor allocate_tensor_on_host(
+    const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* mesh_device);
+ttnn::Tensor create_device_tensor(
+    const tt::tt_metal::TensorSpec& tensor_spec,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    std::optional<TensorTopology> tensor_topology = std::nullopt);
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 
-Tensor to_device(
-    const Tensor& input_tensor,
+ttnn::Tensor to_device(
+    const ttnn::Tensor& input_tensor,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
-    std::optional<QueueId> cq_id = std::nullopt);
+    ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config = std::nullopt,
+    std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
+void copy_to_device(
+    const ttnn::Tensor& host_tensor,
+    ttnn::Tensor& device_tensor,
+    std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
 void copy_to_device(
     tt::tt_metal::distributed::MeshCommandQueue& queue,
     const std::byte* src,
-    Tensor& device_tensor,
-    const std::optional<BufferRegion>& region = std::nullopt);
+    ttnn::Tensor& device_tensor,
+    const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt);
 
 void copy_to_host(
     tt::tt_metal::distributed::MeshCommandQueue& queue,
-    const Tensor& device_tensor,
+    const ttnn::Tensor& device_tensor,
     std::byte* dst,
-    const std::optional<BufferRegion>& region = std::nullopt,
+    const std::optional<tt::tt_metal::BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
 void copy_to_host(
-    const Tensor& device_tensor,
-    Tensor& host_tensor,
+    const ttnn::Tensor& device_tensor,
+    ttnn::Tensor& host_tensor,
     bool blocking = true,
-    std::optional<QueueId> cq_id = std::nullopt);
+    std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
-Tensor to_layout(const Tensor& input_tensor, Layout target_layout);
+ttnn::Tensor to_layout(const ttnn::Tensor& input_tensor, tt::tt_metal::Layout target_layout);
 
-Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
+ttnn::Tensor cpu(
+    const ttnn::Tensor& input_tensor, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
-Tensor pad(
-    const Tensor& input_tensor,
+ttnn::Tensor pad(
+    const ttnn::Tensor& input_tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
-Tensor unpad(
-    const Tensor& input_tensor,
+ttnn::Tensor unpad(
+    const ttnn::Tensor& input_tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end);
 
-Tensor pad_to_tile(const Tensor& input_tensor, float pad_value);
+ttnn::Tensor pad_to_tile(const ttnn::Tensor& input_tensor, float pad_value);
 
-Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
+ttnn::Tensor unpad_from_tile(const ttnn::Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
-Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
-Tensor reshape(
-    const Tensor& input_tensor,
+ttnn::Tensor reshape(const ttnn::Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
+ttnn::Tensor reshape(
+    const ttnn::Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
-Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
-Tensor view(
-    const Tensor& input_tensor,
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
+ttnn::Tensor view(
+    const ttnn::Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
 
@@ -105,9 +101,9 @@ Tensor view(
  * This function is error prone, and the caller is responsible for ensuring that the reinterpretation is semantically
  * valid.
  */
-Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_layout);
+ttnn::Tensor unchecked_reinterpret_layout(const ttnn::Tensor& input_tensor, tt::tt_metal::Layout target_layout);
 
-Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
+ttnn::Tensor to_dtype(const ttnn::Tensor& input_tensor, tt::tt_metal::DataType dtype);
 
 }  // namespace ttnn::tensor_ops
 

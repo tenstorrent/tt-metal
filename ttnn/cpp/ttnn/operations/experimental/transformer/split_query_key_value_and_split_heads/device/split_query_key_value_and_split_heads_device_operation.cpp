@@ -105,13 +105,13 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config.memory_layout(),
             operation_attributes.output_mem_config.buffer_type(),
             shard_spec_k);
-        auto out_tensor_q = TensorSpec(
+        auto out_tensor_q = tt::tt_metal::TensorSpec(
             Shape({batch_size, num_heads, M, K}),
             TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_qv));
-        auto out_tensor_k = TensorSpec(
+        auto out_tensor_k = tt::tt_metal::TensorSpec(
             Shape({batch_size, num_heads, K, M}),
             TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_k));
-        auto out_tensor_v = TensorSpec(
+        auto out_tensor_v = tt::tt_metal::TensorSpec(
             Shape({batch_size, num_heads, M, K}),
             TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), mem_config_qv));
         return {out_tensor_q, out_tensor_k, out_tensor_v};
@@ -119,9 +119,9 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
 
     TensorLayout layout(input_tensor.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config);
     return {
-        TensorSpec(Shape({batch_size, num_heads, M, K}), layout),
-        TensorSpec(Shape({batch_size, num_heads, K, M}), layout),
-        TensorSpec(Shape({batch_size, num_heads, M, K}), layout),
+        tt::tt_metal::TensorSpec(Shape({batch_size, num_heads, M, K}), layout),
+        tt::tt_metal::TensorSpec(Shape({batch_size, num_heads, K, M}), layout),
+        tt::tt_metal::TensorSpec(Shape({batch_size, num_heads, M, K}), layout),
     };
 }
 

@@ -26,11 +26,6 @@ class MeshDevice;
 
 namespace ttnn {
 
-using TensorSpec = tt::tt_metal::TensorSpec;
-using CoreRange = tt::tt_metal::CoreRange;
-using CoreCoord = tt::tt_metal::CoreCoord;
-using DeviceAddr = tt::tt_metal::DeviceAddr;
-
 // Persistent device-to-device streaming service backed by a fixed device tensor
 // on each side and a MeshSocket running over tt-fabric. The D2D analog of
 // H2DStreamService: where H2D drains a PCIe-pinned host FIFO into a single
@@ -51,9 +46,9 @@ using DeviceAddr = tt::tt_metal::DeviceAddr;
 struct D2DStreamConfig {
     // Logical shape & layout of the un-sharded global tensor. The mapper runs
     // once on a zero host tensor of this spec to derive the per-shard
-    // TensorSpec + TensorTopology shared by both sides. V0 supports UINT32,
+    // tt::tt_metal::TensorSpec + tt::tt_metal::TensorTopology shared by both sides. V0 supports UINT32,
     // ROW_MAJOR, DRAM-interleaved.
-    TensorSpec global_spec;
+    tt::tt_metal::TensorSpec global_spec;
 
     // Required. Same mapper describes both sides. Ownership is transferred into
     // the service (move). Construct via ttnn::distributed::create_mesh_mapper.
@@ -66,9 +61,9 @@ struct D2DStreamConfig {
 
     // Worker grid on the sender mesh that produces into the sender backing
     // tensor. Uniform across every participating sender device.
-    CoreRange sender_worker_cores;
+    tt::tt_metal::CoreRange sender_worker_cores;
 
-    CoreRange receiver_worker_cores;
+    tt::tt_metal::CoreRange receiver_worker_cores;
 
     // Optional inline metadata. When > 0, each transfer carries one extra
     // trailing socket page holding `metadata_size_bytes` of metadata (<= one
@@ -151,31 +146,31 @@ public:
     // Sender-side workers write per-shard slices here.
     const Tensor& get_backing_tensor() const;
 
-    // Per-shard TensorSpec; same as get_backing_tensor().tensor_spec().
-    const TensorSpec& get_per_shard_spec() const;
+    // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
+    const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
 
     // Echo of Config::sender_worker_cores.
-    CoreRange get_worker_cores() const;
+    tt::tt_metal::CoreRange get_worker_cores() const;
 
     // Logical CoreCoord of this coord's sender service core. Workers must
     // convert via worker_core_from_logical_core before using as a NoC target.
-    CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    tt::tt_metal::CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Service-core L1 slot. Sender workers atomic-inc here once per iter. Per-
     // coord because each device's service core is independent.
-    DeviceAddr get_data_ready_counter_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    tt::tt_metal::DeviceAddr get_data_ready_counter_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 GlobalSemaphore. Sender workers spin on the local copy after
     // each produce; the service kernel multicast-incs it once per drained iter.
     // Same address across (device, worker core).
-    DeviceAddr get_consumed_sem_addr() const;
+    tt::tt_metal::DeviceAddr get_consumed_sem_addr() const;
 
     // Service-core L1 address of the inline-metadata buffer for this coord. The
     // designated sender worker writes the metadata blob here (over NoC) before
     // acking; the sender service reads it locally and ships it after the data
     // drain. Per-coord because each device's service core is independent.
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
-    DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    tt::tt_metal::DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
     // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
@@ -225,30 +220,30 @@ public:
     // Receiver-side workers read per-shard slices here.
     const Tensor& get_backing_tensor() const;
 
-    // Per-shard TensorSpec; same as get_backing_tensor().tensor_spec().
-    const TensorSpec& get_per_shard_spec() const;
+    // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
+    const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
 
     // Echo of Config::receiver_worker_cores.
-    CoreRange get_worker_cores() const;
+    tt::tt_metal::CoreRange get_worker_cores() const;
 
     // Logical CoreCoord of this coord's receiver service core. Workers must
     // convert via worker_core_from_logical_core before using as a NoC target.
-    CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    tt::tt_metal::CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 GlobalSemaphore. Receiver workers spin on the local copy each
     // iter; the service kernel multicast-incs after the transfer has landed.
     // Same address across (device, worker core).
-    DeviceAddr get_data_ready_sem_addr() const;
+    tt::tt_metal::DeviceAddr get_data_ready_sem_addr() const;
 
     // Service-core L1 slot. Receiver workers atomic-inc here once per iter. Per-
     // coord because each device's service core is independent.
-    DeviceAddr get_consumed_counter_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    tt::tt_metal::DeviceAddr get_consumed_counter_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 address of the inline-metadata buffer. The receiver service
     // multicasts the metadata blob here on every (device, receiver worker core)
     // after each transfer lands. Same address across the mesh. TT_FATALs if
     // metadata was not configured (Config::metadata_size_bytes == 0).
-    DeviceAddr get_metadata_addr() const;
+    tt::tt_metal::DeviceAddr get_metadata_addr() const;
 
     // Fabric-link lease — receiver-side mirror of the sender's (only meaningful when
     // Config::share_fabric_links == true; TT_FATALs otherwise). The receiver kernel
@@ -332,14 +327,14 @@ private:
     static std::unique_ptr<D2DStreamServiceSender> finalize_sender(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
-        std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
-        const std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
+        std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::DeviceAddr>& receiver_tensor_addrs,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
-        std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
+        std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
 };

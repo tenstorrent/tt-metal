@@ -203,7 +203,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         shard_spec.shape[1]);
 }
 
-TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (args.inplace) {

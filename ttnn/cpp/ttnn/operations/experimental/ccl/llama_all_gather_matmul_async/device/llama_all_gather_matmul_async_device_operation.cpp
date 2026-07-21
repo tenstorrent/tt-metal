@@ -41,7 +41,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_specs(
     auto intermediate_shape = input0.padded_shape();
     intermediate_shape[-1] = intermediate_shape[-1] * args.ring_size;
     auto intermediate_shard_shape = args.output_memory_config.shard_spec()->shape;
-    TensorSpec intermediate_tensor_spec = TensorSpec(
+    tt::tt_metal::TensorSpec intermediate_tensor_spec = tt::tt_metal::TensorSpec(
         intermediate_shape,
         TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), args.output_memory_config));
 
@@ -61,7 +61,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_specs(
             aggregated_shard_shape,
             tt::tt_metal::ShardOrientation::ROW_MAJOR));
 
-    TensorSpec aggregated_tensor_spec = TensorSpec(
+    tt::tt_metal::TensorSpec aggregated_tensor_spec = tt::tt_metal::TensorSpec(
         aggregated_shape, TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul

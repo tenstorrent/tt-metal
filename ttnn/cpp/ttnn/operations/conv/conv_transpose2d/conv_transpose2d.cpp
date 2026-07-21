@@ -1057,7 +1057,7 @@ Result conv_transpose2d_DRAM(
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
     Tensor dram_output_tensor = ttnn::create_device_tensor(
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, dims.output_height, dims.output_width, out_channels}),
             tt::tt_metal::TensorLayout(
                 output_dtype,

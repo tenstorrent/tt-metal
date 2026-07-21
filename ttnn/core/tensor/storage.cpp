@@ -15,6 +15,15 @@
 #include "ttnn/tensor/storage.hpp"
 
 namespace ttnn {
+
+using tt::tt_metal::Buffer;
+using tt::tt_metal::DistributedHostBuffer;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 std::vector<tt::tt_metal::distributed::MeshCoordinate> get_all_mesh_coordinates(

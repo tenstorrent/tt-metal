@@ -209,7 +209,7 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     ttnn::Shape output_shape(in0.logical_shape());
     output_shape[-2] = M;
     output_shape[-1] = N;
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
+    return tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 }
 
 VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperation::create_output_tensors(

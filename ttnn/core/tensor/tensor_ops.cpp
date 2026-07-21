@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 namespace ttnn::tensor_ops {
+using tt::tt_metal::MeshTensor;
 
 using tt::tt_metal::enqueue_read_tensor;
 using tt::tt_metal::enqueue_write_tensor;
@@ -345,7 +346,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         }
     }
 
-    auto new_spec = tt::tt_metal::TensorSpec(
+    auto new_spec = TensorSpec(
         new_logical_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),

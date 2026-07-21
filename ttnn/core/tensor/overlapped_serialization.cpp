@@ -25,6 +25,9 @@
 #include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn {
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::MemoryPin;
+
 namespace {
 
 void safe_fwrite(const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {

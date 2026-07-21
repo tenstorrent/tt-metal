@@ -85,7 +85,7 @@ static Tensor index_trilu(
     }
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -126,7 +126,7 @@ static Tensor index_width(
     }  // dim N
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -167,7 +167,7 @@ static Tensor index_height(
     }  // dim N
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -207,7 +207,7 @@ static Tensor index_all(
     }  // dim N
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -271,7 +271,7 @@ static Tensor fill_first_val_into_tensor(
     }
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           input_tensor.logical_shape(),
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type,
@@ -306,7 +306,7 @@ static Tensor prod_result_computation_WH_B0(
     output_buffer[0] = result;
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           ttnn::Shape({}),
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type,
@@ -352,7 +352,7 @@ static Tensor index_channel(
     }  // dim N
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -392,7 +392,7 @@ static Tensor index_batch(
     }  // dim N
     auto output = Tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -419,7 +419,7 @@ static Tensor manual_insertion(
     auto input_cpu_tensor = input_tensor.cpu();
     auto output = Tensor(
                       tt::tt_metal::host_buffer::get_host_buffer(input_cpu_tensor),
-                      TensorSpec(
+                      tt::tt_metal::TensorSpec(
                           logical_shape,
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
@@ -472,7 +472,7 @@ template <typename T>
 static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
-    TensorSpec spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto output_buffer = std::vector<T>(spec.padded_shape().volume());
 
     if constexpr (std::is_same_v<T, uint32_t>) {

@@ -261,7 +261,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const auto& input_tensor = tensor_args.input;
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             output_dtype,

@@ -12,6 +12,8 @@
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::experimental::unit_mesh {
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::TensorTopology;
 
 namespace {
 
@@ -32,7 +34,7 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
 
 }  // namespace
 
-Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
+ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
 
     // Validate all tensors are allocated on the unit meshes.
@@ -69,7 +71,7 @@ Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     const auto& reference_spec = tensors[0].tensor_spec();
     auto reference_address = tensors[0].mesh_buffer().address();
     for (size_t i = 1; i < tensors.size(); i++) {
-        TT_FATAL(tensors[i].tensor_spec() == reference_spec, "All tensors must have the same TensorSpec");
+        TT_FATAL(tensors[i].tensor_spec() == reference_spec, "All tensors must have the same tt::tt_metal::TensorSpec");
         TT_FATAL(
             tensors[i].mesh_buffer().address() == reference_address, "All mesh buffers must be at the same address");
     }
@@ -138,8 +140,8 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
 
-        Tensor unit_tensor(
-            tt::tt_metal::MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec, TensorTopology{}));
+        Tensor unit_tensor(tt::tt_metal::MeshTensor::from_buffer(
+            std::move(*mesh_buffer), reference_spec, tt::tt_metal::TensorTopology{}));
         TT_FATAL(
             unit_tensor.device_storage().get_coords().size() == 1 &&
                 unit_tensor.device_storage().get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),

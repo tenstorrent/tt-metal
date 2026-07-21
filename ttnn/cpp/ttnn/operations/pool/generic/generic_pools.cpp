@@ -907,7 +907,7 @@ static std::vector<Tensor> pool2d_DRAM(
 
     // Create output tensors for DRAM slicing
     Tensor dram_output_tensor = ttnn::create_device_tensor(
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, channels}),
             tt::tt_metal::TensorLayout(
                 dtype,

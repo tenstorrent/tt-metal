@@ -155,7 +155,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
 
     EXPECT_THAT(
         ([&]() { aggregate(tensors); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("All tensors must have the same TensorSpec")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("All tensors must have the same tt::tt_metal::TensorSpec")));
 }
 
 TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {

@@ -145,7 +145,7 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 }
 
 template <typename T, typename Fn>
-Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
+Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const tt::tt_metal::TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
@@ -259,7 +259,7 @@ Tensor to_weight_special_padding_tile_layout(
                 tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
         };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
     return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
 }
@@ -322,7 +322,7 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
             tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
 
     return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
@@ -381,7 +381,7 @@ Tensor to_weight_tile_layout(
             tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
 
     return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
@@ -538,7 +538,7 @@ Tensor to_weight_tile_layout_block_sharded(
             tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
     return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
 }
@@ -601,7 +601,7 @@ Tensor to_bias_tile_layout_block_sharded(
             tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
     return convert_tensor<T>(conv_bias_tensor, compute, output_spec);
 }
@@ -688,7 +688,7 @@ static Tensor conv_group_weight_zero_pad_helper(
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
         tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(weight, pad_weight, output_spec);
@@ -752,7 +752,7 @@ static Tensor conv_depthwise_weight_bcast_helper(
 
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
         tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
@@ -858,7 +858,7 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_weight_shape,
         tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     return convert_tensor<T>(weight, pad_weight, output_spec);
@@ -1026,7 +1026,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
         return Tensor(tt::tt_metal::HostTensor::from_buffer(
             std::move(folded_buffer),
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
             conv_weight_tensor.tensor_topology()));

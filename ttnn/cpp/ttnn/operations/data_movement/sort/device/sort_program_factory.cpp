@@ -488,7 +488,7 @@ Tensor build_physical_core_lookup_table_tensor(const SortInputs& tensor_args, st
             physical_core_lookup_table_data.emplace_back(physical_core.y);
         }
     }
-    const TensorSpec physical_core_lookup_table_spec(
+    const tt::tt_metal::TensorSpec physical_core_lookup_table_spec(
         ttnn::Shape{1, physical_core_lookup_table_data.size()},
         TensorLayout{DataType::UINT32, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
     Tensor physical_core_lookup_table_tensor =

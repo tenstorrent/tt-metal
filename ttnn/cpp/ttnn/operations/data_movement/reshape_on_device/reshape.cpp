@@ -30,7 +30,7 @@ static Tensor manual_insertion(
         logical_shape.volume(),
         input_tensor.logical_volume());
     auto cpu_tensor = input_tensor.cpu();
-    auto output_spec = TensorSpec(
+    auto output_spec = tt::tt_metal::TensorSpec(
         logical_shape,
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));

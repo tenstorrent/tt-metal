@@ -30,7 +30,7 @@
  * Tests that sweep all ~65,000 BF16 values use batched tensor operations:
  *   1. Collect all valid BF16 values into a vector
  *   2. Pad to tile boundary (multiple of 32x32=1024)
- *   3. Create single tensor: Tensor::from_vector(data, TensorSpec).to_device(device)
+ *   3. Create single tensor: Tensor::from_vector(data, tt::tt_metal::TensorSpec).to_device(device)
  *   4. Call operation ONCE on the entire tensor
  *   5. Process results from output vector
  *

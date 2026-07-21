@@ -151,7 +151,7 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
     ttnn::Shape output_shape_wo_padding = output_shape;
     output_shape_wo_padding[output_rank - 2] = h_wo_padding;
     output_shape_wo_padding[output_rank - 1] = w_wo_padding;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape_wo_padding,
         TensorLayout::fromPaddedShape(
             tensor_args.input.dtype(),

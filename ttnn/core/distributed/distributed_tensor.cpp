@@ -62,7 +62,7 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
 
 // Computes tensor spec for shards supplied in `xtensor_shards_views`.
 // Note the shapes of all shards must be the same; resulting in a uniform tensor spec.
-TensorSpec compute_tensor_spec_for_shards(
+tt::tt_metal::TensorSpec compute_tensor_spec_for_shards(
     const auto& xtensor_shards_views, const tt::tt_metal::TensorLayout& global_layout) {
     std::optional<Shape> shard_shape;
     for (const auto& [_, xtensor_view] : xtensor_shards_views) {
@@ -81,7 +81,7 @@ TensorSpec compute_tensor_spec_for_shards(
         }
     }
     TT_FATAL(shard_shape.has_value(), "No shards were produced");
-    return TensorSpec(*shard_shape, global_layout);
+    return tt::tt_metal::TensorSpec(*shard_shape, global_layout);
 }
 
 // Creates a host buffer from a span, with the following optimizations:
@@ -89,7 +89,10 @@ TensorSpec compute_tensor_spec_for_shards(
 // - Otherwise, a copy of the data is created.
 template <typename T>
 tt::tt_metal::HostBuffer create_host_buffer_from_span(
-    ttsl::Span<T> span, const tt::tt_metal::MemoryPin& buffer_pin, const TensorSpec& tensor_spec, T pad_value) {
+    ttsl::Span<T> span,
+    const tt::tt_metal::MemoryPin& buffer_pin,
+    const tt::tt_metal::TensorSpec& tensor_spec,
+    T pad_value) {
     if constexpr (!std::is_const_v<T>) {
         if (tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
             tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
@@ -208,7 +211,7 @@ public:
 
         // Optimize a fully replicated path, which can use the same buffer for all shards.
         if (shard_dims.empty()) {
-            const TensorSpec tensor_spec(shape, layout);
+            const tt::tt_metal::TensorSpec tensor_spec(shape, layout);
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
             auto distributed_buffer = make_distributed_host_buffer();
@@ -299,7 +302,7 @@ private:
         T pad_value,
         const tt::tt_metal::MemoryPin& buffer_pin,
         const ttsl::SmallVector<int>& shard_dims) const {
-        const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
+        const tt::tt_metal::TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
         // Determine whether we can borrow directly from the source buffer instead of copying.
         // Requirements:
@@ -493,7 +496,7 @@ public:
     Tensor compose(const Tensor& tensor) const {
         auto dispatch_to_concrete = [this]<typename T>(const Tensor& tensor) {
             auto [data, shape] = compose<T>(tensor);
-            TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
+            tt::tt_metal::TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
             return Tensor::from_vector(std::move(data), spec);
         };
 

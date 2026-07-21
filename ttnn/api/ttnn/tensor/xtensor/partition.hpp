@@ -12,8 +12,6 @@
 
 namespace ttnn::experimental::xtensor {
 
-using ttnn::Tensor;
-
 namespace detail {
 
 // Helper to compute the type of an unowned strided view over an `xt::xexpression`.
@@ -58,8 +56,8 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
     const ttsl::SmallVector<int>& num_chunks,
     const ttsl::SmallVector<int>& dims);
 
-// Overload in terms of `Tensor`.
+// Overload in terms of `ttnn::Tensor`.
 // Deprecated: Use high-level APIs defined in distributed_tensor.hpp
-Tensor concat(const std::vector<Tensor>& tensors, int dim = 0);
+ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim = 0);
 
 }  // namespace ttnn::experimental::xtensor

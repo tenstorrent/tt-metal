@@ -125,7 +125,7 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + offset_bytes);
 
-        TensorSpec subtensor_spec = TensorSpec(
+        tt::tt_metal::TensorSpec subtensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
@@ -288,7 +288,7 @@ ttnn::Tensor narrow(
         auto narrowed_memory_config =
             MemoryConfig(input_tensor.memory_config().memory_layout(), BufferType::L1, narrowed_shard_spec);
 
-        TensorSpec subtensor_spec = TensorSpec(
+        tt::tt_metal::TensorSpec subtensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));

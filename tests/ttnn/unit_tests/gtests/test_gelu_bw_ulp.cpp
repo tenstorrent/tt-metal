@@ -26,7 +26,7 @@
  * Tests that sweep all ~65,000 BF16 values use batched tensor operations for efficiency:
  *   1. Collect all valid BF16 values into a vector
  *   2. Pad to tile boundary (multiple of 32x32=1024)
- *   3. Create single tensor: Tensor::from_vector(data, TensorSpec).to_device(device)
+ *   3. Create single tensor: Tensor::from_vector(data, tt::tt_metal::TensorSpec).to_device(device)
  *   4. Call operation ONCE on the entire tensor
  *   5. Process results from output vector
  * This achieves ~100x speedup vs calling the operation individually per value.
@@ -411,7 +411,7 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
         bf16_grads.push_back(::bfloat16(1.0f));  // grad = 1.0 to get GELU'(x)
     }
 
-    // Create TensorSpec for tile layout
+    // Create tt::tt_metal::TensorSpec for tile layout
     tt::tt_metal::TensorSpec tensor_spec(
         tt::tt_metal::Shape(dims),
         tt::tt_metal::TensorLayout(
@@ -943,7 +943,7 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
         bf16_grads.push_back(::bfloat16(1.0f));  // grad = 1.0 to get GELU'(x)
     }
 
-    // Create TensorSpec for tile layout
+    // Create tt::tt_metal::TensorSpec for tile layout
     tt::tt_metal::TensorSpec tensor_spec(
         tt::tt_metal::Shape(dims),
         tt::tt_metal::TensorLayout(

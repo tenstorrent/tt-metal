@@ -91,7 +91,7 @@ tt::tt_metal::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_ou
 
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }

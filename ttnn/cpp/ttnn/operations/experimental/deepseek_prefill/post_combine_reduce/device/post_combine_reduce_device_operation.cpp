@@ -119,7 +119,7 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     // Use TILE layout for hardware tilization output
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));

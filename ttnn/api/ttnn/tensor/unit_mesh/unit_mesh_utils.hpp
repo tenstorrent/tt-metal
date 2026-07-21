@@ -10,8 +10,6 @@
 
 namespace ttnn::experimental::unit_mesh {
 
-using ttnn::Tensor;
-
 // Aggregates tensors from unit meshes (1x1 submeshes) into a single tensor on the parent mesh.
 //
 // All input tensors must be allocated on unit meshes that share the same parent mesh, have identical
@@ -19,7 +17,7 @@ using ttnn::Tensor;
 // match the parent mesh size.
 //
 // Returns a tensor distributed across the parent mesh.
-Tensor aggregate(const std::vector<Tensor>& tensors);
+ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors);
 
 // Disaggregates a tensor from a parent mesh into individual tensors on unit meshes (1x1 submeshes).
 //
@@ -27,6 +25,6 @@ Tensor aggregate(const std::vector<Tensor>& tensors);
 // parent mesh size, and each submesh must be a unit mesh (1x1).
 //
 // Returns a vector of tensors, one per submesh, all sharing the same buffer address.
-std::vector<Tensor> disaggregate(const Tensor& tensor);
+std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor);
 
 }  // namespace ttnn::experimental::unit_mesh

@@ -158,7 +158,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
         ttnn::Shape({selected_experts_k, total_batch_per_device_size, total_seq_per_device_size, hidden_size});
 
     auto mem_config = operation_attributes.output_mem_config;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape(output_shape),
         TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(tensor_args.input_tensor.layout()), mem_config));
 }

@@ -22,8 +22,8 @@ using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
+    return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 // Returns the number of unique buffers in host-side multi-device tensor.

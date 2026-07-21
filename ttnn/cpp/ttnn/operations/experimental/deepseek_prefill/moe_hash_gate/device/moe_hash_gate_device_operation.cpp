@@ -78,14 +78,14 @@ MoeHashGateDeviceOperation::spec_return_value_t MoeHashGateDeviceOperation::comp
     auto output_shape = shape;
     output_shape[-1] = attributes.n_activated_experts;
 
-    return std::array<TensorSpec, 2>{
-        TensorSpec(
+    return std::array<tt::tt_metal::TensorSpec, 2>{
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(scores.layout()),
                 attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::UINT16,

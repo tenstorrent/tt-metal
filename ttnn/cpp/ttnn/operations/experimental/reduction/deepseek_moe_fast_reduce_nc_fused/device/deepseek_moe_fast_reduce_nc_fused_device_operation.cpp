@@ -126,7 +126,7 @@ tt::tt_metal::TensorSpec DeepseekMoEFastReduceNCFusedDeviceOperation::compute_ou
     output_shape[reduction_dim] = 1;  // keepdim = true
     output_shape[split_dim] /= num_output_tensors;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }

@@ -206,7 +206,7 @@ void run_d2h_worker_sync_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
@@ -266,7 +266,7 @@ void run_d2h_worker_sync_case_per_shard(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
@@ -338,7 +338,7 @@ void run_d2h_stream_service_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     tt::tt_metal::D2HStreamService::Config cfg{
         .global_spec = global_spec,
@@ -439,7 +439,7 @@ void run_d2h_metadata_only_case(
 
     // Record: [1,1,1,N] uint32, replicated across the mesh, allocated once and refilled per iter.
     const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,
@@ -852,7 +852,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
 
     // Build the record device tensor (same shape/layout the unit helper uses).
     const uint32_t n = md / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,

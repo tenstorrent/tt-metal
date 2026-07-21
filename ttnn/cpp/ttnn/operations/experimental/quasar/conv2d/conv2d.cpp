@@ -229,7 +229,7 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
                     alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
                 Tensor resharded_input_tensor = ttnn::create_device_tensor(
-                    TensorSpec(
+                    tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
                         tt::tt_metal::TensorLayout(
                             input_tensor.dtype(),

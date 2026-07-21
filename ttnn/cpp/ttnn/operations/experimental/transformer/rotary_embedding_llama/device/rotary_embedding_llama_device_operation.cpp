@@ -211,7 +211,7 @@ RotaryEmbeddingLlamaDeviceOperation::spec_return_value_t RotaryEmbeddingLlamaDev
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(),

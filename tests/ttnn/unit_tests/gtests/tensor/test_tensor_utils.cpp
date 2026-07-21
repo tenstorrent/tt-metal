@@ -24,8 +24,9 @@ using namespace tt::tt_metal;
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
 
-TensorSpec make_test_tensor_spec() {
-    return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec make_test_tensor_spec() {
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 using AsOptionalMeshTensorTest = GenericMeshDeviceFixture;

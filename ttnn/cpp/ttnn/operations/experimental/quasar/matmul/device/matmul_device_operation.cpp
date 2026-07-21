@@ -2043,7 +2043,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2064,7 +2064,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     // Use the user-provided shard spec directly
                     auto mem_config = attributes.output_mem_config;
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2113,7 +2113,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2157,7 +2157,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return {TensorSpec(
+                    return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
@@ -2184,7 +2184,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             chosen_program_config);
     }
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             attributes.output_dtype.value(),

@@ -147,7 +147,7 @@ ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_outp
     const ttnn::Shape output_shape({operation_attributes.max_dispatched_tokens_per_expert, hidden_dim});
     const auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             global_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));

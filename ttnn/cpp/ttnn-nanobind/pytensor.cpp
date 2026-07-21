@@ -465,7 +465,8 @@ void pytensor_module(nb::module_& mod) {
                T pad_value) {
                 new (t) Tensor(Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     /*device=*/nullptr,
                     std::nullopt,
                     pad_value));
@@ -520,7 +521,8 @@ void pytensor_module(nb::module_& mod) {
                T pad_value) {
                 new (t) Tensor(Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     device.value_or(nullptr),
                     std::nullopt,
                     pad_value));
@@ -576,7 +578,8 @@ void pytensor_module(nb::module_& mod) {
                T pad_value) {
                 new (t) Tensor(Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
+                    tt::tt_metal::TensorSpec(
+                        ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
                     device.value_or(nullptr),
                     std::nullopt,
                     pad_value));
@@ -1632,7 +1635,7 @@ void pytensor_module(nb::module_& mod) {
             TT_FATAL(
                 host_tensor.storage_type() == StorageType::HOST, "experimental_to_single_device expects a host tensor");
 
-            auto tensor_spec = TensorSpec(
+            auto tensor_spec = tt::tt_metal::TensorSpec(
                 host_tensor.logical_shape(),
                 TensorLayout(host_tensor.dtype(), host_tensor.tensor_spec().page_config(), mem_config));
 
@@ -1671,7 +1674,7 @@ void pytensor_module(nb::module_& mod) {
 
             mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
 
-            TensorTopology topology(
+            tt::tt_metal::TensorTopology topology(
                 tt::tt_metal::distributed::MeshShape(1, 1),
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});

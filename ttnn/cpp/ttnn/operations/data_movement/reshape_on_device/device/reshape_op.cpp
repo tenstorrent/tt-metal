@@ -65,7 +65,7 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
 ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),

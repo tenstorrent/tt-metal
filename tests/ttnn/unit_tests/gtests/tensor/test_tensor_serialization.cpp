@@ -27,8 +27,8 @@ using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 using namespace tt::tt_metal;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
+    return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
@@ -92,7 +92,7 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
 
     Tensor original_tensor = Tensor::from_vector(
         test_data,
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape{1, 2, 3, 1},
             TensorLayout(
                 DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));

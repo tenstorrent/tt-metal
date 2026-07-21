@@ -1163,10 +1163,10 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
     constexpr uint32_t ring_size = 4;
 
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape({1, 8, 1024, 768}),
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), MemoryConfig{}));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec output_tensor_spec(
         ttnn::Shape({ring_size, 8, 1024, 768}),
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), MemoryConfig{}));
 

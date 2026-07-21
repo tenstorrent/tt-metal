@@ -117,7 +117,7 @@ tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
 bool h_reduce_negate_fits_in_l1(
     const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// Builds a TensorSpec for a reduction-style op output, given the already
+// Builds a tt::tt_metal::TensorSpec for a reduction-style op output, given the already
 // shape-adjusted output shape and the dimension that was reduced.
 //
 // `output_layout` selects the physical layout of the result (TILE by default;
@@ -125,7 +125,7 @@ bool h_reduce_negate_fits_in_l1(
 //
 // Handles all currently supported output memory layouts:
 //   - INTERLEAVED: returns the basic spec.
-//   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding TensorSpec
+//   - WIDTH/HEIGHT/BLOCK_SHARDED: delegates to the corresponding tt::tt_metal::TensorSpec
 //     builder using the grid/orientation taken from `output_mem_config` if
 //     available, otherwise falling back to `input_mem_config`.
 //   - ND_SHARDED (TILE output only): copies the ND shard spec (from

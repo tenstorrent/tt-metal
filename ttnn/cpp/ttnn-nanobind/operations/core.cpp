@@ -292,7 +292,7 @@ void py_module(nb::module_& mod) {
               MeshDevice* device,
               const std::optional<ttnn::MemoryConfig>& mem_config) {
                return ttnn::create_device_tensor(
-                   TensorSpec(
+                   tt::tt_metal::TensorSpec(
                        shape,
                        tt::tt_metal::TensorLayout(
                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
@@ -311,7 +311,7 @@ void py_module(nb::module_& mod) {
                MeshDevice* device,
                const std::optional<ttnn::MemoryConfig>& mem_config) {
                 return ttnn::allocate_tensor_on_host(
-                    TensorSpec(
+                    tt::tt_metal::TensorSpec(
                         shape,
                         tt::tt_metal::TensorLayout(
                             dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),

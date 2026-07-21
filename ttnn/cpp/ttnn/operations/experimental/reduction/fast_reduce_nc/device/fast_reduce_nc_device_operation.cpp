@@ -54,7 +54,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     input_grid_opts.shard_grid_contained_in_device_grid = &input.memory_config();
     input_grid_opts.memory_config_label = "input";
 
-    std::optional<TensorSpec> input_spec_nd_shard = std::nullopt;
+    std::optional<tt::tt_metal::TensorSpec> input_spec_nd_shard = std::nullopt;
     if (input.memory_config().nd_shard_spec().has_value()) {
         input_spec_nd_shard = input.tensor_spec();
     }
@@ -63,7 +63,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     ttnn::prim::ReduceOpDeviceGridValidationOptions output_grid_opts{};
     output_grid_opts.shard_grid_contained_in_device_grid = &args.output_mem_config;
     output_grid_opts.memory_config_label = "output";
-    std::optional<TensorSpec> output_spec_nd_shard = std::nullopt;
+    std::optional<tt::tt_metal::TensorSpec> output_spec_nd_shard = std::nullopt;
     if (args.output_mem_config.nd_shard_spec().has_value() || args.output_mem_config.shard_spec().has_value()) {
         output_spec_nd_shard = compute_output_specs(args, tensor_args);
     }
@@ -74,7 +74,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec FastReduceNCDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec FastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -88,7 +88,7 @@ TensorSpec FastReduceNCDeviceOperation::compute_output_specs(
     // last 2-dim
     output_shape[args.dim] = 1;
     const auto output_dtype = args.output_dtype.value_or(input.dtype());
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         operations::TensorLayout(output_dtype, operations::PageConfig(Layout::TILE), args.output_mem_config));
 }

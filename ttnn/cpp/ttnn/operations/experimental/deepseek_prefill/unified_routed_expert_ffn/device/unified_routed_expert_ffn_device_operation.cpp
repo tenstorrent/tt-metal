@@ -232,8 +232,9 @@ UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFf
     const ttnn::Shape output_shape(t.x.padded_shape());
     const auto mem =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
-        output_shape, tt::tt_metal::TensorLayout(t.x.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem));
+    return tt::tt_metal::TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(t.x.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem));
 }
 
 UnifiedRoutedExpertFfnDeviceOperation::tensor_return_value_t

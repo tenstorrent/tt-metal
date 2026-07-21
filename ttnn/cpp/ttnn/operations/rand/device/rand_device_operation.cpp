@@ -19,7 +19,7 @@ void RandDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-TensorSpec RandDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RandDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     return tt::tt_metal::TensorSpec(
         operation_attributes.shape,

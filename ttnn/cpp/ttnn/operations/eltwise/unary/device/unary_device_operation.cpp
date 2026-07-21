@@ -90,7 +90,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec UnaryDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor->tensor_spec();
@@ -116,7 +116,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
             }
         }
 
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 args.output_dtype,
@@ -125,7 +125,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
     }
 
     const auto output_layout = tensor_args.input.layout();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.output_dtype,

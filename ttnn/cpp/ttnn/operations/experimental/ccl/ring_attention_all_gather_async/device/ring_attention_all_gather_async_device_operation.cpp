@@ -122,7 +122,7 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     for (const auto& input_item : input_tensors) {
         auto shape = input_item.logical_shape();
         shape[operation_attributes.dim] *= operation_attributes.ring_size;
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             shape,
             TensorLayout(
                 input_tensor.dtype(),

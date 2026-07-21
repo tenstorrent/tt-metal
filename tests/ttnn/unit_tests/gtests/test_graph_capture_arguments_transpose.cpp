@@ -27,7 +27,7 @@ namespace {
 using TestGraphCaptureArgumentsTranspose = TTNNFixtureWithDevice;
 
 TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape({1, 1, 2048, 512}),
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::ROW_MAJOR), L1_MEMORY_CONFIG));
     auto tt_input = create_device_tensor(tensor_spec, device_);

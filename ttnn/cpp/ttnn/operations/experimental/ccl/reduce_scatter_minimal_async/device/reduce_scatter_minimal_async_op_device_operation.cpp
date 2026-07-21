@@ -93,11 +93,11 @@ std::vector<tt::tt_metal::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::
     output_shape[operation_attributes.dim] /= operation_attributes.ring_size;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             inter_shape,
             TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 input_tensor.dtype(),

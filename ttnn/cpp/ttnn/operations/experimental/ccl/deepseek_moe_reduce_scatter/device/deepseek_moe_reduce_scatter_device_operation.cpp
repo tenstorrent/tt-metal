@@ -149,13 +149,13 @@ std::vector<tt::tt_metal::TensorSpec> DeepseekMoEReduceScatterDeviceOperation::c
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             intermediate_shape,
             TensorLayout(
                 input_tensors.at(0).dtype(),
                 input_tensors.at(0).tensor_spec().page_config(),
                 intermediate_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 input_tensors.at(0).dtype(), input_tensors.at(0).tensor_spec().page_config(), output_memory_config)),

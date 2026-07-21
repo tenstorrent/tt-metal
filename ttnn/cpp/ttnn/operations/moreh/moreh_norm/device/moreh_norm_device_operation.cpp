@@ -72,7 +72,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
     if (operation_attributes.keepdim) {
         auto shape = input_shape;
         shape[dim] = 1;
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             shape,
             TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
@@ -85,7 +85,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
         }
         shape.push_back((is_reduced_dim && is_tile_dim) ? 1 : input_shape[i]);
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(shape),
         TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };

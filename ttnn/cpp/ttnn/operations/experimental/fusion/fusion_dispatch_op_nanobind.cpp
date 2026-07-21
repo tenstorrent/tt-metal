@@ -66,7 +66,7 @@ void dispatch_patched(
 
 std::vector<Tensor> allocate_outputs(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<TensorSpec>& output_specs,
+    const std::vector<tt::tt_metal::TensorSpec>& output_specs,
     const std::vector<std::uint32_t>& shared_output_map) {
     const auto n = output_specs.size();
     std::vector<Tensor> outputs;
@@ -107,7 +107,7 @@ std::vector<Tensor> allocate_outputs(
 /// outputs, patches the cached descriptor, dispatches, and returns outputs.
 /// No tensor state between calls.
 class FusionDispatchState {
-    std::vector<TensorSpec> output_specs_;
+    std::vector<tt::tt_metal::TensorSpec> output_specs_;
     std::vector<std::uint32_t> shared_output_map_;
     std::vector<std::uint32_t> result_reorder_;
     AddressSlots address_slots_;
@@ -116,7 +116,7 @@ class FusionDispatchState {
 
 public:
     FusionDispatchState(
-        const std::vector<TensorSpec>& output_specs,
+        const std::vector<tt::tt_metal::TensorSpec>& output_specs,
         const std::vector<std::uint32_t>& shared_output_map,
         const std::vector<std::uint32_t>& result_reorder,
         const tt::tt_metal::ProgramDescriptor& program_descriptor,
@@ -213,10 +213,10 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
             TT_FATAL(!unique_inputs.empty(), "ops_input_tensors must contain at least one tensor");
 
             // 2. Allocate outputs from cached specs.
-            std::vector<TensorSpec> specs;
+            std::vector<tt::tt_metal::TensorSpec> specs;
             specs.reserve(output_specs_py.size());
             for (auto item : output_specs_py) {
-                specs.push_back(nb::cast<TensorSpec>(item));
+                specs.push_back(nb::cast<tt::tt_metal::TensorSpec>(item));
             }
             auto* device = unique_inputs.front().device();
             auto* mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
@@ -290,7 +290,7 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
     )doc")
         .def(
             nb::init<
-                const std::vector<TensorSpec>&,
+                const std::vector<tt::tt_metal::TensorSpec>&,
                 const std::vector<std::uint32_t>&,
                 const std::vector<std::uint32_t>&,
                 const tt::tt_metal::ProgramDescriptor&,

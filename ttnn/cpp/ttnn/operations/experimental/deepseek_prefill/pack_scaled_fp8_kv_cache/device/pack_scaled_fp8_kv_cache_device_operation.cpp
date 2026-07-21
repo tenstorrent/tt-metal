@@ -84,7 +84,7 @@ PackScaledFp8KvCacheDeviceOperation::spec_return_value_t PackScaledFp8KvCacheDev
         dims.push_back(static_cast<uint32_t>(input_shape[dim]));
     }
     dims.push_back(packed::PACKED_ROW_BYTES);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(dims),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FP8_E4M3,

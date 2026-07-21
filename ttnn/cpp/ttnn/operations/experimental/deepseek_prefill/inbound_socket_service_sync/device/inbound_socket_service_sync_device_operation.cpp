@@ -48,7 +48,7 @@ InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncO
     // metadata: [1,1,1, metadata_size_bytes/4] uint32 ROW_MAJOR DRAM, replicated.
     if (args.metadata_size_bytes > 0) {
         const ttnn::Shape meta_shape({1u, 1u, 1u, args.metadata_size_bytes / 4u});
-        specs.push_back(TensorSpec(
+        specs.push_back(tt::tt_metal::TensorSpec(
             meta_shape,
             TensorLayout(
                 DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})));

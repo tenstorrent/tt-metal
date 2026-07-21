@@ -96,7 +96,7 @@ NlpKVCacheLoadSliceDeviceOperation::spec_return_value_t NlpKVCacheLoadSliceDevic
     auto mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape(out_shape),
         tt::tt_metal::TensorLayout(
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));

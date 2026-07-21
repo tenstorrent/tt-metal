@@ -138,7 +138,7 @@ D2DStreamConfig make_config(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const TensorSpec global_spec(global_shape, tensor_layout);
+    const tt::tt_metal::TensorSpec global_spec(global_shape, tensor_layout);
     return D2DStreamConfig{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
@@ -928,7 +928,7 @@ MeshWorkload make_bridge_workload(
 // that pack exponents alongside data are covered).
 std::unique_ptr<H2DStreamService> make_h2d_service(
     const std::shared_ptr<MeshDevice>& sender_mesh,
-    const TensorSpec& global_spec,
+    const tt::tt_metal::TensorSpec& global_spec,
     const CoreRange& worker_cores,
     uint32_t metadata_size_bytes) {
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);

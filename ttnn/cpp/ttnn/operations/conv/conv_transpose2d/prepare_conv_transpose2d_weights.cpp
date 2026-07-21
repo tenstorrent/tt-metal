@@ -128,7 +128,7 @@ ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_t
         return tt::tt_metal::HostBuffer(std::move(owned_buffer));
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape,
         tt::tt_metal::TensorLayout(
             conv_weight_tensor.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));

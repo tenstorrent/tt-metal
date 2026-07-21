@@ -7,6 +7,9 @@
 
 namespace ttnn {
 
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+
 TensorAttributes::TensorAttributes(HostStorage storage) : storage_(std::move(storage)) {}
 
 TensorAttributes::TensorAttributes(DeviceStorage storage) : storage_(std::move(storage)) {}

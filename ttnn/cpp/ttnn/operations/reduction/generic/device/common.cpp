@@ -171,7 +171,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::Layout output_layout) {
     using namespace tt::tt_metal;
 
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         output_shape,
         TensorLayout(output_dtype, PageConfig(output_layout), MemoryConfig(output_mem_config.buffer_type())));
 
@@ -208,7 +208,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
-        // appropriate TensorSpec builder.
+        // appropriate tt::tt_metal::TensorSpec builder.
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return tensor_spec.width_sharded(grid, orientation);
         }
@@ -239,7 +239,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             nd_shard_spec_copy.shard_shape.rank() > 1) {
             nd_shard_spec_copy.shard_shape[-2] = 1;
         }
-        return tensor_spec.sharded(std::move(nd_shard_spec_copy), TensorSpec::ShardShapeAlignment::REQUIRED);
+        return tensor_spec.sharded(
+            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
 
     // Guard against unexpected new memory layouts.

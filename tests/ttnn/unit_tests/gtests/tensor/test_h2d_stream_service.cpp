@@ -201,7 +201,7 @@ void run_h2d_stream_service_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,
@@ -861,7 +861,7 @@ TEST_F(H2DStreamServiceTest, Preprocessor_RingSDPAReshuffle) {
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(global_shape, tensor_layout);
 
     uint32_t current_chunk_P_aligned = 0;
     auto preprocessor = [N_C, &current_chunk_P_aligned](

@@ -12,9 +12,6 @@
 
 namespace ttnn::experimental::xtensor {
 
-using tt::tt_metal::TensorSpec;
-using ttnn::Tensor;
-
 // Returns the shape of the xtensor as `tt::tt_metal::Shape`.
 template <typename E>
 tt::tt_metal::Shape get_shape_from_xarray(const E& xarr) {
@@ -109,17 +106,17 @@ auto xtensor_to_span(const xt::xarray<T>& xtensor) {
 // Converts an xtensor to a Tensor.
 // IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
-Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec& spec) {
+ttnn::Tensor from_xtensor(const xt::xarray<T>& buffer, const tt::tt_metal::TensorSpec& spec) {
     auto shape = get_shape_from_xarray(buffer);
-    TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied TensorSpec");
+    TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied tt::tt_metal::TensorSpec");
     auto buffer_view = xtensor_to_span(buffer);
-    return Tensor::from_span<T>(buffer_view, spec);
+    return ttnn::Tensor::from_span<T>(buffer_view, spec);
 }
 
 // Converts a Tensor to an xtensor.
 // IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
-xt::xarray<T> to_xtensor(const Tensor& tensor) {
+xt::xarray<T> to_xtensor(const ttnn::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
     const auto& shape = tensor.logical_shape();
     return xt::xarray<T>(span_to_xtensor_view(ttsl::Span<T>(vec.data(), vec.size()), shape));

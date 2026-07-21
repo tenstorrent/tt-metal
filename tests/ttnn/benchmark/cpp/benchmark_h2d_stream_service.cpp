@@ -336,7 +336,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(global_shape, tensor_layout);
 
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,

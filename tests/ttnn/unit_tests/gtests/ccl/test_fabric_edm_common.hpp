@@ -412,10 +412,10 @@ bool RunPipelinedWorkersTest(
         TT_FATAL(num_workers_per_stage[i] < 8, "Must have at most 8 workers per stage");
     }
 
-    std::vector<TensorSpec> tensor_specs;
+    std::vector<tt::tt_metal::TensorSpec> tensor_specs;
     tensor_specs.reserve(num_stages + 1);
     for (size_t i = 0; i < num_stages + 1; ++i) {
-        tensor_specs.push_back(TensorSpec(
+        tensor_specs.push_back(tt::tt_metal::TensorSpec(
             tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i])));
     }
 

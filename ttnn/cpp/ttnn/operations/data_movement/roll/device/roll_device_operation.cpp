@@ -51,7 +51,7 @@ RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_spe
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     // Roll preserves shape and the input's sharded layout.
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input.logical_shape(),
         tt::tt_metal::TensorLayout(
             input.dtype(), tt::tt_metal::PageConfig(input.layout()), operation_attributes.output_mem_config));

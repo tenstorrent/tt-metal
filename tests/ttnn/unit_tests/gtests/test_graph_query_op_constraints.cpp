@@ -1079,7 +1079,8 @@ TYPED_TEST_SUITE(DistributedTensorOpIfTest, DistributedTensorFixtures);
 
 TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     auto query = ttnn::graph::query_op_constraints(
@@ -1097,7 +1098,8 @@ TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithReplicatedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto replicated_topology = TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
+    auto replicated_topology =
+        tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, replicated_topology};
 
     auto query = ttnn::graph::query_op_constraints(
@@ -1116,7 +1118,8 @@ TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithReplicatedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input_a{input_spec, sharded_topology};
     ttnn::graph::DistributedTensorSpec dist_input_b{input_spec, sharded_topology};
 
@@ -1142,7 +1145,8 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1167,7 +1171,8 @@ TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1198,7 +1203,8 @@ TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1226,7 +1232,8 @@ TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1254,7 +1261,8 @@ TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // Send from device at mesh coordinate {0, 0}, cluster_axis=1 selects the column dimension
@@ -1323,7 +1331,8 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
 
     // Sharded topology to match fused_rms_minimal distributed execution assumptions.
     // cluster_axis=1 and the test requires a 1x8 mesh, so shard along mesh dim 1.
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/1);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/1);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // Weight: ROW_MAJOR, padded_shape[-1]==32 (tile width), volume==N.

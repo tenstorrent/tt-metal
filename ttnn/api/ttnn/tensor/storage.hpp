@@ -21,34 +21,27 @@
 
 namespace ttnn {
 
-using tt::tt_metal::Buffer;
-using tt::tt_metal::DistributedHostBuffer;
-using tt::tt_metal::HostBuffer;
-using tt::tt_metal::HostTensor;
-using tt::tt_metal::MeshTensor;
-using tt::tt_metal::TensorSpec;
-using tt::tt_metal::TensorTopology;
-
 class HostStorage {
 public:
     // Creates HostStorage from a HostTensor.
-    explicit HostStorage(HostTensor tensor);
+    explicit HostStorage(tt::tt_metal::HostTensor tensor);
 
     // Returns the distributed host buffer.
-    const DistributedHostBuffer& buffer() const;
+    const tt::tt_metal::DistributedHostBuffer& buffer() const;
 
     // Returns the host tensor.
-    const HostTensor& host_tensor() const;
-    HostTensor& host_tensor();
+    const tt::tt_metal::HostTensor& host_tensor() const;
+    tt::tt_metal::HostTensor& host_tensor();
 
     // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
-    HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
+    HostStorage transform(
+        const std::function<tt::tt_metal::HostBuffer(const tt::tt_metal::HostBuffer&)>& callable) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
-    HostTensor tensor;
+    tt::tt_metal::HostTensor tensor;
 };
 
 // DeviceStorage is a wrapper around the MeshTensor to fit the semantics of ttnn::Tensor.
@@ -60,11 +53,11 @@ private:
 //
 // Invariant:
 // - A default-constructed DeviceStorage acts like a deallocated DeviceStorage. However it is not associated with
-// TensorSpec and TensorTopology.
+// tt::tt_metal::TensorSpec and tt::tt_metal::TensorTopology.
 // - An allocated DeviceStorage always holds a non-default constructed MeshTensor. Do not move the MeshTensor out of
 //   DeviceStorage.
-// - TensorSpec and TensorTopology are always accessible for a DeviceStorage constructed from a MeshTensor. This stays
-// true even after deallocate() is called.
+// - tt::tt_metal::TensorSpec and tt::tt_metal::TensorTopology are always accessible for a DeviceStorage constructed
+// from a MeshTensor. This stays true even after deallocate() is called.
 // - deallocate() releases the underlying device memory.
 // - MeshTensor getters will always throw if the DeviceStorage is deallocated.
 struct DeviceStorage {
@@ -75,11 +68,11 @@ struct DeviceStorage {
     // Constructs a DeviceStorage from a device memory
 
     // Constructs DeviceStorage with coords covering the full mesh device shape.
-    explicit DeviceStorage(MeshTensor mesh_tensor);
+    explicit DeviceStorage(tt::tt_metal::MeshTensor mesh_tensor);
 
     // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
-    DeviceStorage(MeshTensor mesh_tensor, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
+    DeviceStorage(tt::tt_metal::MeshTensor mesh_tensor, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Copys an existing DeviceStorage and share it's underlying device memory.
@@ -103,23 +96,23 @@ struct DeviceStorage {
 
     // Get legacy single device buffer
     // Throws if the DeviceStorage is not allocated.
-    Buffer* get_buffer() const;
+    tt::tt_metal::Buffer* get_buffer() const;
 
     // Get mesh buffer that represents the device memory
     // Throws if the DeviceStorage is deallocated.
     const tt::tt_metal::distributed::MeshBuffer& get_mesh_buffer() const;
 
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
-    const MeshTensor& get_mesh_tensor() const;
+    const tt::tt_metal::MeshTensor& get_mesh_tensor() const;
 
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
     // Please do not move the MeshTensor out of the DeviceStorage using this function,
     // use release_mesh_tensor instead.
-    MeshTensor& get_mesh_tensor();
+    tt::tt_metal::MeshTensor& get_mesh_tensor();
 
     // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated.
     // post-condition: this DeviceStorage will be equivalent to a default constructed DeviceStorage.
-    MeshTensor release_mesh_tensor();
+    tt::tt_metal::MeshTensor release_mesh_tensor();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
@@ -163,7 +156,7 @@ struct DeviceStorage {
     // This is currently the recommended method to reinterpret an existing Tensor.
     // This is  internal functionality: it is not part of the public API.
     // TODO(#38093): implement a more robust mechanism for Tensor reinterpretation
-    DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor);
+    DeviceStorage(const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
     // End internal functions.
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -182,10 +175,10 @@ struct DeviceStorage {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Returns the tensor spec associated with the MeshTensor.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    const TensorSpec& get_tensor_spec() const;
+    const tt::tt_metal::TensorSpec& get_tensor_spec() const;
     // Returns the tensor topology associated with the MeshTensor.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    const TensorTopology& get_tensor_topology() const;
+    const tt::tt_metal::TensorTopology& get_tensor_topology() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Serialization

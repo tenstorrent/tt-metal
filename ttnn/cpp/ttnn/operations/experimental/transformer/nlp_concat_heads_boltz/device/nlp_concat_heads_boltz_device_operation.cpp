@@ -87,13 +87,13 @@ NLPConcatHeadsBoltzDeviceOperation::spec_return_value_t NLPConcatHeadsBoltzDevic
         shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));

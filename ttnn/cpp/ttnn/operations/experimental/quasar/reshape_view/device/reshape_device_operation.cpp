@@ -30,7 +30,7 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor_args.input.dtype(),

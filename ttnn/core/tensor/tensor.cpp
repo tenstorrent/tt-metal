@@ -41,6 +41,22 @@
 #include <atomic>
 
 namespace ttnn {
+
+using tt::tt_metal::Buffer;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::DataType;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::Layout;
+using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::MemoryPin;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::NdShardSpec;
+using tt::tt_metal::ShardSpec;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+using tt::tt_metal::Tile;
+
 namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
 }  // namespace

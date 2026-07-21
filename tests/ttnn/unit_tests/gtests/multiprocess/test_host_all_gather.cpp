@@ -48,7 +48,7 @@ TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
     }
     Tensor input_tensor = Tensor::from_vector(
         test_data,
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape{1, kNumDevices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})));
 
     auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);

@@ -82,7 +82,7 @@ void py_module_types(nb::module_& mod) {
             "get_per_shard_spec",
             &D2DStreamServiceSender::get_per_shard_spec,
             nb::rv_policy::reference_internal,
-            "The per-coord TensorSpec of the backing tensor (mapper output).")
+            "The per-coord tt::tt_metal::TensorSpec of the backing tensor (mapper output).")
         .def(
             "get_worker_cores",
             &D2DStreamServiceSender::get_worker_cores,
@@ -145,7 +145,7 @@ void py_module_types(nb::module_& mod) {
             "get_per_shard_spec",
             &D2DStreamServiceReceiver::get_per_shard_spec,
             nb::rv_policy::reference_internal,
-            "The per-coord TensorSpec of the backing tensor (mapper output).")
+            "The per-coord tt::tt_metal::TensorSpec of the backing tensor (mapper output).")
         .def(
             "get_worker_cores",
             &D2DStreamServiceReceiver::get_worker_cores,

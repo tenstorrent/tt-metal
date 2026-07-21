@@ -69,7 +69,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -106,7 +106,7 @@ TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     auto mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config));
 }
 

@@ -106,8 +106,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
     QueueId op_cq_id(0);  // operation command queue id
     boost::asio::thread_pool pool(devices.size());
 
-    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
+        input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    tt::tt_metal::TensorSpec output_tensor_spec(
         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
@@ -267,8 +268,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
     boost::asio::thread_pool pool(devices.size());
 
-    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
+        input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    tt::tt_metal::TensorSpec output_tensor_spec(
         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
@@ -460,8 +462,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
     boost::asio::thread_pool pool(devices.size());
 
-    TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
-    TensorSpec output_tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
+        input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
+    tt::tt_metal::TensorSpec output_tensor_spec(
         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {

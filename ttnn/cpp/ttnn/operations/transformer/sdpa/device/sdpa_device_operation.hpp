@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct SDPAOperation {
     using operation_attributes_t = SDPAParams;
     using tensor_args_t = SDPAInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SDPAProgramFactory {

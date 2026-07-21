@@ -43,7 +43,7 @@ void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
         "Unsupported grid shape");
 }
 
-TensorSpec ConcatenateHeadsDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ConcatenateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -52,7 +52,7 @@ TensorSpec ConcatenateHeadsDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     const auto batch_size = input_tensor.padded_shape()[0];
     ttnn::Shape output_shape({batch_size, 1, 384, 1024});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));

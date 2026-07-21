@@ -72,7 +72,7 @@ Fold::spec_return_value_t Fold::compute_output_specs(
         auto mem_config = MemoryConfig(
             input_tensor.memory_config().memory_layout(), input_tensor.memory_config().buffer_type(), shard_spec);
 
-        return {TensorSpec(
+        return {tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
@@ -90,7 +90,7 @@ Fold::spec_return_value_t Fold::compute_output_specs(
                  input_shape[3] * op_attr.stride_h * op_attr.stride_w});
         }
     }
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_logical_shape,
         tt::tt_metal::TensorLayout(
             output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};

@@ -168,15 +168,15 @@ std::vector<tt::tt_metal::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::co
         v_shard_spec);
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};

@@ -132,7 +132,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_hit(
 
 PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input_e4m3.logical_shape(),
         tt::tt_metal::TensorLayout(
             attrs.output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), attrs.output_memory_config));

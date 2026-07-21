@@ -306,7 +306,7 @@ void run_pipeline(
     std::function<std::vector<uint32_t>(uint32_t iter)> make_metadata = {}) {
     ASSERT_GE(num_stages, 2u);
     auto stages = carve_stages(parent, num_stages);
-    const TensorSpec global_spec = make_spec(global_shape, dtype, layout);
+    const tt::tt_metal::TensorSpec global_spec = make_spec(global_shape, dtype, layout);
     const CoreRange workers = use_all_cores ? all_cores_for(*stages[0]) : kWorkerCores;
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
     const bool metadata_enabled = metadata_size_bytes > 0;
