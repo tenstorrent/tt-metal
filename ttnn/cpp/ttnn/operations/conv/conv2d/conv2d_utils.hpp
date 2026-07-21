@@ -48,6 +48,9 @@ CoreCoord get_output_compute_grid_size(
     const Conv2dConfig& conv_config,
     const sliding_window::ParallelConfig& input_parallel_config);
 
+void validate_input_channel_partition_grid(
+    const sliding_window::ParallelConfig& input_parallel_config, const CoreRangeSet& requested_output_grid);
+
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
@@ -115,8 +118,7 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     uint32_t out_channels,
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv,
-    bool require_input_channel_partition = false,
-    const std::optional<CoreRangeSet>& input_partition_grid_constraint = std::nullopt);
+    bool require_input_channel_partition = false);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> input_image_size,
