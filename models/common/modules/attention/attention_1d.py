@@ -377,6 +377,7 @@ class Attention1D(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         Prefill forward - multiple tokens.
@@ -391,6 +392,8 @@ class Attention1D(LightweightModule):
             page_table: Page table for paged attention (optional).
             chunk_page_table: Page table for chunked prefill (optional).
             chunk_start_idx: Start index for chunked prefill (optional).
+            chunk_start_idx_tensor: Runtime device start-index tensor for
+                position-general chunked prefill (optional).
 
         Returns:
             Output tensor (1, 1, seq_len, dim), DRAM interleaved.
@@ -526,16 +529,33 @@ class Attention1D(LightweightModule):
         # Invalid combinations (rejected at config time in _resolve_attention1d_config):
         # - Non-paged + Chunked: chunked_sdpa requires page_table
         # - sliding_window + Chunked: chunked_sdpa does not implement window masking
-        if chunk_start_idx is not None:
-            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_sdpa,
-                input_tensor_k=keys,
-                input_tensor_v=values,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
-                program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
-            )
+        # Llama3_8B stages one device-resident chunk-start tensor before entering the layer loop and
+        # reuses it here.
+        # todo)) Other models still receive a Python scalar from the legacy shared executor. Retain
+        # that compatibility path until their executor/model plumbing is updated to stage and forward
+        # the tensor once per chunk.
+        if chunk_start_idx is not None or chunk_start_idx_tensor is not None:
+            if chunk_start_idx_tensor is None:
+                attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_sdpa,
+                    input_tensor_k=keys,
+                    input_tensor_v=values,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
+                )
+            else:
+                block_size = cfg.paged_attention_config.block_size
+                attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_sdpa,
+                    input_tensor_k=keys,
+                    input_tensor_v=values,
+                    page_table_tensor=page_table,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    program_config=cfg.prefill_sdpa_prg_config(seq_len, block_size),
+                )
         else:
             sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
             attn_output = ttnn.transformer.scaled_dot_product_attention(

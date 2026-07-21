@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+from types import SimpleNamespace
+
+from models.common.llm_runtime import module_input_validation as validation
+
+
+class FakeTensor:
+    def __init__(self, memory_config="dram"):
+        self._spec = SimpleNamespace(memory_config=memory_config)
+        self.spec_calls = 0
+        self.memory_config_calls = 0
+
+    def is_allocated(self):
+        return True
+
+    @property
+    def spec(self):
+        self.spec_calls += 1
+        return self._spec
+
+    def memory_config(self):
+        self.memory_config_calls += 1
+        return self._spec.memory_config
+
+
+class FakeConfig:
+    def __init__(self):
+        self.prefill_input_memcfg = "dram"
+
+
+class FakeModule:
+    def __init__(self):
+        self.config = FakeConfig()
+
+    def prefill_forward(self, x):
+        return x
+
+
+class FakeModel:
+    def __init__(self):
+        self.module = FakeModule()
+
+
+def iter_named_modules(model):
+    yield "module", model.module
+
+
+def test_validate_module_input_configs_reads_tensor_spec_when_active(monkeypatch):
+    monkeypatch.setattr(validation, "ttnn", SimpleNamespace(Tensor=FakeTensor))
+    model = FakeModel()
+    tensor = FakeTensor()
+
+    with validation.validate_module_input_configs(
+        model=model,
+        iter_named_modules=iter_named_modules,
+        mode="prefill",
+    ):
+        assert model.module.prefill_forward(tensor) is tensor
+
+    assert tensor.spec_calls == 1
+    assert tensor.memory_config_calls == 0
+
+
+def test_active_validation_does_not_format_matching_config(monkeypatch):
+    class MatchingConfig:
+        def __str__(self):
+            raise AssertionError("matching configs must not be formatted")
+
+    monkeypatch.setattr(validation, "ttnn", SimpleNamespace(Tensor=FakeTensor))
+    model = FakeModel()
+    matching_config = MatchingConfig()
+    model.module.config.prefill_input_memcfg = matching_config
+    tensor = FakeTensor(matching_config)
+
+    with validation.validate_module_input_configs(
+        model=model,
+        iter_named_modules=iter_named_modules,
+        mode="prefill",
+    ):
+        assert model.module.prefill_forward(tensor) is tensor
+
+
+def test_suspend_module_input_validation_bypasses_tensor_spec(monkeypatch):
+    monkeypatch.setattr(validation, "ttnn", SimpleNamespace(Tensor=FakeTensor))
+    model = FakeModel()
+    tensor = FakeTensor()
+
+    with validation.validate_module_input_configs(
+        model=model,
+        iter_named_modules=iter_named_modules,
+        mode="prefill",
+    ):
+        with validation.suspend_module_input_validation():
+            assert model.module.prefill_forward(tensor) is tensor
+
+    assert tensor.spec_calls == 0
+    assert tensor.memory_config_calls == 0
+
+
+def test_suspend_module_input_validation_restores_after_nested_contexts(monkeypatch):
+    monkeypatch.setattr(validation, "ttnn", SimpleNamespace(Tensor=FakeTensor))
+    model = FakeModel()
+    tensor = FakeTensor()
+
+    with validation.validate_module_input_configs(
+        model=model,
+        iter_named_modules=iter_named_modules,
+        mode="prefill",
+    ):
+        with validation.suspend_module_input_validation():
+            with validation.suspend_module_input_validation():
+                model.module.prefill_forward(tensor)
+            model.module.prefill_forward(tensor)
+        model.module.prefill_forward(tensor)
+
+    model.module.prefill_forward(tensor)
+
+    assert tensor.spec_calls == 1
+    assert tensor.memory_config_calls == 0

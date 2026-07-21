@@ -196,29 +196,73 @@ class Sampling1D(LightweightModule):
         assert self.config.is_resolved(), "config must be resolved before loading device buffers!"
         cfg = self.config
 
-        self._index_offsets = _materialize(cfg.index_offsets)
-        self._local_indices = _materialize(cfg.local_indices)
-        self._invalid_vocab_mask = _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
-        self._invalid_vocab_tail_mask = (
-            _materialize(cfg.invalid_vocab_tail_mask) if cfg.invalid_vocab_tail_mask is not None else None
-        )
-        self._invalid_vocab_tail_width = cfg.invalid_vocab_tail_width
-        self._seeds = _materialize(cfg.seeds)
-        self._user_ids = _materialize(cfg.user_ids)
-        from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
-
-        self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
-
-        # Pre-compute static sub_core_grids for ttnn.sampling()
-        self._sampling_sub_core_grids = (
-            ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                cfg.start_core, cfg.max_batch_size, cfg.sub_core_grids, row_wise=True
+        try:
+            self._index_offsets = _materialize(cfg.index_offsets)
+            self._local_indices = _materialize(cfg.local_indices)
+            self._invalid_vocab_mask = (
+                _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
             )
-            if cfg.sub_core_grids is not None
-            else None
-        )
+            self._invalid_vocab_tail_mask = (
+                _materialize(cfg.invalid_vocab_tail_mask) if cfg.invalid_vocab_tail_mask is not None else None
+            )
+            self._invalid_vocab_tail_width = cfg.invalid_vocab_tail_width
+            self._seeds = _materialize(cfg.seeds)
+            self._user_ids = _materialize(cfg.user_ids)
+            from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
+
+            self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
+
+            # Pre-compute static sub_core_grids for ttnn.sampling()
+            self._sampling_sub_core_grids = (
+                ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    cfg.start_core, cfg.max_batch_size, cfg.sub_core_grids, row_wise=True
+                )
+                if cfg.sub_core_grids is not None
+                else None
+            )
+        except BaseException as primary:
+            try:
+                self.release()
+            except BaseException as cleanup_error:
+                failures = (cleanup_error,) + tuple(getattr(cleanup_error, "cleanup_failures", ()))
+                _attach_cleanup_failures(primary, failures)
+            raise
 
         self._device_buffers_loaded = True
+
+    def release(self) -> None:
+        """Release model-owned buffers idempotently and permit rematerialization."""
+        failures = []
+        calculator = getattr(self, "_log_probs_calculator", None)
+        if calculator is not None:
+            try:
+                calculator.release()
+            except BaseException as error:
+                failures.append(error)
+            else:
+                self._log_probs_calculator = None
+
+        for name in (
+            "index_offsets",
+            "local_indices",
+            "invalid_vocab_mask",
+            "invalid_vocab_tail_mask",
+            "seeds",
+            "user_ids",
+        ):
+            specification = getattr(self.config, name, None)
+            if isinstance(specification, LazyBuffer):
+                try:
+                    specification.release()
+                except BaseException as error:
+                    failures.append(error)
+            if not isinstance(specification, LazyBuffer) or specification._value is None:
+                setattr(self, f"_{name}", None)
+
+        self._sampling_sub_core_grids = None
+        self._device_buffers_loaded = False
+        if failures:
+            _raise_cleanup_failures(failures)
 
     # -- Forward methods ------------------------------------------------------
 
@@ -881,3 +925,24 @@ def _materialize(buf):
     if isinstance(buf, ttnn.Tensor):
         return buf
     return buf.get_device_buffer()
+
+
+def _attach_cleanup_failures(primary, failures):
+    if not failures:
+        return
+    previous = tuple(getattr(primary, "cleanup_failures", ()))
+    primary.cleanup_failures = previous + tuple(failures)
+    add_note = getattr(primary, "add_note", None)
+    if callable(add_note):
+        add_note(f"cleanup also encountered {len(failures)} failure(s)")
+
+
+def _raise_cleanup_failures(failures):
+    primary = failures[0]
+    if len(failures) > 1:
+        previous = tuple(getattr(primary, "cleanup_failures", ()))
+        primary.cleanup_failures = previous + tuple(failures[1:])
+        add_note = getattr(primary, "add_note", None)
+        if callable(add_note):
+            add_note(f"cleanup also encountered {len(failures) - 1} additional failure(s)")
+    raise primary

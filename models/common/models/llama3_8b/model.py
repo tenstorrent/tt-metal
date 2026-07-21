@@ -286,7 +286,15 @@ class TransformerBlock1D(LightweightModule):
         return out
 
     def prefill_forward(
-        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size: int = 1
+        self,
+        x: ttnn.Tensor,
+        rot_mats,
+        user_id,
+        page_table,
+        chunk_page_table,
+        chunk_start_idx,
+        batch_size: int = 1,
+        chunk_start_idx_tensor=None,
     ) -> ttnn.Tensor:
         residual = x
 
@@ -301,6 +309,7 @@ class TransformerBlock1D(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
         )
         if batch_size > 1:
             residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
@@ -334,9 +343,19 @@ class TransformerBlock1D(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         batch_size: int = 1,
+        chunk_start_idx_tensor=None,
     ):
         if mode == "prefill":
-            return self.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
+            return self.prefill_forward(
+                x,
+                rot_mats,
+                user_id,
+                page_table,
+                chunk_page_table,
+                chunk_start_idx,
+                batch_size,
+                chunk_start_idx_tensor,
+            )
         return self.decode_forward(x, current_pos, rot_mats, page_table)
 
 
@@ -359,6 +378,7 @@ class Llama3Transformer1DConfig:
     vocab_size: int
     max_batch_size: int
     max_seq_len: int
+    dim: int
     num_devices: int
     mesh_device: ttnn.MeshDevice
 
@@ -441,18 +461,49 @@ class Llama3Transformer1D(LightweightModule):
     # KV Cache binding
     # =========================================================================
 
-    def set_kv_cache(self, kv_cache: list):
-        """Bind static kv_cache pool via each attention layer's config.
+    def iter_executor_named_modules(self):
+        """Yield named submodules that declare executor input contracts."""
+        if not hasattr(self, "layers"):
+            return
 
-        Must be called before the first forward (before load_device_weights runs).
-        The kv_cache is resolved from config during load_device_weights(), just
-        like all other weights.
-        """
-        assert len(kv_cache) == len(
-            self.layers
-        ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers"
         for i, layer in enumerate(self.layers):
-            cache_pair = tuple(kv_cache[i])
+            for suffix, submodule in (
+                ("attn_norm", getattr(layer, "attention_norm", None)),
+                ("attention", getattr(layer, "attention", None)),
+                ("ff_norm", getattr(layer, "ff_norm", None)),
+                ("mlp", getattr(layer, "feed_forward", None)),
+            ):
+                if submodule is not None:
+                    yield f"layer[{i}].{suffix}", submodule
+
+        if hasattr(self, "norm"):
+            yield "final_norm", self.norm
+        if hasattr(self, "lm_head"):
+            yield "lm_head", self.lm_head
+
+    def set_kv_cache(self, kv_cache: list | None):
+        """Bind or unbind the static KV-cache pool transactionally."""
+        if kv_cache is None:
+            for layer in self.layers:
+                layer.attention.config.kv_cache = None
+                if hasattr(layer.attention, "kv_cache"):
+                    layer.attention.kv_cache = None
+            return
+
+        if len(kv_cache) != len(self.layers):
+            raise ValueError(f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers")
+
+        cache_pairs = []
+        for i, value in enumerate(kv_cache):
+            try:
+                cache_pair = tuple(value)
+            except TypeError as error:
+                raise TypeError(f"kv_cache layer {i} must provide an iterable K/V tensor pair") from error
+            if len(cache_pair) != 2:
+                raise ValueError(f"kv_cache layer {i} must contain exactly two K/V tensors")
+            cache_pairs.append(cache_pair)
+
+        for layer, cache_pair in zip(self.layers, cache_pairs):
             layer.attention.config.kv_cache = cache_pair
             if hasattr(layer.attention, "kv_cache"):
                 layer.attention.kv_cache = cache_pair
@@ -491,6 +542,9 @@ class Llama3Transformer1D(LightweightModule):
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
         batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Prefill forward. x_embed is already embedded and unsqueezed to 4D."""
         x = x_embed
@@ -502,15 +556,49 @@ class Llama3Transformer1D(LightweightModule):
                 x = ttnn.typecast(x, activation_dtype)
                 ttnn.deallocate(old)
 
-            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
+            x = layer.prefill_forward(
+                x,
+                rot_mats,
+                user_id,
+                page_table,
+                chunk_page_table,
+                chunk_start_idx,
+                batch_size,
+                chunk_start_idx_tensor,
+            )
 
-        if get_last_token == -1:
+        if last_token_index is not None and last_token_slice is None:
+            raise ValueError("last_token_index is required with a runtime last_token_slice")
+        if get_last_token == -1 and last_token_slice is None:
             return x
 
-        get_last_token_floor = (get_last_token // 32) * 32
         old = x
-        x = ttnn.slice(x, (0, 0, get_last_token_floor, 0), (1, 1, get_last_token_floor + 32, x.shape[-1]))
+        if last_token_slice is None:
+            get_last_token_floor = (get_last_token // 32) * 32
+            x = ttnn.slice(
+                x,
+                (0, 0, get_last_token_floor, 0),
+                (1, 1, get_last_token_floor + 32, x.shape[-1]),
+            )
+        else:
+            x = ttnn.slice(
+                x,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(x.shape[2]) // 32,
+            )
         ttnn.deallocate(old)
+
+        if last_token_index is not None:
+            if x.dtype != ttnn.bfloat16:
+                old = x
+                x = ttnn.typecast(x, ttnn.bfloat16)
+                ttnn.deallocate(old)
+            old = x
+            x = ttnn.embedding(last_token_index, x, layout=ttnn.TILE_LAYOUT)
+            x = ttnn.unsqueeze_to_4D(x)
+            ttnn.deallocate(old)
 
         x = self.norm.prefill_forward(x)
         x = _all_gather_rmsnorm_tensor(self.norm, x)
@@ -521,14 +609,28 @@ class Llama3Transformer1D(LightweightModule):
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         return x
 
-    def post_process_prefill_output(self, hidden_states: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
+    def post_process_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+    ) -> ttnn.Tensor:
         """Convert traced prefill hidden states into logits for the last token block."""
-        get_last_token_floor = (last_token_idx // 32) * 32
-        x = ttnn.slice(
-            hidden_states,
-            (0, 0, get_last_token_floor, 0),
-            (1, 1, get_last_token_floor + 32, hidden_states.shape[-1]),
-        )
+        if last_token_slice is None:
+            get_last_token_floor = (last_token_idx // 32) * 32
+            x = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last_token_floor, 0),
+                (1, 1, get_last_token_floor + 32, hidden_states.shape[-1]),
+            )
+        else:
+            x = ttnn.slice(
+                hidden_states,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(hidden_states.shape[2]) // 32,
+            )
 
         x = self.norm.prefill_forward(x)
         x = _all_gather_rmsnorm_tensor(self.norm, x)
@@ -545,18 +647,35 @@ class Llama3Transformer1D(LightweightModule):
         last_token_idx_list: list[int],
         padded_batch: int,
         prefill_seq_len: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Convert batched prefill hidden states into one logits row per slot."""
         x = self.norm.prefill_forward(hidden_states)
         x = _all_gather_rmsnorm_tensor(self.norm, x)
         x_split = ttnn.split(x, prefill_seq_len, dim=2)
-        x = ttnn.concat(
-            [
+        if last_token_slice is None:
+            selected = [
                 x_user[:, :, last_token_idx : last_token_idx + 1, :]
                 for x_user, last_token_idx in zip(x_split, last_token_idx_list)
-            ],
-            dim=2,
-        )
+            ]
+        else:
+            if last_token_index is None:
+                raise ValueError("last_token_index is required with a runtime last_token_slice")
+            selected = []
+            for x_user in x_split[: len(last_token_idx_list)]:
+                block = ttnn.slice(
+                    x_user,
+                    last_token_slice[0],
+                    last_token_slice[1],
+                    slice_dim=2,
+                    num_devices=prefill_seq_len // 32,
+                )
+                row = ttnn.embedding(last_token_index, block, layout=ttnn.TILE_LAYOUT)
+                row = ttnn.unsqueeze_to_4D(row)
+                ttnn.deallocate(block)
+                selected.append(row)
+        x = ttnn.concat(selected, dim=2)
         lm_head_memcfg = self.lm_head.config.input_memcfg
         if lm_head_memcfg is not None and lm_head_memcfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
@@ -577,6 +696,9 @@ class Llama3Transformer1D(LightweightModule):
         chunk_start_idx=None,
         get_last_token: int = -1,
         batch_size: int = 1,
+        chunk_start_idx_tensor=None,
+        last_token_slice=None,
+        last_token_index=None,
     ) -> ttnn.Tensor:
         """Dispatcher for backward compatibility. Llama 3.1-8B has no local rope."""
         rot_mats = rot_mats_global
@@ -590,6 +712,9 @@ class Llama3Transformer1D(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 get_last_token=get_last_token,
                 batch_size=batch_size,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                last_token_slice=last_token_slice,
+                last_token_index=last_token_index,
             )
         return self.decode_forward(
             x,
@@ -601,6 +726,24 @@ class Llama3Transformer1D(LightweightModule):
     # =========================================================================
     # Embedding + output processing helpers (called by executor)
     # =========================================================================
+
+    def prepare_prefill_rot_mats(self, position_indices: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Gather prefill RoPE rows from runtime device position indices."""
+        self.rope_setup.load_device_weights()
+        cos = None
+        sin = None
+        try:
+            cos = ttnn.embedding(position_indices, self.rope_setup.cos_matrix, layout=ttnn.TILE_LAYOUT)
+            sin = ttnn.embedding(position_indices, self.rope_setup.sin_matrix, layout=ttnn.TILE_LAYOUT)
+            return ttnn.unsqueeze_to_4D(cos), ttnn.unsqueeze_to_4D(sin)
+        except BaseException:
+            for tensor in (sin, cos):
+                if tensor is not None:
+                    try:
+                        ttnn.deallocate(tensor)
+                    except BaseException:
+                        pass
+            raise
 
     def embed_decode(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         """Embed tokens and prepare for decode. Returns tensor in decode_residual_memcfg."""
@@ -1480,6 +1623,7 @@ def build_llama3_transformer_1d_config(
         vocab_size=vocab_size,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
+        dim=dim,
         num_devices=num_devices,
         mesh_device=mesh_device,
         embedding_config=make_embedding_config(),

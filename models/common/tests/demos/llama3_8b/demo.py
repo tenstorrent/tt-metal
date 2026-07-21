@@ -29,13 +29,14 @@ from loguru import logger
 
 import ttnn
 from models.common.device_utils import get_device_name
-from models.common.models.executor import cleanup_ttnn_value, run_perf_benchmark, run_teacher_forcing
-from models.common.models.llama3_8b.executor import EagerLlamaExecutor, TracedLlamaExecutor
+from models.common.llm_runtime.config import LLMExecutorConfig, PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.models.llama3_8b.executor import build_llama3_executor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, preprocess_llama3_8b_chat_prompts
+from models.common.tests.demos.run_helpers import run_perf_benchmark, run_teacher_forcing
 
 # =============================================================================
 # Expected metrics
@@ -234,6 +235,48 @@ def _attention_config(model):
     return model.config.block_configs[0].attention_config
 
 
+def _build_demo_executor(llm, *, trace_mode, device_sampling_enabled, include_decode_top_k=False):
+    attention_config = _attention_config(llm.model)
+    paged_attention_config = attention_config.paged_attention_config
+    config = LLMExecutorConfig(
+        trace=TraceConfig(mode=trace_mode),
+        warmup=WarmupConfig(include_decode_top_k=include_decode_top_k),
+        paged_kv_cache=PagedKVCacheConfig(
+            block_size=int(paged_attention_config.block_size),
+            max_num_blocks=int(paged_attention_config.max_num_blocks),
+            num_blocks=int(paged_attention_config.max_num_blocks),
+            dtype=attention_config.kv_cache_dtype,
+        ),
+        device_sampling_enabled=device_sampling_enabled,
+    )
+    return build_llama3_executor(llm, config)
+
+
+def _warmup_demo_executor(executor, *, kv_cache, page_table):
+    can_sample_on_device = executor.config.device_sampling_enabled
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": can_sample_on_device,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(executor.model.config.max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": can_sample_on_device,
+    }
+
+    # Compile both graph families before capturing either trace so trace plans
+    # never depend on which warmup happens to run first.
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+
+    if executor.config.trace.prefill_enabled:
+        executor.already_warmed_up_prefill = False
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if executor.config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
+
+
 def _expected_for_case(expected, test_config):
     """Merge per-case performance targets into the device-level expectations."""
     case_expected = expected.get(test_config)
@@ -260,8 +303,6 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, log_text=False):
     """Run teacher forcing and return top-1/top-5 percentages."""
     model = llm.model
     model_config = model.config
-    runtime_config = llm.runtime_config
-    attention_config = _attention_config(model)
     model_name = llm.model_name
     reference_tokens, top5_tokens = load_reference_data(model_name)
 
@@ -274,19 +315,16 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, log_text=False):
 
     max_batch_size = model_config.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
-    block_size = 32
-    max_num_blocks = attention_config.paged_attention_config.max_num_blocks
-    max_num_blocks_per_user = max_num_blocks // max_batch_size
-
-    kv_cache_shape = (
-        max_num_blocks,
-        attention_config.n_kv_heads // mesh_device.get_num_devices(),
-        block_size,
-        attention_config.head_dim,
+    executor = _build_demo_executor(
+        llm,
+        trace_mode="none",
+        device_sampling_enabled=False,
+        include_decode_top_k=False,
     )
-    executor = EagerLlamaExecutor(model, mesh_device, model_args=runtime_config)
     try:
-        kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_config.n_layers)
+        kv_cache = executor.allocate_kv_cache()
+        max_num_blocks = executor.paged_kv_cache_config.num_blocks
+        max_num_blocks_per_user = max_num_blocks // max_batch_size
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
         target_top5 = top5_tokens[half - 1 :] if top5_tokens.shape[0] < len(reference_tokens) else top5_tokens[half:]
@@ -323,51 +361,47 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
     """Run performance benchmark (TTFT + tok/s/u)."""
     model = llm.model
     model_config = model.config
-    runtime_config = llm.runtime_config
-    attention_config = _attention_config(model)
-    traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=runtime_config)
-    kv_cache = None
+    prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
+    prompts = load_input_prompts(prompts_path, batch_size)
+    tokenizer = llm.tokenizer
+    num_decode_tokens = int(os.environ.get("LLAMA3_8B_TTTV2_DECODE_TOKENS", "200"))
+    input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
+        prompts,
+        llm,
+        reserve_decode_tokens=num_decode_tokens,
+    )
+
+    sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
+    on_device_params = {
+        "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
+        "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+    }
+    sampling_params = (
+        on_device_params[sampling_mode]
+        if sampling_mode in on_device_params and getattr(model, "supports_on_device_sampling", False)
+        else None
+    )
+    logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+    pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
+    logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
+
+    executor = None
     try:
-        block_size = 32
-        max_batch_size = model_config.max_batch_size
-        max_num_blocks = attention_config.paged_attention_config.max_num_blocks
-        max_num_blocks_per_user = max_num_blocks // max_batch_size
-
-        kv_cache_shape = (
-            max_num_blocks,
-            attention_config.n_kv_heads // mesh_device.get_num_devices(),
-            block_size,
-            attention_config.head_dim,
-        )
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, model_config.n_layers)
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
-
-        prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
-        prompts = load_input_prompts(prompts_path, batch_size)
-        tokenizer = llm.tokenizer
-        num_decode_tokens = int(os.environ.get("LLAMA3_8B_TTTV2_DECODE_TOKENS", "200"))
-        input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
-            prompts,
+        executor = _build_demo_executor(
             llm,
-            reserve_decode_tokens=num_decode_tokens,
+            trace_mode="all",
+            device_sampling_enabled=sampling_params is not None,
+            include_decode_top_k=sampling_params is not None and sampling_mode == "on_device_topk",
         )
-
-        sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
-        on_device_params = {
-            "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
-            "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
-        }
-        sampling_params = (
-            on_device_params[sampling_mode]
-            if sampling_mode in on_device_params and getattr(model, "supports_on_device_sampling", False)
-            else None
-        )
-        logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
-        pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
-        logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
+        kv_cache = executor.allocate_kv_cache()
+        max_batch_size = model_config.max_batch_size
+        max_num_blocks = executor.paged_kv_cache_config.num_blocks
+        max_num_blocks_per_user = max_num_blocks // max_batch_size
+        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        _warmup_demo_executor(executor, kv_cache=kv_cache, page_table=page_table)
 
         result = run_perf_benchmark(
-            traced_executor,
+            executor,
             tokens=input_tokens,
             kv_cache=kv_cache,
             page_table=page_table,
@@ -384,35 +418,31 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
             f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
         )
         log_generated_text(prompts, result.generated_token_ids, tokenizer)
-
-        cleanup_ttnn_value(kv_cache)
-        kv_cache = None
-
-        skip_perf_teacher_forcing = os.environ.get("LLAMA3_8B_TTTV2_SKIP_PERF_TEACHER_FORCING", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        if skip_perf_teacher_forcing:
-            logger.info("Skipping performance-side teacher forcing because profiling requested decode-only execution")
-        else:
-            top1, top5 = _measure_teacher_forcing_accuracy(llm, mesh_device, log_text=False)
-            logger.info(f"Performance-side teacher forcing — top1: {top1:.1f}%, top5: {top5:.1f}%")
-
-        if expected:
-            targets = result.meets_target(expected, PERF_TOLERANCE)
-            for metric, passed in targets.items():
-                if not passed:
-                    logger.warning(
-                        f"{metric} did not meet target: got {getattr(result, metric)}, expected {expected[metric]}"
-                    )
-            failures = []
-            if "tok_s_u" in expected and not targets["tok_s_u"]:
-                failures.append(f"tok/s/u {result.tok_s_u:.1f} below target {expected['tok_s_u']}")
-            if "ttft_ms" in expected and not targets["ttft_ms"]:
-                failures.append(f"ttft_ms {result.ttft_ms:.1f} above target {expected['ttft_ms']}")
-            assert not failures, f"{case_name}: " + "; ".join(failures)
     finally:
-        cleanup_ttnn_value(kv_cache)
-        if traced_executor is not None:
-            traced_executor.cleanup()
+        if executor is not None:
+            executor.cleanup()
+
+    skip_perf_teacher_forcing = os.environ.get("LLAMA3_8B_TTTV2_SKIP_PERF_TEACHER_FORCING", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if skip_perf_teacher_forcing:
+        logger.info("Skipping performance-side teacher forcing because profiling requested decode-only execution")
+    else:
+        top1, top5 = _measure_teacher_forcing_accuracy(llm, mesh_device, log_text=False)
+        logger.info(f"Performance-side teacher forcing — top1: {top1:.1f}%, top5: {top5:.1f}%")
+
+    if expected:
+        targets = result.meets_target(expected, PERF_TOLERANCE)
+        for metric, passed in targets.items():
+            if not passed:
+                logger.warning(
+                    f"{metric} did not meet target: got {getattr(result, metric)}, expected {expected[metric]}"
+                )
+        failures = []
+        if "tok_s_u" in expected and not targets["tok_s_u"]:
+            failures.append(f"tok/s/u {result.tok_s_u:.1f} below target {expected['tok_s_u']}")
+        if "ttft_ms" in expected and not targets["ttft_ms"]:
+            failures.append(f"ttft_ms {result.ttft_ms:.1f} above target {expected['ttft_ms']}")
+        assert not failures, f"{case_name}: " + "; ".join(failures)

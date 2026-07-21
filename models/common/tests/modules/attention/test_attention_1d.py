@@ -19,6 +19,7 @@ Test coverage notes:
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,6 +38,7 @@ except ImportError:
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
+from models.common.modules.attention import attention_1d as attention_1d_module
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig, _resolve_attention1d_config
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
@@ -947,6 +949,99 @@ def test_attention_1d_resolve_rejects_sliding_window_with_paged(expect_error):
 
     with expect_error(ValueError, "sliding_window"):
         _resolve_attention1d_config(config)
+
+
+class _AttentionPrefillTensor:
+    def __init__(self, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+
+
+@pytest.mark.parametrize("use_runtime_tensor", [False, True])
+def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch, use_runtime_tensor):
+    bfloat16 = object()
+    bfloat8_b = object()
+    chunked_sdpa = MagicMock(return_value=_AttentionPrefillTensor((1, 32, 128, 128), bfloat8_b))
+    xqkv = _AttentionPrefillTensor((1, 1, 128, 6144), bfloat16)
+    q_heads = _AttentionPrefillTensor((1, 32, 128, 128), bfloat16)
+    k_heads = _AttentionPrefillTensor((1, 8, 128, 128), bfloat16)
+    v_heads = _AttentionPrefillTensor((1, 8, 128, 128), bfloat16)
+    output = _AttentionPrefillTensor((1, 1, 128, 4096), bfloat8_b)
+    fake_ttnn = SimpleNamespace(
+        DRAM_MEMORY_CONFIG=object(),
+        bfloat16=bfloat16,
+        bfloat8_b=bfloat8_b,
+        deallocate=MagicMock(),
+        experimental=SimpleNamespace(
+            nlp_concat_heads=MagicMock(side_effect=lambda tensor, **_kwargs: tensor),
+            nlp_create_qkv_heads=MagicMock(return_value=(q_heads, k_heads, v_heads)),
+            rotary_embedding_llama=MagicMock(side_effect=lambda tensor, *_args, **_kwargs: tensor),
+        ),
+        linear=MagicMock(side_effect=[xqkv, output]),
+        reshape=MagicMock(side_effect=lambda tensor, *_args, **_kwargs: tensor),
+        transformer=SimpleNamespace(chunked_scaled_dot_product_attention=chunked_sdpa),
+        typecast=MagicMock(side_effect=lambda tensor, **_kwargs: tensor),
+    )
+    prefill_sdpa_prg_config = MagicMock(return_value="sdpa-program")
+    cfg = SimpleNamespace(
+        activation_dtype=None,
+        head_dim=128,
+        li_o_prefill_compute_kernel_cfg=object(),
+        li_qkv_prefill_compute_kernel_cfg=object(),
+        mesh_device=SimpleNamespace(get_num_devices=MagicMock(return_value=1)),
+        min_kv_prefill_shard_seqlen=256,
+        n_heads=32,
+        n_kv_heads=8,
+        paged_attention_config=SimpleNamespace(block_size=32),
+        prefill_sdpa_prg_config=prefill_sdpa_prg_config,
+        prefill_wo_prg_config=MagicMock(return_value="wo-program"),
+        prefill_xqkv_prg_config=MagicMock(return_value="qkv-program"),
+        scale=0.125,
+        sdpa_prefill_compute_kernel_cfg=object(),
+        sliding_window=None,
+        transformation_mat_prefill=object(),
+    )
+    cache_dtype = object()
+    attention = SimpleNamespace(
+        _all_gather_before_wo_prefill=MagicMock(side_effect=lambda tensor: tensor),
+        _kv_fill_prefill=MagicMock(),
+        _reduce_after_wo_prefill=MagicMock(side_effect=lambda tensor: tensor),
+        config=cfg,
+        k_norm=None,
+        kv_cache=(
+            _AttentionPrefillTensor((1, 8, 4096, 128), cache_dtype),
+            _AttentionPrefillTensor((1, 8, 4096, 128), cache_dtype),
+        ),
+        load_device_weights=MagicMock(),
+        q_norm=None,
+        wo=object(),
+        wqkv=object(),
+        wqkv_bias_prefill=None,
+    )
+    x = _AttentionPrefillTensor((1, 1, 128, 4096), bfloat16)
+    page_table = object()
+    chunk_start_idx_tensor = object() if use_runtime_tensor else None
+    monkeypatch.setattr(attention_1d_module, "ttnn", fake_ttnn)
+    monkeypatch.setattr(attention_1d_module, "_load_input_device_tensor", lambda tensor, *_args, **_kwargs: tensor)
+
+    Attention1D.prefill_forward(
+        attention,
+        x,
+        (object(), object()),
+        page_table=page_table,
+        chunk_start_idx=96,
+        chunk_start_idx_tensor=chunk_start_idx_tensor,
+    )
+
+    sdpa_kwargs = chunked_sdpa.call_args.kwargs
+    if use_runtime_tensor:
+        assert sdpa_kwargs["chunk_start_idx_tensor"] is chunk_start_idx_tensor
+        assert "chunk_start_idx" not in sdpa_kwargs
+        prefill_sdpa_prg_config.assert_called_once_with(128, 32)
+    else:
+        assert sdpa_kwargs["chunk_start_idx"] == 96
+        assert "chunk_start_idx_tensor" not in sdpa_kwargs
+        prefill_sdpa_prg_config.assert_called_once_with(128, 96)
 
 
 # ============================================================================

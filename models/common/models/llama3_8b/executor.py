@@ -5,9 +5,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import ttnn
+from models.common.llm_runtime.config import LLMExecutorConfig
+from models.common.llm_runtime.executor import LLMExecutor
 from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
 from models.common.models.llama3_8b.model import Llama3Transformer1D
+
+if TYPE_CHECKING:
+    from models.common.models.llama3_8b.hf_adaptor import Llama3ForCausalLM
 
 
 class EagerLlamaExecutor:
@@ -279,6 +286,11 @@ class TracedLlamaExecutor:
 
     def cleanup(self):
         return self._engine.cleanup()
+
+
+def build_llama3_executor(llm: Llama3ForCausalLM, config: LLMExecutorConfig) -> LLMExecutor:
+    """Build the new runtime from an already-constructed Llama product."""
+    return LLMExecutor(llm.model, llm.runtime_config, config)
 
 
 def _iter_llama_executor_named_modules(model):
