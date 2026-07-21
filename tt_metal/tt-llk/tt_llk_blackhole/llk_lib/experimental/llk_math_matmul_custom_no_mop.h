@@ -52,8 +52,8 @@ inline void matmul_configure_addrmod_no_mop(
     // so the fixed no-mop replay stays confined to the tile's actual face-rows (mirrors the WH no-mop
     // path, which likewise delegates to matmul_configure_addrmod). The hardcoded full-32x32 addrmods
     // below are retained unchanged for the common full-tile case.
-    const bool is_full_tile = (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) &&
-                              (in1_tile_c_dim == TILE_C_DIM) && !partial_face;
+    const bool is_full_tile =
+        (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face;
     if (!is_full_tile)
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
@@ -160,8 +160,7 @@ inline void matmul_configure_addrmod_reinit(
     // Reinit must restore the address-modifier contract used by replay. For tiny tiles this
     // re-establishes the shape-aware addrmods (see matmul_configure_addrmod_no_mop); for full tiles
     // it restores the hardcoded 32x32 addrmods. transpose affects ADDR_MOD_1/4, fidelity uses ADDR_MOD_5/6.
-    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(
-        transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 }
 
 // Number of MVMULs (including the trailing fidelity/clear op) in the no-mop replay image for the given
@@ -178,8 +177,7 @@ inline std::uint32_t matmul_no_mop_replay_len(
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
     const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
     const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
-    return (is_in0_16x32 && is_in1_32x16) ? 4
-                                          : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
+    return (is_in0_16x32 && is_in1_32x16) ? 4 : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
 }
 
 template <MathFidelity math_fidelity>
@@ -436,8 +434,7 @@ inline void _llk_math_matmul_init_no_mop_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
-    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(
-        transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     if constexpr (THROTTLE_LEVEL > 0)
     {
         matmul_configure_mop_throttled_no_mop<THROTTLE_LEVEL>();
@@ -497,6 +494,11 @@ inline void _llk_math_matmul_no_mop_(
                     // THROTTLE_LEVEL 4 or 5: outer_loops = 2
                     if constexpr (high_fidelity)
                     {
+                        // Fidelity-phase fix (mirrors levels 1-3): the phase counter only advances on an
+                        // ADDR_MOD whose fidelity.incr is set. ADDR_MOD_4 has no fidelity field, so using it
+                        // at the phase boundary re-ran every HiFi phase at phase 0 -> HiFi collapsed to ~1/2.
+                        // Use ADDR_MOD_5 (reset + fidelity.incr) between phases and ADDR_MOD_6 (reset +
+                        // fidelity.clr) on the final phase, matching the correct levels 1-3 sequence.
                         // outer loop for fidelity phases
                         for (std::uint32_t phase = 0; phase < num_fidelity_phases; phase++)
                         {
@@ -510,11 +512,11 @@ inline void _llk_math_matmul_no_mop_(
                                 }
                                 else if (phase < num_fidelity_phases - 1)
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // last inner, not last outer
+                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // last inner, not last phase: full addr reset + increment fidelity phase
                                 }
                                 else
                                 {
-                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // last inner, last outer
+                                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_6, 0); // last inner, last phase: full addr reset + clear fidelity phase
                                 }
                             }
                         }
