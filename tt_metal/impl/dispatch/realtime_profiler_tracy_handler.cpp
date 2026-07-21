@@ -445,16 +445,16 @@ void RealtimeProfilerTracyHandler::CalibrateDevice(
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    // Refine the chip's anchor so contexts created AFTER this sync Populate with the current mapping
-    // (a single anchor per context — no dual-anchor birth).
+    // Deliberately does NOT emit a Tracy GpuCalibration. GPU drift-calibration is wrong for tt_device
+    // contexts: the Tensix wall clock is a free-running ABSOLUTE ns counter at the host clock's rate, so a
+    // drift scale (calibrationMod) derived from the anchor-vs-absolute-timestamp delta comes out ~0.11 and
+    // shrinks every zone duration ~9x (see TracyTTDevice.hpp GpuNewContext flags). We keep the mapping as a
+    // pure anchor (server: gpuTime = tgpu + timeDiff). This call only refreshes the stored host/frequency
+    // anchor for any context created later; it never rescales existing zones.
+    (void)device_timestamp;
     if (auto ait = chip_anchors_.find(chip_id); ait != chip_anchors_.end()) {
-        ait->second = ChipAnchor{host_time, static_cast<double>(device_timestamp), frequency};
-    }
-    // Recalibrate every existing context for this chip uniformly.
-    for (auto& [key, ctx] : tracy_contexts_) {
-        if ((key >> 40) == chip_id) {
-            TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
-        }
+        ait->second.host_start = host_time;
+        ait->second.frequency = frequency;
     }
 #endif
 }
