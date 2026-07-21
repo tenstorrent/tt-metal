@@ -389,13 +389,29 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t max_dynamic_chunk_size = dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
+    // The matmul subblock height must DIVIDE PNHt: matmul_blocks loops
+    // in0_num_subblocks = PNHt / subblock_h times, each covering subblock_h rows, and only
+    // packs/pushes those rows. If subblock_h does not divide PNHt, integer truncation makes
+    // the loop cover fewer than PNHt rows — the QK / out CBs are then under-produced and the
+    // consumer deadlocks (e.g. PNHt=3, cap=2 → 3/2=1 covers 2 of 3 rows). This is reachable
+    // whenever the dst-limited cap does not divide PNHt, which fp32_dest_acc_en makes common
+    // (it halves dst_size to 4). Clamp the cap down to the largest divisor of PNHt.
+    auto largest_divisor_leq = [](uint32_t n, uint32_t cap) {
+        uint32_t h = std::min(n, cap);
+        while (h > 1 && n % h != 0) {
+            --h;
+        }
+        return std::max(h, 1u);
+    };
+
     // Matmul block/subblock configuration for QK
     const uint32_t qk_in0_block_w = DHt;
     const uint32_t qk_num_blocks = 1;
     uint32_t qk_out_subblock_w = 0, qk_out_subblock_h = 0, qk_in0_num_subblocks = 0, qk_in1_num_subblocks = 0;
     if (Sk_chunk_t > 0) {
         qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-        qk_out_subblock_h = (qk_out_subblock_w == Sk_chunk_t) ? std::min(PNHt, dst_size / qk_out_subblock_w) : 1;
+        qk_out_subblock_h =
+            (qk_out_subblock_w == Sk_chunk_t) ? largest_divisor_leq(PNHt, dst_size / qk_out_subblock_w) : 1;
         qk_in0_num_subblocks = PNHt / qk_out_subblock_h;
         qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     }
@@ -405,7 +421,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     uint32_t out_num_blocks = Sk_chunk_t > 0 ? 1 : 0;
     const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
     const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
+        (out_out_subblock_w == vDHt) ? largest_divisor_leq(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 

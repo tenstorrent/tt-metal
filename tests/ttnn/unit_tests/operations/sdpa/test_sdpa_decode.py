@@ -65,6 +65,44 @@ def test_sdpa_decode_fp32_dest_acc(device, b, nh, nkv, s, d, grid_size, cur_pos,
 
 
 @pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos, k_chunk",
+    (
+        [1, 96, 8, 1024, 128, (8, 8), 200, 64],  # PNHt=3
+        [1, 160, 8, 1024, 128, (8, 8), 200, 64],  # PNHt=5
+    ),
+    ids=["pnht3", "pnht5"],
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_fp32_dest_acc_odd_pnht(device, b, nh, nkv, s, d, grid_size, cur_pos, k_chunk, reset_seeds):
+    """fp32_dest_acc_en=True with a padded-Q-heads tile count (PNHt) that the matmul
+    subblock height does not divide used to hang the device.
+
+    matmul_blocks loops in0_num_subblocks = PNHt / subblock_h times over subblock_h rows.
+    fp32 accumulation halves DEST to 4 tiles, capping the QK subblock height at 2; for an
+    odd PNHt (e.g. 3) that does not divide PNHt, so the loop covered only 2 of 3 rows, the
+    QK CB was under-produced, and the consumer waited forever. The program factory now
+    clamps the subblock height to a divisor of PNHt.
+    """
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        ttnn.bfloat8_b,
+        grid_size,
+        ttnn.bfloat16,
+        cur_pos_tensor=True,
+        sharded_in=False,
+        sharded_out=False,
+        start_indices=[cur_pos] * b,
+        override_k_chunk_size=k_chunk,
+        fp32_dest_acc_en=True,
+    )
+
+
+@pytest.mark.parametrize(
     "dtype, q_dtype",
     [
         [ttnn.bfloat8_b, ttnn.bfloat16],
