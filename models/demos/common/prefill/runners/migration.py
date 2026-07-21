@@ -88,13 +88,26 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _deliver_local_device_map(device_map) -> None:
+def _deliver_local_device_map(device_map, timeout_s: float = 120.0) -> None:
     """Deliver THIS rank's FNID->UMD device map on the static outward table queue
     (``PREFILL_MIGRATION_*_QUEUE``, passed in by the migration layer); the endpoint orchestrator
-    relays the AssignDevMap/DevMapEntry burst to its internal A/B workers."""
-    client, _cmd_q, table_q, _resp_q = _attach_migration_client()
-    client.send_device_map(device_map)
-    logger.info(f"[migration] delivered {len(device_map)} device-map entries -> {table_q}")
+    relays the AssignDevMap/DevMapEntry burst to its internal A/B workers.
+
+    Retries attachment until the queues appear (the migration endpoint may not have created them
+    yet at this point in the bring-up sequence) or ``timeout_s`` elapses."""
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            client, _cmd_q, table_q, _resp_q = _attach_migration_client()
+            client.send_device_map(device_map)
+            logger.info(f"[migration] delivered {len(device_map)} device-map entries -> {table_q}")
+            return
+        except RuntimeError as e:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
