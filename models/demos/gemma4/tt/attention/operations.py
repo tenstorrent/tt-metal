@@ -30,7 +30,12 @@ from .weights import AttentionWeights
 # The hardware cliff itself is fixed at 2^15; env only changes when we *switch*
 # to the chunked path (may be lower for testing).
 PREFILL_SDPA_HARD_MAX = 32768
-PREFILL_SDPA_MAX_SEQ = int(os.environ.get("GEMMA4_PREFILL_SDPA_MAX_SEQ", str(PREFILL_SDPA_HARD_MAX)))
+# Env may force an *earlier* switch to chunked SDPA for testing; never raise
+# above the hardware cliff (non-chunked SDPA is wrong past 2^15).
+PREFILL_SDPA_MAX_SEQ = min(
+    PREFILL_SDPA_HARD_MAX,
+    int(os.environ.get("GEMMA4_PREFILL_SDPA_MAX_SEQ", str(PREFILL_SDPA_HARD_MAX))),
+)
 # Q chunk size for chunked prefill. Must be <= 32768 and a multiple of the SDPA
 # q/k_chunk_size (128) and the page block size. 8192 keeps L1 bounded for the
 # global layers' head_dim=512.
