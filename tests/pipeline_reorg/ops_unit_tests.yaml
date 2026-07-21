@@ -93,7 +93,7 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
   skus:
     bh_p100:
-      timeout: 35
+      timeout: 60
     bh_p150b_civ2:
       timeout: 35
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

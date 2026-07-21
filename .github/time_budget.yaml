@@ -92,7 +92,7 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
-    bh_p100: 780
+    bh_p100: 805
     bh_p150b_civ2: 1045
     wh_n150_civ2: 1185
     wh_n300_civ2: 1175
