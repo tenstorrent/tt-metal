@@ -348,6 +348,111 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
     return desc;
 }
 
+// Mirrors spec.py's _count_valid_sticks: counts sticks in [start, start+count) whose position
+// within a `batch_h`-sized physical batch falls below `valid_per_batch`. The with-unpadding
+// writer's running out_page_offset needs this to skip padding rows and land on the same compact
+// stick numbering the reference (build_untilize_with_unpadding) produces.
+uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, uint32_t valid_per_batch) {
+    if (valid_per_batch == 0 || batch_h == 0) {
+        return count;
+    }
+    uint32_t full_batches = count / batch_h;
+    uint32_t remainder = count % batch_h;
+    uint32_t pos = start % batch_h;
+    uint32_t n = full_batches * valid_per_batch;
+    for (uint32_t i = 0; i < remainder; ++i) {
+        if ((pos + i) % batch_h < valid_per_batch) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+// Interleaved TILE -> RM + unpadding (build_untilize_with_unpadding): the reference's path for any
+// non-tile-aligned bf16 logical shape. Same reader/compute as the aligned per-tile-row split; the
+// writer additionally skips physical pad sticks and writes only the unpadded row width, producing
+// the compact output UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch
+// declares. Cliff-capable (two compute kernels), same as build_main_split.
+ProgramDescriptor build_with_unpadding(
+    const CommonArgs& a,
+    uint32_t wt,
+    uint32_t total_tile_rows,
+    uint32_t h_unpadded_per_batch,
+    uint32_t w_unpadded,
+    uint32_t padded_batch_h) {
+    auto grid = a.device->compute_with_storage_grid_size();
+    auto split = tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
+    const CoreRangeSet& core_range = std::get<1>(split);
+    const CoreRangeSet& cg1 = std::get<2>(split);
+    const CoreRangeSet& cg2 = std::get<3>(split);
+    uint32_t tpc1 = std::get<4>(split);
+    uint32_t tpc2 = std::get<5>(split);
+
+    uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
+    CbPlan plan = plan_cb_depths(wt, a.tile_size_for_planning, block_ct_dim);
+
+    uint32_t unpadded_row_bytes = w_unpadded * a.out_elem_size;
+    uint32_t padded_row_bytes = wt * TILE_WIDTH * a.out_elem_size;
+
+    ProgramDescriptor desc;
+    // Both CBs use the input format/tile size: build_untilize_with_unpadding only ever runs on a
+    // dtype that is already RM-representable (bf8_b is cast to bf16 upstream of this port's
+    // scope), so in and out CBs are the same dtype here, unlike build_untilize_tile's bf8_b->bf16
+    // repack.
+    desc.cbs.push_back(make_tile_cb(kCbIn, a.in_fmt, plan.cb_in_depth, a.in_tile_size, core_range));
+    desc.cbs.push_back(make_tile_cb(kCbOut, a.in_fmt, plan.cb_out_depth, a.in_tile_size, core_range));
+
+    KernelDescriptor reader = make_reader(core_range, a.in_buf, plan.read_batch);
+
+    KernelDescriptor writer;
+    writer.kernel_source = kernel_path("writer_untilize_interleaved.cpp");
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = core_range;
+    writer.compile_time_args = {kCbOut, unpadded_row_bytes};
+    TensorAccessorArgs(*a.out_buf).append_to(writer.compile_time_args);
+    writer.compile_time_args.push_back(wt);
+    writer.config = WriterConfigDescriptor{};
+
+    // out_page_offset is a running accumulator carried across cores in ascending order (mirrors
+    // spec.py's stateful `_state["off"]` closure, invoked once per core by emit_per_core_rt).
+    uint32_t assigned = 0;
+    uint32_t out_page_offset = 0;
+    auto emit_group = [&](const CoreRangeSet& group, uint32_t wpc) {
+        if (group.empty()) {
+            return;
+        }
+        for (const auto& core : corerange_to_cores(group, std::nullopt, true)) {
+            uint32_t n = std::min(wpc, total_tile_rows - assigned);
+            uint32_t start_stick = assigned * TILE_HEIGHT;
+            reader.emplace_runtime_args(core, RtArgs{a.in_buf, n * wt, assigned * wt});
+            writer.emplace_runtime_args(
+                core,
+                RtArgs{
+                    a.out_buf,
+                    n,
+                    start_stick,
+                    padded_row_bytes,
+                    h_unpadded_per_batch,
+                    padded_batch_h,
+                    out_page_offset});
+            out_page_offset += count_valid_sticks(start_stick, n * TILE_HEIGHT, padded_batch_h, h_unpadded_per_batch);
+            assigned += n;
+        }
+    };
+    emit_group(cg1, tpc1);
+    emit_group(cg2, tpc2);
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    if (cg2.empty()) {
+        desc.kernels.push_back(make_compute(core_range, tpc1, wt, a.max_bct, a.fp32));
+    } else {
+        desc.kernels.push_back(make_compute(cg1, tpc1, wt, a.max_bct, a.fp32));
+        desc.kernels.push_back(make_compute(cg2, tpc2, wt, a.max_bct, a.fp32));
+    }
+    return desc;
+}
+
 }  // namespace
 
 ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
@@ -372,11 +477,9 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     a.in_buf = input.buffer();
     a.out_buf = output.buffer();
 
-    // Wt/Ht/NC are derived from the PADDED (physical, tile-aligned) shape rather than the
-    // logical shape, so this factory also handles non-tile-aligned logical shapes correctly:
-    // the padding rows/columns are preserved in the physical output buffer (matching
-    // compute_output_specs below and native UntilizeDeviceOperation's own scheme), and are
-    // simply cropped by the output tensor's logical_shape metadata on read.
+    // Wt/Ht/NC are derived from the PADDED (physical, tile-aligned) shape, which the reader/
+    // compute stages need regardless of dispatch branch below (even the with-unpadding path
+    // reads/untilizes the full physical tile grid; only the writer differs).
     const auto& padded_shape = input.padded_shape();
     uint32_t rank = padded_shape.rank();
     uint32_t w = padded_shape[-1];
@@ -390,6 +493,16 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     uint32_t total_tile_rows = nc * ht;
 
     (void)operation_attributes;
+
+    // Non-tile-aligned logical shapes (bf16 only -- see supported_by_codegen) route through the
+    // with-unpadding builder instead of build_untilize_tile's variants. h == ht * TILE_HEIGHT
+    // already (padded_shape is always tile-rounded), so it doubles as the physical per-batch
+    // stick count the writer's pad-skip logic needs.
+    const auto& logical_shape = input.logical_shape();
+    bool tile_aligned = logical_shape[-2] % TILE_HEIGHT == 0 && logical_shape[-1] % TILE_WIDTH == 0;
+    if (!tile_aligned) {
+        return build_with_unpadding(a, wt, total_tile_rows, logical_shape[-2], logical_shape[-1], h);
+    }
 
     if (total_tile_rows == 1 && wt > 1) {
         return build_column_parallel(a, wt);
