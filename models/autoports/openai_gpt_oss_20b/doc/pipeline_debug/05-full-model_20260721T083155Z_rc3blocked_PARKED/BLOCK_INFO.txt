@@ -1,0 +1,5 @@
+stage=05-full-model
+run=/home/mvasiljevic/codex-runs/meta-05-full-model-openai_gpt_oss_20b_-20260721T083155Z
+label=rc3blocked_PARKED
+note=4th/meta retry; blocked again -> model parked at stage 05
+captured_at=2026-07-21T13:22:22Z

@@ -1,0 +1,5 @@
+stage=05-full-model
+run=/home/mvasiljevic/codex-runs/meta-05-full-model-openai_gpt_oss_20b_-20260721T063028Z
+label=rc3blocked
+note=3rd/PRIMARY meta run; blocked mid CCL fix re-verify (api_common.h:260)
+captured_at=2026-07-21T13:22:21Z

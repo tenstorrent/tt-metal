@@ -1,0 +1,16 @@
+started_at_utc=20260721T083155Z
+repo=/home/mvasiljevic/tt-metal
+codex_home=/home/mvasiljevic/codex-runs/meta-05-full-model-openai_gpt_oss_20b_-20260721T083155Z/codex_home
+codex_bin=/home/mvasiljevic/.local/bin/codex
+hf_model=openai/gpt-oss-20b
+model_dir=models/autoports/openai_gpt_oss_20b
+runner=app-server
+approval_policy=never
+sandbox=danger-full-access
+prompt_files:
+- .agents/prompts/model_bringup_multigoal/05-full-model.txt
+stage_1_objective_chars=3682
+stage_1_skills=autofix,full-model,stage-review,tt-device-usage,tt-enable-tracing
+stage_1_missing_skills=
+stage_1_thread_id=019f83cd-9490-7893-83c5-3c0068499101
+stage_1_terminal_status=blocked

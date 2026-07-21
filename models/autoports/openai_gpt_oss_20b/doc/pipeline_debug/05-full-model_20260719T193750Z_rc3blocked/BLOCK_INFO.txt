@@ -1,0 +1,5 @@
+stage=05-full-model
+run=/home/mvasiljevic/codex-runs/05-full-model-openai_gpt_oss_20b_-20260719T193750Z
+label=rc3blocked
+note=1st/original run; blocked (perf 8-way LM-head split)
+captured_at=2026-07-21T13:22:20Z
