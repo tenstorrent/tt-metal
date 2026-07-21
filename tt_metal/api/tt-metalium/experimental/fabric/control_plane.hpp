@@ -528,8 +528,9 @@ private:
     // Generate intermesh connections for the local host.
     AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
 
-    // Validate intermesh connections requested in the MGD against resolved exit/peer router pairs.
-    void validate_requested_intermesh_connections() const;
+    // Validate the resolved inter-mesh pairing: per-mesh-pair counts against the MGD, plus the placement
+    // invariants derivable from the (broadcast-identical) annotated intermesh_connections (direction rules).
+    void validate_requested_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) const;
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;

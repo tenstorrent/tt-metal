@@ -2745,10 +2745,12 @@ void ControlPlane::generate_intermesh_connectivity() {
         num_assigned_intermesh_connections,
         get_num_requested_intermesh_connections());
 
-    this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+    // Validate (placement invariants + per-mesh-pair counts, both derived directly from intermesh_connections) first,
+    // so an invalid pairing fails fast before we rebuild the query maps or mutate any downstream routing state.
+    this->validate_requested_intermesh_connections(intermesh_connections);
     this->rebuild_intermesh_exit_maps_from_connections(intermesh_connections);
 
-    this->validate_requested_intermesh_connections();
+    this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
 }
 
 // Gather physical cable facts toward one neighbor; no logical port/direction is chosen here (rank 0 pairs later).
@@ -2894,20 +2896,83 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
     return port_descriptors;
 }
 
-void ControlPlane::validate_requested_intermesh_connections() const {
-    // Validate per mesh pair against the Mesh Graph Descriptor after port assignment completes.
+void ControlPlane::validate_requested_intermesh_connections(
+    const AnnotatedIntermeshConnections& intermesh_connections) const {
+    // Runs on every rank (single- and multi-host) over the broadcast-identical annotated intermesh_connections,
+    // so every rank reaches the same verdict -- no rank-divergent throw that could deadlock MPI.
+    //
+    // Part 1: placement invariants derivable from the annotated connections (they still carry per-endpoint
+    // direction/port info, unlike the resolved FabricNodeId maps):
+    //   R1  assign_z (marked) boundaries are Z-only -- every placed channel sits on a Z lane on both endpoints.
+    //   R2  each chip owns at most one peer per direction (a direction on a chip faces a single neighbor chip;
+    //       see RouterEdge "all ports in one direction connect to the same chip").
+    //   R3/R4  both endpoints of a channel (and thus its cable) share the same Z-ness: Z<->Z or NESW<->NESW.
+    const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
+    auto is_z = [](RoutingDirection d) { return d == RoutingDirection::Z; };
+    using Boundary = std::pair<uint32_t, uint32_t>;
+    auto node_of = [&](uint32_t mesh_raw, const port_id_t& port) {
+        return FabricNodeId(MeshId{mesh_raw}, mesh_edge_ports_to_chip_id.at(mesh_raw).at(port));
+    };
+    std::map<std::pair<FabricNodeId, RoutingDirection>, FabricNodeId> dir_peer;  // R2: (node, dir) -> peer node
+    std::map<Boundary, std::size_t> resolved_between;  // Part 2: directed (src_mesh, dst_mesh) -> #channels placed
+    for (const auto& connection : intermesh_connections) {
+        const auto& [src_mesh_raw, src_port] = std::get<0>(connection);
+        const auto& [dst_mesh_raw, dst_port] = std::get<1>(connection);
+        const RoutingDirection src_dir = src_port.first;
+        const RoutingDirection dst_dir = dst_port.first;
+        const FabricNodeId src_node = node_of(src_mesh_raw, src_port);
+        const FabricNodeId dst_node = node_of(dst_mesh_raw, dst_port);
+        resolved_between[{src_mesh_raw, dst_mesh_raw}]++;
+
+        // R3/R4: endpoints must agree on Z-ness.
+        TT_FATAL(
+            is_z(src_dir) == is_z(dst_dir),
+            "Inter-mesh placement invariant violated (R3/R4): channel {}({}) <-> {}({}) mixes Z and NESW lanes; "
+            "both endpoints of a channel must share the same Z-ness.",
+            src_node,
+            create_port_tag(src_port),
+            dst_node,
+            create_port_tag(dst_port));
+
+        // R1: assign_z boundaries are Z-only.
+        const Boundary boundary =
+            src_mesh_raw < dst_mesh_raw ? Boundary{src_mesh_raw, dst_mesh_raw} : Boundary{dst_mesh_raw, src_mesh_raw};
+        if (this->mesh_graph_->should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second})) {
+            TT_FATAL(
+                is_z(src_dir) && is_z(dst_dir),
+                "Inter-mesh placement invariant violated (R1): assign_z boundary M{}<->M{} placed channel {}({}) <-> "
+                "{}({}) on a non-Z lane; marked boundaries take Z channels exclusively.",
+                boundary.first,
+                boundary.second,
+                src_node,
+                create_port_tag(src_port),
+                dst_node,
+                create_port_tag(dst_port));
+        }
+
+        // R2: a (node, direction) may face only one peer node.
+        auto [it, inserted] = dir_peer.try_emplace({src_node, src_dir}, dst_node);
+        TT_FATAL(
+            inserted || it->second == dst_node,
+            "Inter-mesh placement invariant violated (R2): chip {} owns direction {} toward both {} and {}; each chip "
+            "may own only one link (peer) per direction.",
+            src_node,
+            enchantum::to_string(src_dir),
+            it->second,
+            dst_node);
+    }
+
+    // Part 2: per-mesh-pair counts against the Mesh Graph Descriptor. Counted directly from intermesh_connections
+    // (above) rather than from the resolved exit/peer maps, so this validation does not depend on those maps having
+    // been rebuilt first.
     //
     // The aggregate connection count check in generate_intermesh_connectivity can pass even when an
     // individual mesh boundary resolved zero routers (e.g. every candidate channel was dropped by a
     // Z/non-Z direction mismatch). Fail here at control-plane init instead of surfacing later in a
     // downstream consumer (e.g. generate_blitz_decode_pipeline).
-    auto num_resolved_between = [this](uint32_t src_mesh, uint32_t dst_mesh) -> std::size_t {
-        auto src_it = intermesh_exit_peer_fabric_node_id_pairs_.find(MeshId(src_mesh));
-        if (src_it == intermesh_exit_peer_fabric_node_id_pairs_.end()) {
-            return 0;
-        }
-        auto dst_it = src_it->second.find(MeshId(dst_mesh));
-        return dst_it == src_it->second.end() ? 0 : dst_it->second.size();
+    auto num_resolved_between = [&resolved_between](uint32_t src_mesh, uint32_t dst_mesh) -> std::size_t {
+        auto it = resolved_between.find({src_mesh, dst_mesh});
+        return it == resolved_between.end() ? 0 : it->second;
     };
     const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
     if (!requested_intermesh_ports.empty()) {
@@ -3242,58 +3307,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     };
 
-    auto z_dir_of = [&](FabricNodeId node) -> std::optional<RoutingDirection> {
-        for (const auto& [dir, ports] : dir_ports_by_node.at(node)) {
-            if (is_z(dir)) {
-                return dir;
-            }
-        }
-        return std::nullopt;
-    };
-    // Marked (assign_z) links that cannot claim Z are a hard configuration error. Report which side's
-    // Z lane is contended and which neighbor mesh already owns it so the MGD can be corrected.
-    auto fatal_assign_z_failure = [&](const Boundary& boundary, const Link& link) {
-        const std::size_t need = link.connection_hashes.size();
-        auto conflict_owner = [&](FabricNodeId node, MeshId neighbor) -> std::string {
-            auto zd = z_dir_of(node);
-            if (!zd) {
-                return "no Z lane";
-            }
-            auto it = dir_owner.find({node, *zd});
-            if (it != dir_owner.end() && it->second != neighbor) {
-                return "Z lane owned by M" + std::to_string(*it->second);
-            }
-            std::size_t free_z = 0;
-            for (const auto& [dir, ports] : dir_ports_by_node.at(node)) {
-                if (!is_z(dir)) {
-                    continue;
-                }
-                for (const auto& p : ports) {
-                    if (!occupied[node].contains(p)) {
-                        ++free_z;
-                    }
-                }
-            }
-            return std::to_string(free_z) + " free Z channel(s)";
-        };
-        TT_FATAL(
-            false,
-            "Inter-mesh assign_z placement failed for M{}<->M{}: could not secure a single channel on the Z lane "
-            "(this boundary needs {} channel(s) on the first cable). src {}: {}. dst {}: {}. "
-            "This is an assign_z conflict: the Z lane is already claimed by another neighbor mesh. Remove the "
-            "assign_z_direction flag from one of the conflicting mesh connections in the Mesh Graph Descriptor "
-            "(e.g. drop z for M{}-M{} or for the connection that already owns the Z lane).",
-            boundary.first,
-            boundary.second,
-            need,
-            link.src_node,
-            conflict_owner(link.src_node, link.dst_node.mesh_id),
-            link.dst_node,
-            conflict_owner(link.dst_node, link.src_node.mesh_id),
-            boundary.first,
-            boundary.second);
-    };
-
     // relaxed count lookup; requested_intermesh_connections may be stored one-directional in the MGD.
     auto requested_count = [&](uint32_t x, uint32_t y) -> std::size_t {
         auto it = requested_intermesh_connections.find(x);
@@ -3412,10 +3425,11 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     };
 
     // A physical cable can expose more channels than the count the MGD requested (e.g. a 4-channel cable
-    // with count:2). Trim the link to the remaining budget so it places exactly the requested count instead
+    // with count:2). Cap the link to the remaining budget so it places exactly the requested count instead
     // of being rejected wholesale when its channel count exceeds the per-src-node / per-boundary budget
-    // (the strict device-level 6u-split "0 resolved" bug). Returns false when no budget remains.
-    auto trim_to_budget = [&](const Boundary& boundary, Link& link) -> bool {
+    // (the strict device-level 6u-split "0 resolved" bug). Returns false when no budget remains (caller skips
+    // the link); true when there is room to place (the link has been capped to the remaining budget).
+    auto has_budget_after_trim = [&](const Boundary& boundary, Link& link) -> bool {
         const std::size_t rem = budget_remaining(boundary, link);
         if (rem == 0) {
             return false;
@@ -3426,100 +3440,88 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return true;
     };
 
-    // Phase 1a: marked (assign_z) boundaries are Z-only. They claim the Z lane here and are excluded from
-    // every later phase -- an assign_z boundary NEVER takes an NESW port. Placement is round-robin across
-    // marked boundaries (one link per boundary per round) so a shared Z exit chip is not drained by whichever
-    // marked boundary happens to be processed first. Channels that cannot take Z are simply left unplaced
-    // (dropped) -- they do NOT fall back to NESW. The full requested count is enforced afterwards by the
-    // direction-agnostic validation step.
-    bool z_progress = true;
-    while (z_progress) {
-        z_progress = false;
+    // Placement work-list, built ONCE. The build order is the policy:
+    //   strict  -> boundary-major (greedy: all of boundary A's links, then all of B's, ...); a pinned
+    //              connection is satisfied in full before the next boundary is considered.
+    //   relaxed -> round-major   (round-robin: link 0 of every boundary, then link 1 of every boundary, ...)
+    //              so a shared exit chip is not drained by whichever boundary is processed first.
+    // Each entry pairs a link with its boundary (needed for budget / accounting / conflict reporting).
+    std::vector<std::pair<Boundary, Link*>> order;
+    if (strict_intermesh_port_binding) {
         for (auto& [boundary, links] : links_by_boundary) {
-            if (!is_marked_z(boundary)) {
-                continue;
-            }
             for (auto& link : links) {
-                if (link.placed || !trim_to_budget(boundary, link)) {
-                    continue;  // already placed, or excess beyond the count cap
-                }
-                if (place_link(link, /*want_z=*/true)) {
-                    account_placed(boundary, link);
-                    z_progress = true;
-                    break;  // one link per boundary per round -> fairness across marked boundaries
+                order.push_back({boundary, &link});
+            }
+        }
+    } else {
+        std::size_t max_links = 0;
+        for (auto& [boundary, links] : links_by_boundary) {
+            max_links = std::max(max_links, links.size());
+        }
+        for (std::size_t round = 0; round < max_links; ++round) {
+            for (auto& [boundary, links] : links_by_boundary) {
+                if (round < links.size()) {
+                    order.push_back({boundary, &links[round]});
                 }
             }
         }
     }
-    // A marked boundary must secure at least one channel on the Z lane. Once the round-robin settles, flag a
-    // hard configuration error for any marked boundary that placed zero links despite a genuine attempt: an
-    // unplaced link that still has budget but could not take Z (a Z conflict, not merely a budget skip -- its
-    // Z lane is fully owned by another neighbor mesh). A partially-placed marked boundary is fine.
-    for (auto& [boundary, links] : links_by_boundary) {
+
+    // The work-list is iterated three times, one per phase. A link is placed at most once; later phases skip
+    // links already placed. The phase order (claim Z, then NESW, then NESW-overflow onto leftover Z) reserves
+    // the Z lane for assign_z boundaries and for NESW overflow only.
+
+    // Phase 1a: assign_z (marked) boundaries claim the Z lane; they are excluded from the NESW phases below.
+    for (auto& [boundary, link] : order) {
         if (!is_marked_z(boundary)) {
+            continue;  // Phase 1a is Z-only -- skip unmarked boundaries here
+        }
+        if (link->placed) {
+            continue;  // a link is placed at most once
+        }
+        if (!has_budget_after_trim(boundary, *link)) {
+            continue;  // no count budget left for this link
+        }
+        if (place_link(*link, /*want_z=*/true)) {
+            account_placed(boundary, *link);
+        }
+    }
+
+    // Phase 1b: unmarked boundaries take NESW.
+    for (auto& [boundary, link] : order) {
+        if (is_marked_z(boundary)) {
+            continue;  // assign_z boundaries never take an NESW port
+        }
+        if (link->placed) {
             continue;
         }
-        bool placed_any = false;
-        Link* first_unplaceable = nullptr;  // first unplaced link that still had budget (for the error message)
-        for (auto& link : links) {
-            if (link.placed) {
-                placed_any = true;
-            } else if (first_unplaceable == nullptr && budget_remaining(boundary, link) > 0) {
-                first_unplaceable = &link;
-            }
+        if (!has_budget_after_trim(boundary, *link)) {
+            continue;
         }
-        if (!placed_any && first_unplaceable != nullptr) {
-            fatal_assign_z_failure(boundary, *first_unplaceable);
+        if (place_link(*link, /*want_z=*/false)) {
+            account_placed(boundary, *link);
         }
     }
 
-    // Phase 1b: round-robin over unmarked boundaries only, placing one link each per round on NESW.
-    // Marked (assign_z) boundaries are Z-only and are excluded here -- they are fully placed in Phase 1a.
-    // The per-round rotation keeps a shared exit chip from being drained by whichever boundary is
-    // processed first (the ring-closing-hop contention bug).
-    bool progress = true;
-    while (progress) {
-        progress = false;
-        for (auto& [boundary, links] : links_by_boundary) {
-            if (is_marked_z(boundary)) {
-                continue;  // assign_z boundaries never take NESW
-            }
-            for (auto& link : links) {
-                if (link.placed || !trim_to_budget(boundary, link)) {
-                    continue;
-                }
-                if (place_link(link, /*want_z=*/false)) {
-                    account_placed(boundary, link);
-                    progress = true;
-                    break;  // one link per boundary per round -> fairness across boundaries
-                }
-            }
+    // Phase 2: unmarked NESW-overflow spills onto any leftover Z lanes.
+    for (auto& [boundary, link] : order) {
+        if (is_marked_z(boundary)) {
+            continue;
+        }
+        if (link->placed) {
+            continue;  // already took an NESW port in Phase 1b
+        }
+        if (!has_budget_after_trim(boundary, *link)) {
+            continue;
+        }
+        if (place_link(*link, /*want_z=*/true)) {
+            account_placed(boundary, *link);
         }
     }
 
-    // Phase 2: round-robin placing NESW-overflow links (unmarked boundaries only) on remaining Z lanes,
-    // still within the count cap. Marked boundaries are excluded -- their Z placement is complete after
-    // Phase 1a; anything they could not fit on Z stays unplaced rather than competing for leftover Z here.
-    progress = true;
-    while (progress) {
-        progress = false;
-        for (auto& [boundary, links] : links_by_boundary) {
-            if (is_marked_z(boundary)) {
-                continue;
-            }
-            for (auto& link : links) {
-                if (link.placed || !trim_to_budget(boundary, link)) {
-                    continue;
-                }
-                if (place_link(link, /*want_z=*/true)) {
-                    account_placed(boundary, link);
-                    progress = true;
-                    break;
-                }
-            }
-        }
-    }
-
+    // NOTE: placement invariants (assign_z Z-only, one peer per direction, matching Z-ness on both endpoints) are
+    // validated in validate_requested_intermesh_connections, which runs on every rank over the broadcast-identical
+    // intermesh_connections -- so a violation throws symmetrically rather than only here on rank 0.
     return annotated_intermesh;
 }
 

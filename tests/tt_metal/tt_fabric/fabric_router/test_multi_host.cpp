@@ -1399,6 +1399,23 @@ TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
     check_asic_mapping_against_golden("T3K2x2AssignZDirectionControlPlaneInit");
 }
 
+// Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
+// marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
+// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises
+// the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
+TEST(MultiHost, T3KAssignZConflictFatal) {
+    const std::filesystem::path conflict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_assign_z_conflict_mesh_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            conflict_mesh_graph_desc_path.string(),
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+}
+
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
