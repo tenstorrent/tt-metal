@@ -562,13 +562,16 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 
 }  // namespace
 
-GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
+GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
-    auto mapping = build_dram_sender_mapping(&mesh_device, bank_to_receivers, dual_senders_per_bank);
+    bool support_multi_receiver_shards) {
+    // Multi-receiver shards (legacy interleaved layout) force one sender per bank; the
+    // receiver-contiguous layout that disallows them is what lets a bank use two senders.
+    auto mapping = build_dram_sender_mapping(
+        &mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
         &mesh_device, mapping, size, buffer_type);
 }

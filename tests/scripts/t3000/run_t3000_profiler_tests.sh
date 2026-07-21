@@ -116,7 +116,7 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    python -m tracy -v -r -p -m "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-1link-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    python -m tracy -v -r -p -m "pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"

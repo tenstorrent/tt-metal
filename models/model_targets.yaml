@@ -1185,6 +1185,15 @@ targets:
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89
+              top5: 97
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:
@@ -1196,7 +1205,7 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 241.0
+              prefill_time_to_first_token: 174.0
               decode_t/s: 26.0
               decode_t/s/u: 26.0
               tolerance: 0.2
