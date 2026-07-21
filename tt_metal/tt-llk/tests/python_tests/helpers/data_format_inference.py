@@ -205,6 +205,12 @@ def infer_unpack_out(
         return DataFormat.Float16  # Tilize to Float16
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        # The HW unpacker has no fp16->Float32 conversion (only fp16->{fp16, fp16_b, Tf32}), so forcing
+        # Float32 for a 16-bit-float input produces an unsupported unpack (all-zero SrcS on Atlas). Tf32
+        # shares Float32's 32-bit footprint and preserves the 8-bit exponent, so it is the correct widened
+        # SrcS format for a 32-bit-accumulation path. Native Float32 input stays Float32 (a direct passthrough).
+        if input_format in (DataFormat.Float16, DataFormat.Float16_b):
+            return DataFormat.Tf32
         return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
