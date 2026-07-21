@@ -40,6 +40,7 @@
 #include "profiler_types.hpp"
 #include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
+#include <tt_stl/cleanup.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "impl/threading/thread_pool.hpp"
@@ -1324,6 +1325,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
+
+    // Ensure allocations are marked unsafe on any exit, including thrown exceptions
+    auto mark_unsafe_on_exit = ttsl::make_cleanup([this]() { this->mark_allocations_unsafe(); });
+
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
         "CQ {} is not being used for tracing tid {}",
@@ -1368,7 +1373,6 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         dram_allocation_high_water_mark,
         dram_deletion_high_water_mark,
         max_live_trace_high_water_mark);
-    this->mark_allocations_unsafe();
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
