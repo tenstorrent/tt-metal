@@ -253,10 +253,13 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         return ttnn.from_torch(t, dtype=wdt, layout=ttnn.TILE_LAYOUT, device=device)
 
     def _linear(x, w, b):
-        y = ttnn.matmul(x, w, compute_kernel_config=compute_config)
+        # Fuse bias into the matmul epilogue (ttnn.linear) instead of a separate
+        # ttnn.add: the standalone add is its own dispatch-bound op launch, and
+        # the block issues one per QKV/FF projection, so folding them removes
+        # that many launches from the profiled 2-layer forward.
         if b is not None:
-            y = ttnn.add(y, b)
-        return y
+            return ttnn.linear(x, w, bias=b, compute_kernel_config=compute_config)
+        return ttnn.matmul(x, w, compute_kernel_config=compute_config)
 
     def _all_reduce(x, mesh_axis=None):
         """Megatron all-reduce for a row-parallel output: reduce_scatter + all_gather,
@@ -294,9 +297,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         s = ttnn.silu(temb)
         parts = []
         for w, b in zip(ws, bs):
-            p = ttnn.matmul(s, w, compute_kernel_config=compute_config)
             if b is not None:
-                p = ttnn.add(p, b)
+                p = ttnn.linear(s, w, bias=b, compute_kernel_config=compute_config)
+            else:
+                p = ttnn.matmul(s, w, compute_kernel_config=compute_config)
             parts.append(p)  # each (B, C)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = parts
         B = int(x.shape[0])
