@@ -102,32 +102,6 @@ grid_12_10_configs = {
     (9472, 5120, 3456): (16, 8, 4, (1, 2)),
     (9472, 5120, 3840): (16, 8, 4, (1, 2)),
     (9472, 3456, 5120): (8, 4, 8, (1, 2)),
-    # --- Ideogram 4.0 single-stream block, SP4xTP2 on the (4,2) loudbox (p150b, 12x10) ---
-    # Per-device shapes of the 4 big matmuls (qkv/o/ff1/ff2) at 512/1024/2048px.
-    # RE-TUNED for HiFi2 (2-pass math, matching the block's mm_hifi2_config:
-    #   HiFi2 + fp32_dest_acc=True + packer_l1_acc=True) via a standalone
-    #   minimal_matmul micro-sweep at these exact (M,K,N) on the 12x10 grid.
-    # The earlier entries were HiFi4-tuned and left big MFU on the table under HiFi2
-    # (esp. at 1024/2048px where full-Mpc M_block + small K_block wins): e.g. QKV
-    #   1024px 48.6%->73.5%, FF1 1024px 53.6%->81.6%, FF2 2048px 47.7%->78.8%.
-    # additive only (isolated from Wan/Flux keys).
-    # NB: per-device M is the SDPA-k-chunk-padded seq / sp (_sp_padded_len, div=256*sp),
-    #     NOT ceil(seq/sp): 512px->512, 1024px->1280, 2048px->4352.
-    # 512px  (M=512):
-    (512, 4608, 6912): (2, 8, 6, (2, 2)),  # QKV col  (HiFi2 40.8% vs H4-entry 38.2%)
-    (512, 2304, 4608): (2, 4, 12, (1, 4)),  # O   row   (34.7% vs 33.7%)
-    (512, 4608, 12288): (2, 8, 12, (1, 4)),  # FF1 col   (42.5% vs 40.2%)
-    (512, 6144, 4608): (2, 16, 4, (1, 4)),  # FF2 row   (38.5% vs 37.2%)
-    # 1024px (M=1280):
-    (1280, 4608, 6912): (4, 2, 18, (2, 2)),  # QKV col  (73.5% vs 48.6%)
-    (1280, 2304, 4608): (4, 2, 12, (1, 4)),  # O   row   (60.8% vs 43.6%)
-    (1280, 4608, 12288): (4, 4, 16, (1, 4)),  # FF1 col   (81.6% vs 53.6%)
-    (1280, 6144, 4608): (4, 8, 12, (1, 4)),  # FF2 row   (77.1% vs 68.4%)
-    # 2048px (M=4352):
-    (4352, 4608, 6912): (4, 4, 18, (2, 2)),  # QKV col  (75.7% vs 53.4%)
-    (4352, 2304, 4608): (4, 2, 12, (1, 4)),  # O   row   (64.6% vs 46.2%)
-    (4352, 4608, 12288): (8, 8, 8, (2, 2)),  # FF1 col   (76.3%; 8x8x8 beat all swept, vs 55.9%)
-    (4352, 6144, 4608): (4, 4, 12, (1, 4)),  # FF2 row   (78.8% vs 47.7%)
 }
 
 grid_11_10_configs = {
