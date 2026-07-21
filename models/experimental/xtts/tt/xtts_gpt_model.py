@@ -252,3 +252,77 @@ class TtXttsGptModel(LightweightModule):
         ttnn.deallocate(hidden)
         logits = ttnn.linear(latent, self.mel_head_weight, bias=self.mel_head_bias)
         return logits, latent
+
+    # ------------------------------------------------------------------ #
+    # Fully-traced setup: device-input variants (no host->device write inside — writes are FATAL
+    # during trace capture) + a persistent pre-allocated KV cache seeded via ``fill_cache``, so
+    # the whole prompt path (conditioning->prefill) can be captured as one "setup" trace whose
+    # output caches the decode trace then reads/updates in place.
+    # ------------------------------------------------------------------ #
+    def alloc_static_kv(self, max_seq):
+        """Enable static decode and pre-allocate the persistent per-layer KV cache (zeros). These
+        buffers are seeded by ``prefill_dev`` and updated by ``decode_static`` — both in place."""
+        self.init_static_decode(max_seq)
+        # Precompute text position ids [1, max_seq] uint32 ONCE (host->device write here, outside any
+        # capture) so prefill_dev's _embed_dev can SLICE it instead of calling ttnn.arange — arange
+        # is a host write and is fatal inside a trace capture.
+        self._text_pos_full = ttnn.from_torch(
+            torch.arange(max_seq, dtype=torch.int32).reshape(1, max_seq),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            dtype=ttnn.uint32,
+        )
+        self._static_kv = []
+        for _ in range(self.stack.num_layers):
+            k = ttnn.from_torch(
+                torch.zeros(1, NUM_HEADS, max_seq, HEAD_DIM),
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+            )
+            v = ttnn.from_torch(
+                torch.zeros(1, NUM_HEADS, max_seq, HEAD_DIM),
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+            )
+            self._static_kv.append((k, v))
+        return self._static_kv
+
+    def text_ids_to_device(self, text_ids):
+        """Host text ids ``[1, seq]`` -> device uint32 ROW_MAJOR (the ``from_torch`` host->device
+        write, kept OUTSIDE any trace capture)."""
+        return ttnn.from_torch(
+            text_ids.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32
+        )
+
+    def _embed_dev(self, ids_tt, tok_weight, pos_weight):
+        """Like ``_embed`` but ``ids_tt`` is an already-on-device uint32 ``[1, seq]`` tensor and the
+        positions are SLICED from the precomputed ``self._text_pos_full`` (a device slice, no host
+        write), so the whole thing is trace-capturable (``ttnn.arange`` would be a fatal in-capture write)."""
+        seq = ids_tt.shape[1]
+        pos_tt = ttnn.slice(self._text_pos_full, [0, 0], [1, seq])  # [1, seq] uint32, device slice
+        tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT)
+        pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(pos_tt)
+        emb = ttnn.add(tok, pos)
+        ttnn.deallocate(tok)
+        ttnn.deallocate(pos)
+        return emb
+
+    def prefill_dev(self, text_ids_tt, cond_latents):
+        """Trace-capturable prefill: device text ids + cond_latents -> full causal prefill over
+        ``[cond | text]`` -> seed the persistent ``self._static_kv`` in place with ``fill_cache``.
+        No host->device write inside. Returns ``prompt_len`` (mel token i -> cache pos prompt_len+i)."""
+        text_emb = self._embed_dev(text_ids_tt, self.text_emb_weight, self.text_pos_weight)
+        prefix = ttnn.concat([cond_latents, text_emb], dim=1)  # [1, n_cond + text_len, hidden]
+        ttnn.deallocate(text_emb)
+        prompt_ln, kv = self.stack.forward_prefill(prefix)  # per-layer (k, v) [1, heads, prompt_len, head_dim]
+        ttnn.deallocate(prompt_ln)
+        prompt_len = kv[0][0].shape[2]
+        for i, (k, v) in enumerate(kv):
+            ttnn.fill_cache(self._static_kv[i][0], k, 0)  # write prompt K into positions 0..prompt_len-1
+            ttnn.fill_cache(self._static_kv[i][1], v, 0)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        return prompt_len
