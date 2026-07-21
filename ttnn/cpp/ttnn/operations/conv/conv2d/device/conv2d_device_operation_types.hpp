@@ -216,6 +216,47 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "sliding_window_config",
+        "output_channels",
+        "groups",
+        "untilize_out",
+        "has_bias",
+        "activation",
+        "parallelization_config",
+        "block_config",
+        "memory_config",
+        "dtype",
+        "input_tensor_shape",
+        "compute_kernel_config",
+        "enable_act_double_buffer",
+        "enable_weights_double_buffer",
+        "full_inner_dim",
+        "enable_activation_reuse",
+        "config_tensors_in_dram",
+        "force_split_reader");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->sliding_window_config),
+            std::cref(this->output_channels),
+            std::cref(this->groups),
+            std::cref(this->untilize_out),
+            std::cref(this->has_bias),
+            std::cref(this->activation),
+            std::cref(this->parallelization_config),
+            std::cref(this->block_config),
+            std::cref(this->memory_config),
+            std::cref(this->dtype),
+            std::cref(this->input_tensor_shape),
+            std::cref(this->compute_kernel_config),
+            std::cref(this->enable_act_double_buffer),
+            std::cref(this->enable_weights_double_buffer),
+            std::cref(this->full_inner_dim),
+            std::cref(this->enable_activation_reuse),
+            std::cref(this->config_tensors_in_dram),
+            std::cref(this->force_split_reader));
+    }
 };
 
 struct Conv2dHashableParams {
