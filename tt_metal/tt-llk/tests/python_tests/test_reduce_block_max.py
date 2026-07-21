@@ -30,14 +30,13 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     BLOCK_CT_DIM,
     CLOBBER_OP,
-    MATH_FIDELITY,
     REINIT_MODE,
     USE_RUNTIME,
 )
@@ -73,7 +72,6 @@ def _dest_acc(output_format):
 
 def _run_reduce_block_max(
     formats,
-    math_fidelity,
     block_ct_dim,
     use_runtime=False,
     reinit="none",
@@ -120,7 +118,6 @@ def _run_reduce_block_max(
         formats,
         templates=[
             BLOCK_CT_DIM(block_ct_dim),
-            MATH_FIDELITY(math_fidelity),
             USE_RUNTIME(use_runtime),
             REINIT_MODE(_REINIT_DEFINE[reinit]),
             CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
@@ -163,37 +160,39 @@ def _run_reduce_block_max(
         d = float(res[pr, 0])
         assert abs(d - g) <= tol.atol + tol.rtol * abs(g), (
             f"reduce_block_max_row mismatch at row {pr}: device={d} golden={g} "
-            f"(block_ct_dim={block_ct_dim}, fidelity={math_fidelity.name})"
+            f"(block_ct_dim={block_ct_dim})"
         )
 
 
+# Math fidelity is intentionally not swept: reduce_block_max_row is a pure MAX pool
+# (scaler fixed at 1.0) and the reduce LLKs take no fidelity template, so HiFi2/HiFi4
+# would produce identical kernels.
+
+
 @parametrize(
     formats=FORMATS,
-    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     block_ct_dim=[1, 2, 3, 4, 8],
 )
-def test_reduce_block_max(formats, math_fidelity, block_ct_dim):
+def test_reduce_block_max(formats, block_ct_dim):
     """Compile-time block_ct_dim sweep, bf16 and fp32-dest."""
-    _run_reduce_block_max(formats, math_fidelity, block_ct_dim)
+    _run_reduce_block_max(formats, block_ct_dim)
 
 
 @parametrize(
     formats=FORMATS,
-    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     block_ct_dim=[1, 2, 4, 8],
 )
-def test_reduce_block_max_runtime(formats, math_fidelity, block_ct_dim):
+def test_reduce_block_max_runtime(formats, block_ct_dim):
     """Runtime (dynamic block_ct_dim) path."""
-    _run_reduce_block_max(formats, math_fidelity, block_ct_dim, use_runtime=True)
+    _run_reduce_block_max(formats, block_ct_dim, use_runtime=True)
 
 
 @parametrize(
     formats=FORMATS,
-    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     block_ct_dim=[2, 4],
     reinit=["short", "minimal"],
 )
-def test_reduce_block_max_reinit(formats, math_fidelity, block_ct_dim, reinit):
+def test_reduce_block_max_reinit(formats, block_ct_dim, reinit):
     """Reinit / reprogram after a clobbering op (reconfig-escape guard).
 
     An eltwise binary op runs between init and reinit to overwrite the reduce MOP
@@ -206,18 +205,15 @@ def test_reduce_block_max_reinit(formats, math_fidelity, block_ct_dim, reinit):
         pytest.skip(
             "compile-time reduce_block_max_row reinit is a Blackhole-only lib path"
         )
-    _run_reduce_block_max(
-        formats, math_fidelity, block_ct_dim, reinit=reinit, clobber="eltwise"
-    )
+    _run_reduce_block_max(formats, block_ct_dim, reinit=reinit, clobber="eltwise")
 
 
 @parametrize(
     formats=FORMATS,
-    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     block_ct_dim=[2, 4],
     reinit=["short", "minimal"],
 )
-def test_reduce_block_max_reinit_runtime(formats, math_fidelity, block_ct_dim, reinit):
+def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
     """Runtime reinit paths: reinit_short_runtime on both arches;
     reinit_minimal_runtime is a Blackhole-only lib fn."""
     if reinit == "minimal" and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
@@ -225,10 +221,5 @@ def test_reduce_block_max_reinit_runtime(formats, math_fidelity, block_ct_dim, r
             "runtime reduce_block_max_row reinit_minimal is a Blackhole-only lib path"
         )
     _run_reduce_block_max(
-        formats,
-        math_fidelity,
-        block_ct_dim,
-        use_runtime=True,
-        reinit=reinit,
-        clobber="eltwise",
+        formats, block_ct_dim, use_runtime=True, reinit=reinit, clobber="eltwise"
     )
