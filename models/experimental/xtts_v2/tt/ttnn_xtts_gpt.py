@@ -182,17 +182,25 @@ class TTNNGPTCore:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        attn = ttnn.permute(attn, (0, 2, 1, 3))  # [B, S, nh, dh]
-        attn = ttnn.reshape(attn, (B, S, cfg.n_embd))
+        # Head-merge fusion (matches the tt-mlir optimizer's concatenate_heads): fold the
+        # manual permute [B,nh,S,dh]->[B,S,nh,dh] + reshape into a single fused op.
+        attn = ttnn.transformer.concatenate_heads(attn)  # [B, nh, S, dh] -> [B, S, n_embd]
         out = self._linear(attn, block["attn_proj"])
         ttnn.deallocate(attn)
         return out
 
     def _mlp(self, x, block):
-        h = self._linear(x, block["c_fc"])
-        h = ttnn.gelu(h, variant=ttnn.GeluVariant.Tanh)  # gelu_new
-        h = self._linear(h, block["mlp_proj"])
-        return h
+        # c_fc + gelu_new fused into one linear(activation="gelu") — matches the base
+        # TTIR->TTNN lowering the compiler emits (validated to match the separate
+        # tanh-gelu at PCC ~0.9999993). Avoids a standalone elementwise gelu kernel.
+        h = ttnn.linear(
+            x,
+            block["c_fc"]["weight"],
+            bias=block["c_fc"]["bias"],
+            activation="gelu",
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        return self._linear(h, block["mlp_proj"])
 
     def __call__(self, inputs_embeds):
         x = inputs_embeds
