@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MATH_ISOLATE perf for the Wormhole comparison-to-zero SFPU kernels converted raw
-TTI -> pure sfpi on branch `ldjurovic/expand_on_spfi_update`. Each op below maps to
-one changed function in llk_sfpu/ckernel_sfpu_comp.h so a main-vs-branch run isolates
-the cost of the conversion:
+MATH_ISOLATE perf for the Wormhole comparison-to-zero SFPU kernels. The harness routes
+each op through the same production kernel in llk_sfpu/ckernel_sfpu_comp.h that the
+correctness tests exercise, so a main-vs-branch run isolates the per-op cost.
 
-  eqz/nez/ltz/gtz/lez/gez (float)  -> calculate_comp        (float, bitwise-magnitude)
-  eqz/nez (uint16)                 -> calculate_comp_uint16  (DataLayout::U16)
-  eqz    (uint32)                  -> calculate_eqz_uint32   (DataLayout::U32)
-  nez    (uint32)                  -> calculate_nez_uint32   (DataLayout::U32)
+Only the unsigned kernels were converted on this branch (raw TTI -> pure sfpi); the float
+`calculate_comp` is deliberately retained as hand-tuned TTI (the SFPI form measured slower
+on Wormhole), so its row measures the unchanged TTI implementation, not a conversion:
+
+  eqz/nez/ltz/gtz/lez/gez (float)  -> calculate_comp        (float, TTI — retained, NOT converted)
+  eqz/nez (uint16)                 -> calculate_comp_uint16  (converted: DataLayout::U16)
+  eqz    (uint32)                  -> calculate_eqz_uint32   (converted: DataLayout::U32)
+  nez    (uint32)                  -> calculate_nez_uint32   (converted: DataLayout::U32)
 
 Only PerfRunType.MATH_ISOLATE is requested to keep the sweep small; the cycles/tile
 number lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE), and the
@@ -69,6 +72,15 @@ def _run(formats, mathop, input_dimensions):
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
     unpack_to_dest = formats.input_format.is_32_bit()
+    # 32-bit inputs (UInt32) are unpacked straight into DEST and the uint32 kernels do
+    # full-word DataLayout::U32 accesses, so they require a 32-bit DEST. Mirror the
+    # correctness test (test_eltwise_unary_sfpu_comp_uint) and constraints.py, which force
+    # dest_acc=Yes for 32-bit formats; hardcoding No here would measure an unsupported config.
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
 
     configuration = PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
@@ -99,7 +111,7 @@ def _run(formats, mathop, input_dimensions):
             tile_count_res=tile_count_A,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
     return configuration
 

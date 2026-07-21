@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -47,10 +48,10 @@ inline void not_equal_zero_init() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
-    constexpr uint V = p_sfpu::LREG0;
-    constexpr uint ABS_V = p_sfpu::LREG2;
-    constexpr uint INF = p_sfpu::LREG5;
-    constexpr uint BFLOAT16_INF = 0x7f80;
+    constexpr std::uint32_t V = p_sfpu::LREG0;
+    constexpr std::uint32_t ABS_V = p_sfpu::LREG2;
+    constexpr std::uint32_t INF = p_sfpu::LREG5;
+    constexpr std::uint32_t BFLOAT16_INF = 0x7f80;
 
     if constexpr (
         COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero ||
@@ -178,6 +179,11 @@ inline void calculate_comp_int() {
     }
 }
 
+// The uint16/uint32 comparison-to-zero kernels below are intentionally kept as raw TTI on
+// Blackhole. The pure-SFPI rewrite (DataLayout::U16/U32 + v_if) has only been done and perf-
+// validated on Wormhole so far (see the WH copy of this file); Blackhole stays on the existing
+// TTI path until the same conversion is measured here. The tt-llk functional tests still route
+// through these kernels on BH, so they keep validating the TTI implementation for correctness.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));

@@ -675,10 +675,10 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-# Comparison-to-zero ops rewritten as pure SFPI (ckernel_sfpu_comp.h::calculate_comp).
-# Their whole reason for the bitwise implementation is robust ±0 / ±inf / NaN handling
-# (NaN maps to 0 for every mode except nez), which the finite-only domain sweep never
-# exercises. Drive them with a spec injecting all special classes.
+# Float comparison-to-zero ops (ckernel_sfpu_comp.h::calculate_comp). The whole reason for
+# its bitwise-magnitude implementation is robust ±0 / ±inf / NaN handling (NaN maps to 0 for
+# every mode except nez), which the finite-only domain sweep never exercises. Drive them with
+# a spec injecting all special classes.
 _COMP_ZERO_SPECIAL_MATHOPS = [
     MathOperation.EqualZero,
     MathOperation.NotEqualZero,
