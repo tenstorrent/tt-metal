@@ -15,7 +15,7 @@ Things to remember:
  - Not all planned improvements are available yet.
  - A small handful of legacy API features are not yet supported.
 
-> **Prerequisite**: [Device 2.0 Data Movement migration](../../../../kernel_apis/data_movement/device_api_migration_guide.md) is a pre-requisite to Metal 2.0 migrations. All the kernel code migration examples in this document use Device 2.0 APIs.
+> **Prerequisite**: [Device 2.0 Data Movement migration](../../../kernel_apis/data_movement/device_api_migration_guide.md) is a pre-requisite to Metal 2.0 migrations. All the kernel code migration examples in this document use Device 2.0 APIs.
 
 ## Table of Contents
 
