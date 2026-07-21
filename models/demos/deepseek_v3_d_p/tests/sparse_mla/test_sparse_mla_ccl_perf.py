@@ -254,11 +254,11 @@ GLM_SEQUENCE_TO_HEAD = CollectivePath(
 # --------------------------------------------------------------------------------------------------
 # System resolution
 # --------------------------------------------------------------------------------------------------
-def ccl_mesh_param(collective_axis: int):
+def ccl_mesh_param(_collective_axis: int):
     """`pytest.param(mesh_shape, device_params, marks, id)` for the box + collective axis (collection time).
 
-    Galaxy (32): the production 8x4. LoudBox (8): an SP=8 line proxy (one line of 8 mirrors a Galaxy SP
-    row) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
+    Galaxy (32): the production 8x4. LoudBox (8): a 2x4 Fabric2D proxy that preserves the production TP
+    dimension and fabric transport for both SP and TP collectives.
     """
     num_devices = detect_num_devices()
     canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
@@ -269,16 +269,7 @@ def ccl_mesh_param(collective_axis: int):
     if num_devices == 32:
         system, mesh_shape, mesh_topology, device_params = "galaxy", (8, 4), "mesh-8x4", fabric_2d
     elif num_devices == 8:
-        system = "loudbox_proxy"
-        if collective_axis == SP_AXIS:
-            # SP=8 line proxy for a Galaxy SP row. Production runs the SP all-gather on Topology.Linear
-            # (mla.py:259), so the proxy mirrors that with a FABRIC_1D line — not a ring, which would model a
-            # transport Galaxy does not use today. FABRIC_1D isolates the single axis, so it omits the 2D
-            # fabric-router config.
-            mesh_shape, mesh_topology = (8, 1), "line"
-            device_params = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
-        else:
-            mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
+        system, mesh_shape, mesh_topology, device_params = "loudbox_fabric2d_proxy", (2, 4), "mesh-2x4", fabric_2d
     else:
         reason = f"CCL perf supports Galaxy (32 chips) or LoudBox (8), found {num_devices}"
         return pytest.param((1, 1), fabric_2d, marks=pytest.mark.skip(reason=reason), id="unsupported")
