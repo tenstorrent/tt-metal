@@ -166,6 +166,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             subdevice_id (ttnn.SubDeviceId, optional):
                 Confines the routed expert to a compute sub-device so it can overlap the combine
                 (which runs on a disjoint sub-device) on separate worker cores.
+            output (ttnn.Tensor, optional):
+                Pre-allocated DRAM-interleaved TILE output buffer (shape == dispatched_buffer),
+                used only on the row-major (fused) path. The routed expert writes each expert's
+                region into it while the combine concurrently reads it. Defaults to None.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -190,7 +194,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("up_biases") = nb::none(),
         nb::arg("down_biases") = nb::none(),
         nb::arg("global_semaphore") = nb::none(),
-        nb::arg("subdevice_id") = nb::none());
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("output") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
