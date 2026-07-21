@@ -125,11 +125,17 @@ ttnn:
   # workflows. Budget planning uses a 30-min figure per job (the verify step
   # passes --timeout-minutes 30); actual job timeout is 60 min.
   sweep:
-    wh_n150: 900        # ~30 jobs × 30 min
-    wh_n300: 900
-    bh_p150b_civ2: 900
-    wh_galaxy: 900      # lead-models + model-traced Galaxy sweeps
-    bh_loudbox: 300
+    # Ceilings are the SUM of per-job timeouts declared in
+    # tests/pipeline_reorg/ttnn_sweep_tests.yaml per (team, sku), set from observed
+    # per-job wall-clock with headroom (Lead run 29559503564 / Model-Traced run
+    # 29559513509). SKU names match the *_sweeps routing SKUs in sku_config.yaml.
+    wh_galaxy_sweeps: 60   # lead galaxy (obs ~26/job)
+    wh_n150_sweeps: 75     # lead(15) + model_traced(60); obs ~6 / ~25 per job
+    wh_n300_sweeps: 60     # model_traced (obs ~30/job)
+    wh_t3k_sweeps: 90      # model_traced (obs ~48/job — slowest lane)
+    bh_p100a_sweeps: 30    # model_traced (obs ~13/job)
+    bh_p150b_sweeps: 30    # model_traced (obs ~13/job)
+    bh_p300a_sweeps: 20    # model_traced (obs ~6/job)
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
