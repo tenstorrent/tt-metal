@@ -44,7 +44,6 @@ testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 
 print_logs = True
 missing_links: dict[str, dict] = {}
-exit_status = 0
 
 
 class TestCase(str, Enum):
@@ -847,6 +846,12 @@ async def main():
     runs = list(parse_evs(evs))
     # pprint.pp(runs)
     # print(runs_to_json(runs, sort_keys=True, indent=4))
+
+    exit_status = 0
+    for r in runs:
+        if r.status != "OK":
+            exit_status = 1
+
     if not opts.n:
         print_results(runs)
     if logf:
