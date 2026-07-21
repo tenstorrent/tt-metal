@@ -25,23 +25,30 @@ std::pair<bool, std::string> use_composite_all_gather(
     // narrower = split) moves data with aligned NoC writes. That requires both pages to be un-padded;
     // padded ones go to composite. Tile pages are always aligned, so this never fires for tile.
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
-        const uint32_t element_size = input_tensor.element_size();
         const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
         const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
         const bool input_padded = input_unaligned_page_size != input_page_size;
 
-        // Output page size. Interleaved output = full row (only grows vs input -> concat, never
-        // split); sharded output page = one shard width.
+        // The native path needs an unpadded input page only when the output page differs from the input
+        // page (wider = concat, narrower = split); a matched gather (equal pages) moves whole aligned
+        // pages, so padding rides along. Take the output page from a spec on the input's logical shape +
+        // output mem config: sharded output = shard width, interleaved = full row. Neither depends on
+        // num_devices, except an interleaved last-dim gather whose row grows by num_devices (always
+        // concat), which the unscaled spec can't see.
         const ttnn::MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
         bool concat = false;
         bool split = false;
         uint32_t output_unaligned_page_size = 0;
-        if (output_mem_config.is_sharded()) {
-            output_unaligned_page_size = output_mem_config.shard_spec()->shape[1] * element_size;
+        if (!output_mem_config.is_sharded() && is_last_dim) {
+            concat = true;
+        } else {
+            const tt::tt_metal::TensorSpec output_spec(
+                input_tensor.logical_shape(),
+                tt::tt_metal::TensorLayout(
+                    input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
+            output_unaligned_page_size = output_spec.compute_page_size_bytes();
             concat = output_unaligned_page_size > input_unaligned_page_size;
             split = input_unaligned_page_size > output_unaligned_page_size;
-        } else {
-            concat = input_tensor.memory_config().is_sharded() || is_last_dim;
         }
 
         if ((concat || split) && input_padded) {

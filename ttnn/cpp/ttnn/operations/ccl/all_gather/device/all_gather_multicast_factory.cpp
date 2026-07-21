@@ -4,6 +4,8 @@
 
 #include "all_gather_multicast_factory.hpp"
 
+#include <array>
+
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -346,6 +348,63 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
 
     auto* mesh_device = input_tensor.device();
+
+    // A route is physical {E, W, N, S} hop counts. A logical fwd/bwd hop's physical direction depends
+    // on the sender's mesh position and topology, so resolve it per neighbor and place the hop into its
+    // physical slot; the kernel builds the range verbatim (1D collapses the slots to a hop count).
+    // Slot index follows eth_chan_directions: {E=0, W=1, N=2, S=3}.
+    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+    auto place = [&](std::array<uint32_t, 4>& slots, const std::optional<MeshCoordinate>& coord, uint32_t hops) {
+        if (hops > 0 && coord.has_value()) {
+            const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
+                sender_fabric_node_id, mesh_device->get_fabric_node_id(*coord));
+            slots[static_cast<uint32_t>(dir.value())] = hops;
+        }
+    };
+
+    // Reader = forward (E-line + S-rect), writer = backward (W-line + N-rect); the rect fans both E/W.
+    // Alt routes swap the per-axis hop counts for even-ring load balancing, same physical directions.
+    std::array<uint32_t, 4> r_line{}, r_line_alt{}, r_rect{}, r_rect_alt{};
+    place(r_line, e_coord, e_hops);
+    place(r_line_alt, e_coord, ew_load_balance ? w_hops : e_hops);
+    place(r_rect, e_coord, e_hops);
+    place(r_rect, w_coord, w_hops);
+    place(r_rect, s_coord, s_hops);
+    place(r_rect_alt, e_coord, ew_load_balance ? w_hops : e_hops);
+    place(r_rect_alt, w_coord, ew_load_balance ? e_hops : w_hops);
+    place(r_rect_alt, s_coord, ns_load_balance ? n_hops : s_hops);
+
+    std::array<uint32_t, 4> w_line{}, w_line_alt{}, w_rect{}, w_rect_alt{};
+    place(w_line, w_coord, w_hops);
+    place(w_line_alt, w_coord, ew_load_balance ? e_hops : w_hops);
+    place(w_rect, e_coord, e_hops);
+    place(w_rect, w_coord, w_hops);
+    place(w_rect, n_coord, n_hops);
+    place(w_rect_alt, e_coord, ew_load_balance ? w_hops : e_hops);
+    place(w_rect_alt, w_coord, ew_load_balance ? e_hops : w_hops);
+    place(w_rect_alt, n_coord, ns_load_balance ? s_hops : n_hops);
+
+    // Range runtime args: 4 physical slots per present range (primary then alt), in connection order
+    // (line then rect). Present ranges match num_connections and the fabric connection order below.
+    std::vector<uint32_t> reader_range_args, writer_range_args;
+    auto add_range =
+        [](std::vector<uint32_t>& args, const std::array<uint32_t, 4>& primary, const std::array<uint32_t, 4>& alt) {
+            args.insert(args.end(), primary.begin(), primary.end());
+            args.insert(args.end(), alt.begin(), alt.end());
+        };
+    if (e_hops > 0) {
+        add_range(reader_range_args, r_line, r_line_alt);
+    }
+    if (s_hops > 0) {
+        add_range(reader_range_args, r_rect, r_rect_alt);
+    }
+    if (w_hops > 0) {
+        add_range(writer_range_args, w_line, w_line_alt);
+    }
+    if (n_hops > 0) {
+        add_range(writer_range_args, w_rect, w_rect_alt);
+    }
+
     for (uint32_t link = 0; link < min_num_links; link++) {
         CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
@@ -395,16 +454,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             virtual_core.x,                     // barrier_sem location (core.x)
             virtual_core.y,                     // barrier_sem location (core.y)
             barrier_wait_value,                 // barrier counter to wait for
-            e_hops,                             // line_hops
-            e_hops,                             // rect_e_hops
-            w_hops,                             // rect_w_hops
-            s_hops,                             // rect_spine_hops
-            ew_load_balance ? w_hops : e_hops,  // line_hops_alt
-            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-            ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
         };
-        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        reader_rt_args.insert(reader_rt_args.end(), reader_range_args.begin(), reader_range_args.end());
         // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
@@ -436,15 +487,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             barrier_sem.address(),              // barrier_sem L1 address
             virtual_core.x,                     // barrier_sem location (core.x)
             virtual_core.y,                     // barrier_sem location (core.y)
-            w_hops,                             // line_hops
-            e_hops,                             // rect_e_hops
-            w_hops,                             // rect_w_hops
-            n_hops,                             // rect_spine_hops
-            ew_load_balance ? e_hops : w_hops,  // line_hops_alt
-            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-            ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
         };
+        writer_rt_args.insert(writer_rt_args.end(), writer_range_args.begin(), writer_range_args.end());
 
         // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;

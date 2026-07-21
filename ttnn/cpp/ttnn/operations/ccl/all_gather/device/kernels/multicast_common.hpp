@@ -10,10 +10,14 @@
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
 namespace fabric_api = tt::tt_fabric::mesh::experimental;
 using FabricRange = tt::tt_fabric::mesh::experimental::MeshMcastRange;
+// A route is host-placed physical hop counts per direction.
+inline FabricRange make_fabric_range(uint8_t e, uint8_t w, uint8_t n, uint8_t s) { return FabricRange{e, w, n, s}; }
 #else
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 using FabricRange = uint8_t;  // under 1D each connection carries a single hop count
+// 1D has one active direction, so exactly one slot is set; the sum is that hop count.
+inline FabricRange make_fabric_range(uint8_t e, uint8_t w, uint8_t n, uint8_t s) { return e + w + n + s; }
 #endif
 
 // Helper class to send pages to remote device.
@@ -45,14 +49,16 @@ public:
         chunk_sizes.fill(page_size);
         uint8_t starts[1] = {1};
 
-        fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+        fabric_api::fabric_multicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             fabric_connection,
             scatter_route_id_1,
 #ifndef FABRIC_2D
             starts,
 #endif
             ranges,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet),
+            payload_size);
 
         fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             fabric_connection,
@@ -67,14 +73,16 @@ public:
         //    forward worker alternates between 4 hops and 3 hops (in that order).
         //    backward worker alternates between 3 hops and 4 hops (in that order).
         if constexpr (alternate_routes) {
-            fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+            fabric_api::fabric_multicast_noc_scatter_write_set_state<
+                UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
                 fabric_connection,
                 scatter_route_id_2,
 #ifndef FABRIC_2D
                 starts,
 #endif
                 ranges_alt,
-                NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+                NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet),
+                payload_size);
 
             fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
                 fabric_connection,

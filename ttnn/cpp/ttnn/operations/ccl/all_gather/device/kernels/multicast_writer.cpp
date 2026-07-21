@@ -55,14 +55,14 @@ void kernel_main() {
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_hops_alt = get_arg_val<uint32_t>(arg_idx++);
+    // Physical {E, W, N, S} hop slots for each connection (primary then alt), placed by the host in
+    // connection order. Exactly num_connections ranges are present.
+    uint8_t range_args[2][8];
+    for (uint32_t i = 0; i < num_connections; ++i) {
+        for (uint32_t j = 0; j < 8; ++j) {
+            range_args[i][j] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
     size_t arg_for_fab = arg_idx;
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
@@ -79,30 +79,14 @@ void kernel_main() {
         open_connections(fabric_connection, num_connections, arg_for_fab);
     }
 
-    // Build ranges + ranges_alt arrays.
-    // Connection order matches host: line (W) first, then rect (N) — only active ones are present,
-    // indexed 0..num_connections-1.
-    FabricRange ranges[2] = {};      // [0] = W-line; [1] = N-rect (Fabric_2D only)
-    FabricRange ranges_alt[2] = {};  // [0] = W-line; [1] = N-rect (Fabric_2D only)
-#ifdef FABRIC_2D
-    {
-        uint32_t idx = 0;
-        if (line_hops > 0) {
-            ranges[idx] = FabricRange{0, line_hops, 0, 0};
-            ranges_alt[idx] = FabricRange{0, line_hops_alt, 0, 0};
-            ++idx;
-        }
-        if (rect_spine_hops > 0) {
-            ranges[idx] = FabricRange{rect_e_hops, rect_w_hops, rect_spine_hops, 0};
-            ranges_alt[idx] = FabricRange{rect_e_hops_alt, rect_w_hops_alt, rect_spine_hops_alt, 0};
-            ++idx;
-        }
+    // Build each connection's range from its physical slots (make_fabric_range collapses to a scalar
+    // hop count under 1D).
+    FabricRange ranges[2] = {};
+    FabricRange ranges_alt[2] = {};
+    for (uint32_t i = 0; i < num_connections; ++i) {
+        ranges[i] = make_fabric_range(range_args[i][0], range_args[i][1], range_args[i][2], range_args[i][3]);
+        ranges_alt[i] = make_fabric_range(range_args[i][4], range_args[i][5], range_args[i][6], range_args[i][7]);
     }
-#else
-    // 1D: exactly one of (line_hops, rect_spine_hops) is nonzero — that's the active axis.
-    ranges[0] = (line_hops != 0) ? line_hops : rect_spine_hops;
-    ranges_alt[0] = (line_hops != 0) ? line_hops_alt : rect_spine_hops_alt;
-#endif
 
     // Allocate header and set state for data sends
     FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes> fabric(

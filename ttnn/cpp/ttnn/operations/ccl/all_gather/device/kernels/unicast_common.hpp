@@ -114,10 +114,12 @@ public:
         chunk_sizes.fill(page_size);
         constexpr uint8_t num_hops = 1;  // store-and-forward: always the immediate neighbor
 
-        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+        fabric_api::fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             scatter_packet_header,
             num_hops,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet),
+            payload_size);
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, num_hops);
