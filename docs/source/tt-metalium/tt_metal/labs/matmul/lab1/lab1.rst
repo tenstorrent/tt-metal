@@ -1161,7 +1161,8 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    so your code only needs to generate indices in the right order.
 
 #. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
-   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
+   To initialize the Tensix Engine for matrix multiplication, you will need to call ``compute_kernel_hw_startup<SrcOrder::Reverse>`` once (declared in ``tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h``)
+   followed by ``matmul_init`` (in ``tt_metal/hw/inc/api/compute/matmul.h``). Matmul maps ``in0`` onto ``SrcB`` and ``in1`` onto ``SrcA``, which is why the startup uses ``SrcOrder::Reverse``.
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
    To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
