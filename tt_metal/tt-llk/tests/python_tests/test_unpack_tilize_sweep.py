@@ -147,6 +147,11 @@ def test_unpack_tilize_comprehensive(
             "MOP_OUTER_LOOP=2 and PACK_INTF_SEL values that don't adapt to tiny tiles"
         )
 
+    # BH unpack_tilize does not support num_faces=1 (LLK asserts num_faces in {2, 4}).
+    # WH supports num_faces=1.
+    if arch == ChipArchitecture.BLACKHOLE and num_faces == 1:
+        pytest.skip("BH unpack_tilize does not support num_faces=1")
+
     is_narrow = narrow_tile == NarrowTile.Yes
     # Narrow tile: 2 vertical 16x16 faces (num_faces=2).
     tile_dimensions = [DEFAULT_TILE_R_DIM, FACE_C_DIM] if is_narrow else None

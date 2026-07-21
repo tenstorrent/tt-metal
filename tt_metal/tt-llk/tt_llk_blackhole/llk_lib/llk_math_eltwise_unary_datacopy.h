@@ -539,7 +539,6 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
- * @param skip_bh_tilize_workaround: Skip the Blackhole tilize workaround (set when unpacking 8-bit datums).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
@@ -550,8 +549,7 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en             = false,
     PackMode pack_mode             = PackMode::Default>
-inline void _llk_math_eltwise_unary_datacopy_init_(
-    const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
+inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
@@ -572,18 +570,8 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
     {
-        const std::uint32_t num_rows = (tilize && !skip_bh_tilize_workaround) ? 64 : 16;
-
-        if (skip_bh_tilize_workaround)
-        {
-            eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, false /* tilize */, is_int_fpu_en>(
-                p_mova2d::MOV_8_ROWS, 16, num_faces, dst_format);
-        }
-        else
-        {
-            eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
-                p_mova2d::MOV_8_ROWS, num_rows, num_faces, dst_format);
-        }
+        eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
+            p_mova2d::MOV_8_ROWS, tilize ? 64 : 16, num_faces, dst_format);
     }
     else if constexpr (type == DataCopyType::B2D)
     {

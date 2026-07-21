@@ -31,14 +31,7 @@ inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_(const std::uint32_
     return block_ct_dim;
 }
 
-inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_(const std::uint32_t num_faces)
-{
-    // Wormhole uses num_faces to select the tilize loop count.
-    return num_faces;
-}
-
-inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(
-    [[maybe_unused]] const std::uint32_t unpack_src_format, const std::uint32_t tile_count, const std::uint32_t tile_num_faces)
+inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, const std::uint32_t tile_num_faces)
 {
     // Wormhole tracks dvalids per tile face.
     return tile_count * tile_num_faces;
@@ -82,14 +75,7 @@ inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_([[maybe_unused]] c
     return 0;
 }
 
-inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_(const std::uint32_t num_faces)
-{
-    // Blackhole unpack_tilize supports num_faces=2 and num_faces=4.
-    return num_faces;
-}
-
-inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(
-    [[maybe_unused]] const std::uint32_t unpack_src_format, const std::uint32_t tile_count, [[maybe_unused]] const std::uint32_t tile_num_faces)
+inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, [[maybe_unused]] const std::uint32_t tile_num_faces)
 {
     // Blackhole unpack_tilize emits 1 DVALID per tile: 8-bit via inline path (SetDvalid on
     // last face of active pair), non-8-bit via the whole-tile BH workaround.
