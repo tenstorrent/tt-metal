@@ -1,8 +1,11 @@
 #include <elf.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -12,54 +15,11 @@
 #include <string>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "include/util.h"
-
-// ------------------------------------------------------------- delay-as-loop
-// With --loop, a delay of N is emitted as a fixed 8-word counted spin loop instead
-// of N NOPs, so arbitrarily large delays fit in a core's small instruction memory.
-// The loop saves/restores t0 on the stack, so it is register-transparent; one
-// iteration is ~2 instructions, so the delay is ~2*N cycles. Do not target sites
-// before the stack pointer is set up (i.e. the first few crt0 instructions).
-bool g_loop                        = false;
-constexpr std::uint32_t LOOP_WORDS = 8;
-
-std::uint32_t enc_i(std::uint32_t opc, std::uint32_t rd_, std::uint32_t f3, std::uint32_t rs1_, std::uint32_t imm)
-{
-    return ((imm & 0xfff) << 20) | (rs1_ << 15) | (f3 << 12) | (rd_ << 7) | opc;
-}
-
-std::uint32_t enc_s(std::uint32_t opc, std::uint32_t f3, std::uint32_t rs1_, std::uint32_t rs2_, std::uint32_t imm)
-{
-    return (((imm >> 5) & 0x7f) << 25) | (rs2_ << 20) | (rs1_ << 15) | (f3 << 12) | ((imm & 0x1f) << 7) | opc;
-}
-
-std::uint32_t enc_u(std::uint32_t opc, std::uint32_t rd_, std::uint32_t imm20)
-{
-    return ((imm20 & 0xfffff) << 12) | (rd_ << 7) | opc;
-}
-
-std::vector<std::uint32_t> emit_delay_loop(std::uint32_t count)
-{
-    std::uint32_t hi = ((count + 0x800u) >> 12) & 0xfffffu;
-    std::int32_t lo  = std::int32_t(count) - std::int32_t(hi << 12);
-    return {
-        enc_i(OP_OPIMM, REG_SP, 0, REG_SP, std::uint32_t(-4)),        // addi sp,sp,-4
-        enc_s(OP_STORE, 2, REG_SP, REG_T0, 0),                        // sw   t0,0(sp)
-        enc_u(OP_LUI, REG_T0, hi),                                    // lui  t0,hi
-        enc_i(OP_OPIMM, REG_T0, 0, REG_T0, std::uint32_t(lo)),        // addi t0,t0,lo  (t0=count)
-        enc_i(OP_OPIMM, REG_T0, 0, REG_T0, std::uint32_t(-1)),        // 1: addi t0,t0,-1
-        OP_BRANCH | (1u << 12) | (REG_T0 << 15) | enc_branch_imm(-4), // bne  t0,x0,1b
-        enc_i(OP_LOAD, REG_T0, 2, REG_SP, 0),                         // lw   t0,0(sp)
-        enc_i(OP_OPIMM, REG_SP, 0, REG_SP, 4),                        // addi sp,sp,4
-    };
-}
-
-// Words the delay portion of a cave block occupies (NOP mode = N; loop mode = a
-// fixed block, or 0 for N==0 so a 0-delay detour stays a pure jump).
-std::uint32_t delay_words(std::uint32_t n)
-{
-    return g_loop ? (n ? LOOP_WORDS : 0u) : n;
-}
 
 // A human label for an opcode, used by --list and --every class matching.
 const char* insn_class(std::uint32_t insn)
@@ -315,7 +275,7 @@ std::uint32_t text_word(const Elf& e, std::uint32_t vaddr)
 struct Site
 {
     std::uint32_t vaddr = 0; // address of the instruction we detour
-    std::uint32_t n     = 0; // delay (NOP count, or loop iterations with --loop)
+    std::uint32_t n     = 0; // delay NOP count
     std::string why;         // provenance, for the report
 };
 
@@ -341,21 +301,11 @@ void build_block(Block& b)
     const std::uint32_t I = b.orig;
     const std::uint32_t C = b.cave_vaddr;
     auto& w               = b.words;
-    if (g_loop && b.n)
+    for (std::uint32_t k = 0; k < b.n; ++k)
     {
-        for (std::uint32_t insn : emit_delay_loop(b.n))
-        {
-            w.push_back(insn);
-        }
+        w.push_back(NOP);
     }
-    else
-    {
-        for (std::uint32_t k = 0; k < b.n; ++k)
-        {
-            w.push_back(NOP);
-        }
-    }
-    std::uint32_t pc = C + delay_words(b.n) * 4; // vaddr of the first post-delay word
+    std::uint32_t pc = C + b.n * 4; // vaddr of the first post-delay word
 
     switch (opcode(I))
     {
@@ -427,7 +377,7 @@ void put(std::vector<std::uint8_t>& v, size_t off, const T& x)
 
 // Re-serialize the file with the cave folded onto the end of .text. .text grows, so
 // every later section's file offset is recomputed; virtual addresses are unchanged.
-void write_out(Elf& e, std::vector<Block>& blocks, std::uint32_t cave_vaddr, const std::vector<std::uint8_t>& cave_bytes, const std::string& out_path)
+void write_out(const Elf& e, std::vector<Block>& blocks, std::uint32_t cave_vaddr, const std::vector<std::uint8_t>& cave_bytes, const std::string& out_path)
 {
     const Section& text    = e.sec(e.text_idx);
     const Elf32_Phdr xseg0 = e.phdrs[e.exec_phdr];
@@ -687,12 +637,338 @@ void validate_site(const Elf& e, Site& site)
     }
 }
 
+// batch mode (OpenMP)
+// The `batch` command parses the base kernel ELF ONCE and then,
+// in parallel (OpenMP), emits one perturbed ELF *set* per NOP count.
+// Only `--thread (either math.elf, unpack.elf, pack.elf)` is patched;
+// the other elfs are hardlinked from --base-dir (symlink).
+// pytest-xdist (`-n 8`) runs the sets across 8 Tensix cores.
+
+// Make every directory component of `path` (which may end in '/').
+static void mkdirs(const std::string& path)
+{
+    std::string acc;
+    for (size_t i = 0; i < path.size(); ++i)
+    {
+        acc += path[i];
+        if (path[i] == '/' || i + 1 == path.size())
+        {
+            if (acc == "/" || acc.empty())
+            {
+                continue;
+            }
+            std::string d = (path[i] == '/') ? acc.substr(0, acc.size() - 1) : acc;
+            if (::mkdir(d.c_str(), 0777) != 0 && errno != EEXIST)
+            {
+                die("mkdir failed: " + d);
+            }
+        }
+    }
+}
+
+// Point dst at the unchanged baseline ELF using a hardlink.
+// If we are patching math.elf, unpack and pack elf will always be the same across
+// the 100*blocks iterations. Copying the same file is not efficient here and creating a
+// hardlink is much more efficient because the file is the EXACT same across all iterations
+static void link_sibling_elf(const std::string& src, const std::string& dst)
+{
+    // Remove any stale destination entry first.
+    if (::unlink(dst.c_str()) != 0 && errno != ENOENT)
+    {
+        die("batch: cannot remove stale sibling: " + dst);
+    }
+
+    if (::link(src.c_str(), dst.c_str()) != 0)
+    {
+        die("batch: cannot hardlink sibling " + src + " -> " + dst);
+    }
+}
+
+// Checks if the virtual address chosen is safe to add NOPs to
+static bool is_detourable(const Elf& e, std::uint32_t v)
+{
+    const Section& t = e.sec(e.text_idx);
+
+    // check if the virtual address is inside .text and room for 4 byte instruction to be inserted
+    if (v < t.h.sh_addr || v + 4 > t.h.sh_addr + t.h.sh_size)
+    {
+        return false;
+    }
+
+    // address must also be 4 byte aligned
+    if (v % 4)
+    {
+        return false;
+    }
+
+    std::uint32_t oc = opcode(text_word(e, v));
+
+    // if the instruction is unsafe return false
+    return oc != OP_AUIPC && oc != OP_BRANCH && oc != OP_JAL;
+}
+
+// Batch injection site: entry of run_kernel (past crt0 setup).
+// Mangled names still contain "run_kernel"; skip non-FUNC symbols with that substring.
+std::uint32_t pick_auto_site(const Elf& e)
+{
+    // 1) Prefer run_kernel (mangled names still contain "run_kernel").
+    for (const auto& pair : e.syms)
+    {
+        const Sym& s = pair.second;
+        // run_kernel must be a function, there can be variables names with it too
+        if (s.type != STT_FUNC)
+        {
+            continue;
+        }
+        if (s.name.find("run_kernel") == std::string::npos)
+        {
+            continue;
+        }
+        if (!is_detourable(e, s.value))
+        {
+            continue;
+        }
+        std::fprintf(stderr, "ttnop: site -> run_kernel entry 0x%08x (<%s>)\n", s.value, s.name.c_str());
+        return s.value;
+    }
+    die("no detourable run_kernel function symbol found");
+}
+
+// Patch a single already-loaded base ELF with N NOPs at one site and write it out.
+// Shares the read-only `base` across OpenMP workers (no re-parse per variant).
+void patch_one(const Elf& base, std::uint32_t site_vaddr, std::uint32_t n, const std::string& out_path)
+{
+    const Section& t = base.sec(base.text_idx);
+
+    // t.h.sh_addr -> where .text starts
+    // t.h.sh_size -> size of .text
+    // finds the 4 byte aligned address right after .text
+    std::uint32_t cave_vaddr = ((t.h.sh_addr + t.h.sh_size) + 3u) & ~3u;
+
+    Block b;
+    b.site       = site_vaddr;                  // address where jump will be
+    b.orig       = text_word(base, site_vaddr); // current instruction that jump will replace
+    b.n          = n;
+    b.cave_vaddr = cave_vaddr;
+
+    build_block(b);
+
+    // Take the list of 32-bit words into bytes for write_out
+    const std::uint8_t* p = reinterpret_cast<const std::uint8_t*>(b.words.data());
+    std::vector<std::uint8_t> cave_bytes(p, p + b.words.size() * 4);
+
+    std::vector<Block> blocks {b};
+    write_out(base, blocks, cave_vaddr, cave_bytes, out_path);
+}
+
+std::vector<std::string> split_csv(const std::string& s)
+{
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size())
+    {
+        size_t j        = s.find(',', i);
+        std::string tok = s.substr(i, j == std::string::npos ? std::string::npos : j - i);
+        if (!tok.empty())
+        {
+            out.push_back(tok);
+        }
+        if (j == std::string::npos)
+        {
+            break;
+        }
+        i = j + 1;
+    }
+    return out;
+}
+
+struct BatchArgs
+{
+    std::string base_dir, out_root, thread = "math";
+    std::vector<std::string> components = {"unpack", "math", "pack"};
+    std::vector<std::uint32_t> counts;
+    int jobs = 0;
+};
+
+int do_batch(BatchArgs a)
+{
+    if (a.base_dir.empty())
+    {
+        die("batch: --base-dir <elf dir> is required");
+    }
+    if (a.out_root.empty())
+    {
+        die("batch: --out-root <dir> is required");
+    }
+    if (a.counts.empty())
+    {
+        die("batch: --counts <csv> is required");
+    }
+
+    if (std::find(a.components.begin(), a.components.end(), a.thread) == a.components.end())
+    {
+        die("batch: --thread '" + a.thread + "' not in components");
+    }
+
+    // Parse the base thread ELF once; OpenMP workers share it read-only.
+    Elf base;
+    load_elf(a.base_dir + "/" + a.thread + ".elf", base);
+
+    // Resolve + validate the injection site ONCE (before the parallel region).
+    std::uint32_t site_vaddr = pick_auto_site(base);
+    Site site_chk;
+    site_chk.vaddr = site_vaddr;
+    validate_site(base, site_chk);
+
+    // Sibling ELFs are unchanged; workers hardlink them from --base-dir.
+    for (const std::string& c : a.components)
+    {
+        if (c == a.thread)
+        {
+            continue;
+        }
+        std::string src = a.base_dir + "/" + c + ".elf";
+        struct stat st;
+        if (::stat(src.c_str(), &st) != 0)
+        {
+            die("batch: missing sibling ELF: " + src);
+        }
+    }
+
+    const int N = static_cast<int>(a.counts.size());
+#ifdef _OPENMP
+    // Cap OpenMP workers to omp_get_max_threads()
+    // so batch threads don't oversubscribe when many xdist workers run at once.
+    // If jobs are higher than max_threads, then the OS time-slices them and there are more context switches
+    const int max_threads = std::max(1, omp_get_max_threads());
+    int jobs              = std::max(1, std::min(N, max_threads));
+    if (a.jobs > 0)
+    {
+        jobs = std::max(1, std::min(jobs, a.jobs));
+    }
+#else
+    // not using openMP set jobs to 1 and ignore -j
+    const int jobs = 1;
+    (void)a.jobs;
+#endif
+    std::fprintf(
+        stderr,
+        "ttnop batch: base_dir=%s thread=%s site=0x%08x (%s) payload=RISCV_NOP variants=%d jobs=%d (max_threads=%d)\n",
+        a.base_dir.c_str(),
+        a.thread.c_str(),
+        site_vaddr,
+        insn_class(text_word(base, site_vaddr)),
+        N,
+        jobs,
+#ifdef _OPENMP
+        max_threads
+#else
+        1
+#endif
+    );
+
+    mkdirs(a.out_root + "/");
+
+#ifdef _OPENMP
+    omp_set_num_threads(jobs);
+#endif
+
+#pragma omp parallel for schedule(static, 1) // round robin jobs
+    for (int i = 0; i < N; ++i)
+    {
+        std::uint32_t n = a.counts[i];
+        std::string dir = a.out_root + "/n" + std::to_string(n);
+        mkdirs(dir + "/");
+        for (const std::string& c : a.components)
+        {
+            std::string dst = dir + "/" + c + ".elf";
+            if (c == a.thread)
+            {
+                patch_one(base, site_vaddr, n, dst);
+            }
+            else
+            {
+                link_sibling_elf(a.base_dir + "/" + c + ".elf", dst);
+            }
+        }
+    }
+
+    return 0;
+}
+
+int run_batch(int argc, char** argv)
+{
+    BatchArgs a;
+    auto take = [&](int& i) -> std::string
+    {
+        if (i + 1 >= argc)
+        {
+            die(std::string("missing argument to ") + argv[i]);
+        }
+        return argv[++i];
+    };
+    for (int i = 2; i < argc; ++i)
+    {
+        std::string s = argv[i];
+        if (s == "--base-dir")
+        {
+            a.base_dir = take(i);
+        }
+        else if (s == "--out-root")
+        {
+            a.out_root = take(i);
+        }
+        else if (s == "--thread")
+        {
+            a.thread = take(i);
+        }
+        else if (s == "--counts")
+        {
+            for (const std::string& tok : split_csv(take(i)))
+            {
+                std::uint32_t v;
+                if (!parse_u32(tok, v))
+                {
+                    die("batch: bad --counts value '" + tok + "'");
+                }
+                if (std::find(a.counts.begin(), a.counts.end(), v) != a.counts.end())
+                {
+                    die("batch: duplicate --counts value '" + tok + "'");
+                }
+                a.counts.push_back(v);
+            }
+        }
+        else if (s == "-j")
+        {
+            std::uint32_t v;
+            if (!parse_u32(take(i), v) || v == 0)
+            {
+                die("batch: bad -j value (want positive integer)");
+            }
+            a.jobs = static_cast<int>(v);
+        }
+        else
+        {
+            die("batch: unknown option: " + s);
+        }
+    }
+    return do_batch(a);
+}
+
 // --------------------------------------------------------------------- main
 void usage()
 {
     std::printf(
         "ttnop\ninject NOP delays into a linked RV32 kernel ELF\n\n"
-        "usage: ttnop <in.elf> -o <out.elf> [SITE ...] [options]\n\n"
+        "usage: ttnop <in.elf> -o <out.elf> [SITE ...] [options]\n"
+        "       ttnop batch --counts <csv> [options]\n\n"
+        "BATCH MODE (OpenMP: parse base once, emit one perturbed ELF set per count):\n"
+        "  --counts CSV       one perturbed set per value (the NOP count; no duplicates)\n"
+        "  --thread T         component that receives the NOPs (default math)\n"
+        "  -j N               cap OpenMP workers (default: OMP_NUM_THREADS / OpenMP max)\n"
+        "  (ELF set is always unpack/math/pack; siblings hardlinked from base dir)\n"
+        "  (injection site is always run_kernel entry)\n\n"
+        "SINGLE-ELF MODE:\n"
         "A SITE is  LOC=N  meaning: inject a delay of N before the instruction at LOC.\n"
         "  LOC is  0xADDR | symbol | symbol+0xOFF | 0xADDR+0xOFF\n"
         "  examples:  0x6510=5   main=8   main+0x1c=3\n\n"
@@ -702,9 +978,6 @@ void usage()
         "  --every CLASS=N    inject a delay of N before every instruction of CLASS\n"
         "                     CLASS: load store op opimm lui branch jal call jalr\n"
         "                            system fence amo custom all\n"
-        "  --loop             emit each delay as a compact ~8-word spin loop of N iterations\n"
-        "                     (~2N cycles) instead of N NOPs, so large delays fit in small\n"
-        "                     IRAM. Uses the stack, so do not target early (pre-stack) sites.\n"
         "  --list             classify .text (with no sites: print the disassembly + tally)\n"
         "  --verify           re-open the output and re-check the detours\n"
         "  -h, --help         this message\n");
@@ -722,6 +995,12 @@ int run(int argc, char** argv)
     {
         usage();
         return 1;
+    }
+
+    // OpenMP batch sub-command: compile-once / patch-many across NOP counts.
+    if (std::string(argv[1]) == "batch")
+    {
+        return run_batch(argc, argv);
     }
 
     std::string in_path, out_path, sites_file;
@@ -760,10 +1039,6 @@ int run(int argc, char** argv)
         else if (a == "--verify")
         {
             do_verify = true;
-        }
-        else if (a == "--loop")
-        {
-            g_loop = true;
         }
         else if (a == "--every")
         {
@@ -979,7 +1254,7 @@ int run(int argc, char** argv)
         b.orig       = text_word(e, s.vaddr);
         b.n          = s.n;
         b.cave_vaddr = cv;
-        cv += (delay_words(s.n) + body_words(b.orig)) * 4;
+        cv += (s.n + body_words(b.orig)) * 4;
         blocks.push_back(b);
     }
     std::uint32_t cave_size = cv - cave_vaddr;
@@ -993,8 +1268,8 @@ int run(int argc, char** argv)
             std::snprintf(
                 b,
                 sizeof b,
-                "cave [0x%x,0x%x) would overlap the segment at 0x%x. reduce the delay, "
-                "use --loop, or instrument fewer sites",
+                "cave [0x%x,0x%x) would overlap the segment at 0x%x. reduce the delay "
+                "or instrument fewer sites",
                 cave_vaddr,
                 cave_vaddr + cave_size,
                 p.p_vaddr);
@@ -1081,8 +1356,6 @@ int run(int argc, char** argv)
     }
     return 0;
 }
-
-} // namespace
 
 int main(int argc, char** argv)
 {

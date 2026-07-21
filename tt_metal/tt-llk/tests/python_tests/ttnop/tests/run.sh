@@ -34,7 +34,7 @@ if have "$GCC" && have "$QEMU"; then
     if [ -n "$EXP" ]; then ok "fixture builds and runs (baseline output: $EXP)"
     else bad "fixture produced no output"; EXP=__none__; fi
 
-    # Equivalence under a spread of instrumentation strategies (NOPs and --loop).
+    # Equivalence under a spread of instrumentation strategies.
     configs=(
       "0x10000=1"
       "--every store=4"
@@ -44,8 +44,6 @@ if have "$GCC" && have "$QEMU"; then
       "--every load=2 --every op=2"
       "--every system=4 --every fence=4"
       "--every all=1"
-      "--every store=4 --loop"
-      "--every all=2 --loop"
     )
     for cfg in "${configs[@]}"; do
       if $TT "$BASE" -o "$WORK/inst" $cfg --verify >"$WORK/t.log" 2>&1; then
@@ -69,16 +67,6 @@ if have "$GCC" && have "$QEMU"; then
     read _ H1 < <($TT "$BASE" -o "$WORK/a" 0x10010=10  2>&1 | cave_range)
     read _ H2 < <($TT "$BASE" -o "$WORK/b" 0x10010=100 2>&1 | cave_range)
     [ "$((H2))" -gt "$((H1))" ] && ok "cave grows with nop count" || bad "cave size did not scale with nops"
-
-    # --loop keeps the cave tiny regardless of N (fixed ~8 words), so a delay that
-    # would be far too large as NOPs still fits and stays functionally identical.
-    if $TT "$BASE" -o "$WORK/big" 0x10010=200000 --loop --verify >"$WORK/t.log" 2>&1; then
-      got=$($QEMU "$WORK/big" 2>/dev/null)
-      [ "$got" = "$EXP" ] && ok "--loop 200000 fits and runs identically" \
-                          || bad "--loop 200000 changed output (got '$got')"
-    else
-      bad "--loop 200000 failed ($(tail -1 "$WORK/t.log"))"
-    fi
   else
     bad "fixture failed to build: $(tail -1 "$WORK/cc.log")"
   fi
