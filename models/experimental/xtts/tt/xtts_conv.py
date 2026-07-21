@@ -33,6 +33,33 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 
+# The vocoder's conditioning-bias fold (TtConv1d.forward) prepares the combined bias on HOST via
+# ttnn.from_device — a device->host READ that is fatal inside a ttnn trace capture. It is the faster
+# path for eager execution (fused conv-bias epilogue, no full-length broadcast add), so it stays the
+# DEFAULT. When capturing a trace, wrap the region in ``cond_bias_trace_safe()`` (or call
+# ``set_cond_bias_trace_safe(True)``) to switch to the equivalent trace-safe post-conv device add.
+_COND_BIAS_TRACE_SAFE = False
+
+
+def set_cond_bias_trace_safe(flag: bool) -> bool:
+    """Toggle the trace-safe conditioning-bias path; returns the previous value (for restore)."""
+    global _COND_BIAS_TRACE_SAFE
+    prev = _COND_BIAS_TRACE_SAFE
+    _COND_BIAS_TRACE_SAFE = bool(flag)
+    return prev
+
+
+class cond_bias_trace_safe:
+    """Context manager: force the trace-safe conditioning-bias add inside `with`, restore after."""
+
+    def __enter__(self):
+        self._prev = set_cond_bias_trace_safe(True)
+        return self
+
+    def __exit__(self, *exc):
+        set_cond_bias_trace_safe(self._prev)
+        return False
+
 
 def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
     """Bring a (possibly sharded) conv output to interleaved DRAM and reshape to
@@ -158,16 +185,18 @@ class TtConv1d(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None) -> ttnn.Tensor:
         batch_size, input_length, _ = x.shape
-        # ``cond_bias`` ([1,1,1,C], fp32, tiled) is a per-channel constant folded into the
-        # bias so the conv adds it in its fused epilogue (free) instead of the caller
-        # running a full-length broadcast add. It varies per call (depends on ``g``), so
-        # the combined bias is rebuilt each call and never cached back onto ``self``.
+        # ``cond_bias`` ([1,1,1,C], fp32) is a per-channel conditioning constant. Two equivalent
+        # ways to apply it (identical math — a per-output-channel bias add):
+        #   * EAGER (default, faster): fold it into the conv's bias so conv1d adds it in its fused
+        #     epilogue — needs a host-prepared bias (from_device), a device->host READ.
+        #   * TRACE-SAFE (_COND_BIAS_TRACE_SAFE): add it on device AFTER the conv, broadcasting over
+        #     length. No host transfer, so it is legal inside a trace capture (from_device is fatal
+        #     there). Set via cond_bias_trace_safe() around a trace region.
+        fold = cond_bias is not None and not _COND_BIAS_TRACE_SAFE
         bias_tensor = self.tt_bias
-        if cond_bias is not None:
-            # Combine on device, then move to host so ttnn.conv1d prepares it through its
-            # normal (host) bias path. A device-side unprepared bias makes conv pull it
-            # back to host and reprocess anyway (with a warning); doing it explicitly is
-            # the same tiny [1,1,1,C] transfer without the failed device-prepare attempt.
+        if fold:
+            # Combine on device, then move to host so ttnn.conv1d prepares it through its normal
+            # (host) bias path (a device unprepared bias makes conv pull it back to host anyway).
             combined = ttnn.to_layout(ttnn.add(self._raw_bias_fp32, cond_bias), ttnn.ROW_MAJOR_LAYOUT)
             bias_tensor = ttnn.from_device(combined)
             ttnn.deallocate(combined)
@@ -192,12 +221,18 @@ class TtConv1d(LightweightModule):
             return_weights_and_bias=True,
         )
         self.tt_weight = weight
-        if cond_bias is None:
+        if not fold:  # bias is the (prepared) base bias — cache it; when folding it is the combined bias
             self.tt_bias = bias
         # Keep TILE: the conv already emits TILE/interleaved-DRAM, and the whole
         # vocoder conv chain (+ its eltwise ops) consumes TILE, so we skip the
         # per-conv untilize->ROW_MAJOR round-trip.
-        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
+        out = _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
+        if cond_bias is not None and not fold:  # trace-safe post-conv device add
+            cb = ttnn.reshape(cond_bias, [1, 1, self.out_channels])
+            if cb.dtype != out.dtype:
+                cb = ttnn.typecast(cb, out.dtype)
+            out = ttnn.add(out, cb)
+        return out
 
 
 class TtConvTranspose1d(LightweightModule):
