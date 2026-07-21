@@ -16,11 +16,13 @@ on device (no host fallback in the tensor path):
                           combined with the top-k threshold via `ttnn.maximum`)
     -> categorical draw   via the Gumbel-max trick: argmax(logits + Gumbel noise),
                           since ttnn has no multinomial. Gumbel = -log(-log(U)),
-                          U ~ uniform(0,1) from `ttnn.rand` (drawn in fp32 — bf16 is
-                          too coarse near 0/1 and biases the draw toward greedy).
+                          U ~ uniform(0,1). ``pick`` draws U with `ttnn.rand` (fp32 — bf16 is
+                          too coarse near 0/1 and biases toward greedy); ``pick_dev`` (the traced
+                          loop) instead ADDS pre-drawn Gumbel noise streamed in from host, so the
+                          draw is trace-safe AND a true uniform (matches torch.multinomial).
 
 Only the final sampled id crosses to host (loop control + next embedding index) —
-the same one-int-per-step read greedy already needs.
+the same one-int-per-step read greedy already needs (``pick_dev`` keeps even that on device).
 """
 
 import torch
@@ -47,11 +49,10 @@ class TtSampler:
             torch.full((1, vocab_size), NEG_INF), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
         self._one = ttnn.from_torch(torch.ones((1, 1)), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        # Counter-PRNG constants for the trace-compatible Gumbel draw (pick_dev): a GLSL-style hash
-        # frac(sin(step*A + idx*B) * C) driven by a per-step counter, in place of ttnn.rand (which
-        # replays identical noise inside a trace). ``_arange_b`` = idx * B, precomputed.
-        self._arange_b = ttnn.from_torch(
-            torch.arange(vocab_size, dtype=torch.float32).reshape(1, vocab_size) * 78.233,
+        # arange over the vocab (fp32 — exact for ids > 256, unlike bf16) for building an on-device
+        # one-hot of the sampled token when marking the ``seen`` mask in place (pick_dev).
+        self._arange_v = ttnn.from_torch(
+            torch.arange(vocab_size, dtype=torch.float32).reshape(1, vocab_size),
             device=device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -59,6 +60,9 @@ class TtSampler:
         self.reset()
 
     def reset(self):
+        # bf16 persistent repetition mask (1.0 at seen ids — 0/1 flags are bf16-exact). MUST be bf16:
+        # an fp32 seen makes ttnn.gt(seen, 0.5) yield a condition whose dtype mismatches the bf16
+        # logit branches in ttnn.where, silently corrupting the rep-penalty (garbage output).
         self.seen = ttnn.from_torch(
             torch.zeros((1, self.v)), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
@@ -116,7 +120,7 @@ class TtSampler:
             pos = ttnn.gt(L, 0.0)
             penalized = ttnn.where(pos, ttnn.multiply(L, 1.0 / self.rep), ttnn.multiply(L, self.rep))
             L = ttnn.where(ttnn.gt(self.seen, 0.5), penalized, L)
-        if self.temperature != 1.0:
+        if self.temperature > 0.0 and self.temperature != 1.0:  # >0 guard: temp<=0 is greedy (no scaling)
             L = ttnn.multiply(L, 1.0 / self.temperature)
         if self.top_k:
             vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]
@@ -132,22 +136,29 @@ class TtSampler:
             L = ttnn.where(ttnn.ge(L, thr), L, self._neg)
         return L
 
-    def pick_dev(self, logits, step_t):
-        """Fully-on-device sample for the TRACED decode loop: same rep/temp/top-k/top-p shaping,
-        but the Gumbel noise comes from a counter-based PRNG (``step_t``: a ``[1, 1]`` fp32 tensor
-        holding the decode step) instead of ``ttnn.rand`` — so it is trace-capturable and varies
-        every step. Returns the sampled id as a DEVICE ``[1, 1]`` uint32 tensor (no host readback)
-        and updates the ``seen`` mask on device. Greedy when ``temperature <= 0``."""
+    def pick_dev(self, logits, gumbel=None):
+        """Fully-on-device sample for the TRACED decode loop: same rep/temp/top-k/top-p shaping as
+        the host path, then a Gumbel-max draw ``argmax(shaped_logits + gumbel)``. ``gumbel`` is a
+        ``[1, V]`` fp32 tensor of PRE-DRAWN Gumbel noise ``-log(-log(U))``, ``U ~ uniform(0,1)`` —
+        drawn on HOST with a proper RNG (``torch``) once before the loop and streamed into this
+        persistent buffer per step. Because the noise is independent of the logits it is genuine
+        preprocessing, not a host fallback, and unlike an in-trace ``frac(sin)`` PRNG it is a true
+        uniform draw, so this matches ``torch.multinomial`` in distribution (exact Gumbel-max
+        equivalence). Returns the sampled id as a DEVICE ``[1, 1]`` uint32 tensor (no host readback)
+        and updates the ``seen`` mask on device. Greedy when ``temperature <= 0`` / ``gumbel`` None."""
         L = self._apply_penalty_temp_topk(logits)
         Lf = ttnn.typecast(L, ttnn.float32)
-        if self.temperature > 0.0:
-            # U = frac(sin(step*12.9898 + idx*78.233) * 43758.5453) in (0,1); g = -log(-log(U)).
-            h = ttnn.add(ttnn.multiply(step_t, 12.9898), self._arange_b)  # [1,1] broadcasts over [1,V]
-            u = ttnn.clamp(ttnn.frac(ttnn.multiply(ttnn.sin(h), 43758.5453)), 1e-4, 1.0 - 1e-3)
-            g = ttnn.multiply(ttnn.log(ttnn.multiply(ttnn.log(u), -1.0)), -1.0)
-            Lf = ttnn.add(Lf, g)
+        if self.temperature > 0.0 and gumbel is not None:
+            Lf = ttnn.add(Lf, gumbel)  # + pre-drawn Gumbel noise -> exact categorical sample
         tok = ttnn.argmax(ttnn.to_layout(Lf, ttnn.ROW_MAJOR_LAYOUT), dim=-1)  # device
         tok = ttnn.reshape(ttnn.typecast(tok, ttnn.uint32), [1, 1])
         if self.rep != 1.0:
-            self.seen = ttnn.scatter(self.seen, 1, tok, self._one)  # mark on device (no host int)
+            # Mark the sampled id in the persistent seen mask IN PLACE (output_tensor=self.seen) so
+            # it ACCUMULATES across traced replays. A reassignment (self.seen = scatter(...)) binds
+            # buffers once at capture and does NOT feed back on replay, silently killing the
+            # repetition penalty -> the model repeats and never emits STOP.
+            oh = ttnn.typecast(
+                ttnn.eq(self._arange_v, ttnn.typecast(tok, ttnn.float32)), ttnn.bfloat16
+            )  # [1,V] one-hot
+            ttnn.maximum(self.seen, oh, output_tensor=self.seen)
         return tok
