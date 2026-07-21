@@ -227,30 +227,6 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     TT_THROW("Invalid subtile broadcast type");
 }
 
-ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
-    // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
-    auto base_hash = ttsl::hash::hash_objects_with_default_seed(
-        binary_op_type,
-        lhs_activations,
-        rhs_activations,
-        (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
-        memory_config,
-        get_dtype(),
-        compute_kernel_config,
-        sub_core_grids,
-        subtile_broadcast_type,
-        is_sfpu,
-        is_quant_op,
-        is_where_op,
-        input_layout_a,
-        input_layout_b,
-        output_layout);
-    if (binary_op_type == BinaryOpType::ISCLOSE) {
-        base_hash = ttsl::hash::hash_objects(base_hash, equal_nan);
-    }
-    return base_hash;
-}
-
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
@@ -483,66 +459,6 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-
-    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
-
-    // The Metal 2.0 factory bakes each operand's full TensorSpec into the ProgramSpec's
-    // TensorParameters, and ValidateTensorArgs enforces exact spec equality on every cache hit — so a
-    // cached program is reusable only for an identical (a, b, output) spec triple. The metal_v2 branch
-    // therefore folds the full specs. (Folding only the output volume collides for differently-shaped
-    // ops that share a volume — e.g. outer-broadcast operands — reusing a program whose baked spec no
-    // longer matches.) The descriptor path keeps the default shape-excluding hash (its program is
-    // shape-agnostic via runtime args).
-    const bool metal_v2 = select_program_factory(attributes, tensor_args).index() != 0;
-
-    if (input_tensor_b.has_value()) {
-        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
-
-        const auto output_spec = compute_output_specs(attributes, tensor_args);
-
-        if (metal_v2) {
-            return operation::hash_operation<BinaryNgDeviceOperation>(
-                attributes, input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), output_spec);
-        }
-
-        // Descriptor (ProgramFactory) path. Its program is nominally shape-agnostic via runtime args, but
-        // it bakes shape-dependent uint32 scalars (per-core tile counts, start ids, D/N/C/Ht/Wt dims,
-        // row-width strides — see the reader/writer arg builders in binary_ng_program_factory.cpp) into
-        // those args, and now declares the output as a BufferBinding, so a cross-shape cache hit would
-        // re-use frozen scalars against a differently-shaped tensor (wrong tile range / OOB). Key on
-        // dtype/memory_config plus the per-operand shard volumes AND the full padded shapes of every
-        // present operand + output, so both differently-sharded and differently-shaped ops get distinct
-        // cache entries (over-keying is safe; under-keying is the bug). shard_volumes is computed only on
-        // this branch — the metal_v2 branch folds full specs instead.
-        const auto shard_volumes =
-            get_shard_volumes(input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), output_spec);
-        return operation::hash_operation<BinaryNgDeviceOperation>(
-            attributes,
-            input_tensor_a.dtype(),
-            input_tensor_a.memory_config(),
-            input_tensor_b->dtype(),
-            input_tensor_b->memory_config(),
-            shard_volumes,
-            input_tensor_a.padded_shape(),
-            input_tensor_b->padded_shape(),
-            output_spec.padded_shape());
-    }
-
-    // Descriptor path, single operand (scalar RHS). Same reasoning as the has-b descriptor branch above:
-    // the baked reader/writer scalars derive from the a/output padded shapes, so hash them.
-    const auto output_spec = compute_output_specs(attributes, tensor_args);
-    return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes,
-        input_tensor_a.dtype(),
-        input_tensor_a.memory_config(),
-        input_tensor_a.padded_shape(),
-        output_spec.padded_shape());
-}
-
 bool BinaryNgDeviceOperation::skip_launch(
     const operation_attributes_t& /*attributes*/,
     const tensor_args_t& /*tensor_args*/,
@@ -688,6 +604,10 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
         "Input tensor B must be on device, got storage type: {}",
         input_tensor_b.storage_type());
 
+    // Valid input is allocated
+    TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor A is not allocated");
+    TT_FATAL(input_tensor_b.is_allocated(), "Input Tensor B is not allocated");
+
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -826,6 +746,9 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
         input_tensor_a.storage_type() == StorageType::DEVICE,
         "Input tensor A must be on device, got storage type: {}",
         input_tensor_a.storage_type());
+
+    // Valid input is allocated
+    TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor is not allocated");
 
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;

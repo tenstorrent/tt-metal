@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tuple>
 #include <tt-metalium/program_descriptors.hpp>
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
@@ -55,7 +56,48 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
 
-        ttsl::hash::hash_t to_hash() const;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "binary_op_type",
+            "lhs_activations",
+            "rhs_activations",
+            "post_activations",
+            "memory_config",
+            "dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            "subtile_broadcast_type",
+            "is_sfpu",
+            "is_quant_op",
+            "is_where_op",
+            "input_layout_a",
+            "input_layout_b",
+            "output_layout",
+            "equal_nan",
+            "scalar",
+            "rtol",
+            "atol");
+        auto attribute_values() const {
+            return std::make_tuple(
+                binary_op_type,
+                lhs_activations,
+                rhs_activations,
+                (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                subtile_broadcast_type,
+                is_sfpu,
+                is_quant_op,
+                is_where_op,
+                input_layout_a,
+                input_layout_b,
+                output_layout,
+                equal_nan,
+                scalar,
+                rtol,
+                atol);
+        }
         DataType get_dtype() const;
     };
 
@@ -92,15 +134,13 @@ struct BinaryNgDeviceOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // True iff (attributes, tensor_args) match the Metal 2.0 factory's supported slice. Shared by
-    // select_program_factory and compute_program_hash (to fold the shape into the hash for matching
-    // ops only).
+    // select_program_factory.
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 

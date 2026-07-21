@@ -513,7 +513,12 @@ def run_request_loop(
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
     as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see
-    run_standalone_loop for those."""
+    run_standalone_loop for those.
+
+    Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
+    pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
+    writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
+    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -524,6 +529,16 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    # Per-slot bookkeeping for the optional post-loop migration validation (validate_after_prefill):
+    # how many chunks each slot received and its highest real (non-pad) end position.
+    chunks_per_slot: dict = {}
+    real_end_per_slot: dict = {}
+    # If we run prefill validation, we need to know the expected number of chunks to exit the loop.
+    _expected_chunks = (
+        int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0"))
+        if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
+        else 0
+    )
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -539,13 +554,25 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
+        slot = meta["slot_id"]
+        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
+        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(
             runtime, kv_cache, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
         )
         if first is None:
             first = t
         c += 1
+        if _expected_chunks and c >= _expected_chunks:
+            logger.info(
+                f"[pp rank {rank}] processed {c}/{_expected_chunks} chunks "
+                "(PREFILL_STANDALONE_CHUNKED_NCHUNKS reached); exiting request loop for migration validation"
+            )
+            if d2d_out is not None:
+                _forward_shutdown(d2d_out, rank, hidden_size)
+            break
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+    return chunks_per_slot, real_end_per_slot, c
 
 
 def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
@@ -884,7 +911,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         )
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(
+    chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
         runtime,
         kv_caches,
         rank,
@@ -895,6 +922,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         d2d_out=d2d_out,
         d2h_service=d2h_service,
     )
+
+    # Post-loop KV validation (bring-up / migration accuracy; never in production serving). Single-rank
+    # only: only the last/single rank owns the whole cache. By now the scheduler has migrated the slots
+    # out-of-band and written the DONE sentinel; the validator waits for it and PCCs the migrated pairs.
+    if single_rank and os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
+        from models.demos.common.prefill.runners.validation import validate_after_prefill
+
+        validate_after_prefill(
+            runtime,
+            kv_caches,
+            chunks_per_slot=chunks_per_slot,
+            real_end_per_slot=real_end_per_slot,
+            num_users=NUM_USERS,
+            total_chunks=total_chunks,
+        )
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
@@ -911,4 +953,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
 
 if __name__ == "__main__":
+    # Best-effort: some galaxies ship a small RLIMIT_NPROC soft limit that starves the runner's threads, so
+    # raise it to the hard limit. Guarded — get/setrlimit can raise OSError/ValueError when the limit is
+    # immutable or the process lacks permission, and that must not crash the runner before main().
+    try:
+        import resource
+
+        _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+    except (OSError, ValueError) as e:
+        logger.warning(f"[prefill] could not raise RLIMIT_NPROC to the hard limit: {e}")
+
     main()
