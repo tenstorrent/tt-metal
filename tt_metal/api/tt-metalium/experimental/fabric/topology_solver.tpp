@@ -2055,6 +2055,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
     }
 
     minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
+    max_same_rank_groups_used = constraints.max_same_rank_groups_used();
 }
 
 template <typename TargetNode, typename GlobalNode>
