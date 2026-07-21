@@ -31,8 +31,11 @@ def test_board_reset_passes_all_when_devices_unset(monkeypatch):
     assert calls == ["all"]
 
 
-def test_board_reset_falls_back_to_single_chip_when_run_unavailable(monkeypatch):
+def test_board_reset_fallback_is_galaxy_aware_never_single_chip(monkeypatch):
+    from agent import probes
+
     monkeypatch.setattr(perf_mcp, "_run_module", lambda: None)
+    monkeypatch.setattr(probes, "_reset_arg_sets", lambda: [["-glx_reset_auto"], ["-glx_reset"], ["-r"]])
     seen = []
 
     class _R:
@@ -40,7 +43,43 @@ def test_board_reset_falls_back_to_single_chip_when_run_unavailable(monkeypatch)
 
     monkeypatch.setattr(perf_mcp._sp, "run", lambda cmd, **k: seen.append(cmd) or _R())
     perf_mcp._board_reset("where", "note")
-    assert seen and seen[0][1:] == ["-r", "0"]
+    assert seen and seen[0][1:] == ["-glx_reset_auto"]
+    assert not any(c[1:] == ["-r", "0"] for c in seen)
+
+
+def test_board_reset_fallback_tries_arg_sets_in_order(monkeypatch):
+    from agent import probes
+
+    monkeypatch.setattr(perf_mcp, "_run_module", lambda: None)
+    monkeypatch.setattr(probes, "_reset_arg_sets", lambda: [["-glx_reset_auto"], ["-r"]])
+    seen = []
+
+    def _run(cmd, **k):
+        seen.append(cmd)
+        return types.SimpleNamespace(returncode=0 if cmd[1:] == ["-r"] else 1)
+
+    monkeypatch.setattr(perf_mcp._sp, "run", _run)
+    perf_mcp._board_reset("where", "note")
+    assert [c[1:] for c in seen] == [["-glx_reset_auto"], ["-r"]]
+
+
+def test_board_reset_fallback_bare_r_when_probes_unavailable(monkeypatch):
+    from agent import probes
+
+    monkeypatch.setattr(perf_mcp, "_run_module", lambda: None)
+
+    def _boom():
+        raise RuntimeError("probes unavailable")
+
+    monkeypatch.setattr(probes, "_reset_arg_sets", _boom)
+    seen = []
+
+    class _R:
+        returncode = 0
+
+    monkeypatch.setattr(perf_mcp._sp, "run", lambda cmd, **k: seen.append(cmd) or _R())
+    perf_mcp._board_reset("where", "note")
+    assert seen and seen[0][1:] == ["-r"]
 
 
 def test_device_recover_and_reclaim_use_board_reset(monkeypatch):

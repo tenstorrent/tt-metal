@@ -99,8 +99,10 @@ def _run_module():
 
 def _board_reset(where: str, note: str) -> None:
     """Recover the device via run.py's board-aware _reset_devices (whole board(s) of PERF_MCP_DEVICES —
-    a single-chip `-r 0` half-resets a p300c and breaks its enumeration), falling back to a single-chip
-    reset only if that path is unavailable."""
+    a single-chip `-r 0` half-resets a p300c and breaks its enumeration, and does not reset a Galaxy at
+    all). If that module is unavailable, fall back to agent.probes._reset_arg_sets — the SAME
+    galaxy/board-aware invocations (glx_reset on a Galaxy, full enumerated `-r` elsewhere) — and never a
+    bare single-chip `-r 0`."""
     _mod = _run_module()
     if _mod is not None:
         try:
@@ -108,12 +110,22 @@ def _board_reset(where: str, note: str) -> None:
             sys.stderr.write(f"[perf-mcp] {note}: {status} at {where}\n")
             return
         except Exception as exc:  # noqa: BLE001
-            sys.stderr.write(f"[perf-mcp] board-aware reset unavailable ({exc}) at {where}; single-chip fallback\n")
+            sys.stderr.write(f"[perf-mcp] board-aware reset unavailable ({exc}) at {where}; probes fallback\n")
     try:
-        _sp.run([_TT_SMI, "-r", "0"], capture_output=True, text=True, timeout=180)
-        sys.stderr.write(f"[perf-mcp] {note} via tt-smi -r 0 (fallback) at {where}\n")
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}: {exc}\n")
+        from agent import probes as _pr
+
+        arg_sets = _pr._reset_arg_sets()
+    except Exception:  # noqa: BLE001
+        arg_sets = [["-r"]]
+    for args in arg_sets:
+        try:
+            r = _sp.run([_TT_SMI, *args], capture_output=True, text=True, timeout=300)
+            if r.returncode == 0:
+                sys.stderr.write(f"[perf-mcp] {note} via tt-smi {' '.join(args)} (fallback) at {where}\n")
+                return
+        except Exception:  # noqa: BLE001
+            continue
+    sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}\n")
 
 
 def _device_recover(where: str) -> None:
