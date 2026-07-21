@@ -65,4 +65,9 @@ set_target_properties(
 
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
+    # test_fiber_sanitizer_isolation.cpp includes jit_hw/internal/emule_thread_ctx.h to
+    # assert EmuleSanitizerState lives on the per-fiber ctx. Link the emule headers target
+    # (same mechanism tt_metal/impl uses) so the jit_hw include root resolves — robust
+    # whether tt-emule is CPM-fetched or a local TT_EMULE_PATH override.
+    target_link_libraries(unit_tests_api_lib PRIVATE tt-emule::headers)
 endif()
