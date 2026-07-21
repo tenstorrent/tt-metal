@@ -55,14 +55,27 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
 
     const auto q_shape = q_in.padded_shape();
     TT_FATAL(q_shape.rank() == 4U, "MlaQRope: q_in must be rank-4. Got {}", q_shape.rank());
-    TT_FATAL(q_shape[1] >= 1U, "MlaQRope: q_in must have at least one head.");
 
     const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
-    TT_FATAL(
-        q_shape[3] == qk_head,
-        "MlaQRope: q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
-        qk_head,
-        q_shape[3]);
+    uint32_t n_heads = 0;
+    if (args.packed_input) {
+        TT_FATAL(q_shape[1] == 1U, "MlaQRope: packed q_in dim 1 must be 1. Got {}", q_shape[1]);
+        TT_FATAL(
+            q_shape[3] % qk_head == 0U && q_shape[3] / qk_head >= 1U,
+            "MlaQRope: packed q_in dim 3 must be a positive multiple of qk_head={}. Got {}",
+            qk_head,
+            q_shape[3]);
+        n_heads = q_shape[3] / qk_head;
+    } else {
+        TT_FATAL(q_shape[1] >= 1U, "MlaQRope: head-major q_in must have at least one head.");
+        TT_FATAL(
+            q_shape[3] == qk_head,
+            "MlaQRope: head-major q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
+            qk_head,
+            q_shape[3]);
+        n_heads = q_shape[1];
+    }
+    TT_FATAL(n_heads >= 1U, "MlaQRope: n_heads must be >= 1.");
 
     TT_FATAL(
         args.qk_nope_dim % TILE_WIDTH == 0,
@@ -111,16 +124,29 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
 }
 
 MlaQRopeDeviceOperation::spec_return_value_t MlaQRopeDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& q_in = tensor_args.q_in;
+    const auto q_shape = q_in.logical_shape();
+    const uint32_t B = q_shape[0];
+    const uint32_t S = q_shape[2];
+    const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
+
+    ttnn::Shape out_shape;
+    if (args.packed_input) {
+        const uint32_t n_heads = q_shape[3] / qk_head;
+        out_shape = ttnn::Shape({B, n_heads, S, qk_head});
+    } else {
+        const uint32_t n_heads = q_shape[1];
+        out_shape = ttnn::Shape({B, 1U, S, n_heads * qk_head});
+    }
+
     return ttnn::TensorSpec(
-        q_in.logical_shape(),
-        tt::tt_metal::TensorLayout(q_in.dtype(), tt::tt_metal::Layout::TILE, q_in.memory_config()));
+        out_shape, tt::tt_metal::TensorLayout(q_in.dtype(), tt::tt_metal::Layout::TILE, q_in.memory_config()));
 }
 
 MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_output_tensors(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    auto spec = compute_output_specs({}, tensor_args);
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto spec = compute_output_specs(args, tensor_args);
     return create_device_tensor(spec, tensor_args.q_in.device());
 }
 
@@ -145,12 +171,14 @@ ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation::tensor_return_val
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
+    uint32_t qk_rope_dim,
+    bool packed_input) {
     using OperationType = ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
         .qk_nope_dim = qk_nope_dim,
         .qk_rope_dim = qk_rope_dim,
+        .packed_input = packed_input,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .q_in = q_in,

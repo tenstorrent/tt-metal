@@ -5,15 +5,14 @@
 #pragma once
 
 #include "metal/ttnn_all_includes.hpp"
-#include "mla_qkv_assemble_bw_device_operation_types.hpp"
+#include "mla_kv_assemble_fw_device_operation_types.hpp"
 
-namespace ttml::metal::ops::mla_qkv_assemble_bw::device {
+namespace ttml::metal::ops::mla_kv_assemble_fw::device {
 
-struct MLAQKVAssembleBwProgramFactory {
+struct MLAKVAssembleFwProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
-        tt::tt_metal::KernelHandle compute_kernel_id{};
         uint32_t num_cores{};
         uint32_t num_cores_y{};
     };
@@ -31,4 +30,4 @@ struct MLAQKVAssembleBwProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttml::metal::ops::mla_qkv_assemble_bw::device
+}  // namespace ttml::metal::ops::mla_kv_assemble_fw::device

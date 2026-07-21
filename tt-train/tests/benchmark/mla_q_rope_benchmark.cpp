@@ -5,9 +5,9 @@
 // ============================================================================
 // Q RoPE op-level fusion benchmark
 //
-// Measures average wall-clock time for Q RoPE:
-//   composite - slice + rotary_embedding_llama + concat
-//   fused     - ttml::metal::mla_q_rope
+// Measures average wall-clock time for Q RoPE + head-split:
+//   composite - reshape/transpose + slice + rotary_embedding_llama + concat
+//   fused     - ttml::metal::mla_q_rope (packed q_pre -> head-major q_roped)
 // ============================================================================
 
 #include <benchmark/benchmark.h>
@@ -28,7 +28,9 @@
 #include "ops/rope_op.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
 
 namespace {
@@ -107,25 +109,30 @@ ttnn::Tensor make_q_input(uint32_t batch, uint32_t n_heads, uint32_t seq_len, ui
     const size_t count = static_cast<size_t>(batch) * n_heads * seq_len * qk_head;
     const auto host = ttml::test_utils::make_uniform_vector<float>(count, -1.0F, 1.0F, seed);
     return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        host, ttnn::Shape{batch, n_heads, seq_len, qk_head}, device, ttnn::Layout::TILE);
+        host, ttnn::Shape{batch, 1U, seq_len, n_heads * qk_head}, device, ttnn::Layout::TILE);
 }
 
 ttnn::Tensor composite_q_rope(
-    const ttnn::Tensor& q_in,
+    const ttnn::Tensor& q_pre,
     const ttml::ops::RotaryEmbeddingParams& params,
+    uint32_t n_heads,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim) {
-    const auto shape = q_in.logical_shape();
+    const auto shape = q_pre.logical_shape();
     const uint32_t B = shape[0];
-    const uint32_t H = shape[1];
     const uint32_t S = shape[2];
     const uint32_t qk_head = qk_nope_dim + qk_rope_dim;
 
+    auto q_in = ttnn::transpose(ttnn::reshape(q_pre, ttnn::Shape({B, S, n_heads, qk_head})), 1, 2);
+
     ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
     auto q_nope = ttnn::slice(
-        q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, 0}, ttsl::SmallVector<uint32_t>{B, H, S, qk_nope_dim}, step);
+        q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, 0}, ttsl::SmallVector<uint32_t>{B, n_heads, S, qk_nope_dim}, step);
     auto q_pe = ttnn::slice(
-        q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim}, ttsl::SmallVector<uint32_t>{B, H, S, qk_head}, step);
+        q_in,
+        ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim},
+        ttsl::SmallVector<uint32_t>{B, n_heads, S, qk_head},
+        step);
 
     auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
         q_pe,
@@ -144,17 +151,23 @@ double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batc
     device->clear_program_cache();
 
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    const auto q_in = make_q_input(batch, shape.n_heads, seq_len, qk_head, 1001U);
+    const auto q_pre = make_q_input(batch, shape.n_heads, seq_len, qk_head, 1001U);
     const auto params = ttml::ops::build_rope_params(seq_len, shape.qk_rope_dim, /*theta=*/10000.0F);
     tt::tt_metal::distributed::Synchronize(device, std::nullopt);
 
     const auto run_step = [&]() {
         if (use_fused) {
             auto out = ttml::metal::mla_q_rope(
-                q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+                q_pre,
+                params.cos_cache,
+                params.sin_cache,
+                params.trans_mat,
+                shape.qk_nope_dim,
+                shape.qk_rope_dim,
+                /*packed_input=*/true);
             benchmark::DoNotOptimize(out);
         } else {
-            auto out = composite_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
+            auto out = composite_q_rope(q_pre, params, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim);
             benchmark::DoNotOptimize(out);
         }
     };
@@ -282,8 +295,8 @@ int main(int argc, char** argv) {
             g_sweep_cfg.num_warmup,
             g_sweep_cfg.num_measure);
         fmt::print(
-            "Composite: slice + rotary_embedding_llama (ComputeKernelConfig::precise) + concat.\n"
-            "Fused: mla_q_rope (fp32 dest acc, qk_rope_dim <= 128).\n");
+            "Composite: reshape/transpose + slice + rotary_embedding_llama (precise) + concat.\n"
+            "Fused: mla_q_rope packed q_pre -> head-major (fp32 dest acc, qk_rope_dim <= 128).\n");
 
         benchmark::RegisterBenchmark("MLA_QRope", BM_MLA_QRope)
             ->DenseRange(0, static_cast<int>(g_cases.size()) - 1, 1)

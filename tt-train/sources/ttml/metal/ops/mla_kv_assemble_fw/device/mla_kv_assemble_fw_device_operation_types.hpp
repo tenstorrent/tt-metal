@@ -8,24 +8,23 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::mla_qkv_assemble_bw::device {
+namespace ttml::metal::ops::mla_kv_assemble_fw::device {
 
-struct MLAQKVAssembleBwParams {
+struct MLAKVAssembleFwParams {
     uint32_t n_heads{};
     uint32_t qk_nope_dim{};
     uint32_t qk_rope_dim{};
     uint32_t v_dim{};
 };
 
-struct MLAQKVAssembleBwInputs {
-    const ttnn::Tensor& dQ;
-    const ttnn::Tensor& dK;
-    const ttnn::Tensor& dV;
+struct MLAKVAssembleFwInputs {
+    const ttnn::Tensor& kv_up;
+    const ttnn::Tensor& k_pe;
 };
 
-using operation_attributes_t = MLAQKVAssembleBwParams;
-using tensor_args_t = MLAQKVAssembleBwInputs;
+using operation_attributes_t = MLAKVAssembleFwParams;
+using tensor_args_t = MLAKVAssembleFwInputs;
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
-}  // namespace ttml::metal::ops::mla_qkv_assemble_bw::device
+}  // namespace ttml::metal::ops::mla_kv_assemble_fw::device

@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ============================================================================
-// MLA QKV assemble op-level fusion benchmark
+// MLA KV assemble op-level fusion benchmark
 //
-// Uses Google Benchmark to measure average wall-clock time of the DeepSeek MLA QKV assemble, forward
+// Uses Google Benchmark to measure average wall-clock time of the DeepSeek MLA KV assemble, forward
 // and backward, each for two paths:
 //   composite — split_heads (reshape + transpose) + slice + concat + k_pe broadcast (and its reverse)
-//   fused     — the single ttml::metal::mla_qkv_assemble_fw / mla_qkv_assemble_bw data-movement op
+//   fused     — the single ttml::metal::mla_kv_assemble_fw / mla_kv_assemble_bw data-movement op
 //
 // Each measured sample enqueues several assembles and synchronizes once at the end to amortize
 // dispatch latency. Results are printed as two tables (forward, backward).
@@ -89,19 +89,12 @@ std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
     return cases;
 }
 
-// Composite assemble: the pre-fusion MLA path (split_heads + slice + concat + k_pe broadcast).
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> composite_assemble(
-    const ttnn::Tensor& q_pre,
-    const ttnn::Tensor& kv_up,
-    const ttnn::Tensor& k_pe,
-    uint32_t batch,
-    uint32_t seq_len,
-    const ModelShape& shape) {
-    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+// Composite assemble: the pre-fusion MLA KV path (split_heads + slice + concat + k_pe broadcast).
+std::tuple<ttnn::Tensor, ttnn::Tensor> composite_assemble(
+    const ttnn::Tensor& kv_up, const ttnn::Tensor& k_pe, uint32_t batch, uint32_t seq_len, const ModelShape& shape) {
     const uint32_t kv_w = shape.qk_nope_dim + shape.v_dim;
 
     // split_heads: [B, 1, S, H*W] -> [B, S, H, W] -> [B, H, S, W]
-    const auto q = ttnn::transpose(ttnn::reshape(q_pre, ttnn::Shape({batch, seq_len, shape.n_heads, qk_head})), 1, 2);
     const auto kv = ttnn::transpose(ttnn::reshape(kv_up, ttnn::Shape({batch, seq_len, shape.n_heads, kv_w})), 1, 2);
 
     const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
@@ -120,24 +113,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> composite_assemble(
     const std::vector<ttnn::Tensor> kpe_copies(shape.n_heads, k_pe);
     const auto k_pe_b = ttnn::concat(kpe_copies, /*dim=*/1);
     const auto k = ttnn::concat(std::vector<ttnn::Tensor>{k_nope, k_pe_b}, /*dim=*/3);
-    return {q, k, v};
+    return {k, v};
 }
 
 // Composite backward: the pre-fusion gradient path (reverse head-split + slice/concat + head-axis sum).
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> composite_assemble_bw(
-    const ttnn::Tensor& dQ,
-    const ttnn::Tensor& dK,
-    const ttnn::Tensor& dV,
-    uint32_t batch,
-    uint32_t seq_len,
-    const ModelShape& shape) {
+std::tuple<ttnn::Tensor, ttnn::Tensor> composite_assemble_bw(
+    const ttnn::Tensor& dK, const ttnn::Tensor& dV, uint32_t batch, uint32_t seq_len, const ModelShape& shape) {
     const uint32_t H = shape.n_heads;
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     const uint32_t kv_w = shape.qk_nope_dim + shape.v_dim;
     const ttsl::SmallVector<uint32_t> step = {1U, 1U, 1U, 1U};
-
-    // dq_pre: reverse head-split [B, H, S, qk_head] -> [B, S, H, qk_head] -> [B, 1, S, H*qk_head].
-    const auto dq_pre = ttnn::reshape(ttnn::transpose(dQ, 1, 2), ttnn::Shape({batch, 1U, seq_len, H * qk_head}));
 
     // dkv_up: concat [dK_nope | dV] per head, then reverse head-split.
     const auto dk_nope = ttnn::slice(
@@ -156,7 +141,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> composite_assemble_bw(
         step);
     const auto dk_pe =
         ttnn::sum(dk_rope, /*dim=*/1, /*keepdim=*/true, std::nullopt, ttml::core::ComputeKernelConfig::precise());
-    return {dq_pre, dkv_up, dk_pe};
+    return {dkv_up, dk_pe};
 }
 
 ttnn::Tensor make_input(uint32_t batch, uint32_t seq_len, uint32_t width, uint32_t seed) {
@@ -167,7 +152,7 @@ ttnn::Tensor make_input(uint32_t batch, uint32_t seq_len, uint32_t width, uint32
     return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(host, shape, device, ttnn::Layout::TILE);
 }
 
-// Head-major [B, H, S, W] input for the backward grads dQ / dK / dV.
+// Head-major [B, H, S, W] input for the backward grads dK / dV.
 ttnn::Tensor make_input_hm(uint32_t batch, uint32_t n_heads, uint32_t seq_len, uint32_t width, uint32_t seed) {
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t count = static_cast<size_t>(batch) * n_heads * seq_len * width;
@@ -180,19 +165,17 @@ double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batc
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
 
-    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    const auto q_pre = make_input(batch, seq_len, shape.n_heads * qk_head, 1001U);
     const auto kv_up = make_input(batch, seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 2002U);
     const auto k_pe = make_input(batch, seq_len, shape.qk_rope_dim, 3003U);
     tt::tt_metal::distributed::Synchronize(device, std::nullopt);
 
     const auto run_step = [&]() {
         if (use_fused) {
-            auto out = ttml::metal::mla_qkv_assemble_fw(
-                q_pre, kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+            auto out = ttml::metal::mla_kv_assemble_fw(
+                kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
             benchmark::DoNotOptimize(out);
         } else {
-            auto out = composite_assemble(q_pre, kv_up, k_pe, batch, seq_len, shape);
+            auto out = composite_assemble(kv_up, k_pe, batch, seq_len, shape);
             benchmark::DoNotOptimize(out);
         }
     };
@@ -219,18 +202,17 @@ double run_single_bw(
     device->clear_program_cache();
 
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
-    const auto dQ = make_input_hm(batch, shape.n_heads, seq_len, qk_head, 4004U);
     const auto dK = make_input_hm(batch, shape.n_heads, seq_len, qk_head, 5005U);
     const auto dV = make_input_hm(batch, shape.n_heads, seq_len, shape.v_dim, 6006U);
     tt::tt_metal::distributed::Synchronize(device, std::nullopt);
 
     const auto run_step = [&]() {
         if (use_fused) {
-            auto out = ttml::metal::mla_qkv_assemble_bw(
-                dQ, dK, dV, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+            auto out = ttml::metal::mla_kv_assemble_bw(
+                dK, dV, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
             benchmark::DoNotOptimize(out);
         } else {
-            auto out = composite_assemble_bw(dQ, dK, dV, batch, seq_len, shape);
+            auto out = composite_assemble_bw(dK, dV, batch, seq_len, shape);
             benchmark::DoNotOptimize(out);
         }
     };
@@ -291,7 +273,7 @@ SweepConfig g_sweep_cfg;
 std::vector<BenchmarkCase> g_cases;
 std::vector<RowSummary> g_rows;
 
-void BM_MLAQKVAssemble(benchmark::State& state) {
+void BM_MLAKVAssemble(benchmark::State& state) {
     const auto case_index = static_cast<size_t>(state.range(0));
     const auto& bench_case = g_cases.at(case_index);
     const auto& model = all_models().at(bench_case.model_index);
@@ -349,7 +331,7 @@ int main(int argc, char** argv) {
             "Composite path: split_heads (reshape + transpose) + slice + concat + k_pe broadcast.\n"
             "Each measured sample enqueues multiple assembles and synchronizes once at the end.\n");
 
-        benchmark::RegisterBenchmark("MLAQKVAssemble", BM_MLAQKVAssemble)
+        benchmark::RegisterBenchmark("MLAKVAssemble", BM_MLAKVAssemble)
             ->DenseRange(0, static_cast<int>(g_cases.size()) - 1, 1)
             ->Unit(benchmark::kMillisecond)
             ->UseManualTime()
@@ -363,7 +345,7 @@ int main(int argc, char** argv) {
         ttml::autograd::ctx().close_device();
         return 0;
     } catch (const std::exception& e) {
-        fmt::print(stderr, "mla_qkv_assemble_benchmark failed: {}\n", e.what());
+        fmt::print(stderr, "mla_kv_assemble_benchmark failed: {}\n", e.what());
         return 1;
     }
 }

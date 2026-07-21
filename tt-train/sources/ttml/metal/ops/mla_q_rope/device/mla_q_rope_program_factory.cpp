@@ -84,8 +84,11 @@ static void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_2,
     uint32_t Ts,
     uint32_t Th,
-    uint32_t Tr,
-    uint32_t n_heads) {
+    uint32_t n_heads,
+    bool packed_input) {
+    const uint32_t tiles_per_head = Ts * Th;
+    const uint32_t packed_block_stride = n_heads * Th;
+
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -98,11 +101,13 @@ static void assign_per_core_runtime_args(
             TT_FATAL(false, "MlaQRope: core not in any work group");
         }
 
-        // Q [B, H, S, D] head-major pages: tile_id(b, h, sb, w) = b*H*tiles_per_head + h*tiles_per_head + sb*Th + w.
         const uint32_t b_start = num_blocks_written / Ts;
         const uint32_t sb_start = num_blocks_written % Ts;
-        const uint32_t tiles_per_head = Ts * Th;
-        const uint32_t q_block_base_start = b_start * n_heads * tiles_per_head + sb_start * Th;
+        const uint32_t packed_base = num_blocks_written * packed_block_stride;
+        const uint32_t head_major_base = b_start * n_heads * tiles_per_head + sb_start * Th;
+
+        const uint32_t q_in_tile_base = packed_input ? packed_base : head_major_base;
+        const uint32_t q_out_tile_base = packed_input ? head_major_base : packed_base;
 
         SetRuntimeArgs(
             program,
@@ -114,13 +119,10 @@ static void assign_per_core_runtime_args(
              trans_buffer->address(),
              num_blocks_per_core,
              sb_start,
-             q_block_base_start});
+             q_in_tile_base});
 
         SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {q_out_buffer->address(), num_blocks_per_core, sb_start, q_block_base_start});
+            program, kernels.writer, core, {q_out_buffer->address(), num_blocks_per_core, sb_start, q_out_tile_base});
 
         SetRuntimeArgs(program, kernels.compute, core, {num_blocks_per_core});
 
@@ -139,7 +141,8 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     const auto q_shape = q_in.padded_shape();
     const uint32_t B = q_shape[0];
     const uint32_t S = q_shape[2];
-    const uint32_t H = q_shape[1];
+    const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
+    const uint32_t H = args.packed_input ? (q_shape[3] / qk_head) : q_shape[1];
 
     const uint32_t Tn = args.qk_nope_dim / TILE_WIDTH;
     const uint32_t Tr = args.qk_rope_dim / TILE_WIDTH;
@@ -148,6 +151,7 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     const uint32_t tiles_per_head = Ts * Th;
 
     const uint32_t num_blocks = B * Ts;
+    const uint32_t packed_input_u32 = args.packed_input ? 1U : 0U;
 
     TT_FATAL(
         Tr <= 4U,
@@ -213,13 +217,15 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     auto* trans_buffer = tensor_args.trans_mat.buffer();
     auto* q_out_buffer = q_out.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles};
+    std::vector<uint32_t> reader_compile_time_args = {
+        Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
     tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(trans_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles};
+    std::vector<uint32_t> writer_compile_time_args = {
+        Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
     tt::tt_metal::TensorAccessorArgs(q_out_buffer).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
@@ -258,8 +264,8 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
         core_group_2,
         Ts,
         Th,
-        Tr,
-        H);
+        H,
+        args.packed_input);
 
     return cached_program_t{
         std::move(program), {kernels.reader, kernels.writer, kernels.compute, num_cores, num_cores_y}};

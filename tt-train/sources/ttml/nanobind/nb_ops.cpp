@@ -26,7 +26,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_kv_assemble_op.hpp"
 #include "ops/mla_q_rope.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
@@ -265,15 +265,16 @@ void py_module(nb::module_& m) {
     {
         auto py_mla = static_cast<nb::module_>(m.attr("mla"));
         py_mla.def(
-            "qkv_assemble",
-            &ttml::ops::mla_qkv_assemble,
-            nb::arg("q_pre"),
+            "kv_assemble",
+            &ttml::ops::mla_kv_assemble,
             nb::arg("kv_up"),
             nb::arg("k_pe"),
             nb::arg("n_heads"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            nb::arg("v_dim"));
+            nb::arg("v_dim"),
+            "Fused MLA KV assembly: demuxes kv_up and broadcasts k_pe into head-major K/V.\n"
+            "Q head-split + RoPE is handled by rope.mla_q_rope.");
     }
 
     {
@@ -330,12 +331,14 @@ void py_module(nb::module_& m) {
         py_rope.def(
             "mla_q_rope",
             &ttml::ops::mla_q_rope,
-            nb::arg("q_full"),
+            nb::arg("q_pre"),
             nb::arg("rope_params"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            "MLA Q RoPE with autograd: fused metal mla_q_rope forward and backward (neg cos/sin on backward).\n"
-            "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16. Requires qk_rope_dim <= 128.");
+            "MLA Q RoPE + head-split with autograd: packed q_pre -> head-major q_roped "
+            "(backward uses neg cos/sin and packs dq_pre).\n"
+            "q_pre: [B, 1, S, n_heads * (qk_nope_dim + qk_rope_dim)] TILE bf16. "
+            "Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
