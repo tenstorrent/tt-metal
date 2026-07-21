@@ -128,7 +128,30 @@ setup_worktree() {
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"
 
-  echo "[worktree] Building test environment (venv + SFPI) in worktree"
+  # run_test.sh lives outside codegen/ but is codegen infra: symlink it to the
+  # source copy so every worktree runs the current test harness, not the base
+  # commit's. Marked --skip-worktree below so git ignores the override.
+  mkdir -p "${wt_llk}/.claude/scripts"
+  ln -sf "${LLK_ROOT}/.claude/scripts/run_test.sh"  "${wt_llk}/.claude/scripts/run_test.sh"
+  ln -sf "${LLK_ROOT}/.claude/scripts/llk_triage.py" "${wt_llk}/.claude/scripts/llk_triage.py"
+
+  # Share the source checkout's Python venv across worktrees instead of rebuilding
+  # it every run — apt + pip install of requirements.txt is the slow part, and the
+  # deps are arch-independent. Symlink it like the other codegen infra; the venv's
+  # activate hardcodes its real path, so activation through the symlink (run_test.sh
+  # sources tests/.venv/bin/activate) resolves to the real venv.
+  # The tt-metal Docker image has no venv (deps are system-wide) — skip the link there.
+  if [[ -d "${LLK_ROOT}/tests/.venv" ]]; then
+    echo "[worktree] Linking shared test venv from ${LLK_ROOT}/tests/.venv"
+    ln -snf "${LLK_ROOT}/tests/.venv" "${wt_llk}/tests/.venv"
+  else
+    echo "[worktree] No shared venv at ${LLK_ROOT}/tests/.venv — using ambient python (Docker image)"
+  fi
+
+  # Fetch only the arch-specific SFPI toolchain per worktree (setup_testing_env.sh
+  # is idempotent: skips if already at the pinned version). test_config resolves it
+  # at tests/sfpi/ relative to each worktree, so it cannot be shared.
+  echo "[worktree] Fetching SFPI toolchain in worktree"
   (
     cd "${wt_llk}/tests"
     if [[ ! -e /dev/tenstorrent ]]; then
@@ -136,10 +159,8 @@ setup_worktree() {
       # rather than relying on a prefix assignment surviving `source`.
       export CHIP_ARCH=quasar
     fi
-
-    # Clear source params (this will avoid misuse of script)
-    set --
-    source ./setup_external_testing_env.sh
+    [[ -f .venv/bin/activate ]] && source .venv/bin/activate
+    ./setup_testing_env.sh
   )
 
   cat >> "${wt_llk}/.gitignore" <<'GITIGNORE'
@@ -149,13 +170,15 @@ codegen/
 .claude/
 CLAUDE.md
 .mcp.json
+# Shared test venv: **/.venv/** ignores its contents but not the symlink itself
+tests/.venv
 GITIGNORE
 
   # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json
   # on origin/main): the symlink shows up as a typechange. Mark such tracked paths
   # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
   # its own appended lines stay hidden too.)
-  for rel in CLAUDE.md .mcp.json .gitignore; do
+  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh; do
     p="${LLK_REL}/${rel}"
     if git -C "$WORKTREE_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
       git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true
