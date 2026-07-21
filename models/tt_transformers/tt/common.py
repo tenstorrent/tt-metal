@@ -925,9 +925,23 @@ def create_tt_model(
     if prefetcher is not None:
         prefetcher.num_layers = tt_model_args.n_layers
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
-        state_dict = tt_model_args.load_state_dict()
+    # Decide whether the HF weights are still needed on host. When the ttnn weight cache for
+    # this (model, dtype, mesh shape) was already fully built on a previous run, ttnn.as_tensor
+    # loads every weight from disk and the state_dict is never read -- so skip the expensive
+    # from_pretrained host load entirely (the load that OOMs/hangs in prefill, #48509), without
+    # relying on the manual --skip-model-load flag. Generalizes GPT-OSS PR #48531.
+    #
+    # state_dict is None  -> decide here (warm cache => {} skip, else cold load).
+    # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
+    # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
+    loaded_real_weights = False
+    if state_dict is None:
+        if not tt_model_args.dummy_weights and tt_model_args.weight_cache_is_complete(dtype):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+            state_dict = {}
+        else:
+            state_dict = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
 
     model = Transformer(
         args=tt_model_args,
@@ -938,6 +952,12 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
         prefetcher=prefetcher,
     )
+
+    # If this run populated the cache from a cold host load, record completion so future runs
+    # can skip the load. Only for full-model builds (a num_layers override produces a partial
+    # cache that must not satisfy the completeness check).
+    if loaded_real_weights and num_layers is None:
+        tt_model_args.mark_weight_cache_complete(dtype)
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 

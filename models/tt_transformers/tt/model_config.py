@@ -3027,6 +3027,73 @@ class ModelArgs:
                 self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
             )
 
+    # Name of the marker file dropped into a weight-cache directory once every weight for that
+    # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
+    # warm-cache detector (#48531) to every tt_transformers e2e model.
+    WEIGHT_CACHE_MARKER = ".weights_complete"
+    # Cache-format version embedded in the marker. Bump this whenever the set/naming/layout of
+    # cached weight tensors changes in a way that an existing cache would not satisfy (e.g. a
+    # weight tensor is added or renamed without changing the layer count). A marker written by an
+    # older format is then rejected -> the run cold-loads and regenerates the cache, rather than
+    # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
+    WEIGHT_CACHE_FORMAT_VERSION = 1
+
+    def weight_cache_is_complete(self, dtype):
+        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
+        fully built by a previous run.
+
+        When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
+        state_dict is never read, so the caller can skip the expensive from_pretrained host
+        load entirely (the load that OOMs/hangs during prefill, #48509) without needing the
+        manual --skip-model-load flag. Set TT_TRANSFORMERS_FORCE_MODEL_LOAD=1 to force a fresh
+        load (e.g. to regenerate the cache)."""
+        if os.getenv("TT_TRANSFORMERS_FORCE_MODEL_LOAD") == "1":
+            return False
+        cache_path = self.weight_cache_path(dtype)
+        marker = cache_path / self.WEIGHT_CACHE_MARKER
+        if not marker.is_file():
+            return False
+        try:
+            meta = json.loads(marker.read_text())
+        except (ValueError, OSError):
+            return False
+        # Reject a stale marker: an older cache format, a different model, a different mesh
+        # shape, or a partial (num_layers-limited) build whose cache does not cover the full
+        # model we are about to construct. tt_transformers weight_cache_path (unlike GPT-OSS)
+        # does not encode the mesh shape in the path, so we validate it here. A rejected marker
+        # falls back to a cold load (which regenerates the cache) rather than skipping the load
+        # and crashing on a missing/renamed .tensorbin.
+        if meta.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION:
+            return False
+        if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
+            return False
+        if meta.get("mesh_shape") != str(self.mesh_device.shape):
+            return False
+        # Belt-and-suspenders: the cache dir must still actually hold tensor files.
+        return any(cache_path.glob("*.tensorbin"))
+
+    def mark_weight_cache_complete(self, dtype):
+        """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
+        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
+        cache_path = self.weight_cache_path(dtype)
+        cache_path.mkdir(parents=True, exist_ok=True)
+        marker = cache_path / self.WEIGHT_CACHE_MARKER
+        try:
+            marker.write_text(
+                json.dumps(
+                    {
+                        "format_version": self.WEIGHT_CACHE_FORMAT_VERSION,
+                        "model_name": self.model_name,
+                        "n_layers": self.n_layers,
+                        "dtype": str(dtype),
+                        "mesh_shape": str(self.mesh_device.shape),
+                    }
+                )
+            )
+            logger.info(f"Marked ttnn weight cache complete: {marker}")
+        except OSError as e:
+            logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
+
     def get_model_config(self):
         return self.model_config
 
