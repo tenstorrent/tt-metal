@@ -222,18 +222,17 @@ def run_all_gather_impl(
     ##### Perform torch ops #####
     torch_matmul_output_list = []
     for i in range(num_iters):
-        if use_bias and precision_offset is not None:
-            # Reference the true (small) result in fp64 so the assertion detects any precision loss in
-            # the device's fp32 accumulation of the large partial sums.
-            matmul_output = torch.nn.functional.linear(
-                ag_output_tensor_goldens_list[i].double(),
-                weights_tensor.double().T.contiguous(),
-                bias_tensor.double(),
-            ).float()
-        elif use_bias:
-            matmul_output = torch.nn.functional.linear(
-                ag_output_tensor_goldens_list[i], weights_tensor.T.contiguous(), bias_tensor
-            )
+        if use_bias:
+            g = ag_output_tensor_goldens_list[i]
+            w = weights_tensor.T.contiguous()
+            b = bias_tensor
+
+            if precision_offset is not None:
+                # Reference the true (small) result in fp64 so the assertion detects any precision loss in
+                # the device's fp32 accumulation of the large partial sums.
+                matmul_output = torch.nn.functional.linear(g.double(), w.double(), b.double()).float()
+            else:
+                matmul_output = torch.nn.functional.linear(g, w, b)
         else:
             matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weights_tensor)
         torch_matmul_output_list.append(matmul_output)
