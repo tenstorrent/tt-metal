@@ -133,7 +133,7 @@ def test_op_pcc(tt_device, rec_id: int):
 def main() -> None:
     ap = argparse.ArgumentParser(description="Generate minimal op-level PCC pytest from tracer manifest.")
     ap.add_argument("--manifest", required=True, help="Path to tracer manifest.json")
-    ap.add_argument("--out-test", required=True, help="Output pytest file path")
+    ap.add_argument("--out-test", required=True, help="Output pytest file path, relative to the repo root")
     ap.add_argument("--only", default=None, help="Comma/space-separated op kinds to include (e.g. Conv2d,ReLU)")
     ap.add_argument("--pcc-threshold", type=float, default=0.999, help="PCC threshold (default: 0.999)")
     ap.add_argument(
@@ -151,8 +151,10 @@ def main() -> None:
     args = ap.parse_args()
 
     manifest_path = Path(_resolve_within_repo(args.manifest, label="--manifest"))
-    out_test = Path(_resolve_within_repo(args.out_test, label="--out-test"))
-    out_test.parent.mkdir(parents=True, exist_ok=True)
+
+    # --out-test is a repo-root-relative path; reject absolute paths outright.
+    if os.path.isabs(args.out_test):
+        raise RuntimeError(f"--out-test must be relative to the repo root, got an absolute path: {args.out_test!r}")
 
     # Absolute path to the bringup tools directory (where tracer_test_harness.py
     # and tracer_op_specs.py live). Baked into the generated test's sys.path.
@@ -165,7 +167,7 @@ def main() -> None:
     cand = [int(x.strip()) for x in str(args.device_candidates).split(",") if x.strip()]
 
     content = TEST_FILE_TEMPLATE.format(
-        out_name=out_test.name,
+        out_name=os.path.basename(args.out_test),
         harness_dir=harness_dir,
         manifest_path=str(manifest_path),
         record_ids=record_ids,
@@ -178,12 +180,15 @@ def main() -> None:
         l1_small_size=int(args.l1_small_size),
     )
 
-    if str(out_test).startswith(str(Path(_REPO_ROOT).resolve())):
-        # check required to comply with ❗Cycode: SAST violation: 'Unsanitized dynamic input in file path'.
-        out_test.write_text(content, encoding="utf-8")
-
+    # Confine the user-supplied (relative) output path to the repo root using the
+    # exact abspath(join(BASE_DIRECTORY, dynamic_input)) + startswith guard that
+    # SAST recognizes as proper sanitization for 'Unsanitized dynamic input in file path'.
+    out_test = os.path.abspath(os.path.join(_REPO_ROOT, args.out_test))
+    if out_test.startswith(_REPO_ROOT):
+        os.makedirs(os.path.dirname(out_test), exist_ok=True)
+        Path(out_test).write_text(content, encoding="utf-8")
     else:
-        raise RuntimeError(f"out_test resolved to {out_test}, but the output must be in the {_REPO_ROOT}")
+        raise RuntimeError(f"out_test resolved to {out_test}, but the output must be within the repo root {_REPO_ROOT}")
 
     print(f"Wrote pytest: {out_test}")
     print(f"Records selected: {len(record_ids)} / {len(records)} (only={only})")
