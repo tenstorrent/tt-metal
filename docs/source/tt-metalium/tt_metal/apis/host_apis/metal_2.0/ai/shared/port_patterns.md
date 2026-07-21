@@ -25,6 +25,7 @@ Optional fields, used when the entry's substance requires them:
 
 - [Self-loop DFB binding (producer == consumer)](#pattern-self-loop-dfb-binding)
 - [Sync-free and single-ended CBs → self-loop DFB](#pattern-sync-free-and-single-ended-cbs--self-loop-dfb)
+- [Two-toucher DFB → assign 1P+1C (dual-instance work-split)](#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split)
 - [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings)
 - [Aliased DFBs (legacy aliased CBs)](#pattern-aliased-dfbs-legacy-aliased-cbs)
 - [Same-FIFO aliasing (one DFB, multiple kernel-side names)](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names)
@@ -80,7 +81,9 @@ The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yieldin
 - **Sync-free** — the kernel uses the CB purely as an *address source*: a base-pointer grab via `get_read_ptr` / `get_pointer_to_cb_data` (or `get_write_ptr`), then a direct memory access, with **no FIFO ops at all** — nothing `push_back`s, nothing `wait_front`s. The legacy idiom borrows a CB onto a resident tensor's buffer because, pre–Metal 2.0, that was the most convenient way to hand a kernel a base pointer to resident memory.
 - **Single-ended** — the CB *does* use the FIFO machinery, but on **one** side only: a FIFO producer with no consumer (or vice versa). Canonical case: the compute packer produces tiles (`reserve_back` / `push_back`) straight into an output-tensor-backed CB that nothing drains — a **synchronized** CB (real `push_back`), just missing its consumer. **Examples:** conv2d / pool `OUT` (compute packer → output shard); pool `out_idx_cb` (a DM kernel writes the argmax-index output).
 
-**Decision — self-loop it.** Bind the touching kernel as **both** PRODUCER and CONSUMER of the DFB (a self-loop), borrowing the [Self-loop DFB binding](#pattern-self-loop-dfb-binding) mechanism. **This is legal on Gen1 for compute *and* DM kernels alike** — a Gen1 DFB lowers to a plain circular buffer that a single RISC (compute or DM) can both fill and drain, so the kernel code is untouched and runtime behavior is identical to the legacy CB. The self-loop is the sanctioned Gen1 port shape, not a temporary hack. First confirm the CB *genuinely* lacks a distinct producer+consumer pair across **every** config (per *classify per instantiation*, below) — a real cross-kernel FIFO whose partner you simply missed is an ordinary DFB, not a self-loop.
+**Hard gate — self-loop is a *one-toucher* resolution.** Before self-looping, count the **distinct kernels** that touch the CB on a node. Self-loop applies **only when exactly one kernel touches it**. **If two or more distinct kernels touch it, do NOT self-loop** — run the [endpoint-assignment procedure](#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split) instead: **two** touchers → 1P+1C (bind one PRODUCER, the other CONSUMER); **three or more** distinct touchers, or **two kernels locked to the same FIFO role**, → multi-binding. Self-looping a CB and *also* setting the multi-binding flag on it — stacking both resolutions on one DFB — is the tell of a mis-slotted plain 1:1; if you're reaching for both, stop and recount.
+
+**Decision — self-loop it (one toucher only).** Bind the touching kernel as **both** PRODUCER and CONSUMER of the DFB (a self-loop), borrowing the [Self-loop DFB binding](#pattern-self-loop-dfb-binding) mechanism. **This is legal on Gen1 for compute *and* DM kernels alike** — a Gen1 DFB lowers to a plain circular buffer that a single RISC (compute or DM) can both fill and drain, so the kernel code is untouched and runtime behavior is identical to the legacy CB. The self-loop is the sanctioned Gen1 port shape, not a temporary hack. First confirm the CB *genuinely* lacks a distinct producer+consumer pair across **every** config (per *classify per instantiation*, below) — a real cross-kernel FIFO whose partner you simply missed is an ordinary DFB, not a self-loop.
 
 > **A DM self-loop is a Gen1-only shape.** The spec validator rejects a DM self-loop on **Gen2 (Quasar)**, where a DFB's credit machinery requires producer and consumer to be *distinct* kernels. That is **Quasar-uplift's** concern, not a Gen1 blocker — and Metal 2.0's declarative bindings make a DM self-loop trivial to spot post-port (a kernel bound PRODUCER+CONSUMER on one DFB), so the Quasar audit finds and refactors them; you need not track them here.
 
@@ -118,9 +121,65 @@ experimental::DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
 
 **The verdict can flip per config — classify per instantiation, not per CB.** Whether a CB lands here (sync-free / single-ended) or is a genuine producer→consumer FIFO is *not* a fixed property of the CB; it can change across an op's configs. The same `buffer_index` can be a sync-free **scratchpad** (compute tilizes in place → self-loop) under one sharding and a **real FIFO** (a DM reader produces, compute consumes → ordinary DFB) under another. Re-run the litmus per code-path — one verdict applied across all configs mis-classifies the rest. **Canonical confuser:** conv2d `ACT_TILIZED` — height-sharded → sync-free scratchpad (self-loop); block/width-sharded → real FIFO.
 
-**Orthogonal — endpoint multiplicity.** A self-loop resolves too *few* endpoints (single-ended / sync-free). The opposite case — a CB with **2+ FIFO endpoints of one kind on a node** — is *not* a self-loop case; it is a **multi-binding** CB, port work in its own right (set the DFB multi-binding advanced option). See [CB endpoints](../audit/metal2_audit.md#cb-endpoints).
+**Orthogonal — endpoint multiplicity.** A self-loop resolves too *few* endpoints (one toucher). More touchers is a *different* axis, and it does **not** go straight to the multi-binding flag:
+- **Two** distinct touchers → assign **1P+1C** (bind one PRODUCER, one CONSUMER) — see [Two-toucher DFB → assign 1P+1C](#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split). This is the common case; the flag is *not* involved.
+- Only a genuine excess the census can't relabel — **≥3 distinct touchers**, or **≥2 kernels locked to the same FIFO role** (two real `push_back`ers / two real `pop_front`ers) — is a **multi-binding** CB (set the DFB multi-binding advanced option). Sync-free (raw-pointer) touchers are role-free and never force the flag on their own.
 
-**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [CB endpoints](../audit/metal2_audit.md#cb-endpoints).
+See [CB endpoints](../audit/metal2_audit.md#cb-endpoints) for the authoritative census-to-disposition table.
+
+**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [Two-toucher DFB → assign 1P+1C](#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split) (the ≥2-toucher sibling); [CB endpoints](../audit/metal2_audit.md#cb-endpoints).
+
+---
+
+## Pattern: Two-toucher DFB → assign 1P+1C (dual-instance work-split)
+
+**Category**: Pattern
+
+**Recognition signal**: **Two** distinct co-resident kernels touch one CB on the same node, and neither the self-loop (one toucher) nor the multi-binding flag (genuine excess) fits. The dominant shape is the **dual-instance work-split**: the factory pushes the **same `kernel_source`** into two `KernelDescriptor`s differing only by `ReaderConfigDescriptor` / `WriterConfigDescriptor` (BRISC/NCRISC, to double NoC bandwidth) and per-instance work-split args, both over **one** `core_ranges` — so both instances run on *every* node and both touch each node's borrowed CB, splitting the work by disjoint offset/row ranges. The co-fill/co-read is **sync-free** by construction (raw `get_write_ptr`/`get_read_ptr` + offset — two kernels cannot share one FIFO write-pointer to write disjoint regions). Two co-readers of a borrowed input CB, and a FIFO producer plus a lone raw co-filler with nothing downstream, land here too.
+
+**Why this is hard.** The audit brief may label such a CB "multi-binding" from an endpoint over-read (*two writers ⇒ two producers*). It isn't: a **sync-free (raw-pointer) touch is role-free** — on Gen1 the DFB lowers to a plain circular buffer, and the PRODUCER/CONSUMER label drives FIFO machinery the kernel never invokes, so the label is **cosmetic** (assigned purely to satisfy the validator; `get_*_ptr` is a public peek on either role). With two touchers you have exactly enough to fill both roles — so you assign 1P+1C, you don't multi-bind.
+
+**Decision — assign the minimal endpoint set (the endpoint-assignment procedure).** This procedure applies to *every* CB, not just this shape; it converts "which pattern?" into a countable choice. On a node:
+
+1. List the **distinct kernels** that touch the CB. Tag each: FIFO-produces (`reserve_back`/`push_back`) → **locked producer**; FIFO-consumes (`wait_front`/`pop_front`) → **locked consumer**; only raw-pointer *peeks* (`get_write_ptr`/`get_read_ptr`, no FIFO ops) → **role-free**. **Cursor surgery is not a peek:** a raw call that *mutates* the FIFO cursor (`evil_set_write_ptr`/`evil_set_read_ptr`) drives the shared cursor, so it **locks** the corresponding role exactly like a FIFO op — a write-cursor driver is a locked producer, a read-cursor driver a locked consumer.
+2. Assign the minimal set satisfying "≥1 PRODUCER **and** ≥1 CONSUMER per node":
+   - **1 toucher** → [self-loop](#pattern-sync-free-and-single-ended-cbs--self-loop-dfb) (that one kernel bound PRODUCER + CONSUMER).
+   - **2 touchers, at most one locked to each FIFO role** → **1P+1C**: bind one PRODUCER, one CONSUMER. A locked kernel keeps its FIFO-dictated role; a role-free toucher takes whichever side is open (cosmetic — pick the assignment with the fewest bindings). *(Two touchers locked to the **same** role — e.g. two real `push_back`ers — can't split this way; they fall to the next bullet.)*
+   - **≥3 touchers, or ≥2 kernels locked to the same FIFO role** → [multi-binding](../audit/metal2_audit.md#multi-binding-2-of-one-kind-on-a-node), the last resort — set `advanced_options.allow_instance_multi_binding = true`.
+3. **Re-derive, don't transcribe.** Treat a brief's endpoint disposition as "this DFB needs endpoint attention," then run the census yourself and follow *it* — endpoint dispositions are mechanical enough that the porter verifies them (unlike the factory-concept choice). If your census disagrees with the brief (e.g. the brief said multi-binding but you count two touchers), follow the census and note the disagreement in the port report.
+
+**Guard against stacking.** Self-loop and multi-binding are **mutually-exclusive** resolutions for one DFB. If you find yourself self-looping a CB *and* setting its multi-binding flag, stop — you have mis-slotted a plain two-toucher 1:1. Recount and assign 1P+1C.
+
+**Correct port** (reshard generic factory — the verified case):
+
+```cpp
+// Legacy: two KernelDescriptors of ONE source over the SAME core range
+// (Reader-config + Writer-config), splitting work by disjoint page ranges;
+// both raw-write the single output CB via `dfb.get_write_ptr() + offset`.
+
+// Metal 2.0: two KernelSpecs of the same source, both over all_cores,
+// binding the one output DFB with OPPOSITE roles — 1P+1C, no flag:
+KernelSpec reader{
+    .unique_id = RESHARD_READER, .source = "reshard_reader.cpp",
+    .compile_time_args = compile_args,
+    .dfb_bindings = {DFBBinding{.dfb_spec_name = OUT, .accessor_name = "shard",
+                                .endpoint_type = DFBEndpointType::PRODUCER}},
+};
+KernelSpec writer{
+    .unique_id = RESHARD_WRITER, .source = "reshard_reader.cpp",  // same source
+    .compile_time_args = compile_args,
+    .dfb_bindings = {DFBBinding{.dfb_spec_name = OUT, .accessor_name = "shard",
+                                .endpoint_type = DFBEndpointType::CONSUMER}},
+};
+// Kernel side is UNCHANGED — `dfb.get_write_ptr() + offset` is a public peek that
+// either role permits; the CONSUMER-bound instance still writes its page range.
+```
+
+Per node this is exactly 1 PRODUCER + 1 CONSUMER, so the SPSC validator passes with no advanced option. On Gen2 the cosmetic labels become real (a CONSUMER can't write), so Quasar uplift refactors this into a genuine reader→writer topology — out of scope for the Gen1 port.
+
+**Constraint — distinguish from the disjoint-node work-split.** This is **not** the [Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) case, where two same-source `KernelSpec`s cover **disjoint** node sets (two `WorkUnitSpec`s over different core groups). There, each node sees exactly *one* instance, so each node's DFB is an ordinary 1:1 with no assignment question — and binding both `KernelSpec`s to one endpoint role is legal precisely *because* their node sets don't overlap (the [`dataflow_buffer_spec.hpp`](../../../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp) invariant). Here both instances hit *every* node, so each node genuinely has two touchers to assign.
+
+**See also**: [Sync-free and single-ended CBs → self-loop DFB](#pattern-sync-free-and-single-ended-cbs--self-loop-dfb) (the one-toucher sibling); [CB endpoints](../audit/metal2_audit.md#cb-endpoints) (the authoritative census-to-disposition table); [Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) (the disjoint-node case, not to be confused).
 
 ---
 
@@ -351,7 +410,7 @@ This isn't a Metal 2.0-specific issue, but it surfaces during op porting because
 
 **Recognition signal**: A legacy factory uses `split_work_to_cores` and creates two `KernelDescriptor`s for the compute kernel (one per core group) with different per-group CTA values (e.g. one with `Ht=X1`, one with `Ht=X2`). The Metal 2.0 port has *one* `KernelSpec` for the compute kernel, and the dimension that varied per group has been moved into `KernelSpec::runtime_arg_schema.runtime_arg_names` instead of `compile_time_args`.
 
-**Why wrong**: The premise — "Metal 2.0 supports only one `KernelSpec` per kernel source" — is false. Metal 2.0 supports multiple `KernelSpec`s referencing the same source with different CTA bindings, each placed in its own `WorkUnitSpec`, sharing upstream/downstream DFBs as multi-bindings. The "two `KernelDescriptor`s per work split" idiom translates 1:1 to "two `KernelSpec`s of the same source, in two `WorkUnitSpec`s, both binding the same input/output DFBs."
+**Why wrong**: The premise — "Metal 2.0 supports only one `KernelSpec` per kernel source" — is false. Metal 2.0 supports multiple `KernelSpec`s referencing the same source with different CTA bindings, each placed in its own `WorkUnitSpec`, sharing upstream/downstream DFBs across their **disjoint** node sets (each node sees one instance, so each is a legal single-role binding — **not** the `allow_instance_multi_binding` flag; contrast the same-grid [two-toucher work-split](#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split)). The "two `KernelDescriptor`s per work split" idiom translates 1:1 to "two `KernelSpec`s of the same source, in two `WorkUnitSpec`s, both binding the same input/output DFBs."
 
 The demotion sacrifices compile-time loop unrolling on the demoted dimension — a real, measurable kernel-perf regression — and is unnecessary.
 
