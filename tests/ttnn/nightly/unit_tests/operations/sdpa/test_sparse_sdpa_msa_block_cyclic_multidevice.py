@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import (
     BLK_KV,
     make_msa_inputs,
@@ -38,6 +39,7 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
     return t.reshape(1, H, T, d).contiguous()
 
 
+@run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)  # SP along cols; fixture skips if absent
 @pytest.mark.parametrize("n_chunks", [8])
 @pytest.mark.parametrize("causal", [False, True])  # True: diagonal-block mask must stay on the logical id
