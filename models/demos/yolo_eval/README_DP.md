@@ -17,7 +17,7 @@ python models/demos/yolo_eval/yolo_dp_mesh_infer.py \
 
 ### Full system mesh (Galaxy / driver topology, ResNet DP-style)
 
-Same sharding as above, but `**MeshShape` comes from `SystemMeshDescriptor()**` (like `sahi_ultralytics_eval.py` and multi-device ResNet bring-up). `**--batch-size` is adjusted** to the reported device count if it does not match (with a one-line note). `**--tt-mesh-shape` is ignored.**
+Same sharding as above, but `**MeshShape` comes from `SystemMeshDescriptor()**` (like multi-device ResNet bring-up). `**--batch-size` is adjusted** to the reported device count if it does not match (with a one-line note). `**--tt-mesh-shape` is ignored.**
 
 ```sh
 python models/demos/yolo_eval/yolo_dp_mesh_infer.py \
@@ -197,6 +197,5 @@ To make submesh `--parallel` faster, the fundamental fix is **per-submesh comman
 
 ## See also
 
-- [README_SAHI.md](README_SAHI.md) — SAHI sliced inference + `sahi_ultralytics_eval.py`
 - [README.md](README.md) — broader yolo_eval / pytest evaluation
 - [YOLOv8s README](../yolov8s/README.md) — Trace+2CQ (hand-rolled vs `tt_cnn` pipeline), Galaxy **8×4** pytest, `run_yolov8s_trace_2cqs_tt_cnn_pipeline_inference`

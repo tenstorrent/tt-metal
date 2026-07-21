@@ -79,27 +79,7 @@ pytest models/demos/yolov8l/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_
 
 Place test images in `models/demos/yolov8l/demo/images/`.
 
-### 4) Large images (e.g. 1280x1280 on T3K)
-SAHI supports TT input selection via `--tt-input-size {640,1280}`; use slicing (install `sahi`, plus a `ttnn`-compatible `numpy`/OpenCV stack):
-
-```bash
-python models/demos/yolov8l/sahi_ultralytics_eval.py --backend tt --tt-eth-dispatch \
-  --tt-input-size 640 --pre-resize-to 1280 1280 \
-  --slice-height 640 --slice-width 640 --overlap-height-ratio 0 --overlap-width-ratio 0 \
-  --postprocess-type GREEDYNMM --postprocess-match-metric IOS --postprocess-match-threshold 0.1 \
-  --confidence-threshold 0.55 --input models/demos/yolov8l/demo/images/
-```
-
-`--tt-model` defaults to **yolov8l**; omit it for this demo. Other values (`yolov8s`, `yolov8x`) select those TT runners for comparison only.
-
-Throughput on **T3K (1×8 mesh):** eight **1280×1280** images at a time—each chip runs one image; SAHI runs **four** sequential batched forwards (tile 0…3), each forward batch **8**. Requires **8** images (directory or repeated inputs), `--tt-mesh-shape 1 8`, and `--tt-slice-dp-batch 8` (omit `--tt-slice-parallel-devices`). `summary.json` marks amortized per-image timings when this mode is on.
-
-### 5) Offline tests (no device)
-```bash
-pytest models/demos/yolov8l/tests/test_sahi_parallel_chunks.py
-```
-
-### 6) COCO subset eval (mAP-style metric vs FiftyOne val, 1280×1280)
+### 4) COCO subset eval (mAP-style metric vs FiftyOne val, 1280×1280)
 Same harness as `yolov8s` / `yolov8x` in `models/demos/yolo_eval/evaluate.py` (subset size and metric definition match that script). Resolution and device buffers match the 1280² demo (`yolov8l_l1_small_size_for_res` / `yolov8l_trace_region_size_e2e_for_res`).
 
 Bracket order is `res`-`device_params`-`model_type` (same as `test_yolov8s[...]`); `res` is id `1280`:
@@ -112,7 +92,7 @@ pytest models/demos/yolo_eval/evaluate.py::test_yolov8l[1280-device_params0-torc
 ## Details
 - **Entry point:** `models/demos/yolov8l/tt/ttnn_yolov8l.py`
 - **Batch size:** 1 per device (effective batch scales with mesh in DP).
-- **Resolution:** **(640, 640)** and **(1280, 1280)** in PCC/demo/perf; SAHI uses `--tt-input-size`.
+- **Resolution:** **(640, 640)** and **(1280, 1280)** in PCC/demo/perf.
 - **Post-processing:** PyTorch (`models/demos/utils/common_demo_utils.py`).
 
 ## Inputs / outputs
