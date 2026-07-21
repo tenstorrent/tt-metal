@@ -272,19 +272,19 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
     def _build_generate_config_model_kwargs(
         self, generation_config, inputs, tokenizer, return_processors=False, **kwargs
     ):
-        if generation_config is None:
-            generation_config = GenerationConfig(
-                bos_token_id=tokenizer.bos_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-        else:
-            generation_config = GenerationConfig(
-                **generation_config,
-                bos_token_id=tokenizer.bos_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                pad_token_id=tokenizer.pad_token_id,
-            )
+        # Fold generation-length kwargs into the GenerationConfig object rather than leaving them as
+        # loose kwargs for _prepare_generation_config — transformers 4.57+/5.x deprecates passing
+        # generation-affecting arguments alongside a generation_config. Same resulting cap.
+        gen_cfg_dict = dict(generation_config) if generation_config else {}
+        for _len_key in ("max_new_tokens", "max_length", "min_new_tokens", "min_length"):
+            if kwargs.get(_len_key) is not None:
+                gen_cfg_dict.setdefault(_len_key, kwargs.pop(_len_key))
+        generation_config = GenerationConfig(
+            **gen_cfg_dict,
+            bos_token_id=tokenizer.bos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+        )
 
         # transformers 4.51.3 accepts a positional `use_model_defaults`; 4.57+/5.x dropped it.
         _pgc_kwargs = dict(
