@@ -141,6 +141,8 @@ Please commit METAL2_PREPORT_AUDIT.md, METAL2_PORT_BRIEF.md, METAL2_PORT_PLAN.md
 
 The first thing that Claude will do is to seek out the tests for your op. You will be asked to confirm that the tests identified are correct. **Please vet carefully that no critical tests are omitted, and that no expensive, unnecessary tests are included.**
 
+For large, complex ops, Claude will port only one `ProgramFactory` at a time. If Claude has less than 50% context window remaining when he reports status, you should either trigger a compaction or use a fresh Claude for the next `ProgramFactory`.
+
 
 ### Style fixup porting step
 
