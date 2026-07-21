@@ -10,11 +10,10 @@ Composes the ported modules into the full on-device model (mirrors
     (cond_latents, text ids) -> TtXttsGenerator (KV-cache greedy) -> codes + latents [1, T, 1024]
     ref audio -> TtXttsHifiDecoder (speaker encoder mel + ResNet -> g; latents + g -> waveform)
 
-Everything runs on device EXCEPT two host touchpoints, both outside the tensor
-compute path: the BPE text tokenizer (not a tensor op) and the conditioning
-80-mel spectrogram (``xtts_conditioning.wav_to_mel``, fed in as ``cond_mel``) —
-the latter is the one remaining op to move on device for a strictly no-host
-pipeline (the speaker-encoder mel frontend is already on device).
+Everything runs on device. The only remaining host touchpoint is the BPE text
+tokenizer (not a tensor op); the conditioning 80-mel spectrogram now runs on
+device too (``TtConditioningMel`` — a port of ``xtts_conditioning.wav_to_mel``),
+so callers pass the raw reference waveform and the mel is computed on device.
 
 The GPT runs in bf16 and its latents are cast to fp32 ROW_MAJOR at the handoff to
 the (fp32) HiFi-GAN decoder.
@@ -24,12 +23,13 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.xtts.reference.xtts_conditioning import chunk_cond_mel
+from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
 from models.experimental.xtts.tt.xtts_full_decoder import TtXttsHifiDecoder
 from models.experimental.xtts.tt.xtts_generator import TtXttsGenerator
 from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
+from models.experimental.xtts.tt.xtts_mel import TtConditioningMel
 
 
 class TtXtts(LightweightModule):
@@ -41,15 +41,24 @@ class TtXtts(LightweightModule):
         super().__init__()
         self.device = device
         self.conditioning = TtXttsConditioning(state_dict, device)
+        self.cond_mel_fe = TtConditioningMel(device, state_dict["mel_stats"].cpu())
         self.gpt = TtXttsGptModel(state_dict, device)
         self.generator = TtXttsGenerator(self.gpt)
         self.decoder = TtXttsHifiDecoder(device, ref_decoder_full)
 
-    def _cond_latents(self, cond_mel):  # torch [1, 80, s] -> ttnn [1, 32, 1024]
-        # coqui get_gpt_cond_latents: chunk the mel into gpt_cond_chunk_len windows, encode
-        # each (get_style_emb -> [1, 1024, 32]), and average the style embeddings. A mel
-        # shorter than one chunk yields a single window == the previous single-pass behaviour.
-        parts = [self.conditioning(m) for m in chunk_cond_mel(cond_mel)]  # each [1, 1024, 32]
+    def _wav_chunk_to_device(self, chunk):  # torch [1, Lc] @ 22050 -> ttnn [1, Lc, 1] ROW_MAJOR fp32
+        return ttnn.from_torch(
+            chunk.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.float32
+        )
+
+    def _style_from_mel(self, mel_dev):  # device fp32 mel [1, 80, s] -> conditioning style [1, 1024, 32]
+        return self.conditioning.forward_dev(ttnn.typecast(mel_dev, ttnn.bfloat16))
+
+    def _cond_latents(self, cond_wav):  # torch [1, L] @ 22050 -> ttnn [1, 32, 1024]
+        # coqui get_gpt_cond_latents: chunk the AUDIO into gpt_cond_chunk_len windows, compute the
+        # 80-mel ON DEVICE per chunk, encode each (get_style_emb -> [1, 1024, 32]) and average the
+        # style embeddings. A wav shorter than one chunk yields a single window (single-pass).
+        parts = [self._style_from_mel(self.cond_mel_fe(self._wav_chunk_to_device(c))) for c in chunk_wav(cond_wav)]
         if len(parts) == 1:
             style = parts[0]
         else:
@@ -67,7 +76,7 @@ class TtXtts(LightweightModule):
     def inference(
         self,
         text_ids,
-        cond_mel,
+        cond_wav,
         ref_wav_spk,
         max_new_tokens=MAX_AUDIO_TOKENS,
         force_codes=None,
@@ -77,12 +86,13 @@ class TtXtts(LightweightModule):
         top_p=1.0,
         min_new_tokens=0,
     ):
-        """``text_ids``: ``[START]/[STOP]``-wrapped torch ids. ``cond_mel``: torch
-        80-mel ``[1, 80, s]``. ``ref_wav_spk``: ttnn 16 kHz audio ``[1, L, 1]``
-        ROW_MAJOR. ``force_codes`` (optional) teacher-forces a fixed code sequence.
-        ``temperature``/``top_k``/``repetition_penalty`` enable on-device sampling
-        (``temperature <= 0`` = greedy). Returns ``(waveform [1, T_out, 1], codes [1, T])``."""
-        cond_latents = self._cond_latents(cond_mel)
+        """``text_ids``: ``[START]/[STOP]``-wrapped torch ids. ``cond_wav``: torch raw
+        22.05 kHz reference waveform ``[1, L]`` (the 80-mel is computed on device).
+        ``ref_wav_spk``: ttnn 16 kHz audio ``[1, L, 1]`` ROW_MAJOR. ``force_codes``
+        (optional) teacher-forces a fixed code sequence. ``temperature``/``top_k``/
+        ``repetition_penalty`` enable on-device sampling (``temperature <= 0`` = greedy).
+        Returns ``(waveform [1, T_out, 1], codes [1, T])``."""
+        cond_latents = self._cond_latents(cond_wav)
         if force_codes is not None:
             _, latents_tt = self.generator.latents_for_codes(text_ids, cond_latents, force_codes)
             codes = torch.tensor([force_codes], dtype=torch.long)
@@ -103,7 +113,7 @@ class TtXtts(LightweightModule):
     def inference_fully_traced(
         self,
         text_ids,
-        cond_mel,
+        cond_wav,
         ref_wav_spk,
         max_seq,
         max_new_tokens=MAX_AUDIO_TOKENS,
@@ -117,19 +127,21 @@ class TtXtts(LightweightModule):
           1. SETUP  : conditioning + speaker encoder + prefill (seeds the persistent KV cache),
           2. DECODE : one static-KV decode step, captured once and replayed per token,
           3. VOCODER: HiFi-GAN on the generated latents.
-        Only the host tokenizer / conditioning-mel / per-token sampling stay eager. Assumes a
-        single conditioning chunk (mel <= one chunk); returns ``(waveform [1, T_out, 1], codes)``.
-        NOTE: all host->device writes are done BEFORE any capture — writes are fatal inside a trace."""
+        Only the host tokenizer / per-token sampling stay eager (the conditioning mel is now
+        computed on device, inside the SETUP trace). Assumes a single conditioning chunk (ref wav
+        <= one chunk); returns ``(waveform [1, T_out, 1], codes)``. NOTE: all host->device writes
+        are done BEFORE any capture — writes are fatal inside a trace, so the raw wav is pre-placed
+        and the mel-frontend index cache is warmed by the first _setup() call before capture."""
         dev = self.device
         gpt = self.gpt
 
         # Pre-place every host input on device up front (no host->device write inside a capture).
-        mel_dev = self.conditioning.mel_to_device(cond_mel)
+        wav_dev = self._wav_chunk_to_device(chunk_wav(cond_wav)[0])  # single conditioning chunk
         text_dev = gpt.text_ids_to_device(text_ids)
         gpt.alloc_static_kv(max_seq)  # persistent zero caches, seeded by the setup trace
 
-        def _setup():  # conditioning -> cond_latents ; speaker -> g ; prefill -> seed caches
-            cl = ttnn.permute(self.conditioning.forward_dev(mel_dev), (0, 2, 1))  # [1, 32, 1024]
+        def _setup():  # cond mel (on device) -> cond_latents ; speaker -> g ; prefill -> seed caches
+            cl = ttnn.permute(self._style_from_mel(self.cond_mel_fe(wav_dev)), (0, 2, 1))  # [1, 32, 1024]
             g = self.decoder.speaker_embedding(ref_wav_spk)  # [1, 1, 512]
             return g, gpt.prefill_dev(text_dev, cl)
 
