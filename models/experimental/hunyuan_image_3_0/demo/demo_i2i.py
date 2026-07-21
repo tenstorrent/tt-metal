@@ -83,7 +83,6 @@ _bootstrap_vae_model_dir()
 
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
-from models.common.modules.tt_ccl import get_num_links
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
 from models.experimental.hunyuan_image_3_0.ref.image_gen.model_loaders import (
     load_timestep_embedder,
@@ -518,7 +517,7 @@ def main():
     cond_cache = None
     try:
         mesh_device.enable_program_cache()
-        ccl = CCLManager(mesh_device, num_links=max(1, get_num_links(mesh_device)), topology=ttnn.Topology.Linear)
+        ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
         def rep(t):
             return ttnn.from_torch(
