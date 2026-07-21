@@ -230,7 +230,6 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     expand/expand_nanobind.cpp
     fill_pad/fill_pad_nanobind.cpp
     fill_rm/fill_rm_nanobind.cpp
-    fold/fold_nanobind.cpp
     indexed_fill/indexed_fill_nanobind.cpp
     narrow/narrow_nanobind.cpp
     moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp

@@ -21,7 +21,7 @@ RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon, bool use_composite)
 }
 
 autograd::TensorPtr RMSNormLayer::operator()(const autograd::TensorPtr& tensor) {
-    // TODO(nuked-op rms_norm): restore real call (rmsnorm_composite / rmsnorm)
+    // TODO(rms_norm): restore real call (rmsnorm_composite / rmsnorm)
     static_cast<void>(m_use_composite);
     static_cast<void>(m_epsilon);
     return tensor;

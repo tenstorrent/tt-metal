@@ -62,16 +62,16 @@
 #include <ttnn/operations/matmul/matmul.hpp>                                                               // NOLINT
 #include <ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp>                                               // NOLINT
 #include <ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm.hpp>                             // NOLINT
-// TODO(nuked-op layer_norm): moreh_layer_norm / moreh_layer_norm_backward includes removed (op nuked)
+// TODO(layer_norm): moreh_layer_norm / moreh_layer_norm_backward includes removed
 #include <ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp>                           // NOLINT
 #include <ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp>                                             // NOLINT
 #include <ttnn/operations/moreh/moreh_mean/moreh_mean.hpp>                                                 // NOLINT
 #include <ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp>                               // NOLINT
 #include <ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss.hpp>                                         // NOLINT
 #include <ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp>                       // NOLINT
-// TODO(nuked-op softmax): moreh_softmax / moreh_softmax_backward includes removed (op nuked)
+// TODO(softmax): moreh_softmax / moreh_softmax_backward includes removed
 #include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>                                                   // NOLINT
-// TODO(nuked-op softmax): normalization/softmax include removed (op nuked)
+// TODO(softmax): normalization/softmax include removed
 #include <ttnn/operations/rand/rand.hpp>                                                                   // NOLINT
 #include <ttnn/operations/reduction/argmax/argmax.hpp>                                                     // NOLINT
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>                                        // NOLINT
