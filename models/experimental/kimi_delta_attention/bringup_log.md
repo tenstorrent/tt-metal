@@ -247,6 +247,24 @@ green incl. T=128 chunk path. **Full-layer before/after re-measured (T=640, devi
   inefficient; switch to `reduce_scatter` + `all_gather` (needs the 3-semaphore RS set), or reduce
   collective volume. This is the next loop iteration.
 
+### Phase 9 — perf loop iteration 3: optimize the collective (RS+AG)
+
+**Improvement:** replaced the all-reduce's all-gather+local-sum with `reduce_scatter_minimal_async` +
+`all_gather_async` (3-semaphore RS set). PCC still 0.99998 on (2,4). **Re-analysis (T=640, after TP=4):**
+
+| group | prev (all-gather+sum) | now (RS+AG) |
+|---|---|---|
+| collective | 26 355 µs | **477 µs** (**55× faster**) |
+| **total (after TP=4)** | 43 082 µs | **10 898 µs** |
+
+**TP=4 vs TP=1 now: 10.9 ms vs 33.0 ms = 3.0× win** — distribution pays once the collective is efficient.
+Collective now ~10× off the 49 µs roofline (was ~540×). **New dominant term: "other" 6.5 ms** (the chunk
+op's elementwise: exp/mul/mask/transpose), then matmul 3.9 ms. Next loop targets: reduce chunk elementwise
+op count / fuse; then matmul fidelity/config.
+
+**Distribution + fusion scorecard (T=640, per-chip device time):**
+- token-loop, TP=1: 217 ms → chunk, TP=1: 33 ms → chunk, TP=4, RS+AG: **10.9 ms** (**~20× from the start**).
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).

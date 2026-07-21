@@ -35,10 +35,13 @@ _MM = ttnn.WormholeComputeKernelConfig(
 
 
 def make_tp_semaphores(mesh_device):
-    """Global + barrier semaphores over the full compute grid (mirrors test_sparse_mla_ccl_perf._global_semaphores)."""
+    """Semaphore sets over the full compute grid: all_gather (2), reduce_scatter (3), barrier (1)."""
     g = mesh_device.compute_with_storage_grid_size()
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
-    return create_global_semaphores(mesh_device, cores, 0), ttnn.create_global_semaphore(mesh_device, cores, 0)
+    ag = create_global_semaphores(mesh_device, cores, 0)                                  # 2
+    rs = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3)]          # 3
+    bar = ttnn.create_global_semaphore(mesh_device, cores, 0)
+    return ag, rs, bar
 
 
 class TtKimiDeltaAttentionMesh:
@@ -70,7 +73,7 @@ class TtKimiDeltaAttentionMesh:
         self.norm_eps = ref.norm_eps
         self.num_links = num_links
         self.topology = ttnn.Topology.Linear
-        self.sem_ag, self.sem_bar = make_tp_semaphores(mesh_device)
+        self.sem_ag, self.sem_rs, self.sem_bar = make_tp_semaphores(mesh_device)
         sd = ref.state_dict()
         mshape = tuple(mesh_device.shape)
 
@@ -113,21 +116,20 @@ class TtKimiDeltaAttentionMesh:
         return ttnn.linear(x, w, compute_kernel_config=_MM)
 
     def _tp_all_reduce(self, x):
-        """Sum per-TP-chip o_proj partials across the TP axis via all-gather + local sum.
-
-        (all_gather needs 2 global semaphores; reduce_scatter needs 3 and its own set — production
-        cycles separate RS/AG handles via tt_ccl. all-gather + sum is the simplest correct all-reduce;
-        the RS+AG form is a perf-phase refinement.)
-        """
+        """Sum per-TP-chip o_proj partials across the TP axis: reduce_scatter + all_gather (production
+        form — moves ~(p-1)/p of the data per phase, no wasteful [.,.,TP,.] intermediate)."""
         if self.TP == 1:
             return x
-        B, T, Hd = x.shape
-        x = ttnn.reshape(x, [B, T, 1, Hd])
-        x = ttnn.experimental.all_gather_async(
-            x, dim=2, multi_device_global_semaphore=self.sem_ag, barrier_semaphore=self.sem_bar,
+        d = len(x.shape) - 1  # scatter/gather the hidden (last) dim; hidden % TP must be tile-aligned
+        x = ttnn.experimental.reduce_scatter_minimal_async(
+            x, persistent_output_buffers=None, dim=d,
+            multi_device_global_semaphore=self.sem_rs, barrier_semaphore=self.sem_bar,
             num_links=self.num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=self.topology, cluster_axis=self.tp_axis,
-        )  # [B, T, TP, Hd] — each chip now holds all TP partials
-        x = ttnn.sum(x, dim=2)  # [B, T, Hd] all-reduced
+        )
+        x = ttnn.experimental.all_gather_async(
+            x, dim=d, multi_device_global_semaphore=self.sem_ag, barrier_semaphore=self.sem_bar,
+            num_links=self.num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=self.topology, cluster_axis=self.tp_axis,
+        )
         return x
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
