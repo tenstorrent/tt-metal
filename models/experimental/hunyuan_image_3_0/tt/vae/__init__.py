@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .conv3d import HunyuanSymmetricConv3d, promote_conv3d_fallback_to_exact
+from .pointwise import HunyuanPointwiseLinear
 from .decoder import (
     AttnBlockTTNN,
     ConvInTTNN,
@@ -30,6 +31,7 @@ from .encoder import (
 
 __all__ = [
     "HunyuanSymmetricConv3d",
+    "HunyuanPointwiseLinear",
     "promote_conv3d_fallback_to_exact",
     "AttnBlockTTNN",
     "ConvInTTNN",
