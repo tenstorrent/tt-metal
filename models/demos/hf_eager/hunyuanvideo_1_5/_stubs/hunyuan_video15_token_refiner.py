@@ -173,10 +173,10 @@ def build(device, torch_module):
         return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     def _linear(x, w, b):
-        y = ttnn.matmul(x, w, compute_kernel_config=compute_config)
+        # Fold bias into the matmul epilogue (launch-bound path: fewer op launches).
         if b is not None:
-            y = ttnn.add(y, b)
-        return y
+            return ttnn.linear(x, w, bias=b, compute_kernel_config=compute_config)
+        return ttnn.matmul(x, w, compute_kernel_config=compute_config)
 
     def _ln(x, wbe):
         w, b, eps = wbe
