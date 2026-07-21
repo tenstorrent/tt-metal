@@ -70,8 +70,6 @@ ttnn::Tensor reduce_scatter(
     // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 
-    // For fp32 inputs without an explicit compute_kernel_config, enable fp32 dest accumulation so the
-    // reduction sum runs at fp32 precision in dst. See reduce_scatter_minimal_async.cpp / issue #37883.
     auto resolved_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
 

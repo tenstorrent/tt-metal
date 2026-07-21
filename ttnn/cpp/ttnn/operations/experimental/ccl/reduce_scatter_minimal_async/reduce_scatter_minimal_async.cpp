@@ -48,10 +48,6 @@ ttnn::Tensor reduce_scatter_minimal_async(
         num_devices,
         usable_topology);
 
-    // For fp32 inputs without an explicit compute_kernel_config, enable fp32 dest accumulation
-    // so the reduction sum runs at fp32 precision in dst (Tf32 unpack-dst). Without this,
-    // the JIT data-format selection picks a 7-bit-mantissa dst, silently truncating the
-    // cross-device sum. Resolved before the composite fallback below so both paths get it.
     auto resolved_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
 
