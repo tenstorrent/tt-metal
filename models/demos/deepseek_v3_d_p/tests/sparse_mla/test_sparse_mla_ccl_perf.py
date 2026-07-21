@@ -164,16 +164,22 @@ def _query_tokens(workload: Workload, sp: int) -> int:
     return workload.chunk_tokens * sp // GALAXY_SP
 
 
+def _cache_tokens(workload: Workload, sp: int) -> int:
+    # Keep the prefix shard on each proxy chip equal to the production Galaxy shard.
+    return workload.cache_tokens * sp // GALAXY_SP
+
+
 def _kvpe_logical_shape(w: Workload, mesh_shape) -> list:
-    # KVPE runs only on SP=GALAXY_SP meshes, so the global prefix (cache + the just-written chunk) needs
-    # no proxy scaling — sharding it over SP already yields the Galaxy per-chip depth.
-    total_tokens = w.cache_tokens + w.chunk_tokens
+    # Scale the prefix like the query path: on the 2x4 LoudBox Fabric2D proxy, SP=2 instead of Galaxy's
+    # SP=8, so using the unscaled Galaxy prefix would make each chip hold four times the intended KVPE shard.
+    sp, _ = mesh_shape
+    total_tokens = _cache_tokens(w, sp) + _query_tokens(w, sp)
     return [1, 1, total_tokens, w.kvpe_dim]
 
 
 def _kvpe_local_input_shape(w: Workload, mesh_shape) -> list:
     sp, _ = mesh_shape
-    total_tokens = w.cache_tokens + w.chunk_tokens
+    total_tokens = _cache_tokens(w, sp) + _query_tokens(w, sp)
     return [1, 1, total_tokens // sp, w.kvpe_dim]
 
 
