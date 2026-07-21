@@ -65,6 +65,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
+#include "umd/device/chip_helpers/simulation_sysmem_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // fabric route table (multi-chip dst resolve)
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
@@ -297,12 +298,56 @@ static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 //     that is the true in-bank offset (already includes
 //     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
 //     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
+// Helper: get SWEmuleChip* from MetalContext cluster for a given device_id. (Relocated up from
+// later in this file — needed here for the PCIe branch below, and by the fabric teleport hooks
+// further down.)
+static tt::umd::SWEmuleChip* get_sw_emulated_chip(tt::ChipId device_id) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto* umd_cluster = cluster.get_driver().get();
+    if (!umd_cluster) {
+        return nullptr;
+    }
+    auto* chip = umd_cluster->get_chip(device_id);
+    return dynamic_cast<tt::umd::SWEmuleChip*>(chip);
+}
+
+// Per-device cache of pcie_base_ (the host-facing/PCIe address threshold), keyed by device_id —
+// avoids a dynamic_cast + cluster lookup on every single NOC-address resolve. Rebuilt lazily; a
+// device close+reopen mints a new SWEmuleChip with a stable arch, so the cached value never goes
+// stale the way the core_map cache (which holds raw Core* into per-chip L1) can.
+static std::mutex g_pcie_base_mutex;
+static std::unordered_map<uint32_t, uint64_t> g_pcie_base_cache;
+
+static uint64_t get_pcie_base_cached(uint32_t device_id) {
+    std::lock_guard<std::mutex> lock(g_pcie_base_mutex);
+    auto it = g_pcie_base_cache.find(device_id);
+    if (it != g_pcie_base_cache.end()) {
+        return it->second;
+    }
+    auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
+    uint64_t pcie_base =
+        sw_emu ? tt::umd::SysmemManager::get_pcie_base_for_arch(sw_emu->get_soc_descriptor().arch) : UINT64_MAX;
+    g_pcie_base_cache[device_id] = pcie_base;
+    return pcie_base;
+}
+
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
+    emule_require_self(__func__);
+
+    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space starts at
+    // pcie_base_ and shares the same 64-bit range as a real on-chip NOC address, so this branch
+    // must run FIRST, before any noc_x/noc_y/local_addr decomposition below.
+    uint32_t device_id = __emule_self->chip_id;
+    if (noc_addr >= get_pcie_base_cached(device_id)) {
+        auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
+        auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
+        return sysmem ? static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr, /*size=*/1)) : nullptr;
+    }
+
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
 
-    emule_require_self(__func__);
     if (__emule_self->core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
@@ -1102,19 +1147,6 @@ static std::function<void()> jit_compile_kernel(
     // 11. Wrap in shared_ptr for lifetime management (dlclose on destruction).
     auto shared_handle = std::shared_ptr<void>(handle, [](void* h) { dlclose(h); });
     return [fn, shared_handle]() { fn(); };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: get SWEmuleChip* from MetalContext cluster for a given device_id.
-// ---------------------------------------------------------------------------
-static tt::umd::SWEmuleChip* get_sw_emulated_chip(ChipId device_id) {
-    auto& cluster = MetalContext::instance().get_cluster();
-    auto* umd_cluster = cluster.get_driver().get();
-    if (!umd_cluster) {
-        return nullptr;
-    }
-    auto* chip = umd_cluster->get_chip(device_id);
-    return dynamic_cast<tt::umd::SWEmuleChip*>(chip);
 }
 
 // ---------------------------------------------------------------------------
