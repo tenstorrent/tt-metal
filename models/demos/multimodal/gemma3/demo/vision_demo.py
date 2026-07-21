@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from models.common.llama_models import sample_top_p
 from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
 from models.tt_transformers.tt.generator import create_submeshes
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 
 IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
@@ -69,7 +70,7 @@ def create_multimodal_model(
     enable_program_trace: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
-    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, is_gemma3_host_weight
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(
@@ -91,18 +92,39 @@ def create_multimodal_model(
         dtype = ttnn.bfloat8_b
         logger.info(f"Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
 
+    # Warm ttnn cache => build from .tensorbin (hybrid): the 5 vision weights gemma3 loads without
+    # a cache_file_name (patch-embed conv, siglip position embed, the two projector weights) are
+    # served real from the sidecar; the rest are dataless placeholders. The build uses bfloat8_b,
+    # so the cache identity must too. Shares the cache dir + host-weight set with the text path.
+    cache_dtype = ttnn.bfloat8_b
+    cache_dir = tt_model_args.weight_cache_path(cache_dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(tt_model_args.mesh_device.shape),
+    )
+    loaded_real_weights = False
     if checkpoint is None:
-        checkpoint = tt_model_args.load_state_dict()
+        if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- building hybrid vision state_dict (no HF load).")
+            checkpoint = build_cached_state_dict(cache_dir)
+        else:
+            checkpoint = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights
 
     model = TtGemmaModel(
         mesh_device=mesh_device,
         state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
-        dtype=ttnn.bfloat8_b,
+        weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
+        dtype=cache_dtype,
         args=tt_model_args,
         use_paged_kv_cache=use_paged_kv_cache,
         paged_attention_config=paged_attention_config,
     )
+
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, checkpoint, is_host_weight=is_gemma3_host_weight, **cache_identity)
+
     return tt_model_args, model, checkpoint
 
 

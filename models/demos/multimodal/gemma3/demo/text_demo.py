@@ -24,6 +24,7 @@ from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
@@ -70,7 +71,7 @@ def create_tt_model(
     dummy_weights: bool = False,
     enable_program_trace: bool = False,
 ):
-    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, is_gemma3_host_weight
     from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
@@ -113,16 +114,22 @@ def create_tt_model(
                 tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
             tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
 
-    # Warm ttnn cache => skip the HF from_pretrained host load and build from .tensorbin. The
-    # gemma3 text path builds the tt_transformers Transformer (on-device embedding), so the
-    # dataless placeholder applies as-is -- no hybrid needed (#45400). ModelArgs subclasses the
-    # tt_transformers ModelArgs, so weight_cache_is_complete/placeholder_state_dict are inherited.
-    # None=decide, placeholder=skip/DP-reuse, populated=reuse.
+    # Warm ttnn cache => skip the HF from_pretrained host load and build from .tensorbin. Text and
+    # vision share one cache dir and gemma3's load_state_dict returns the full multimodal dict, so
+    # both paths use the shared hybrid helper with the SAME host-weight set (the text Transformer
+    # consumes none of the 5 vision host keys, but they must be captured to the sidecar for the
+    # vision path). None=decide, placeholder=skip/DP-reuse, populated=reuse. (#45400 follow-up)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(tt_model_args.mesh_device.shape),
+    )
     loaded_real_weights = False
     if state_dict is None:
-        if not tt_model_args.dummy_weights and tt_model_args.weight_cache_is_complete(dtype):
-            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
-            state_dict = tt_model_args.placeholder_state_dict(dtype)
+        if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- building state_dict from cache (no HF load).")
+            state_dict = build_cached_state_dict(cache_dir)
         else:
             state_dict = tt_model_args.load_state_dict()
             loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
@@ -139,7 +146,7 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     if loaded_real_weights and num_layers is None:
-        tt_model_args.mark_weight_cache_complete(dtype, state_dict)
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=is_gemma3_host_weight, **cache_identity)
 
     return tt_model_args, model, tt_kv_cache, state_dict
 
