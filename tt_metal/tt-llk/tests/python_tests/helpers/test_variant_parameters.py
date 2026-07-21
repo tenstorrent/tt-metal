@@ -314,26 +314,6 @@ class BLOCK_CT_DIM(TemplateParameter):
 
 
 @dataclass
-class RESPECT_TRIGGER(TemplateParameter):
-    """Enables the SDPA MOP-split trigger optimization in reduce_block_max_row."""
-
-    respect_trigger: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool RESPECT_TRIGGER = {str(self.respect_trigger).lower()};"
-
-
-@dataclass
-class OVERLAP_FIRST_HALF(TemplateParameter):
-    """Enables the overlap-first-half trigger token in the runtime reduce_block_max_row."""
-
-    overlap_first_half: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool OVERLAP_FIRST_HALF = {str(self.overlap_first_half).lower()};"
-
-
-@dataclass
 class USE_RUNTIME(TemplateParameter):
     """Selects the runtime (dynamic block_ct_dim) reduce_block_max_row LLK family."""
 
@@ -351,6 +331,17 @@ class REINIT_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int REINIT_MODE = {self.reinit_mode};"
+
+
+@dataclass
+class CLOBBER_OP(TemplateParameter):
+    """Op run between reduce init and reinit to overwrite the reduce MOP/addrmods:
+    0=none, 1=eltwise binary (reconfig-escape guard for the reinit paths)."""
+
+    clobber_op: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int CLOBBER_OP = {self.clobber_op};"
 
 
 @dataclass

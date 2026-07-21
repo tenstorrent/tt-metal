@@ -29,24 +29,23 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     BLOCK_CT_DIM,
+    CLOBBER_OP,
     MATH_FIDELITY,
     REINIT_MODE,
     USE_RUNTIME,
 )
+from helpers.tilize_untilize import tilize, untilize
 from helpers.utils import tolerances
 
-# 32x32 bf16 tile, stored as 4 faces of 16x16 (2x2 face grid).
+# 32x32 bf16 tile.
 TILE_DIM = 32
-FACE_DIM = 16
-FACES_PER_ROW = 2  # num_faces_c_dim
-FACE_SIZE = FACE_DIM * FACE_DIM
 ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 
 # Inputs are always bf16 (the op's contract); only the DEST/output precision varies.
@@ -58,6 +57,11 @@ FORMATS = [
 # REINIT_MODE C++ selector: 0 = plain init, 1 = reinit_short, 2 = reinit_minimal.
 _REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2}
 
+# CLOBBER_OP C++ selector: op run between init and reinit to overwrite the reduce
+# MOP / addrmods, so the reinit path must actually restore them (reconfig-escape guard).
+# 0 = none, 1 = eltwise binary (ELWADD, clobbers the MOP + addrmods like matmul/sub_exp).
+_CLOBBER_DEFINE = {"none": 0, "eltwise": 1}
+
 
 def _dest_acc(output_format):
     return (
@@ -67,67 +71,49 @@ def _dest_acc(output_format):
     )
 
 
-def _defined_output_indices():
-    """Flat (tilized) indices of the defined row-max lanes in the 32x32 output tile.
-
-    The row-max for each of the 32 physical rows lands in column [0], which in the
-    4-face tile layout is: face-row ``pr // 16`` (faces {0,1} or {2,3}), row
-    ``pr % 16``, col 0 → flat index (face_row * FACES_PER_ROW) * FACE_SIZE + within*16.
-    """
-    indices = []
-    for pr in range(TILE_DIM):
-        face_row = pr // FACE_DIM
-        within = pr % FACE_DIM
-        indices.append((face_row * FACES_PER_ROW) * FACE_SIZE + within * FACE_DIM)
-    return indices
-
-
-def _row_max_golden(src_a, block_ct_dim):
-    """Per-row MAX across the whole block width (block_ct_dim tiles x 32 cols).
-
-    Operand A is block_ct_dim contiguous 32x32 tiles in tilized (4-face) layout.
-    Returns a flat 1024-element tile with the row-max placed in column [0] of each
-    physical row (tilized layout); other lanes are left 0 (unspecified on HW).
-    Mirrors helpers.golden_generators.ReduceBlockMaxRowGolden semantics.
-    """
-    src = src_a.to(torch.float32)
-    out = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
-    for pr in range(TILE_DIM):
-        face_row = pr // FACE_DIM
-        within = pr % FACE_DIM
-        row_vals = []
-        for t in range(block_ct_dim):
-            tile_base = t * ELEMENTS_PER_TILE
-            # The two faces holding physical row `pr` (left cols 0-15, right cols 16-31).
-            for fc in range(FACES_PER_ROW):
-                face = face_row * FACES_PER_ROW + fc
-                face_base = tile_base + face * FACE_SIZE + within * FACE_DIM
-                row_vals.append(src[face_base : face_base + FACE_DIM])
-        out_idx = (face_row * FACES_PER_ROW) * FACE_SIZE + within * FACE_DIM
-        out[out_idx] = torch.max(torch.cat(row_vals))
-    return out
-
-
 def _run_reduce_block_max(
-    formats, math_fidelity, block_ct_dim, use_runtime=False, reinit="none"
+    formats,
+    math_fidelity,
+    block_ct_dim,
+    use_runtime=False,
+    reinit="none",
+    clobber="none",
 ):
     dest_acc = _dest_acc(formats.output_format)
-    # Operand A is a single block of block_ct_dim tiles, laid out tile-major
-    # (each 32x32 tile contiguous), i.e. a 32-row x (block_ct_dim*32)-col operand.
-    input_dimensions = [TILE_DIM, block_ct_dim * TILE_DIM]
 
-    # A ~ U[0, 1] keeps every row-max well inside bf16's dynamic range.
-    src_A, tile_cnt_A, _, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=StimuliSpec.uniform(low=0.0, high=1.0),
+    # Build operand A row-major (32 rows x block_ct_dim*32 cols), so the canonical
+    # ReduceBlockMaxRowGolden (which reshapes its operand to `dimensions` row-major)
+    # is unambiguous. A ~ U[0, 1] keeps every row-max well inside bf16's range.
+    dimensions = [TILE_DIM, block_ct_dim * TILE_DIM]
+    src_A_rowmajor = (
+        torch.empty(TILE_DIM * block_ct_dim * TILE_DIM)
+        .uniform_(0.0, 1.0)
+        .to(torch.bfloat16)
+    )
+
+    # Canonical golden: the established fuser oracle for this op. Returns a row-major
+    # tensor with the per-row max in column [0], every other column 0. (In the
+    # compile-producer phase get_golden_generator hands back a stub — the reshape is
+    # deferred until after run() below, where the real result is available.)
+    generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
+    golden_flat = generate_golden(
+        src_A_rowmajor.clone(), block_ct_dim, formats.output_format, dimensions
+    )
+
+    # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
+    src_A = torch.cat(
+        [
+            tilize(
+                src_A_rowmajor.reshape(TILE_DIM, block_ct_dim * TILE_DIM)[
+                    :, t * TILE_DIM : (t + 1) * TILE_DIM
+                ].reshape(-1),
+                formats.input_format,
+            )
+            for t in range(block_ct_dim)
+        ]
     )
     # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
     src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
-
-    golden = _row_max_golden(src_A, block_ct_dim)
 
     configuration = TestConfig(
         "sources/reduce_block_max_test.cpp",
@@ -137,6 +123,7 @@ def _run_reduce_block_max(
             MATH_FIDELITY(math_fidelity),
             USE_RUNTIME(use_runtime),
             REINIT_MODE(_REINIT_DEFINE[reinit]),
+            CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -158,17 +145,24 @@ def _run_reduce_block_max(
         len(res_from_L1) == ELEMENTS_PER_TILE
     ), f"Expected one {ELEMENTS_PER_TILE}-element output tile, got {len(res_from_L1)}"
 
-    res = torch.tensor(res_from_L1, dtype=torch.float32)
+    # In the compile-producer phase the golden is a stub (no real reduction to check).
+    if golden_flat.numel() != TILE_DIM * block_ct_dim * TILE_DIM:
+        return
+    golden_rowmajor = golden_flat.reshape(TILE_DIM, block_ct_dim * TILE_DIM)
+
+    # Untilize the device output tile to row-major so both sides share layout.
+    res = untilize(
+        torch.tensor(res_from_L1, dtype=torch.float32), formats.output_format
+    ).reshape(TILE_DIM, TILE_DIM)
     tol = tolerances[formats.output_format]
 
     # Only column [0] of each physical row is defined (the row-max); the packer's
-    # REDUCE_ROW mask leaves every other lane unspecified, so validate those alone.
-    for pr, idx in enumerate(_defined_output_indices()):
-        g = float(golden[idx])
-        d = float(res[idx])
+    # REDUCE_ROW mask leaves every other lane unspecified, so validate column [0].
+    for pr in range(TILE_DIM):
+        g = float(golden_rowmajor[pr, 0])
+        d = float(res[pr, 0])
         assert abs(d - g) <= tol.atol + tol.rtol * abs(g), (
-            f"reduce_block_max_row mismatch at physical row {pr} (idx {idx}): "
-            f"device={d} golden={g} "
+            f"reduce_block_max_row mismatch at row {pr}: device={d} golden={g} "
             f"(block_ct_dim={block_ct_dim}, fidelity={math_fidelity.name})"
         )
 
@@ -200,7 +194,11 @@ def test_reduce_block_max_runtime(formats, math_fidelity, block_ct_dim):
     reinit=["short", "minimal"],
 )
 def test_reduce_block_max_reinit(formats, math_fidelity, block_ct_dim, reinit):
-    """Reinit / reprogram after init (reconfig-escape guard).
+    """Reinit / reprogram after a clobbering op (reconfig-escape guard).
+
+    An eltwise binary op runs between init and reinit to overwrite the reduce MOP
+    and addrmods (as matmul / sub_exp do in the SDPA inner loop); the reinit must
+    restore them for the reduce to match golden.
 
     Compile-time short/minimal reinit lib fns are Blackhole-only; skip on WH.
     """
@@ -208,7 +206,9 @@ def test_reduce_block_max_reinit(formats, math_fidelity, block_ct_dim, reinit):
         pytest.skip(
             "compile-time reduce_block_max_row reinit is a Blackhole-only lib path"
         )
-    _run_reduce_block_max(formats, math_fidelity, block_ct_dim, reinit=reinit)
+    _run_reduce_block_max(
+        formats, math_fidelity, block_ct_dim, reinit=reinit, clobber="eltwise"
+    )
 
 
 @parametrize(
@@ -225,5 +225,10 @@ def test_reduce_block_max_reinit_runtime(formats, math_fidelity, block_ct_dim, r
             "runtime reduce_block_max_row reinit_minimal is a Blackhole-only lib path"
         )
     _run_reduce_block_max(
-        formats, math_fidelity, block_ct_dim, use_runtime=True, reinit=reinit
+        formats,
+        math_fidelity,
+        block_ct_dim,
+        use_runtime=True,
+        reinit=reinit,
+        clobber="eltwise",
     )

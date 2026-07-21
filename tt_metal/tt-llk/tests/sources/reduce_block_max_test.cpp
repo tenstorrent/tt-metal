@@ -18,12 +18,20 @@
 // (constexpr) switches, supplied by the Python driver, select the covered path:
 //
 //   * USE_RUNTIME   - the runtime (dynamic block_ct_dim) LLK family.
-//   * REINIT_MODE   - re-arm the reduce config right after init, matching the SDPA
+//   * CLOBBER_OP    - op run between init and reinit that overwrites the reduce
+//                     MOP/addrmods: 0 = none, 1 = eltwise binary init (as matmul /
+//                     sub_exp do in the SDPA inner loop).
+//   * REINIT_MODE   - re-arm the reduce config after the clobber, matching the SDPA
 //                     inner-loop reinit paths: 0 = none, 1 = reinit_short (reprogram
 //                     MOP + addrmods), 2 = reinit_minimal (ADDR_MOD_1/2/6 only).
 //
 // The compile-time short/minimal reinit lib fns are Blackhole-only, so the driver
-// only requests those on Blackhole; the runtime reinit fns exist on both arches.
+// only requests those on Blackhole; the runtime reinit fns exist on both arches
+// (runtime reinit_minimal is Blackhole-only).
+//
+// respect_trigger / overlap_first_half (the SDPA MOP-split producer/consumer
+// handshake) are out of scope here — they are owned by the packer layer two levels
+// above the LLK and need the SDPA compute-kernel scaffolding to drive faithfully.
 //
 // Reference: on-silicon compute kernels
 //   tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row{,_runtime}/compute.cpp
@@ -97,7 +105,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_math_reduce_custom.h"
 #include "experimental/llk_math_reduce_runtime_custom.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h"
 #include "params.h"
+
+// CLOBBER_OP selector: an op run between reduce init and reinit that overwrites the
+// reduce MOP / addrmods, so the reinit path must actually restore them (reconfig-escape
+// guard). 0 = none, 1 = eltwise binary init (reprograms addr_mods + MOP, exactly like the
+// matmul / sub_exp that precede the reduce in the SDPA inner loop).
+static inline void clobber_reduce_config(const ckernel::TensorShape& tensor_shape)
+{
+    if constexpr (CLOBBER_OP == 1)
+    {
+        // ELWADD reprograms the addr_mods + MOP (the reduce state the reinit restores).
+        // ELWADD requires LoFi (HiFi is multiply-only); fidelity is irrelevant here since
+        // the op is never executed, only its init reconfigures the clobbered registers.
+        _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+            tensor_shape, 0 /* acc_to_dest */);
+    }
+}
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -113,6 +138,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (USE_RUNTIME)
     {
         _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(BLOCK_CT_DIM, tensor_shape);
+
+        // Overwrite the reduce MOP/addrmods so the reinit below must restore them.
+        clobber_reduce_config(tensor_shape);
 
         if constexpr (REINIT_MODE == 1)
         {
@@ -136,6 +164,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         _llk_math_reduce_block_max_row_init_<BLOCK_CT_DIM, is_fp32_dest_acc_en>(tensor_shape);
+
+        // Overwrite the reduce MOP/addrmods so the reinit below must restore them.
+        clobber_reduce_config(tensor_shape);
 
 #ifdef ARCH_BLACKHOLE
         if constexpr (REINIT_MODE == 1)
