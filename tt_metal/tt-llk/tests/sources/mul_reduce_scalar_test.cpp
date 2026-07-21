@@ -44,7 +44,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2, 2};
+    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
     // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const std::uint32_t tile_cnt            = params.TILE_CNT;
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2, 2};
+    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
     // compute_kernel_hw_startup
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
 
     // Step 4 - stage tile 0 into SrcA, fill SrcB with the scaler, clear DEST[0].
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
+    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0 /* idst */);
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0 /* dst_index */, VectorMode::RC_custom, REDUCE_SCALER);
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
@@ -126,11 +126,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
-    _llk_math_mul_reduce_column_<MATH_FIDELITY>(0, tensor_shape);
+    _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /* dst_index */, tensor_shape);
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(0, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /* dst_index */, tensor_shape);
     }
 
     // Step 7 - collapse DEST[0] to a single scalar.
@@ -155,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2, 2};
+    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
@@ -176,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Single output tile: the scalar lives in DEST[0].
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // mul_reduce_scalar_uninit

@@ -9,8 +9,9 @@ Exercises the experimental ``mul_reduce_scalar`` LLKs
 
     result = sum_over_all_tiles_and_elements(A * B)
 
-stored in element ``[0]`` of a single output tile. The packer applies the
-REDUCE_SCALAR mask, so every other output datum is zero.
+stored in element ``[0]`` of the output tile. Per the op's contract (Compute
+API doc + on-silicon gtest), only element ``[0]`` is defined — the packer's
+other lanes are unspecified — so the test validates the reduced scalar alone.
 
 Kernel B is held at 1.0 (matching the on-silicon gtest and the
 ``fuser_config/fpu_reduce_scalar.yaml`` recipe), so the multiply reduces to
@@ -28,8 +29,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import MATH_FIDELITY, TILE_COUNT
-from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import tolerances
 
 # 32x32 bf16 tile: 4 faces of 16x16.
 ELEMENTS_PER_TILE = 1024
@@ -71,7 +71,6 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles):
         pytest.skip("mul_reduce_scalar is a Blackhole-only experimental LLK")
 
     dest_acc = _dest_acc(formats.output_format)
-    tile_shape = construct_tile_shape(TILE_DIMENSIONS)
     input_dimensions = [num_tiles * TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
 
     # A ~ U[0, 1] mirrors the on-silicon gtest and keeps the accumulated sum
@@ -90,15 +89,10 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles):
     )
 
     # Golden mirrors the on-silicon reference (test_mul_reduce_scalar.cpp): the
-    # element-wise product summed over every element of every tile, landing in
-    # element [0]; the REDUCE_SCALAR pack mask zeros the rest. Since the golden
-    # is one-hot, passed_test's PCC term is trivially 1.0 — the isclose term on
-    # element [0] is what actually validates the reduced scalar.
-    scalar = float((src_A.to(torch.float32) * src_B.to(torch.float32)).sum().item())
-    golden_tensor = torch.zeros(
-        ELEMENTS_PER_TILE, dtype=format_dict[formats.output_format]
+    # element-wise product summed over every element of every tile, in fp32.
+    golden_scalar = float(
+        (src_A.to(torch.float32) * src_B.to(torch.float32)).sum().item()
     )
-    golden_tensor[0] = scalar
 
     configuration = TestConfig(
         "sources/mul_reduce_scalar_test.cpp",
@@ -125,11 +119,16 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
+    assert (
+        len(res_from_L1) == ELEMENTS_PER_TILE
+    ), f"Expected one {ELEMENTS_PER_TILE}-element output tile, got {len(res_from_L1)}"
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape
-    ), "mul_reduce_scalar result does not match golden"
+    # The reduced scalar lives in element [0]; every other lane is unspecified.
+    device_scalar = float(res_from_L1[0])
+    tol = tolerances[formats.output_format]
+    assert abs(device_scalar - golden_scalar) <= tol.atol + tol.rtol * abs(
+        golden_scalar
+    ), (
+        f"mul_reduce_scalar mismatch: device={device_scalar} golden={golden_scalar} "
+        f"(num_tiles={num_tiles}, fidelity={math_fidelity.name})"
+    )
