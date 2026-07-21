@@ -39,7 +39,7 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
     return t.reshape(1, H, T, d).contiguous()
 
 
-@run_for_blackhole()
+@run_for_blackhole()  # sparse_sdpa_msa is Blackhole-only; nightly runs this dir on wh_n300 too
 @pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)  # SP along cols; fixture skips if absent
 @pytest.mark.parametrize("n_chunks", [8])
 @pytest.mark.parametrize("causal", [False, True])  # True: diagonal-block mask must stay on the logical id

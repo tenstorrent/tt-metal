@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Union
 
@@ -16,6 +18,25 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+
+# Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
+# Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
+# ABSOLUTE times inflate vs an un-instrumented run — trust the MLA:FFN ratio and the per-layer shape,
+# NOT the totals. When off (default) there is no sync and no timing, so normal runs are unperturbed.
+# Keyed by global layer_idx -> {"mla": [seconds...], "ffn": [seconds...]} (one entry per forward call).
+_BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
+_BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
+
+
+def reset_block_timings() -> None:
+    """Drop all recorded per-layer MLA/FFN samples (e.g. to exclude a warmup iteration)."""
+    _BLOCK_TIMINGS.clear()
+
+
+def get_block_timings() -> dict[int, dict[str, list[float]]]:
+    """Per-layer {"mla": [s...], "ffn": [s...]} host-timing samples recorded since the last reset."""
+    return _BLOCK_TIMINGS
+
 
 # Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
 # col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
@@ -443,6 +464,14 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
+        # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
+        # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
+        # Skip kv_only layers (they run no FFN and return early below).
+        _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_start = time.perf_counter()
+
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
@@ -503,6 +532,9 @@ class TtPrefillBlock(LightweightModule):
 
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_mla = time.perf_counter()
         if return_kv_intermediates:
             # post-MLA residual (x + mla_out), TP-sharded on hidden.
             kv_intermediates["post_mla_residual"] = ttnn.clone(x)
@@ -526,6 +558,12 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_norm_out)
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_ffn = time.perf_counter()
+            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
+            rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
 
         if return_kv_intermediates:
             if return_indexer_indices:
