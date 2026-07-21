@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 # tracer_test_harness.py
 # Stable runtime harness for running op-level PCC checks from a tracer manifest.
 #
