@@ -20,6 +20,32 @@ import os
 
 from helpers.logger import logger
 
+_MODE_TO_FUNC = {
+    "accuracy": "test_sfpu_accuracy_sweep",
+    "perf": "test_sfpu_perf_sweep",
+    "both": "test_sfpu_accuracy_and_perf_sweep",
+}
+_SWEEP_FUNCS = set(_MODE_TO_FUNC.values())
+
+
+def pytest_collection_modifyitems(config, items):
+    # --mode defaults to "accuracy"
+    mode = config.getoption("--mode", default=None)
+    if not mode:
+        return
+    target = _MODE_TO_FUNC[mode]
+    deselected = [
+        it
+        for it in items
+        if getattr(it, "function", None) is not None
+        and it.function.__name__ in _SWEEP_FUNCS
+        and it.function.__name__ != target
+    ]
+    if deselected:
+        drop = {id(it) for it in deselected}
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = [it for it in items if id(it) not in drop]
+
 
 def pytest_addoption(parser):
     parser.addoption(
