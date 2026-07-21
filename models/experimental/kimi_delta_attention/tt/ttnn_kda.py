@@ -17,7 +17,7 @@ from einops import rearrange
 from .ttnn_kda_chunk import chunk_kda_ttnn
 from .ttnn_kda_ops import causal_conv1d_silu_ttnn, conv_weight_taps, kda_gate_ttnn, l2norm_ttnn, recurrent_kda_ttnn
 
-_CHUNK = 64  # chunked prefill when T % _CHUNK == 0, else token-recurrent (decode / ragged)
+_CHUNK = 32  # chunked prefill when T % _CHUNK == 0, else token-recurrent (decode / ragged)
 
 _MM = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -107,7 +107,10 @@ class TtKimiDeltaAttention:
         g = kda_gate_ttnn(g, self.A_log, self.dt_bias, self.lower_bound)
 
         if T % _CHUNK == 0:
-            o, _ = chunk_kda_ttnn(q, k, v, g, beta, device=self.device, chunk_size=_CHUNK)  # prefill
+            o = ttnn.transformer.chunk_kda(q, k, v, g, beta, scale=self.K ** -0.5, chunk_size=_CHUNK, use_qk_l2norm=False)
+            if isinstance(o, (tuple, list)):
+                o = o[0]  # fused C++ kernel -> o [B,T,HV,V]
+            o = ttnn.to_layout(o, ttnn.TILE_LAYOUT)  # C++ op returns ROW_MAJOR
         else:
             o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.device)                 # decode/ragged
 

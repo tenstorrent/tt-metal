@@ -382,6 +382,23 @@ at Kt=4). **Immediate follow-up:** fix Kt=2, then wire into the layer + full re-
 reverted for now (layers stay on the validated composed chunk_kda_ttnn); the fused op stands as a
 validated standalone `ttnn.transformer.chunk_kda` for K=128.
 
+**Kt=2 hang FIXED** (commit `8ff4863`). Root cause (watcher-localized): the WY-inverse quadrant-mask CB
+`cb_mask` (3 tiles) aliases `cb_u` sized `cv=Vt`; at V<96 (Vt<3) the reader `reserve_back(cb_mask,3)` +
+compute `WAIT(cb_mask,3)` deadlock. **Pre-existing** in the parent op (qwen36 uses V=128, Vt=4). Fix:
+`cb_u = max(cv,3)`; also `WAIT(cb_g, Ct)→ck`. K=64 and K=128 now pass (`test_chunk_kda_dims.py`).
+Now wiring the fused kernel into the layers + full re-measure (the payoff the hang blocked).
+
+**Fused kernel wired into both layers** (prefill T%32==0 → `ttnn.transformer.chunk_kda`, +`to_layout(TILE)`
+since the op returns ROW_MAJOR). Layer PCC passes (T=128, conv on/off). **Full-layer before/after (T=640):**
+| | before TP=1 | after TP=4 |
+|---|---|---|
+| composed chunk | 33.0 ms | 10.9 ms |
+| **C++ fused chunk** | **16.0 ms** | **6.3 ms** |
+Fused kernel cut the layer ~2× (before) / ~1.7× (after); TP=4 now a **2.5× win**. The recurrence (original
+bottleneck) is no longer dominant; the layer's remaining "other" is the non-chunk elementwise (conv FIR,
+gate, l2norm, gated-RMSNorm). **C++ fused kernel arc COMPLETE** — implemented, Kt=2-fixed, wired, validated,
+measured end-to-end. Remaining open: SP sequence-sharding (Galaxy); further layer-elementwise trimming.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
