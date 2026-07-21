@@ -21,23 +21,24 @@ struct ChunkSizeConfig {
     uint32_t output_full_chunk_size_bytes;         // actual bytes written to DRAM per full chunk
     uint32_t input_partial_chunk_size_bytes;       // actual bytes read from DRAM for partial chunk
     uint32_t output_partial_chunk_size_bytes;      // actual bytes written to DRAM for partial chunk
-    uint32_t padded_input_full_chunk_size_bytes;   // CB page size (rounded up to 32-element boundary)
-    uint32_t padded_output_full_chunk_size_bytes;  // CB page size (rounded up to 32-element boundary)
+    uint32_t padded_input_full_chunk_size_bytes;   // CB page size (one full hardware tile)
+    uint32_t padded_output_full_chunk_size_bytes;  // CB page size (one full hardware tile)
     uint32_t full_chunks_per_row;
     uint32_t partial_chunks_per_row;
 };
 
 ChunkSizeConfig calculate_chunk_config(
     uint32_t row_width_elements, uint32_t input_element_size, uint32_t output_element_size) {
-    constexpr uint32_t max_elements_per_chunk = 1024;
+    constexpr uint32_t max_elements_per_chunk = TILE_HW;
     const uint32_t elements_per_full_chunk = std::min(max_elements_per_chunk, row_width_elements);
 
     // Actual chunk sizes in bytes (for DRAM reads/writes)
     const uint32_t input_full_chunk_size_bytes = elements_per_full_chunk * input_element_size;
     const uint32_t output_full_chunk_size_bytes = elements_per_full_chunk * output_element_size;
 
-    // CB page sizes: round up to next multiple of 32 elements for the unpacker.
-    const uint32_t padded_full_elements = tt::align(elements_per_full_chunk, 32u);
+    // copy_tile and pack_tile always access a full hardware tile. Keep each CB page at least
+    // that large so an LLK operation cannot cross into the next double-buffered page.
+    constexpr uint32_t padded_full_elements = TILE_HW;
     const uint32_t padded_input_full_chunk_size_bytes = padded_full_elements * input_element_size;
     const uint32_t padded_output_full_chunk_size_bytes = padded_full_elements * output_element_size;
 
