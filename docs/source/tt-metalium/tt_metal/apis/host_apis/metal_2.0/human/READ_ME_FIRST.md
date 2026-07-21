@@ -59,9 +59,10 @@ You will **delete** all of the op-porting recipes and intermediate porting artif
 
 ## How to Port to Metal 2.0
 
-A Metal 2.0 port is done in two steps:
+A Metal 2.0 port is done in three steps:
  1. Audit (evaluate the op's porting readiness)
- 2. Port the op to Metal 2.0
+ 2. Port the op to Metal 2.0 (basic port)
+ 3. Post-port style fixups
 
 The porting recipes are available on the branch `akertesz/op-porting-recipe`, in the directory `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/`. The recipes are designed to be AI-facing, not human-friendly. These recipes are **not** checked into main (nor will they be). This is by design; it facilitates rapid iteration on the recipes, and it keeps the recipes internal (not customer-facing).
 
@@ -109,7 +110,7 @@ A Metal 2.0 port produces _no functional changes to the op_. It should be struct
 
 However, some required op fixups _do_ introduce semantic/functional changes. These are applied at the discretion of the ops team. Entangling the pre-port fixup step with the Metal 2.0 port makes any problems virtually impossible to debug.
 
-### Porting step
+### Basic Porting step
 The porting step requires a capable AI model with **full context availability**. To ensure a good result, it is *essential* that you do the following:
  - Use **Claude Opus 1M** (with Max effort)
  - Launch the port as your **primary session**. You cannot use a subagent for the main port, because subagents cannot delegate builds to subagents.
@@ -119,7 +120,7 @@ The porting step requires a capable AI model with **full context availability**.
 
 Experiments have demonstrated that porting quality falls off significantly if you don't follow these guidelines. Please be very conscious of context window size for Metal 2.0 ports.
 
-#### Port launch AI prompt
+#### Basic port launch AI prompt
 
 ```
 Please port the TTNN op <OP RELATIVE PATH HERE> to Metal 2.0.
@@ -138,6 +139,19 @@ Please commit METAL2_PREPORT_AUDIT.md, METAL2_PORT_BRIEF.md, METAL2_PORT_PLAN.md
 ```
 
 The first thing that Claude will do is to seek out the tests for your op. You will be asked to confirm that the tests identified are correct. **Please vet carefully that no critical tests are omitted, and that no expensive, unnecessary tests are included.**
+
+
+### Style fixup porting step
+
+The basic Metal 2.0 porting recipe was designed to be as minimal as possible, both to minimize the burden on the porter and to make the diff easier to inspect. However, there are a number of Metal 2.0 style improvements than should be applied to a basic port. Most are primarily cosmetic, but some are beneficial to the downstream Quasar uplift.
+
+This phase of the port applies the style changes stepwise, each as a separate commit.
+
+#### Audit launch AI prompt
+
+```
+(Not yet available; coming soon!)
+```
 
 ### Post-port testing
 
