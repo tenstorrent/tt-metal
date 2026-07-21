@@ -208,6 +208,10 @@ class TtMoe(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
+        # DEBUG: identify this MoE layer and count its forward calls (once per chunk per iter)
+        # so the TT_DS_PREFILL_DEBUG_TOKEN_COUNT dump can be labeled per-layer / per-chunk.
+        self.layer_idx = layer_idx
+        self._moe_forward_calls = 0
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -412,6 +416,13 @@ class TtMoe(LightweightModule):
 
         # Load debug flags from environment
         self.debug_token_count = os.getenv("TT_DS_PREFILL_DEBUG_TOKEN_COUNT", "0").lower() in ("1", "true", "yes")
+        # Optional dedicated file for the token-count dump so it survives even if the console
+        # scrollback is lost. Defaults to ./expert_token_counts.log when the dump is enabled.
+        self.token_count_file = (
+            os.getenv("TT_DS_PREFILL_TOKEN_COUNT_FILE", "expert_token_counts.log") if self.debug_token_count else None
+        )
+        if self.token_count_file:
+            logger.info(f"[TtMoe] expert_token_counts dump will be appended to: {self.token_count_file}")
 
         logger.debug("TtMoe initialization complete")
 
@@ -492,17 +503,37 @@ class TtMoe(LightweightModule):
             else ttnn.deallocate(gate_logits)
         )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
 
+        self._moe_forward_calls += 1
         if self.debug_token_count:
-            # DEBUG: Print full token counts per expert for monitoring (controlled by env var)
+            # DEBUG: Print full token counts per expert for monitoring (controlled by env var).
+            # Labeled with layer_idx and this layer's forward-call index. In chunked prefill the
+            # forward runs once per chunk in order, so for the first iteration call index == chunk
+            # index (grep 'TOKEN_COUNT_DUMP' and take the first n_chunks calls per layer).
+            _call = self._moe_forward_calls - 1
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
             _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
             _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-            logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+            _counts_line = (
+                f"[TtMoe.forward] TOKEN_COUNT_DUMP layer={self.layer_idx} call={_call} "
+                f"expert_token_counts: {_counts_host.flatten().tolist()}"
+            )
+            logger.info(_counts_line)
 
             # DEBUG: Print full region offsets per expert for monitoring
             _offsets_4d = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
             _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
-            logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
+            _offsets_line = (
+                f"[TtMoe.forward] TOKEN_COUNT_DUMP layer={self.layer_idx} call={_call} "
+                f"expert_region_offsets: {_offsets_host.flatten().tolist()}"
+            )
+            logger.info(_offsets_line)
+
+            # Also append directly to a dedicated file (independent of console/tee) so the
+            # dump survives even if scrollback is lost. Append + flush per call.
+            if self.token_count_file:
+                with open(self.token_count_file, "a") as _f:
+                    _f.write(_counts_line + "\n")
+                    _f.write(_offsets_line + "\n")
 
         # Ensure ROW_MAJOR layout for dispatch compatibility
         indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
