@@ -8,10 +8,9 @@
 // cb_control mailbox (read_tile_value distributes the UNPACK read to MATH/PACK so all three threads
 // agree on the loop bound).
 //
-// Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
-//   Phase 1   : input_e4m3 -> compute-df tiles (bf16: tilize decodes e4m3 directly; fp32: copy-decode
-//               to RM then tilize, since tilize cannot decode e4m3 into a Float32 dest)
-//   Phase 2c+3: bcast multiply into DEST, then pack_untilize_dest straight to the row-major output
+// Per block = tile_h rows x 128 cols = 4 tiles (default 32-wide tiles):
+//   Phase 1: e4m3 -> compute-df tiles (bf16: tilize decodes directly; fp32: copy-decode then tilize)
+//   Phase 2: broadcast-multiply by scale, untilize straight from DEST to the row-major output
 
 #include <cstdint>
 
@@ -67,9 +66,8 @@ void kernel_main() {
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
             if constexpr (compute_is_bf16) {
-                // ----- Phase 1+2a (bf16): tilize e4m3 row-major directly into bf16 tiles -----
-                // tilize's unpacker decodes e4m3 and reshapes row-major -> tile in one pass, removing the
-                // separate copy-decode step and the cb_in_rm round-trip. Valid only for a non-Float32 dest.
+                // Phase 1 (bf16): tilize decodes e4m3 and reshapes to tiles in one pass.
+                // Only valid for a non-Float32 dest (Float32 "lossless" tilize mishandles an 8-bit source).
                 reconfig_data_format_srca(cb_input_e4m3_id);
                 pack_reconfig_data_format(cb_in_tile_id);
                 tilize_init(cb_input_e4m3_id, tiles_per_block, cb_in_tile_id);
@@ -80,7 +78,7 @@ void kernel_main() {
                 cb_input_e4m3.pop_front(tiles_per_block);
                 tilize_uninit(cb_input_e4m3_id, cb_in_tile_id);
             } else {
-                // ----- Phase 1 (fp32): decode e4m3 -> fp32 row-major, then tilize fp32 -> tile -----
+                // Phase 1 (fp32): copy-decode e4m3 -> fp32 row-major, then tilize.
                 // tilize cannot decode e4m3 into a Float32 dest, so decode first via copy_tile.
                 reconfig_data_format_srca(cb_input_e4m3_id);
                 pack_reconfig_data_format(cb_in_rm_id);
@@ -109,9 +107,7 @@ void kernel_main() {
                 tilize_uninit(cb_in_rm_id, cb_in_tile_id);
             }
 
-            // ----- Scale convert: packer narrows the fp32 scale operand to bf16 -----
-            // copy_tile lands the fp32 scale in DEST; pack_tile with a bf16 pack-reconfig does the
-            // round-to-bf16 on the pack path, so the multiply below sees a bf16 SrcB matching SrcA.
+            // Scale convert (bf16): packer narrows the fp32 scale to bf16 so the multiply's SrcB matches SrcA.
             if constexpr (convert_scale) {
                 reconfig_data_format_srca(cb_scale_bcast_id);
                 pack_reconfig_data_format(cb_scale_bcast_bf16_id);
@@ -128,11 +124,8 @@ void kernel_main() {
                 cb_scale_bcast.pop_front(block_ht);
             }
 
-            // ----- Phase 2c+3: broadcast multiply, then untilize straight from DEST -----
-            // The mul writes all tiles_per_block(=4) tiles into DEST (indices 0..3); pack_untilize_dest then
-            // untilizes them to the row-major output in the packer, so there is no intermediate output-tile
-            // CB or standalone untilize datacopy pass. In 32-bit DEST (fp32_dest_acc), the half-sync
-            // pack-untilize block cap is 4 tiles, which is exactly one 128-wide block.
+            // Phase 2: broadcast-multiply by scale into DEST, then pack_untilize_dest straight to output
+            // (no intermediate output-tile CB). fp32 DEST caps the half-sync pack-untilize at 4 tiles = one block.
             reconfig_data_format(cb_in_tile_id, cb_scale_mul_id);
             mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_mul_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_fp32_id);
