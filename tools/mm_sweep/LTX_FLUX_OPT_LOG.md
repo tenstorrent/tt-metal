@@ -42,3 +42,22 @@ near the DRAM floor (wall/ideal ≤1.05, ≥488 GB/s) — likely "practical floo
 ---
 ## Iteration log
 (entries appended per shape below)
+
+### [1] 128x15360x768 (Mt4, deep-K W5, narrow-N) — CLOSED: practical floor
+- **Baseline** (config=None, mask 0): auto cfg (1,6,1,2,3), us_med 66.0, ideal 54.1, excess 11.85µs,
+  wall/ideal 1.22, 420 GB/s, per-RISC B/N/T = 66.1/64.6/65.2 (all saturated ~65µs; BRISC/in1-read
+  marginally critical), core_spread 41%, sched_over_valid 1.0, PCC 1.0000 (fresh+cached, corpus smoke).
+- **Sweep** (98 feasible configs, exhaustive; ltxflux_sweep_128x15360x768.json): **AUTO is the best config
+  — 0.0% headroom.** Top: (1,6,1,2,3)=65.4µs, (1,6,2,2,3)=69.4, (1,12,1,1,3)=70.3, (1,8,1,2,3)=77.3. Sm>1
+  and all other Pk/kb/nsb factorizations are slower. => NOT a picker problem.
+- **Ablation** (auto cfg; ablate_128x15360x768.log): NO_REDUCE −4.0% (reduction ~2.6µs, lossy);
+  FULL_IN0_WAIT +29.5% (progressive-wait, adopted, is the dominant captured win); NO_COALESCE +2.6%,
+  BARRIER_DRAIN +1.6%, FWD_FLUSH_FIRST +0.5% — all adopted optimizations active and helping. Even with
+  ALL reduction removed (lossy) 8.3µs excess remains => residual is in1-read BW efficiency (420 vs ~500
+  GB/s ceiling) + reduction-root asymmetry, not a discrete removable stall.
+- **Hypotheses**: H1 reduction restructure to cut the 41% split-K root asymmetry — FORECLOSED (NO_REDUCE
+  ceiling 4% lossy; reduction-tree already measured sub-bar for this class). H2 finer in0/in1 delivery
+  granularity — FORECLOSED (in0-chunk C1 measured NEUTRAL on this exact shape). H3 higher in1-read BW — no
+  mechanism (all 3 RISCs saturated, coalescing already adopted; no idle engine to recover).
+- **Decision: CLOSED, practical floor.** No lossless kernel/picker opportunity. Speedup 0% (kept nothing).
+- Artifacts: ltxflux_sweep_128x15360x768.json, ablate_128x15360x768.log. Commit: (harness) this branch.
