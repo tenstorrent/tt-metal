@@ -55,11 +55,11 @@ Key Metal 2.0 changes, at a glance:
 Some benefits of Metal 2.0:
 
 - **Named resource bindings**. Metal 2.0 natively supports binding resources (DFBs, semaphores, tensors, etc) to kernels. The corresponding handles are cleanly passed to the device code with user-defined accessor names.
-- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely; positional RTAs/CRTAs survive only as **varargs**, intended for the rare kernels that read a dynamic-count argument tail in a loop (e.g. shape of an N-D tensor where N is a CTA). For everything else, prefer names.
+- **Named arguments**. Compile-time, runtime, and common runtime arguments are addressed by name on both the host and device sides. Positional CTAs are gone from the API entirely; positional RTAs/CRTAs survive only as **varargs**, for the rare arguments a kernel reaches *by index rather than by name* — a dynamic-count argument tail read in a loop (e.g. an N-D tensor's shape), or an argument selected by a data-computed index. For everything else, prefer names.
 
 > **Stated goal: eliminate raw pointer arguments.** With DFBs, semaphores, and tensors all bindable as named resources, runtime args carrying a buffer or tensor address should now be the exception rather than the rule. If you're about to put `tensor.buffer()->address()` in a runtime arg, you're probably doing it wrong — bind the tensor as a `TensorParameter` instead.
 
-> **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Runtime and common runtime arguments may be named (the typical case) or positional (varargs, intended for kernels with a genuinely dynamic argument count consumed in a loop — e.g., an N-dimensional shape where N is a CTA). When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for varargs only when the kernel actually loops over the arguments.
+> **Argument naming.** Metal 2.0 is designed around named arguments. Compile-time arguments must be named — positional CTAs are no longer part of the API. Runtime and common runtime arguments may be named (the typical case) or positional (varargs, intended for kernels with a genuinely dynamic argument count consumed in a loop — e.g., an N-dimensional shape where N is a CTA). When porting from a legacy kernel, individually-known RTAs translate naturally to named RTAs; reach for varargs only when the kernel reaches an argument *by index rather than as a distinct named field* — a variable-count loop, or a data-selected index.
 
 Many additional refinements are planned as the experimental APIs mature.
 
@@ -507,7 +507,7 @@ WorkUnitSpec wu_halo{
  - Kernel common runtime arguments
  - Tensor arguments (`tensor_args`) — one `MeshTensor` per declared `TensorParameter`. See [TensorParameter](#tensorparameter). Borrowed-memory DFBs draw their backing L1 address from the corresponding `tensor_args` entry automatically; they don't require a separate `dfb_run_overrides` entry.
 
-All kernel arguments are named arguments in Metal 2.0. For kernels that accept a variable number of arguments, the API additionally provides an  "varargs" mechanism.
+All kernel arguments are named arguments in Metal 2.0. For the rare arguments a kernel reaches *by index rather than by name* — a variable-count loop, or a data-computed index — the API additionally provides a **varargs** mechanism.
 
 **Legacy** (values on the descriptor):
 
@@ -564,7 +564,7 @@ params.kernel_run_args = {{
 
 Named and vararg forms can coexist on the same kernel. Vararg indices are stable across schema changes — promoting a named RTA to a CRTA, or adding/removing named args, does not shift vararg indices. Common runtime varargs (`num_common_runtime_varargs`, retrieved on the device via `get_common_vararg(i)`) work analogously, broadcast across all nodes.
 
-> The vararg form is intended for kernels whose device-side code retrieves arguments in a loop — i.e., `get_vararg(i)` with `i` a runtime variable. When the kernel reads each argument by a constant index (`get_vararg(0)`, `get_vararg(1)`, …), the named form reads more clearly on both sides.
+> The vararg form is for arguments the kernel reaches **as elements of an indexed collection** — a variable-count loop (CTA- or runtime-bounded), or an element **selected by a data-computed index**. An argument read once as a **distinct field** reads more clearly as a **named** arg — even if its legacy retrieval walked a running `arg_index++`, and even if its legacy offset fell after a variable-count block (Metal 2.0 addresses named args in a section separate from the varargs, so the offset is irrelevant).
 
 ---
 
@@ -719,7 +719,7 @@ void kernel_main() {
 
 Common runtime varargs are analogous: declare with `num_common_runtime_varargs`, retrieve on the device with `get_common_vararg(i)`. Same loop-retrieval criterion applies.
 
-> When porting a legacy kernel with positional RTAs, the natural Metal 2.0 form is named RTAs — one per legacy positional argument. A translation into vararg slots compiles and runs (and may be useful as an interim step on a large kernel), but the named form is the recommended endpoint for new code. The distinguishing criterion is whether the kernel's device-side `get_vararg(i)` calls use `i` as a runtime variable (varargs are appropriate) or constants (named RTAs are clearer).
+> When porting a legacy kernel with positional RTAs, the natural Metal 2.0 form is named RTAs — one per distinct field. A translation into vararg slots compiles and runs (and may be a useful interim step on a large kernel), but named is the recommended endpoint. Reach for varargs only when the kernel reaches an argument **as an element of an indexed collection** — a variable-count loop, or a data-selected index — *not* merely because the legacy code walked its args with an `arg_index++` counter, and *not* because a distinct field's legacy offset happens to be runtime-dependent.
 
 Vararg indices are stable across schema changes: promoting a named RTA to a CRTA, or adding or removing named arguments, does not shift vararg indices. (This stability lets you migrate incrementally — rename arguments to named form one at a time without disturbing the remaining varargs.)
 
@@ -848,7 +848,7 @@ Legacy `ProgramDescriptor` offered a hybrid model: `KernelDescriptor::compile_ti
 - Named CTAs in legacy → named CTAs in Metal 2.0. 1:1 mechanical.
 - Positional CTAs in legacy → named CTAs in Metal 2.0. Explicit naming required during port; pick names that reflect what the kernel actually does with the value.
 
-> **Use varargs only when the kernel reads its arguments in a loop.** Varargs are designed for kernels whose device-side code retrieves arguments via `get_vararg(i)` where `i` is a runtime variable — the canonical case is an N-dimensional shape gated on a CTA-known `rank`. When each argument is referenced by a constant index (`get_vararg(0)`, `get_vararg(1)`, ...), the named form is clearer on both sides. A port from positional RTAs to varargs may compile and run, but it preserves the legacy positional vocabulary instead of upgrading to Metal 2.0's named one. See the [patterns catalog](port_patterns.md) caution on varargs.
+> **Named by default; varargs only when the kernel reaches an argument as an element of an indexed collection.** That means a **variable-count loop** (bounded by a CTA — e.g. an N-dimensional shape gated on `rank` — or by a runtime value) or an element **selected by a data-computed index**. An argument read once as a **distinct field** is a **named** arg — *including* one whose legacy retrieval used a running `arg_index++` counter, and one whose legacy offset fell after a variable-count block (named args live in a section separate from the varargs). Shorthand: *indexed-collection element → vararg, distinct field → named*. A port from positional RTAs to varargs may compile and run, but it preserves the legacy positional vocabulary instead of upgrading to Metal 2.0's named one. See the [patterns catalog](port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary) caution for the two failure modes and the sentinel exception.
 
 ---
 
@@ -1204,7 +1204,7 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **DFB placement is derived, not specified.** Don't pass a node range to `DataflowBufferSpec` — the DFB lives wherever its bound producer / consumer kernels run. `DataflowBufferSpec` has no `target_nodes` field by design.
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
-- **Runtime varargs are intended for dynamic-count tails.** `num_runtime_varargs` (and `num_common_runtime_varargs`) is the right fit for kernels that consume a variable number of arguments in a loop — e.g., an N-dimensional shape gated on a CTA-known `rank`. For kernels with a fixed set of individually-known arguments, named RTAs are the recommended form, even when porting from a positional legacy interface.
+- **Runtime varargs are for indexed-collection elements.** `num_runtime_varargs` (and `num_common_runtime_varargs`) is the right fit for arguments a kernel reaches **by index** — a variable-count loop (e.g. an N-dimensional shape gated on a CTA-known `rank`), or an element selected by a data-computed index. For a **distinct field read a fixed number of times**, named RTAs are the recommended form — even when porting from a positional legacy interface, even via a running `arg_index++`, and even when the field's legacy offset falls after a variable-count block (named args live in a section separate from the varargs).
 - **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunArgs` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunArgsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
 
 ### Cryptic error → likely cause
