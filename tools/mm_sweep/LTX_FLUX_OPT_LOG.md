@@ -290,3 +290,38 @@ reduce/output(9) + startup ~= 22us.
 
 **Status: NOT prototyping.** Next: NCRISC ring + reduction sub-zones -> numerical ceilings + precise
 experiments, then report. Artifacts: zone_raw_256x2048x1024.json, zone_parse.py, ltxflux_sweep_256x2048x1024.json.
+
+### [DEEP-1 REV3] 256x2048x1024 — reduction sub-zone breakdown (numerical ceilings)
+Added writer PHASE2 sub-zones (DIAG_ZONES): Z_P2_RECVWAIT (wait upstream partial), Z_P2_OUTWAIT (wait
+compute block), Z_P2_OUTWRITE (root DRAM output issue+flush). ROOT cores (16, is_top), per-iter med:
+| root sub-zone | med us | max us |
+|---|---|---|
+| Z_PHASE2 (total) | 9.38 | 12.51 |
+| **Z_P2_RECVWAIT** | **7.1** | 10.46 |
+| Z_P2_OUTWAIT | 0.76 | 0.76 |
+| Z_P2_OUTWRITE | 0.89 | 1.43 |
+=> **The root's reduction tail is WAIT-bound (7.1us waiting for the Pk=4 chain), NOT output-write-bound
+(0.9us).** This REFUTES the earlier H1 (overlap output write — the write is only 0.9us). Also DIFFERENT from
+the deep-K shapes where reduction was WORK-bound (there the prior reduction-tree rejection mechanism applied);
+here it is chain-WAIT/latency-bound, a regime the prior rejection did NOT cover.
+
+**Accounted wall model (root core, ~22.5us wall):** ring(~11us, overlaps compute matmul+in0-wait) THEN
+Z_PHASE2 = RECVWAIT(7.1) + OUTWAIT(0.8) + OUTWRITE(0.9) ~= 9us. Compute (TRISC) ~17us (matmul 9 + in0-wait
+4.9 + in1-wait 1.4 + pack/oh ~1.7). Wall ~= compute-end + reduction-chain-drain, with RECVWAIT the dominant
+post-compute critical-path component.
+
+**Ranked realizable hypotheses (numerical ceilings + precise experiments):**
+- **H-A (LEAD): split-K reduction-chain RECVWAIT = 7.1us on the root** (dominant Z_PHASE2 component, on the
+  post-compute critical path). Ceiling: up to ~7us if the root did not serialize on chain propagation.
+  EXPERIMENT A1 (diagnostic first, no prod change): instrument RECVWAIT by chain position (bottom/middle/
+  root) — if RECVWAIT grows with position => propagation-latency (a shallower/tree reduction or fewer hops
+  helps); if uniform+large => upstream compute-imbalance (balance/faster-finish helps); if forward-BW =>
+  large out_blk forwards (coalesce/smaller granularity). EXPERIMENT A2 (only if A1 shows propagation): A/B a
+  2-level tree for Pk=4 (2 hops vs 3) — reopens reduction-tree with NEW evidence (wait-bound, not work-bound;
+  prior rejection was work-bound on deep-K). Predicted zone: shrink Z_P2_RECVWAIT.
+- **H-B: in0-ring exposed to compute = 4.9us** (TRISC in0-wait). Ceiling ~4.9us. EXPERIMENT B1: ring
+  sub-zones (inject / recv-wait / forward) to locate the exposed latency; only propose an in0 change if it is
+  a mechanism NOT already tested on this shape (scatter/exchange/repl/chunk all rejected here).
+
+**Status: diagnosis complete with numerical ceilings + experiments. NO prototype.** Lead = H-A (A1 diagnostic
+next). Artifacts: zone_raw_256x2048x1024.json, LTX_FLUX_OPT_LOG.md.

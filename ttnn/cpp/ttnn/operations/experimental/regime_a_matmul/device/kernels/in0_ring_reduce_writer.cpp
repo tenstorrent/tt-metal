@@ -331,17 +331,23 @@ void kernel_main() {
 
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         if (!is_bottom) {
-            cb_reserve_back(cb_reduce, out_blk);      // wait our compute freed slot (nb-2)
-            noc_semaphore_inc(prev_redfree, 1);       // tell prev: our slot (nb%2) is free for block nb
-            noc_semaphore_wait_min(red_ptr, nb + 1);  // prev forwarded block nb into it
-            cb_push_back(cb_reduce, out_blk);         // compute reduce_add's it -> out_cb, pops cb_reduce
+            cb_reserve_back(cb_reduce, out_blk);  // wait our compute freed slot (nb-2)
+            noc_semaphore_inc(prev_redfree, 1);   // tell prev: our slot (nb%2) is free for block nb
+            {
+                RA_ZONE("Z_P2_RECVWAIT");                 // wait prev core's forwarded partial (chain latency)
+                noc_semaphore_wait_min(red_ptr, nb + 1);  // prev forwarded block nb into it
+            }
+            cb_push_back(cb_reduce, out_blk);  // compute reduce_add's it -> out_cb, pops cb_reduce
         }
 #if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
         if (is_top) {
             feed_fused(nb);  // ROOT only: supply bias/residual/gate for compute's single fused epilogue
         }
 #endif
-        cb_wait_front(out_cb, out_blk);  // compute produced reduced (+ fused at top) block nb
+        {
+            RA_ZONE("Z_P2_OUTWAIT");         // wait compute to produce the reduced block into out_cb
+            cb_wait_front(out_cb, out_blk);  // compute produced reduced (+ fused at top) block nb
+        }
         uint32_t r = get_read_ptr(out_cb);
         if (!is_top) {
             noc_semaphore_wait_min(redfree_ptr, nb + 1);  // next signalled its slot (nb%2) is free
@@ -358,6 +364,7 @@ void kernel_main() {
             noc_async_writes_flushed();       // payload departed L1 -> out_cb slot safe to reuse
 #endif
         } else {
+            RA_ZONE("Z_P2_OUTWRITE");  // ROOT: issue output DRAM pages + flush (the reduction tail on the wall)
             const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
