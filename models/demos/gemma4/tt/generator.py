@@ -37,6 +37,31 @@ from models.tt_transformers.tt.model_config import determine_device_name
 # (padded_batch × padded_prefill_seq_len).
 GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 
+# Max users in one true-batched prefill forward. Measured on P150x8 / 12B:
+# B∈{1,2,4} OK; B≥8 wedges indefinitely after the first all_gather (eager or
+# traced). Override with GEMMA4_MAX_BATCHED_PREFILL_USERS (0 = no user cap).
+_DEFAULT_MAX_BATCHED_PREFILL_USERS = 4
+
+
+def max_batched_prefill_users() -> int:
+    raw = os.environ.get("GEMMA4_MAX_BATCHED_PREFILL_USERS")
+    if raw is None:
+        return _DEFAULT_MAX_BATCHED_PREFILL_USERS
+    val = int(raw)
+    return val if val > 0 else 10**9
+
+
+def resolve_batched_prefill_chunk_users(padded_batch: int, prefill_seq_len: int) -> int:
+    """Largest user chunk that respects the 128k token ceiling and the B≤4 hang cap."""
+    max_by_tokens = max(1, GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN // max(prefill_seq_len, 1))
+    max_by_users = max_batched_prefill_users()
+    chunk = min(padded_batch, max_by_tokens, max_by_users)
+    while chunk > 1 and chunk * prefill_seq_len >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN:
+        chunk //= 2
+    # Prefer a supported padded batch size so each chunk stays on the fast path.
+    supported = [b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= chunk]
+    return supported[-1] if supported else 1
+
 
 def _load_text_tokenizer(model_path):
     # The 12B tokenizer config can advertise multimodal extra_special_tokens as
@@ -610,6 +635,27 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         # Gemma4 decode already returns sampled tokens when on-device sampling is enabled.
         self.enable_split_sampling = False
 
+    def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
+        """Warmup tokens with *unique* per-user page-table rows.
+
+        Stock ``Generator._mock_tokens`` fills the page table with zeros, so every
+        user maps to physical block 0. That is fine for B=1 but wedges batched
+        prefill (B≥2) when concurrent ``paged_fill_cache`` writers collide —
+        indefinite stall after the first all_gather on P150x8 (batch-32 demo).
+        """
+        ret = super()._mock_tokens(batch_size, seq_len, kv_cache, model_id)
+        page_table = ret.get("page_table")
+        if page_table is not None and batch_size > 1:
+            num_blocks = int(page_table.shape[1])
+            needed = batch_size * num_blocks
+            # Paged K: [num_blocks_total, n_heads, block_size, head_dim] (see get_block_size).
+            pool = needed
+            if kv_cache is not None and kv_cache[model_id] is not None:
+                pool = int(kv_cache[model_id][0][0].shape[0])
+            flat = torch.arange(needed, dtype=torch.int32) % max(pool, 1)
+            ret["page_table"] = flat.reshape(batch_size, num_blocks)
+        return ret
+
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
@@ -677,26 +723,18 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                 (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
                 self.model_args[0].max_batch_size,
             )
-            if (
-                padded_batch <= self.model_args[0].max_batch_size
-                and padded_batch * prefill_seq_lens[0] >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
-            ):
-                max_users_per_chunk = min(
-                    max(1, GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN // prefill_seq_lens[0]),
-                    padded_batch,
-                )
-                while (
-                    max_users_per_chunk > 1
-                    and max_users_per_chunk * prefill_seq_lens[0] >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
-                ):
-                    max_users_per_chunk //= 2
-
+            max_users_per_chunk = resolve_batched_prefill_chunk_users(padded_batch, prefill_seq_lens[0])
+            # Chunk when over the 128k token ceiling *or* the B≥8 device hang cap.
+            if batch_size > max_users_per_chunk and padded_batch <= self.model_args[0].max_batch_size:
                 logger.info(
-                    "Chunking Gemma4 batched prefill: batch_size={} padded_batch={} prefill_seq_len={} chunk_size={}",
+                    "Chunking Gemma4 batched prefill: batch_size={} padded_batch={} "
+                    "prefill_seq_len={} chunk_size={} (token_cap={} user_cap={})",
                     batch_size,
                     padded_batch,
                     prefill_seq_lens[0],
                     max_users_per_chunk,
+                    GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN,
+                    max_batched_prefill_users(),
                 )
 
                 merged_output = None
