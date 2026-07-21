@@ -1567,8 +1567,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 
 # GLM (glm_5_1 / glm_5_2) counterpart of the no-PCC perf sweep: same chunked driver, sparse (DSA) path.
 # Reports end-to-end prefill time — the per-iteration total ("iter {it} done ... in Xs") and the per-chunk
-# median/stddev table — for the two GLM variants at matched ISL (n_chunks x CHUNK) and num_layers. No PCC,
-# no golden-trace dependency (record-only). Uses the GLM fabric payload + on-device fp32 gate + L1_SMALL
+# median/stddev table — for the two GLM variants at matched ISL (n_chunks x CHUNK) and num_layers. No PCC;
+# the empty-cache case (preload0) needs no golden trace, preload_isl > 0 requires it. Uses the GLM fabric payload + on-device fp32 gate + L1_SMALL
 # routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_2 additionally exercises the
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
 @pytest.mark.parametrize(
@@ -1584,6 +1584,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # up to that point. Pair with n_chunks=1 to sweep single-chunk ratio vs depth. 0 = start from empty cache.
 # Chunk-multiple KV depths to seed before measuring. Depths within the ~55k golden trace use real KV; the
 # rest (e.g. preload95k) fills random KV beyond the trace so larger ISLs than the trace can be measured.
+# Requires a golden trace when >0.
 @pytest.mark.parametrize(
     "preload_isl",
     [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK],
