@@ -69,7 +69,6 @@ MAX_RANDOM_LAYERS = 12
 @pytest.mark.parametrize("temperature", [0.0], ids=["greedy"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
-@pytest.mark.parametrize("seq_parallel", [False, True], ids=["seq_repl", "seq_par"])
 @pytest.mark.parametrize("isl_total, dispatch_buffer_capacity_factor", [(SEQ_LEN_5K, 8)], ids=["5k"])
 @pytest.mark.parametrize(
     "num_layers",
@@ -102,7 +101,6 @@ def test_dflash_prefill_integration(
     mesh_device,
     device_params,
     is_balanced,
-    seq_parallel,
     isl_total,
     dispatch_buffer_capacity_factor,
     num_layers,
@@ -156,7 +154,6 @@ def test_dflash_prefill_integration(
         num_links=num_links,
         topology=topology,
         fc_mode="concat",
-        seq_parallel=seq_parallel,
     )
     drafter.reset()
     target_ids = set(dcfg.target_layer_ids)
@@ -164,24 +161,12 @@ def test_dflash_prefill_integration(
 
     def on_layer_hidden(global_idx, h):
         # ONLY the 6 target layers are kept, ON DEVICE, in DRAM. h is [1,1,seq/sp,H/tp] (SP-sharded on seq,
-        # TP-sharded on hidden). Phase-1 (seq-replicated cache): SP-gather to the full sequence → DRAM, then
-        # hand to the drafter. seq_parallel: leave seq SP-sharded — clone (drafter takes ownership + frees
-        # its tap; h is the verifier's live residual) and tap this chip's own slice, no gather. No host copy.
+        # TP-sharded on hidden). Leave seq SP-sharded — clone (drafter takes ownership + frees its tap; h is
+        # the verifier's live residual) and tap this chip's own slice, no gather. No host copy.
         if global_idx not in target_ids:
             return
         tapped.append(global_idx)
-        if seq_parallel:
-            drafter.tap(ttnn.clone(h), global_idx)  # own a private copy of the live SP-sharded residual slice
-        else:
-            h_full = ttnn.all_gather(
-                h,
-                dim=2,
-                cluster_axis=sp_axis,
-                num_links=num_links,
-                topology=topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            drafter.tap(h_full, global_idx)  # drafter takes ownership (DRAM); freed in write_kv_cache
+        drafter.tap(ttnn.clone(h), global_idx)  # own a private copy of the live SP-sharded residual slice
 
     # ---- Phase A: build + run the full 61-layer verifier DIRECTLY (weight handling identical to
     #      test_prefill_transformer.run_model). on_layer_hidden taps ONLY the 6 target layers on device. ----
@@ -300,17 +285,11 @@ def test_dflash_prefill_integration(
     # (they're SP-replicated + TP-sharded on hidden) to feed the CPU HF reference — the device path never
     # left DRAM. This is the sole host touch, and it must happen BEFORE write_kv_cache consumes the taps.
     def _tap_to_host(t):  # -> host [1, seq, H]; TP concatenated on hidden → full H
-        if seq_parallel:
-            # SP-sharded on seq: concat SP along seq(dim2), TP along hidden(dim3) → full [1,1,seq,H]
-            host = ttnn.to_torch(
-                t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_shape)
-            )
-            return host.reshape(1, isl_total, H).float()
-        # SP-replicated: concat SP on dim0 (8 identical copies), take one replica; TP on hidden(dim3)
+        # SP-sharded on seq: concat SP along seq(dim2), TP along hidden(dim3) → full [1,1,seq,H]
         host = ttnn.to_torch(
-            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=mesh_shape)
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_shape)
         )
-        return host[0:1].reshape(1, isl_total, H).float()
+        return host.reshape(1, isl_total, H).float()
 
     target_hiddens = [_tap_to_host(drafter._taps[j]) for j in range(len(dcfg.target_layer_ids))]
     ctx = torch.cat(target_hiddens, dim=-1)  # [1, seq, n*H] — the fc input (concat over target layers)
@@ -323,9 +302,9 @@ def test_dflash_prefill_integration(
     drafter.write_kv_cache()
     ttnn.synchronize_device(mesh_device)
 
-    # seq_parallel: cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1); the
-    # host[:num_layers] slice is then a no-op. Phase-1: SP-replicated → take the first SP replica.
-    read_dims = (2, 1) if seq_parallel else (0, 1)
+    # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1); the host[:num_layers]
+    # slice is then a no-op.
+    read_dims = (2, 1)
 
     def _read(cache):
         host = ttnn.to_torch(
