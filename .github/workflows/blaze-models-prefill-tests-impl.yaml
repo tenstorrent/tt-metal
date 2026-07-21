@@ -120,6 +120,19 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
           echo "Filtered tests for ${{ inputs.sp-config }}:"
           echo "$FILTERED" | jq .
+      - name: Write test matrix to file
+        env:
+          MATRIX: ${{ steps.filter-tests.outputs.matrix }}
+        run: |
+          echo "$MATRIX" > test_matrix_${{ inputs.resource-prefix }}.json
+      # Named per resource-prefix so the two impl invocations (module, sdpa-perf)
+      # don't collide on one artifact name; the parent merges them for expected-jobs.
+      - name: Upload test matrix
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test_matrix_${{ inputs.resource-prefix }}
+          path: test_matrix_${{ inputs.resource-prefix }}.json
+          retention-days: 1
 
   multihost-tests:
     name: ${{ matrix.test-group.name }}
