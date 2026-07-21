@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 import torch
@@ -13,11 +15,28 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, is_wormhole_b0, run_for_blackhole
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
+
+
+@pytest.fixture(autouse=True)
+def _skip_welford_on_sim_wormhole(request):
+    # tt-sim's Wormhole model (sim_wormhole_b0) aborts the Welford group-norm reduce-receiver
+    # kernels with a NonContractualBehavior halfword-load error that does not reproduce on
+    # WH/BH silicon or on sim_blackhole. Skip only that config until the tt-sim issue is fixed.
+    # Tracking: tenstorrent/tt-metal#50539.
+    if not (os.environ.get("TT_METAL_SIMULATOR") and is_wormhole_b0()):
+        return
+    callspec = getattr(request.node, "callspec", None)
+    params = callspec.params if callspec is not None else {}
+    if params.get("welford_mode") in ("welford_normal", "welford_reciprocal"):
+        pytest.skip(
+            "Welford group_norm aborts on sim_wormhole_b0 (https://github.com/tenstorrent/tt-metal/issues/50539)"
+        )
+
 
 GROUP_NORM_DRAM_SHAPES = [
     (8, 768, 1, 512, 32, 2, 8, 8),  # base case
