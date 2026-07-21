@@ -12,8 +12,15 @@
 
 namespace ttnn::prim {
 
-// Mirrors manifest.cache_key_fields for pad exactly; units (tile-page vs element) depend on
-// layout and are resolved by the program factory, not stored here.
+// Mirrors manifest.cache_key_fields for pad. The manifest leaves the tile-page-vs-element unit
+// choice to the translate stage ("a translate-stage decision driven by layout_split"); this port
+// stores H_out/W_out/front_h/front_w in ELEMENT units for both layouts (not tile-pages for TILE),
+// because validate_on_program_cache_miss only has this struct + the input tensor to re-check
+// supported_by_codegen(), and a tile-rounded H_out cannot distinguish an exact multiple-of-32
+// back-pad from a sub-tile one
+// (both round to the same Ht_out) -- exactly the distinction the TILE gate must make. The program
+// factory derives tile-page counts (Ht_in/Wt_in/front_ht/front_wt/Ht_out/Wt_out) from these element
+// values via ceil-division, matching ops/pad/pad.py's own Ht_in/Ht_out computation.
 struct PadCodegenParams {
     uint32_t N_out{};
     uint32_t C_out{};
