@@ -378,12 +378,12 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
     constexpr std::uint32_t MOP_INNER_LOOP = FULL_CT_DIM;
 
     std::uint32_t unpack_face0_instrn =
-        (UNP_SEL == p_unpacr::UNP_A)
+        (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
             ? TT_OP_UNPACR0_STRIDE(
                   ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*Set Dvalid*/)
             : TT_OP_UNPACR1_STRIDE(
                   ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*Set Dvalid*/);
-    std::uint32_t unpack_face1_instrn = (UNP_SEL == p_unpacr::UNP_A)
+    std::uint32_t unpack_face1_instrn = (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
                                             ? TT_OP_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0, 0, buf_desc_id, 1 /*Set Dvalid*/)
                                             : TT_OP_UNPACR1_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0, 0, buf_desc_id, 1 /*Set Dvalid*/);
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_face0_instrn, unpack_face1_instrn);
@@ -415,7 +415,7 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM>
 inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
-    if constexpr (UNP_SEL == p_unpacr::UNP_A)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
