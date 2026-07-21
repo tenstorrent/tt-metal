@@ -58,6 +58,21 @@ _DIM_ID = {"row": 0, "col": 1, "scalar": 2}
 DIMS = tuple(_DIM_ID)
 DTYPES = ("fp32", "bf16")  # accumulation (DEST / SFPU) dtype; input is always bf16
 
+# ReduceInputPolicy selector (both datapaths). bulk = BulkWaitBulkPop (resident block, per-output pop);
+# stream = WaitAndPopPerTile (stream reduce dim thru DST); wait_upfront = WaitUpfrontNoPop, no_wait =
+# NoWaitNoPop (both leave input resident + bulk-reserve the outputs). "stream" is the back-compat name for
+# the old `stream=True` flag.
+_POLICY_ID = {"bulk": 0, "stream": 1, "wait_upfront": 2, "no_wait": 3}
+POLICIES = tuple(_POLICY_ID)
+_NO_POP = ("wait_upfront", "no_wait")
+
+# AccumulateViaAdd cross-call reload strategy (later-chunk accumulator fold), for the accumulate bake-off.
+# fold = FoldViaAdd (acc as add_tiles SRCB operand; Default-acc only); copy_pairs = CopySeedPairs (copy_tile
+# reload + pairwise new + DEST-reuse leftover; safe for UnpackToDestFp32 acc); copy_uniform = CopySeedUniform
+# (copy_tile reload + DEST-reuse every new tile; safe, 1 tile/op).
+_RELOAD_ID = {"fold": 0, "copy_pairs": 1, "copy_uniform": 2, "copy_sfpu": 3, "copy_zero": 4}
+RELOADS = tuple(_RELOAD_ID)
+
 # Fewest REDUCED tiles per output at which the fast path beats the library, per dim (from the 1-D sweep:
 # the REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles before fast pulls ahead).
 _DISPATCH_MIN = {"row": 4, "col": 8, "scalar": 8}
@@ -185,15 +200,14 @@ void kernel_main() {
             tile_regs_acquire();
 
             // ---- pure add accumulate of the full_cnt full tiles, parity resolved at the seed. ----
-            uint32_t k;
+            // acc_to_dest=true throughout: a freshly-acquired DEST reads 0 on its first write, so the first add
+            // is the plain sum (no overwrite-seed), and full_cnt==0 (a single partial tile) simply skips the
+            // loop and leaves DEST=0 for the masked fold below — matching the library. Odd count: unary-copy seed.
+            uint32_t k = 0;
             if constexpr (full_cnt & 1u) {
                 copy_tile_init(cb_in);
                 copy_tile(cb_in, start, 0);                  // odd: DEST = cb_in[start]
                 k = 1;
-            } else {
-                add_tiles_init(cb_in, cb_in, false);
-                add_tiles(cb_in, cb_in, start, start + stride, 0);  // even: DEST = first pair
-                k = 2;
             }
             add_tiles_init(cb_in, cb_in, true);
             for (; k < full_cnt; k += 2) {
@@ -245,7 +259,17 @@ void kernel_main() {
 # =============================================================================
 # Helper kernel — the reduce library over the general (Ht, Wt, NC) block, AVG pool. The `algo` CT arg
 # selects the library datapath: 0 = ReduceTile (Auto default, FPU matmul-with-ones), 1 = AccumulateViaAdd.
-# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo]
+# `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths; `avg_direct` makes the
+# AccumulateViaAdd path use reduce<AVG> (geometry 1/N) instead of reduce_mean (explicit N).
+#
+# The per-iter reduce dispatch is hoisted into a TEMPLATE (do_reduce_block) so `if constexpr (algo)` GENUINELY
+# discards the dead branch. kernel_main is not a template, so an `if constexpr (algo)` there would still
+# fully-CHECK (instantiate) the dead branch — a reduce_tile build (algo=0) would then instantiate the
+# AccumulateViaAdd branch with e.g. POLICY=WaitUpfrontNoPop or dim=col+stream and trip the fast-path
+# static_asserts, breaking the reduce_tile kernel compile. In a template, the discarded branch is not
+# instantiated, so each build compiles only its own algo's reduce().
+# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride,
+#           n_reduced, avg_direct]
 # =============================================================================
 _HELPER_BLOCK_KERNEL = r"""
 #include <cstdint>
@@ -255,8 +279,60 @@ _HELPER_BLOCK_KERNEL = r"""
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+namespace {
+constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
+
+// Templated so `if constexpr (algo)` discards the dead branch (see the header note). Each build instantiates
+// exactly one algo's reduce(), so a policy/dim invalid for the OTHER algo never trips its static_asserts.
+template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct>
+ALWI void do_reduce_block(
+    [[maybe_unused]] uint32_t iter,
+    compute_kernel_lib::ReduceInputBlockShape shape,
+    compute_kernel_lib::ReduceInputMemoryLayout ml,
+    compute_kernel_lib::ReducePartialScaler ps,
+    [[maybe_unused]] uint32_t n_reduced,
+    [[maybe_unused]] uint32_t recfg) {
+    using namespace compute_kernel_lib;
+    using ckernel::PoolType;
+    using ckernel::ReduceDim;
+    constexpr ReduceAlgorithm ALG = (algo == 1u) ? ReduceAlgorithm::AccumulateViaAdd : ReduceAlgorithm::Auto;
+    constexpr ReduceInputPolicy POLICY = (policy_id == 1u)   ? ReduceInputPolicy::WaitAndPopPerTile
+                                         : (policy_id == 2u) ? ReduceInputPolicy::WaitUpfrontNoPop
+                                         : (policy_id == 3u) ? ReduceInputPolicy::NoWaitNoPop
+                                                             : ReduceInputPolicy::BulkWaitBulkPop;
+    constexpr ReduceDim RDIM = (dim == 0u)   ? ReduceDim::REDUCE_ROW
+                               : (dim == 1u) ? ReduceDim::REDUCE_COL
+                                             : ReduceDim::REDUCE_SCALAR;
+    using RECFG = ReduceDataFormatReconfigMode;
+    if constexpr (algo == 1u) {
+        // AccumulateViaAdd. recfg==1 exercises RECFG::NONE after the first call (reusing the first call's
+        // config). avg_direct==1: reduce<AVG> derives 1/N from geometry; else reduce_mean applies the explicit
+        // caller N (which is cross-chunk / uneven-shard safe).
+        const bool none_now = (recfg == 1u) && (iter > 0u);
+        if constexpr (avg_direct == 1u) {
+            if (none_now)
+                reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ALG>(
+                    shape, ml, NoAccumulation{}, NoOp{}, ps);
+            else
+                reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ALG>(
+                    shape, ml, NoAccumulation{}, NoOp{}, ps);
+        } else {
+            if (none_now)
+                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ALG>(
+                    shape, n_reduced, ml, NoAccumulation{}, ps);
+            else
+                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ALG>(
+                    shape, n_reduced, ml, NoAccumulation{}, ps);
+        }
+    } else {
+        // ReduceTile: AVG via the reader-computed 1/N scaler.
+        reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ALG>(
+            shape, ml, NoAccumulation{}, NoOp{}, ps);
+    }
+}
+}  // namespace
+
 void kernel_main() {
-    constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
@@ -265,40 +341,45 @@ void kernel_main() {
     constexpr uint32_t out_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t algo = get_compile_time_arg_val(6);  // 0 Auto->ReduceTile, 1 AccumulateViaAdd
     constexpr uint32_t partial_elems = get_compile_time_arg_val(7);  // valid elems in last tile (0=aligned)
-    constexpr uint32_t stream = get_compile_time_arg_val(8);  // 1 = WaitAndPopPerTile (stream reduce dim thru DST)
-    constexpr uint32_t in_tiles = Ht * Wt * NC;
+    constexpr uint32_t policy_id = get_compile_time_arg_val(8);  // 0 Bulk, 1 WaitAndPop, 2 WaitUpfront, 3 NoWait
+    constexpr uint32_t recfg = get_compile_time_arg_val(9);  // 1 = ReduceDataFormatReconfigMode::NONE after 1st call
+    constexpr uint32_t row_stride = get_compile_time_arg_val(10);  // tile pitch per row (0=contiguous=Wt)
+    constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // real elems/output = the AccumulateViaAdd mean 1/N
+    constexpr uint32_t avg_direct = get_compile_time_arg_val(12);  // 1 = AccumulateViaAdd uses reduce<AVG> direct
+    constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
+    constexpr uint32_t in_tiles = Ht * row_pitch * NC;  // resident block incl. padded rows
+    constexpr bool pops_input = (policy_id <= 1u);  // Bulk + WaitAndPop pop the input; no-pop policies do not
 
     using namespace compute_kernel_lib;
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    constexpr ReduceAlgorithm ALG =
-        (algo == 1u) ? ReduceAlgorithm::AccumulateViaAdd : ReduceAlgorithm::Auto;
-    constexpr auto POLICY =
-        (stream == 1u) ? ReduceInputPolicy::WaitAndPopPerTile : ReduceInputPolicy::BulkWaitBulkPop;
-    constexpr auto RECFG = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
     // AccumulateViaAdd partial: 0/1 mask tile at scaler-CB index 0 + valid element count for the mean.
     const ReducePartialScaler PS =
         (partial_elems > 0u) ? ReducePartialScaler::partial_mask(partial_elems, 0) : ReducePartialScaler::none();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
+    const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
+                                      : ReduceInputMemoryLayout::contiguous();
 
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
+    // Boot init (once, never in the loop). The library reduce() does the light per-call reconfig, so
+    // compute_kernel_hw_startup is the same boot for both datapaths (the algo==1 form keeps SrcA=SrcB=cb_in
+    // explicit); the heavy hw_configure lives here.
+    if constexpr (algo == 1u) {
+        compute_kernel_hw_startup(cb_in, cb_in, cb_out);
+    } else {
+        compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
+    }
 
-    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+    // No-pop policies (WaitUpfront / NoWait) never pop the input, so arm the resident block ONCE — re-arming
+    // it per iter with no matching pop would overflow the in_tiles-deep sharded CB (producer-blocked hang).
+    // Pop policies (Bulk / WaitAndPop) re-arm each iter, balanced by reduce()'s pop.
+    if constexpr (!pops_input) {
         cb_reserve_back(cb_in, in_tiles);
-        cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
-        if constexpr (dim == 0) {
-            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
-                   POLICY, RECFG, ALG>(
-                SHAPE, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{}, PS);
-        } else if constexpr (dim == 1) {
-            reduce<PoolType::AVG, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out,
-                   POLICY, RECFG, ALG>(
-                SHAPE, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{}, PS);
-        } else {
-            reduce<PoolType::AVG, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out,
-                   POLICY, RECFG, ALG>(
-                SHAPE, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{}, PS);
+        cb_push_back(cb_in, in_tiles);
+    }
+    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+        if constexpr (pops_input) {
+            cb_reserve_back(cb_in, in_tiles);
+            cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
         }
+        do_reduce_block<algo, dim, policy_id, avg_direct>(iter, SHAPE, ML, PS, n_reduced, recfg);
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, out_tiles);
             cb_pop_front(cb_out, out_tiles);
@@ -325,8 +406,45 @@ _ACCUM_KERNEL = r"""
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+namespace {
+constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_acc = 2, cb_out = 16;
+
+// One accumulate chunk (dim-templated to keep the per-dim reduce() calls in one place + thread the partial
+// scaler / memory layout cleanly). Non-last chunks SUM the RAW partial into cb_acc; the LAST chunk finalizes
+// into cb_out — MEAN via reduce_mean with the GRAND-TOTAL divisor mean_n (spanning all chunks), else SUM.
+// A partial (ROW/COL) folds the masked last reduce-dim tile into EACH chunk's sum; row_stride reduces the
+// first Wt columns of a wider resident block.
+template <uint32_t dim, uint32_t mean_n>
+ALWI void do_accum_chunk(
+    uint32_t c, bool is_last,
+    compute_kernel_lib::ReduceInputBlockShape shape,
+    compute_kernel_lib::ReduceInputMemoryLayout ml,
+    compute_kernel_lib::ReducePartialScaler ps,
+    compute_kernel_lib::AccumulateReloadMode reload) {
+    using namespace compute_kernel_lib;
+    using ckernel::PoolType;
+    using ckernel::ReduceDim;
+    constexpr ReduceDim RDIM = (dim == 0u)   ? ReduceDim::REDUCE_ROW
+                               : (dim == 1u) ? ReduceDim::REDUCE_COL
+                                             : ReduceDim::REDUCE_SCALAR;
+    constexpr auto POLICY = ReduceInputPolicy::BulkWaitBulkPop;
+    constexpr auto RECFG = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+    constexpr auto ALG = ReduceAlgorithm::AccumulateViaAdd;
+    if (is_last) {
+        if constexpr (mean_n > 0u)
+            reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
+                shape, mean_n, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), ps);
+        else
+            reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
+                shape, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), NoOp{}, ps);
+    } else {
+        reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
+            shape, ml, Accumulate::at(cb_acc, c).with_reload(reload), NoOp{}, ps);
+    }
+}
+}  // namespace
+
 void kernel_main() {
-    constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_acc = 2, cb_out = 16;
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
@@ -334,48 +452,35 @@ void kernel_main() {
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(4);
     constexpr uint32_t out_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(6);
-    constexpr uint32_t in_tiles = Ht * Wt * NC;
+    constexpr uint32_t mean_n = get_compile_time_arg_val(7);  // 0 = SUM; >0 = MEAN, divide the GRAND total by mean_n
+    constexpr uint32_t partial_elems = get_compile_time_arg_val(8);  // valid elems in last reduce-dim tile (0=aligned)
+    constexpr uint32_t row_stride = get_compile_time_arg_val(9);  // tile pitch per row (0=contiguous=Wt)
+    constexpr uint32_t reload_id = get_compile_time_arg_val(10);  // 0 FoldViaAdd, 1 CopySeedPairs, 2 CopySeedUniform
+    constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
+    constexpr uint32_t in_tiles = Ht * row_pitch * NC;
 
     using namespace compute_kernel_lib;
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    constexpr auto POLICY = ReduceInputPolicy::BulkWaitBulkPop;
-    constexpr auto RECFG = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
-    constexpr auto ALG = ReduceAlgorithm::AccumulateViaAdd;
+    constexpr AccumulateReloadMode RELOAD = (reload_id == 0u)   ? AccumulateReloadMode::FoldViaAdd
+                                            : (reload_id == 2u) ? AccumulateReloadMode::CopySeedUniform
+                                            : (reload_id == 3u) ? AccumulateReloadMode::CopySeedSfpuAdd
+                                            : (reload_id == 4u) ? AccumulateReloadMode::CopySeedZeroPair
+                                                                : AccumulateReloadMode::CopySeedPairs;
+    const ReducePartialScaler PS =
+        (partial_elems > 0u) ? ReducePartialScaler::partial_mask(partial_elems, 0) : ReducePartialScaler::none();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
+    const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
+                                      : ReduceInputMemoryLayout::contiguous();
 
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
+    // AccumulateViaAdd is a binary-add datapath -> boot with SrcA = SrcB = cb_in (once, never in the loop);
+    // the reduce() helper only does light per-call (re)config. The packer format is re-adapted per call
+    // (RECFG=INPUT_AND_OUTPUT) as the output alternates cb_acc (non-last) / cb_out (last).
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         for (uint32_t c = 0; c < num_chunks; ++c) {
             cb_reserve_back(cb_in, in_tiles);
             cb_push_back(cb_in, in_tiles);  // re-arm the resident block for this chunk
-            const bool is_last = (c + 1u == num_chunks);
-            if constexpr (dim == 0) {
-                if (is_last) {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
-                        SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at_last(cb_acc, c), NoOp{});
-                } else {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
-                        SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at(cb_acc, c), NoOp{});
-                }
-            } else if constexpr (dim == 1) {
-                if (is_last) {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
-                        SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at_last(cb_acc, c), NoOp{});
-                } else {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
-                        SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at(cb_acc, c), NoOp{});
-                }
-            } else {
-                if (is_last) {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out, POLICY, RECFG, ALG>(
-                        SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at_last(cb_acc, c), NoOp{});
-                } else {
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ALG>(
-                        SHAPE, ReduceInputMemoryLayout::contiguous(), Accumulate::at(cb_acc, c), NoOp{});
-                }
-            }
+            do_accum_chunk<dim, mean_n>(c, (c + 1u == num_chunks), SHAPE, ML, PS, RELOAD);
         }
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, out_tiles);
@@ -444,6 +549,27 @@ void kernel_main() {
 
 
 # =============================================================================
+# Zero-tile dataflow kernel (CopySeedZeroPair accumulate) — fills the scaler CB with an all-zero tile that the
+# odd-leftover add_tiles pairs with. prepare_reduce_scaler zeroes the whole tile then skips the fill for a 0
+# value, so scaler_f=0 yields a genuine all-positions-zero tile.
+# =============================================================================
+_ZERO_KERNEL = r"""
+#include <cstdint>
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_scaler = 1;
+    using ckernel::PoolType;
+    using ckernel::ReduceDim;
+    // scaler_f=0 -> prepare_reduce_scaler zeroes the whole tile and skips the fill, yielding an all-zero tile.
+    // PoolType / ReduceDim are irrelevant for a zero fill.
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>(0.0f, 32);
+}
+"""
+
+
+# =============================================================================
 # Host-side layout + program descriptor
 # =============================================================================
 def _single_core():
@@ -476,15 +602,18 @@ def _resolve(variant, dim, Ht, Wt):
     return variant
 
 
-def _mean_scaler_bits(dim, Ht, Wt, partial_elems):
-    """Float bits of 1/N_true for the mean. partial_elems>0 -> last reduce-dim tile has that many valid
-    elements, so N_true = (reduced_tiles-1)*32 + partial_elems (ROW/COL only)."""
+def _mean_n(dim, Ht, Wt, partial_elems):
+    """N_true = real elements reduced into each output (the mean divisor the CALLER supplies to reduce_mean).
+    partial_elems>0 -> the last reduce-dim tile holds that many valid elements, so N_true =
+    (reduced_tiles-1)*32 + partial_elems (ROW/COL only); else the tile-aligned count."""
     if partial_elems > 0:
-        red = reduced_count(dim, Ht, Wt)
-        n_true = (red - 1) * TILE + partial_elems
-    else:
-        n_true = elements_reduced(dim, Ht, Wt)
-    return struct.unpack("<I", struct.pack("<f", 1.0 / n_true))[0]
+        return (reduced_count(dim, Ht, Wt) - 1) * TILE + partial_elems
+    return elements_reduced(dim, Ht, Wt)
+
+
+def _mean_scaler_bits(dim, Ht, Wt, partial_elems):
+    """Float bits of 1/N_true for the mean (used by the inline kernel's own scaler CT arg)."""
+    return struct.unpack("<I", struct.pack("<f", 1.0 / _mean_n(dim, Ht, Wt, partial_elems)))[0]
 
 
 def create_program_descriptor(
@@ -501,6 +630,10 @@ def create_program_descriptor(
     math_fidelity=None,
     partial_elems=0,
     stream=False,
+    policy="bulk",
+    avg_direct=False,
+    reconfig=None,
+    row_stride=0,
 ):
     if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
@@ -516,14 +649,46 @@ def create_program_descriptor(
         raise ValueError(
             f"partial_elems must be in [1, {TILE - 1}] (valid elems in the last tile), got {partial_elems}"
         )
-    if stream:
-        # WaitAndPopPerTile streaming (DST accumulator) is an AccumulateViaAdd feature, contiguous + aligned.
+    if stream:  # back-compat alias for the old boolean flag
+        policy = "stream"
+    if policy not in _POLICY_ID:
+        raise ValueError(f"policy must be one of {POLICIES}, got {policy!r}")
+    # The library handles all four policies for both datapaths; the example's guards below capture the combos
+    # the reduce_block SETUP (one row-major resident shard, single core) can actually feed correctly.
+    if policy != "bulk":
+        # The inline hand-written kernel is BulkWaitBulkPop-only; policies apply only to the library paths.
+        if variant == "accumulate_via_add_inline":
+            raise ValueError("policy applies to the library variants only (inline is BulkWaitBulkPop)")
+        # A column stream would need tiles delivered in column-major order; the row-major resident shard
+        # cannot supply that (both datapaths would read the wrong tiles) — reject for reduce_tile too.
+        if policy == "stream" and dim == "col":
+            raise ValueError("stream is contiguous-only (row/scalar); col needs a column-ordered reader")
+        if policy == "stream" and partial_elems and dim != "row":
+            raise ValueError("streaming partial is ROW-only")
+        # No-pop policies keep the input resident and bulk-reserve the outputs; exercise them aligned +
+        # contiguous + no-accumulate here (the paths compose with partial/row_stride in the library, but the
+        # example wiring for those is proven on the bulk policy).
+        if policy in _NO_POP and (partial_elems or row_stride):
+            raise ValueError("no-pop policies are exercised aligned + contiguous in this example")
+    if avg_direct and variant != "accumulate_via_add":
+        raise ValueError("avg_direct (reduce<AVG> geometry 1/N) is an accumulate_via_add lever")
+    if reconfig not in (None, "none_after_first"):
+        raise ValueError(f"reconfig must be None or 'none_after_first', got {reconfig!r}")
+    if reconfig and variant != "accumulate_via_add":
+        raise ValueError("reconfig (NONE-after-first) needs variant=accumulate_via_add")
+    if row_stride:
+        # row_stride (a wider resident block, padded rows) is a library AccumulateViaAdd feature: reduce the
+        # first Wt columns of each row_stride-wide row. ROW/COL only, indexed (not streaming), no partial.
         if variant != "accumulate_via_add":
-            raise ValueError("stream (WaitAndPopPerTile) needs variant=accumulate_via_add")
-        if dim not in ("row", "scalar"):
-            raise ValueError("stream is contiguous-only (row/scalar); col is strided")
+            raise ValueError("row_stride needs variant=accumulate_via_add")
+        if dim not in ("row", "col"):
+            raise ValueError("row_stride is supported for row/col only (scalar walks a 2-D block)")
+        if policy == "stream":
+            raise ValueError("row_stride is incompatible with stream (a pure contiguous stream)")
         if partial_elems:
-            raise ValueError("stream is aligned-only (no partial)")
+            raise ValueError("row_stride + partial not supported")
+        if row_stride < Wt:
+            raise ValueError(f"row_stride ({row_stride}) must be >= Wt ({Wt})")
 
     path = _resolve(variant, dim, Ht, Wt)
     dim_id = _DIM_ID[dim]
@@ -576,7 +741,21 @@ def create_program_descriptor(
         kernel_source=_HELPER_BLOCK_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[Ht, Wt, NC, dim_id, kernel_iters, out_tiles, algo, partial_elems, int(stream)],
+        compile_time_args=[
+            Ht,
+            Wt,
+            NC,
+            dim_id,
+            kernel_iters,
+            out_tiles,
+            algo,
+            partial_elems,
+            _POLICY_ID[policy],
+            int(reconfig == "none_after_first"),
+            row_stride,
+            _mean_n(dim, Ht, Wt, partial_elems),
+            int(avg_direct),
+        ],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
     reader = ttnn.KernelDescriptor(
@@ -603,6 +782,10 @@ def run_op(
     math_fidelity=None,
     partial_elems=0,
     stream=False,
+    policy="bulk",
+    avg_direct=False,
+    reconfig=None,
+    row_stride=0,
 ):
     out_hw = output_shape(dim, Ht, Wt, NC)
     output = ttnn.allocate_tensor_on_device(
@@ -625,6 +808,10 @@ def run_op(
         math_fidelity=math_fidelity,
         partial_elems=partial_elems,
         stream=stream,
+        policy=policy,
+        avg_direct=avg_direct,
+        reconfig=reconfig,
+        row_stride=row_stride,
     )
     return ttnn.generic_op([input_tensor, output], descriptor)
 
@@ -635,43 +822,150 @@ def run_op(
 # Each chunk re-reduces the SAME resident block, so the result is num_chunks * sum(block, reduce_dim).
 # =============================================================================
 def create_accumulate_program_descriptor(
-    input_tensor, output_tensor, *, dim, Ht, Wt, NC=1, accum="fp32", kernel_iters=1, num_chunks=2, math_fidelity=None
+    input_tensor,
+    output_tensor,
+    *,
+    dim,
+    Ht,
+    Wt,
+    NC=1,
+    accum="fp32",
+    kernel_iters=1,
+    num_chunks=2,
+    mean=False,
+    math_fidelity=None,
+    partial_elems=0,
+    row_stride=0,
+    reload="copy_pairs",
+    acc_unpack_to_dest=False,
 ):
     if dim not in _DIM_ID:
         raise ValueError(f"dim must be one of {DIMS}, got {dim!r}")
+    if reload not in _RELOAD_ID:
+        raise ValueError(f"reload must be one of {RELOADS}, got {reload!r}")
+    if acc_unpack_to_dest and accum != "fp32":
+        raise ValueError("acc_unpack_to_dest (UnpackToDestFp32 accumulator) requires accum='fp32'")
     if min(Ht, Wt, NC) < 1 or kernel_iters < 1 or num_chunks < 1:
         raise ValueError("Ht, Wt, NC, kernel_iters and num_chunks must be positive")
     if input_tensor.dtype != ttnn.bfloat16 or input_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("input must be bfloat16 TILE_LAYOUT")
     if output_tensor.dtype != ttnn.float32 or output_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("output must be float32 TILE_LAYOUT")
+    if partial_elems and (partial_elems < 1 or partial_elems >= TILE):
+        raise ValueError(f"partial_elems must be in [1, {TILE - 1}], got {partial_elems}")
+    if partial_elems and dim not in ("row", "col"):
+        raise ValueError("partial + accumulate is row/col only (scalar corner mask not encodable)")
+    if row_stride:
+        if dim not in ("row", "col"):
+            raise ValueError("row_stride + accumulate is row/col only (scalar walks a 2-D block)")
+        if partial_elems:
+            raise ValueError("row_stride + partial not wired in the accumulate example")
+        if row_stride < Wt:
+            raise ValueError(f"row_stride ({row_stride}) must be >= Wt ({Wt})")
+    if reload == "copy_zero" and partial_elems:
+        raise ValueError("copy_zero uses the scaler CB for the zero tile; incompatible with a partial mask")
+    if reload == "fold" and acc_unpack_to_dest:
+        raise ValueError(
+            "reload='fold' (FoldViaAdd) reads the accumulator via SrcB, disabled for an "
+            "UnpackToDestFp32 CB; use a CopySeed* reload (copy_pairs/copy_uniform/copy_sfpu/copy_zero)"
+        )
 
     dim_id = _DIM_ID[dim]
     fp32_dest = accum == "fp32"
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     out_tiles = out_tile_count(dim, Ht, Wt, NC)
+    use_mask = bool(partial_elems)
+    use_zero = reload == "copy_zero"  # scaler CB holds an all-zero tile (aligned only; guarded above)
+    # MEAN over the accumulated chunks: each chunk re-reduces the same block, so the GRAND-total element
+    # count is num_chunks * (elements reduced per chunk, incl. the partial count). This is the divisor
+    # reduce_mean applies on the last chunk — it must span all chunks, not just the last block's count. 0 => SUM.
+    mean_n = num_chunks * _mean_n(dim, Ht, Wt, partial_elems) if mean else 0
 
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_IN, input_tensor),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
-        _scratch_cb(CB_SCALER, _dtype_of(accum)),  # unused by the accumulate path, needed for hw_startup
+        # SCALER CB: a 0/1 mask tile (partial) or an all-zero tile (copy_zero), both bf16; else unused.
+        _scratch_cb(CB_SCALER, ttnn.bfloat16 if (use_mask or use_zero) else _dtype_of(accum)),
         # Running RAW partial-sum tile per output, at the accumulation (DEST) dtype — fp32 when fp32_dest_acc
         # is on, so the cross-chunk partial keeps full precision. The library reconfigures SRCA/SRCB around
         # each accumulator read (copy_tile / add_tiles do NOT), so the accumulator CB may differ in format
         # from the bf16 input (mirrors the standard reload_accumulator_if_needed).
         _scratch_cb(CB_ACC, _dtype_of(accum), num=out_tiles),
     ]
+    compute_cfg = ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest)
+    if acc_unpack_to_dest:
+        # Tag the accumulator CB UnpackToDestFp32 -> lossless fp32 reload via copy_tile, and SrcA/B access
+        # DISABLED for it (so FoldViaAdd, which reads it via SrcB, is incorrect here; the CopySeed* reloads
+        # are the sanctioned access). Per-CB vector indexed by CB id; only CB_ACC is tagged.
+        modes = [ttnn.UnpackToDestMode.Default] * 64  # one entry per circular buffer (NUM_CIRCULAR_BUFFERS)
+        modes[CB_ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_cfg.unpack_to_dest_mode = modes
     compute = ttnn.KernelDescriptor(
         kernel_source=_ACCUM_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[Ht, Wt, NC, dim_id, kernel_iters, out_tiles, num_chunks],
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
+        compile_time_args=[
+            Ht,
+            Wt,
+            NC,
+            dim_id,
+            kernel_iters,
+            out_tiles,
+            num_chunks,
+            mean_n,
+            partial_elems,
+            row_stride,
+            _RELOAD_ID[reload],
+        ],
+        config=compute_cfg,
     )
-    return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs)
+    kernels = [compute]
+    if use_mask:
+        # 0/1 mask tile the partial fold multiplies the last reduce-dim tile by (padding -> 0).
+        kernels.insert(
+            0,
+            ttnn.KernelDescriptor(
+                kernel_source=_MASK_KERNEL,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=_single_core(),
+                compile_time_args=[dim_id, partial_elems],
+                runtime_args=[],
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+        )
+    elif use_zero:
+        # All-zero scaler tile the CopySeedZeroPair odd-leftover add_tiles pairs with.
+        kernels.insert(
+            0,
+            ttnn.KernelDescriptor(
+                kernel_source=_ZERO_KERNEL,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=_single_core(),
+                compile_time_args=[],
+                runtime_args=[],
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+        )
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
-def run_accumulate(input_tensor, *, dim, Ht, Wt, NC=1, accum="fp32", kernel_iters=1, num_chunks=2, math_fidelity=None):
+def run_accumulate(
+    input_tensor,
+    *,
+    dim,
+    Ht,
+    Wt,
+    NC=1,
+    accum="fp32",
+    kernel_iters=1,
+    num_chunks=2,
+    mean=False,
+    math_fidelity=None,
+    partial_elems=0,
+    row_stride=0,
+    reload="copy_pairs",
+    acc_unpack_to_dest=False,
+):
     out_hw = output_shape(dim, Ht, Wt, NC)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(out_hw)),
@@ -690,6 +984,11 @@ def run_accumulate(input_tensor, *, dim, Ht, Wt, NC=1, accum="fp32", kernel_iter
         accum=accum,
         kernel_iters=kernel_iters,
         num_chunks=num_chunks,
+        mean=mean,
         math_fidelity=math_fidelity,
+        partial_elems=partial_elems,
+        row_stride=row_stride,
+        reload=reload,
+        acc_unpack_to_dest=acc_unpack_to_dest,
     )
     return ttnn.generic_op([input_tensor, output], descriptor)
