@@ -70,6 +70,23 @@ def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUN
     return kept or [mel]
 
 
+COND_CHUNK_SAMPLES = int(round(GPT_COND_CHUNK_SEC * MEL_SR))  # 88200 samples / 4 s window
+COND_MIN_CHUNK_SAMPLES = COND_MIN_CHUNK_FRAMES * MEL_HOP  # drop a tiny trailing chunk
+
+
+def chunk_wav(wav, chunk_samples=COND_CHUNK_SAMPLES, min_samples=COND_MIN_CHUNK_SAMPLES):
+    """Split a waveform ``[1, L]`` (22.05 kHz) into ``gpt_cond_chunk_len`` windows — the
+    on-device analogue of :func:`chunk_cond_mel` (coqui chunks the audio, then mels each
+    chunk). Returns a list of ``[1, <=chunk_samples]`` wavs; a trailing window shorter than
+    ``min_samples`` is dropped; a wav already under one chunk is returned as-is."""
+    length = wav.shape[-1]
+    if length <= chunk_samples:
+        return [wav]
+    chunks = [wav[..., i : i + chunk_samples] for i in range(0, length, chunk_samples)]
+    kept = [c for c in chunks if c.shape[-1] >= min_samples]
+    return kept or [wav]
+
+
 # ---------------------------------------------------------------------------
 # ConditioningEncoder — port of TTS/tts/layers/xtts/latent_encoder.py
 # ---------------------------------------------------------------------------

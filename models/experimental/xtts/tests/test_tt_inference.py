@@ -100,7 +100,7 @@ def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
     spk_wav_tt = ttnn.from_torch(
         spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
-    wav_tt_dev, _ = tt.inference(wrapped, cond_mel, spk_wav_tt, force_codes=codes_ref[0].tolist())
+    wav_tt_dev, _ = tt.inference(wrapped, wav, spk_wav_tt, force_codes=codes_ref[0].tolist())  # mel on device
     wav_tt = ttnn.to_torch(wav_tt_dev).float().permute(0, 2, 1)  # [1, T_out, 1] -> [1, 1, T_out]
 
     logger.info(f"codes={codes_ref.shape[1]}, ref wav {tuple(wav_ref.shape)}, tt wav {tuple(wav_tt.shape)}")
@@ -146,7 +146,6 @@ def test_tt_eval(device, xtts_state_dict, reset_seeds):
     # Inputs: real reference audio (22.05 kHz conditioning; resampled to 16 kHz for the speaker
     # encoder + SECS target) + a bigger, real text sentence.
     wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)  # [1, s] @ 22050
-    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s]
     g = math.gcd(SPK_SR, MEL_SR)
     spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
 
@@ -167,7 +166,7 @@ def test_tt_eval(device, xtts_state_dict, reset_seeds):
     ttnn.manual_seed(1234, device=device)  # reproducible-ish sampled decode
     wav_eval_dev, codes_eval = tt.inference(
         wrapped,
-        cond_mel,
+        wav,  # raw reference wav; 80-mel computed on device
         spk_wav_tt,
         max_new_tokens=EVAL_MAX_TOKENS,
         temperature=EVAL_TEMPERATURE,

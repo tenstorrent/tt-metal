@@ -38,7 +38,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio, wav_to_mel
+from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio
 from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
 from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE, XttsHifiDecoderFull
@@ -91,7 +91,6 @@ def test_tt_full_trace(device, xtts_state_dict, pcc, reset_seeds):
 
     # Inputs: reference audio (22.05 kHz conditioning, 16 kHz speaker) + text — host preprocessing.
     wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)  # [1, s] @ 22050
-    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s]
     g = math.gcd(SPK_SR, MEL_SR)
     spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
     wrapped = wrap_text_ids(preprocess_text(DEMO_TEXT, lang="en"))
@@ -108,7 +107,7 @@ def test_tt_full_trace(device, xtts_state_dict, pcc, reset_seeds):
     # ---- FULLY TRACED: setup (conditioning+speaker+prefill) -> decode (per token) -> vocoder ----
     wav_dev, codes = tt.inference_fully_traced(
         wrapped,
-        cond_mel,
+        wav,  # raw reference wav; 80-mel computed on device inside the setup trace
         spk_wav_tt,
         TRACE_MAX_SEQ,
         max_new_tokens=TRACE_MAX_TOKENS,
@@ -123,7 +122,7 @@ def test_tt_full_trace(device, xtts_state_dict, pcc, reset_seeds):
     logger.info(f"fully-traced generation: {n} codes -> {wav_traced.shape[1] / OUTPUT_SAMPLE_RATE:.2f}s audio")
 
     # ---- EAGER REFERENCE on the SAME generated codes (concat-KV decode + eager vocoder) ----
-    cond_latents = tt._cond_latents(cond_mel)
+    cond_latents = tt._cond_latents(wav)
     _, latents_ref = tt.generator.latents_for_codes(wrapped, cond_latents, codes[0].tolist())
     wav_ref = ttnn.to_torch(tt._decode_wav(latents_ref, spk_wav_tt)).float()
 

@@ -110,3 +110,94 @@ class TtMelFrontend(LightweightModule):
         mel = ttnn.matmul(power, self.mel_fb)  # [T, 257] @ [257, 64] -> [T, 64]
         mel = ttnn.permute(mel, (1, 0))  # [64, T]
         return ttnn.reshape(mel, [1, N_MELS, num_frames])
+
+
+# ---------------------------------------------------------------------------
+# Conditioning mel (``wav_to_mel``) on device — the GPT/perceiver style-embedding mel.
+# Same DFT-as-matmul + on-device gather-framing as the speaker frontend above, but with the
+# conditioning params (n_fft 2048 / win 1024 hann / hop 256 / 80 mels / fmax 8000), NO
+# preemphasis, and a log-clamp + divide-by-mel_norms tail — a faithful port of
+# ``reference/xtts_conditioning.wav_to_mel`` so the conditioning input is computed on device
+# (removing the last host tensor op). The mel filterbank is librosa htk+slaney, precomputed.
+# ---------------------------------------------------------------------------
+from models.experimental.xtts.reference.xtts_conditioning import (  # noqa: E402
+    MEL_FMAX as C_FMAX,
+    MEL_FMIN as C_FMIN,
+    MEL_HOP as C_HOP,
+    MEL_N_FFT as C_NFFT,
+    MEL_SR as C_SR,
+    MEL_WIN as C_WIN,
+    N_MELS as C_NMELS,
+)
+
+C_NFREQS = C_NFFT // 2 + 1  # 1025
+C_CENTER_PAD = C_NFFT // 2  # 1024
+C_FRAME_CHUNK = 32  # n_fft is 4x the speaker frontend's, so quarter the frame chunk to stay in L1
+
+
+def _cond_dft_basis():
+    """Windowed real-DFT basis ``[C_NFFT, 2*C_NFREQS]`` (hann ``C_WIN`` centered in ``C_NFFT``)."""
+    win = torch.zeros(C_NFFT)
+    off = (C_NFFT - C_WIN) // 2
+    win[off : off + C_WIN] = torch.hann_window(C_WIN, dtype=torch.float32)
+    n = torch.arange(C_NFFT).float()
+    k = torch.arange(C_NFREQS).float().unsqueeze(1)
+    ang = 2 * math.pi * k * n / C_NFFT
+    cos_b = torch.cos(ang) * win
+    sin_b = -torch.sin(ang) * win
+    return torch.cat([cos_b, sin_b], dim=0).t().contiguous()  # [C_NFFT, 2*C_NFREQS]
+
+
+class TtConditioningMel(LightweightModule):
+    """On-device ``wav_to_mel``: waveform ``[1, L, 1]`` (22.05 kHz) -> normalized log-mel
+    ``[1, 80, T]`` — the trace-friendly replacement for the host ``wav_to_mel``."""
+
+    def __init__(self, device, mel_norms):
+        super().__init__()
+        self.device = device
+        self.basis = ttnn.from_torch(_cond_dft_basis(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+        import librosa
+
+        fb = librosa.filters.mel(
+            sr=C_SR, n_fft=C_NFFT, n_mels=C_NMELS, fmin=C_FMIN, fmax=C_FMAX, htk=True, norm="slaney"
+        )
+        self.mel_fb = ttnn.from_torch(
+            torch.from_numpy(fb).t().contiguous().float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+        )  # [C_NFREQS, 80]
+        self.mel_norms = ttnn.from_torch(
+            mel_norms.float().reshape(1, C_NMELS, 1), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+        )  # [1, 80, 1]
+        self._index_cache = {}
+
+    def _frame_index(self, length):
+        if length not in self._index_cache:
+            num_frames = 1 + length // C_HOP
+            m = torch.arange(num_frames).unsqueeze(1)
+            n = torch.arange(C_NFFT).unsqueeze(0)
+            pos = m * C_HOP + n - C_CENTER_PAD
+            idx = _reflect_index(pos, length).reshape(1, -1).to(torch.int32)
+            idx_dev = ttnn.from_torch(idx, layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.uint32)
+            self._index_cache[length] = (idx_dev, num_frames)
+        return self._index_cache[length]
+
+    def forward(self, wav):  # wav: ttnn [1, L, 1] ROW_MAJOR fp32
+        length = wav.shape[1]
+        x = ttnn.to_layout(ttnn.reshape(wav, [1, length]), ttnn.TILE_LAYOUT)  # no preemphasis for the cond mel
+        idx, num_frames = self._frame_index(length)
+        chunks = []
+        for start in range(0, num_frames, C_FRAME_CHUNK):
+            nf = min(C_FRAME_CHUNK, num_frames - start)
+            idx_c = ttnn.slice(idx, [0, start * C_NFFT], [1, (start + nf) * C_NFFT])
+            g = ttnn.gather(x, dim=1, index=idx_c)
+            g = ttnn.reshape(ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT), [nf, C_NFFT])
+            chunks.append(ttnn.to_layout(g, ttnn.TILE_LAYOUT))
+        framed = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=0)  # [T, C_NFFT]
+
+        spec = ttnn.matmul(framed, self.basis)  # [T, 2*C_NFREQS]
+        real = ttnn.slice(spec, [0, 0], [num_frames, C_NFREQS])
+        imag = ttnn.slice(spec, [0, C_NFREQS], [num_frames, 2 * C_NFREQS])
+        power = ttnn.add(ttnn.mul(real, real), ttnn.mul(imag, imag))  # [T, C_NFREQS]
+        mel = ttnn.matmul(power, self.mel_fb)  # [T, 80]
+        mel = ttnn.reshape(ttnn.permute(mel, (1, 0)), [1, C_NMELS, num_frames])  # [1, 80, T]
+        mel = ttnn.log(ttnn.clamp(mel, 1e-5, 1e30))  # log(clamp(mel, min=1e-5))
+        return ttnn.divide(mel, self.mel_norms)  # / mel_norms  (broadcast [1,80,1])
