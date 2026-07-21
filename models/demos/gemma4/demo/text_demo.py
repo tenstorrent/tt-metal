@@ -45,7 +45,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.demo.sampling_utils import (
+    build_device_sampling_params,
+    log_sampling_mode,
+    model_can_sample_on_device,
+)
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
@@ -210,19 +214,14 @@ def _mesh_shape_from_env():
 
 
 def _device_params():
-    """Blackhole needs a larger trace region; keep a single command queue (host sampling).
+    """Blackhole needs a larger trace region; CQ / fabric knobs match ``text_demo_v2``.
 
-    Matches ``text_demo_v2._device_params``. ``GEMMA4_TRACE_REGION_SIZE`` overrides
-    the Blackhole budget when needed.
+    ``GEMMA4_TRACE_REGION_SIZE``, ``GEMMA4_NUM_CQS``, ``GEMMA4_FABRIC``,
+    ``GEMMA4_CCL_PACKET_BYTES`` — see ``text_demo_v2._device_params``.
     """
-    if is_blackhole():
-        trace_region_size = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-        return {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": trace_region_size,
-            "num_command_queues": 1,
-        }
-    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
+    from models.demos.gemma4.demo.text_demo_v2 import _device_params as _v2_device_params
+
+    return _v2_device_params()
 
 
 def _host_sample_greedy(logits):
@@ -637,11 +636,18 @@ def _run_generation_via_generator(
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
 
+    # Default host sample — see text_demo_v2 (device sample + decode trace hazard).
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "1").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    # Generator long-context path is greedy-only today.
+    device_sampling_params = build_device_sampling_params({"temperature": 0}, can_sample=can_sample)
+    log_sampling_mode(can_sample, {"temperature": 0})
+
     logger.info("Warming up prefill...")
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=prefill_enable_trace,
-        can_sample_on_device=False,
+        can_sample_on_device=can_sample,
         greedy_only=True,
     )
     logger.info("Warmup complete")
@@ -658,15 +664,20 @@ def _run_generation_via_generator(
 
     logger.info("Starting prefill...")
     profiler.start("inference_prefill")
-    prefill_logits = generator.prefill_forward_text(
+    prefill_out = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         warmup_prefill=False,
         enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
     )
-    prefilled_token = _host_sample_greedy(prefill_logits)
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample_greedy(prefill_out)
     profiler.end("inference_prefill")
 
     prefilled_flat = prefilled_token.view(batch_size, -1).squeeze(-1)
@@ -681,15 +692,18 @@ def _run_generation_via_generator(
     profiler.start("inference_decode")
     while iteration < max_new_tokens:
         profiler.start(f"inference_decode_time_{iteration}")
-        logits, _ = generator.decode_forward(
+        decode_out, _ = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=enable_decode_trace,
             page_table=page_table,
             kv_cache=tt_kv_cache,
-            sampling_params=None,
+            sampling_params=device_sampling_params,
         )
-        out_tok = _host_sample_greedy(logits)
+        if device_sampling_params is not None:
+            out_tok = decode_out.long().view(batch_size, 1)
+        else:
+            out_tok = _host_sample_greedy(decode_out)
         profiler.end(f"inference_decode_time_{iteration}")
         current_pos += 1
         for user in range(batch_size):
