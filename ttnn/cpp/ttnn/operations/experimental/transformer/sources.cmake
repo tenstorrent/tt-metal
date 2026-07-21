@@ -47,18 +47,6 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
     nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
-    fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
-    fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
-    fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_device_operation.cpp
-    fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_program_factory.cpp
-    fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.cpp
-    fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp
-    dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather.cpp
-    dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_device_operation.cpp
-    dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_welford_program_factory.cpp
-    dit_layernorm_post_all_gather/dit_layernorm_post_all_gather.cpp
-    dit_layernorm_post_all_gather/device/dit_layernorm_post_all_gather_device_operation.cpp
-    dit_layernorm_post_all_gather/device/dit_layernorm_post_all_gather_welford_program_factory.cpp
     dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused.cpp
     rotary_embedding/device/rotary_embedding_device_operation.cpp
     rotary_embedding/device/rotary_embedding_program_factory.cpp
