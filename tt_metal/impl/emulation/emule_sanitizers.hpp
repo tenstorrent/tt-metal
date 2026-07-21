@@ -26,38 +26,17 @@ class IDevice;
 // Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
 static constexpr uint32_t EMULE_NUM_CBS = 32;
 
-// Per-kernel sanitizer thread-local state. The definitions live in
-// emulated_program_runner.cpp (exported via -rdynamic so JIT kernel .so files
-// resolve them by flat name at dlopen); they are declared here so the sanitizer
-// logic in emule_sanitizers.cpp shares the same storage. Global namespace, to
-// match the symbol names the kernel side expects.
-extern thread_local uint32_t __emule_sem_l1_range_start;
-extern thread_local uint32_t __emule_sem_l1_range_end;
-extern thread_local uint32_t __emule_l1_unreserved_base;
-extern thread_local const uint64_t* __emule_l1_tensor_ranges;
-extern thread_local uint32_t __emule_l1_tensor_ranges_count;
-extern thread_local const uint64_t* __emule_l1_padding_ranges;
-extern thread_local uint32_t __emule_l1_padding_ranges_count;
-extern thread_local const uint64_t* __emule_l1_host_ranges;
-extern thread_local uint32_t __emule_l1_host_ranges_count;
-// (Object-Intent resolved-range log lives in the fiber ctx, not a thread-local — #241.)
-extern thread_local uint32_t __emule_cb_reserved_pages[32];
-extern thread_local uint32_t __emule_cb_waited_pages[32];
-extern thread_local bool __emule_cb_reserve_dangling[32];
-extern thread_local bool __emule_cb_wait_dangling[32];
-extern thread_local const char* __emule_cb_reserve_file[32];
-extern thread_local uint32_t __emule_cb_reserve_line[32];
-extern thread_local const char* __emule_cb_wait_file[32];
-extern thread_local uint32_t __emule_cb_wait_line[32];
-extern thread_local bool __emule_cb_boundary_strict;
-extern thread_local uint32_t __emule_dram_unreserved_base;
-extern thread_local const uint64_t* __emule_dram_tensor_ranges;
-extern thread_local uint32_t __emule_dram_tensor_ranges_count;
+// The per-launch sanitizer range/counter state used to live in `extern
+// thread_local`s here; it now lives in the per-fiber context
+// (`__emule_self->san`, EmuleSanitizerState in jit_hw/internal/emule_thread_ctx.h)
+// so it travels with a yielding fiber instead of being clobbered by a
+// co-scheduled one. emule_sanitizers.cpp reads/writes it through __emule_self.
 
 namespace tt::tt_metal::emule {
 
-// Sanitizer state threaded into each kernel thread. Built once per launch by
-// build_oob_tensor_state, then pushed into the thread-locals above.
+// Sanitizer state threaded into each kernel launch. Built once per launch by
+// build_oob_tensor_state, then copied into the current fiber's sanitizer state
+// (__emule_self->san) by set_sanitizer_thread_locals.
 struct EmuleOobTensorState {
     bool asan_enabled = false;
     uint32_t l1_unreserved_base = 0;
@@ -93,9 +72,9 @@ public:
         const std::vector<uint64_t>& persistent_cb_ranges,
         uint32_t lx,
         uint32_t ly);
-    // Accumulate a finished kernel's resolved-range log (from the fiber ctx) into the
-    // per-core resolved set that verify_post_launch consults. No-op for multi-kernel
-    // cores (nothing was snapshotted).
+    // Fold a finished kernel's per-fiber resolved-range log (from
+    // __emule_self->san_resolved_log) into this core's resolved set. No-op unless
+    // ASAN is on and the core is single-kernel (snapshots_ non-empty).
     void accumulate_resolved(const EmuleOobTensorState& oob, const uint64_t* resolved_log, uint32_t count);
     void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly, const char* kernel_name) const;
 
