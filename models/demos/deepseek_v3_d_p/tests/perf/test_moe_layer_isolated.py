@@ -314,12 +314,17 @@ def test_moe_layer_isolated(
     num_iters,
     overlap_shared_expert_with_dispatch,
     overlap_routed_expert_with_combine,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Replay one (chunk_id, layer_id) MoE forward from a captured activation, num_iters times.
 
     Iteration 0 is a warmup that builds the program cache and is excluded from the
     reported mean/median/std; iterations 1..num_iters-1 are the measured samples.
     """
+    # Local profiling/replay aid: needs captured activations + the Kimi weight cache.
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("test_moe_layer_isolated is a local profiling/replay aid; not run in CI")
     cap_dir = os.environ.get("TT_DS_CAPTURE_MOE_DIR")
     if not cap_dir:
         pytest.skip("Set TT_DS_CAPTURE_MOE_DIR to the dir holding the captured MoE inputs")
@@ -443,7 +448,7 @@ def test_moe_layer_isolated(
 
 
 @pytest.mark.timeout(0)
-def test_moe_stacked_op_stats():
+def test_moe_stacked_op_stats(is_ci_env, is_ci_v2_env):
     """Post-tracy analysis: bisect per-op DEVICE KERNEL duration from a recorded ops CSV.
 
     This is NOT a device test -- it opens no mesh and runs no forward. It consumes the
@@ -470,6 +475,9 @@ test_moe_stacked_op_stats" -xvs
     and their iteration counts are discovered from the CSV's signposts -- no need to match
     the recording's parametrization here.
     """
+    # Local post-tracy analysis aid; not part of CI coverage.
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("test_moe_stacked_op_stats is a local analysis aid; not run in CI")
     csv_env = os.environ.get("TT_MOE_OPS_CSV")
     if not csv_env:
         pytest.skip("Set TT_MOE_OPS_CSV to a tracy-produced ops_perf_results_*.csv to analyze")
