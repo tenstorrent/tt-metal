@@ -164,6 +164,10 @@ PACK_FORMATS = input_output_formats(
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp6R,
+        DataFormat.MxFp6P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
@@ -235,8 +239,14 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         tile_shape=tile_shape,
     )
 
+    # Packer threshold-relu requires T >= 0 (MIN_THRESHOLD: x<=T?0:x; MAX_THRESHOLD:
+    # clamp to [0, T]); a negative threshold is undefined behaviour on HW. The mean
+    # is positive for the legacy stimuli but goes negative for the wide ~symmetric MX
+    # distributions (MxFp8 -> MxFp6), which would feed an undefined negative threshold
+    # (and a degenerate clamp([0, <0]) in the golden). Clamp to >= 0: a no-op for the
+    # positive-mean cases, and a defined config the golden and HW agree on otherwise.
     tensor_average = (
-        torch.mean(golden_tensor).item()
+        max(torch.mean(golden_tensor).item(), 0.0)
         if not formats.output_format.is_integer()
         else 0.0
     )

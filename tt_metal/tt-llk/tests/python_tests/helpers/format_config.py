@@ -68,6 +68,12 @@ class DataFormat(Enum):
     UInt8 = DataFormatInfo("UInt8", 1)
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
+    MxFp6R = DataFormatInfo(
+        "MxFp6R", 1
+    )  # QSR specific - E3M2, 6 bits used in an 8-bit L1 container
+    MxFp6P = DataFormatInfo(
+        "MxFp6P", 1
+    )  # QSR specific - E2M3, 6 bits used in an 8-bit L1 container
     MxFp4 = DataFormatInfo(
         "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
@@ -172,6 +178,8 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
@@ -191,6 +199,8 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
         }
 
@@ -213,90 +223,197 @@ class DataFormat(Enum):
 # Bare in mind that MX formats can have multiple contiguous scales with corresponding values after.
 MX_FORMAT_BLOCK_SIZE = 32
 
-# Map of MX formats to their maximum normal values
-# Per OCP MX Specification:
-# - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344
-# - E4M3 (MxFp8P): Max normal = ± 2^8 × 1.75 = ± 448
-# - E2M1 (MxFp4):  Max normal = ± 2^2 × 1.5 = ± 6.0
+
+@dataclass(frozen=True)
+class MxFpFormatSpec:
+    """Canonical per-format parameters for an MX floating-point element format.
+
+    Single source of truth shared by the pack element-quantizer, the unpack
+    decoder, the block-aware compare, and the finfo-derived value maps below.
+    The element layout is SxEyMz (sign, ``exp_bits`` exponent, ``man_bits``
+    mantissa, no hidden bit); ``ml_dtype`` is the matching ml_dtypes scalar type.
+    """
+
+    ml_dtype: type
+    exp_bits: int
+    man_bits: int
+    exp_bias: int
+    exp_min_unbiased: int  # min-normal unbiased exponent
+    exp_max_unbiased: int  # max-normal unbiased exponent
+    has_nan: bool  # only E5M2 / E4M3 represent NaN
+    # Largest *normal* mantissa at the max exponent. Defaults to the full field;
+    # E4M3 reserves {exp=all-ones, man=all-ones} for NaN, so its man_max is one less.
+    man_max_override: Optional[int] = None
+    # Accepted adjacent-representable steps for the block-aware compare.
+    max_compare_steps: int = 2
+
+    @property
+    def man_max(self) -> int:
+        if self.man_max_override is not None:
+            return self.man_max_override
+        return (1 << self.man_bits) - 1
+
+    @property
+    def nan_code(self) -> Optional[int]:
+        # +NaN = {sign 0, exp all-ones, man all-ones}; 0x7F for both E5M2 and E4M3.
+        if not self.has_nan:
+            return None
+        return (1 << (self.exp_bits + self.man_bits)) - 1
+
+    def element_quantizer_kwargs(self) -> dict:
+        """Keyword args consumed by pack._quantize_to_mx_fp_element_codes."""
+        return dict(
+            exp_bits=self.exp_bits,
+            man_bits=self.man_bits,
+            exp_bias=self.exp_bias,
+            exp_max_unbiased=self.exp_max_unbiased,
+            exp_min_unbiased=self.exp_min_unbiased,
+            man_max=self.man_max,
+            nan_code=self.nan_code,
+        )
+
+
+# Canonical MX floating-point format parameters, keyed by DataFormat. Every other
+# MX-FP table (pack/unpack element params, the block-aware compare params, and the
+# finfo value maps below) derives from this so the per-format constants live in
+# exactly one place.
+MX_FP_SPECS: dict[DataFormat, MxFpFormatSpec] = {
+    DataFormat.MxFp8R: MxFpFormatSpec(  # E5M2
+        ml_dtypes.float8_e5m2,
+        exp_bits=5,
+        man_bits=2,
+        exp_bias=15,
+        exp_min_unbiased=-14,
+        exp_max_unbiased=15,
+        has_nan=True,
+    ),
+    DataFormat.MxFp8P: MxFpFormatSpec(  # E4M3 (top mantissa at max exp reserved for NaN)
+        ml_dtypes.float8_e4m3fn,
+        exp_bits=4,
+        man_bits=3,
+        exp_bias=7,
+        exp_min_unbiased=-6,
+        exp_max_unbiased=8,
+        has_nan=True,
+        man_max_override=6,
+    ),
+    DataFormat.MxFp6R: MxFpFormatSpec(  # E3M2
+        ml_dtypes.float6_e3m2fn,
+        exp_bits=3,
+        man_bits=2,
+        exp_bias=3,
+        exp_min_unbiased=-2,
+        exp_max_unbiased=4,
+        has_nan=False,
+    ),
+    DataFormat.MxFp6P: MxFpFormatSpec(  # E2M3
+        ml_dtypes.float6_e2m3fn,
+        exp_bits=2,
+        man_bits=3,
+        exp_bias=1,
+        exp_min_unbiased=0,
+        exp_max_unbiased=2,
+        has_nan=False,
+    ),
+    DataFormat.MxFp4: MxFpFormatSpec(  # E2M1
+        ml_dtypes.float4_e2m1fn,
+        exp_bits=2,
+        man_bits=1,
+        exp_bias=1,
+        exp_min_unbiased=0,
+        exp_max_unbiased=2,
+        has_nan=False,
+    ),
+}
+
+# The value maps below all derive from MX_FP_SPECS so each format's dtype is
+# named exactly once.
+
+# Maximum normal magnitude per format (OCP MX spec):
+#   E5M2=57344, E4M3=448, E3M2=28.0, E2M3=7.5, E2M1=6.0.
 MX_FORMAT_MAX_NORMAL = {
-    DataFormat.MxFp8R: float(
-        ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
-    ),  # 57344.0 from dtype
-    DataFormat.MxFp8P: float(
-        ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
-    ),  # 448.0 from dtype,
-    DataFormat.MxFp4: float(
-        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).max
-    ),  # 6.0 from dtype,
+    fmt: float(ml_dtypes.finfo(spec.ml_dtype).max) for fmt, spec in MX_FP_SPECS.items()
 }
 
-# Map of MX formats to their minimum normal values
-# Per OCP MX Specification:
-# - E5M2 (MxFp8R): Min normal = ± 2^-14
-# - E4M3 (MxFp8P): Min normal = ± 2^-6
-# - E2M1 (MxFp4):  Min normal = ± 2^0 × 1.0 = ± 1.0
+# Minimum normal magnitude per format (OCP MX spec):
+#   E5M2=2^-14, E4M3=2^-6, E3M2=0.25, E2M3=1.0, E2M1=1.0.
 MX_FORMAT_MIN_NORMAL = {
-    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal),
-    DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal),
-    DataFormat.MxFp4: float(
-        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal
-    ),  # 1.0 from dtype
+    fmt: float(ml_dtypes.finfo(spec.ml_dtype).smallest_normal)
+    for fmt, spec in MX_FP_SPECS.items()
 }
 
-# Map of MX formats to their maximum subnormal values
-# Per OCP MX Specification:
-# - E5M2 (MxFp8R): Max subnormal = ± 2^-14 × 0.75
-# - E4M3 (MxFp8P): Max subnormal = ± 2^-6 × 0.875
-# - E2M1 (MxFp4):  Max subnormal = ± 2^0 × 0.5 = ± 0.5
+# Maximum subnormal = smallest_normal × (2^man_bits − 1)/2^man_bits (largest
+# mantissa, hidden bit 0): E5M2/E3M2 ×0.75, E4M3/E2M3 ×0.875, E2M1 ×0.5.
 MX_FORMAT_MAX_SUBNORMAL = {
-    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal)
-    * 0.75,
-    DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal)
-    * 0.875,
-    DataFormat.MxFp4: float(ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal)
-    * 0.5,
+    fmt: float(ml_dtypes.finfo(spec.ml_dtype).smallest_normal)
+    * (((1 << spec.man_bits) - 1) / (1 << spec.man_bits))
+    for fmt, spec in MX_FP_SPECS.items()
 }
 
-# Map of MX formats to their minimum subnormal values
-# Per OCP MX Specification:
-# - E5M2 (MxFp8R): Min subnormal = ± 2^-16
-# - E4M3 (MxFp8P): Min subnormal = ± 2^-9
-# - E2M1 (MxFp4):  Min subnormal = ± 2^0 × 0.5 = ± 0.5 (same as max)
+# Minimum (smallest) subnormal magnitude per format, straight from the dtype.
 MX_FORMAT_MIN_SUBNORMAL = {
-    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_subnormal),
-    DataFormat.MxFp8P: float(
-        ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_subnormal
-    ),
-    DataFormat.MxFp4: float(
-        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_subnormal
-    ),
+    fmt: float(ml_dtypes.finfo(spec.ml_dtype).smallest_subnormal)
+    for fmt, spec in MX_FP_SPECS.items()
 }
 
 # Map of MX formats to safe minimum magnitudes for stimulus generation.
 MX_FORMAT_MIN_MAGNITUDE = {
     DataFormat.MxFp8R: 2.44e-4,
     DataFormat.MxFp8P: 0.0625,
+    DataFormat.MxFp6R: 0.25,  # min normal (E3M2)
+    DataFormat.MxFp6P: 1.0,  # min normal (E2M3)
     DataFormat.MxFp4: 1.0,
 }
 
-# Max representable element magnitude for MxInt formats (signed 2's-complement
-# with implicit power-of-2 scale per OCP spec; no normal/subnormal split).
-# MxInt8 (S1.6, scale 2^-6): symmetric ±127/64; MxInt4 (S1.2, scale 2^-2):
-# symmetric ±7/4; MxInt2 (S1.0, scale 2^0): symmetric ±1 (only -1/0/+1
-# representable; the -2 encoding 0b10 is left unused for symmetry).
-# (ws-tensix metadata says 15/8 for MxInt4, but its decode formula at
-# storage.py:419-434 actually yields 7/4 = raw_7 × 2^-2.)
-MX_INT_MAX = {
-    DataFormat.MxInt8: 127.0 / 64.0,
-    DataFormat.MxInt4: 7.0 / 4.0,
-    DataFormat.MxInt2: 1.0,
+
+@dataclass(frozen=True)
+class MxIntFormatSpec:
+    """Canonical per-format parameters for an MX integer (MxInt) element format.
+
+    Single source of truth for the symmetric fixed-point S1.k MxInt elements:
+    2's-complement with an implicit 2^-k scale, one E8M0 block scale per
+    32-element OCP block, no normal/subnormal split. Shared by the pack
+    quantizer, the block-aware compare, and the max-magnitude map below.
+    Sibling of MxFpFormatSpec (different encoding family, no exp/man split).
+    """
+
+    elem_scale: int  # 2^k implicit scale: int_val = round(scaled * elem_scale)
+    elem_max: int  # symmetric clamp magnitude (the -(elem_max+1) code is left unused)
+    max_ulp_steps: int  # accepted lattice steps for the block-aware compare
+
+    @property
+    def max_normal(self) -> float:
+        """Max representable element magnitude = elem_max / elem_scale."""
+        return self.elem_max / self.elem_scale
+
+
+# Canonical MxInt format parameters, keyed by DataFormat. MX_INT_MAX below derives
+# from this so the per-format constants live in exactly one place. Signed
+# 2's-complement with an implicit power-of-2 scale (OCP spec); no normal/subnormal
+# split.
+#   MxInt8 (S1.6, scale 2^-6): symmetric ±127/64; MxInt4 (S1.2, scale 2^-2):
+#   symmetric ±7/4; MxInt2 (S1.0, scale 2^0): symmetric ±1 (only -1/0/+1
+#   representable; the -2 encoding 0b10 is left unused for symmetry).
+#   (ws-tensix metadata says 15/8 for MxInt4, but its decode formula at
+#   storage.py:419-434 actually yields 7/4 = raw_7 × 2^-2.)
+MX_INT_SPECS: dict[DataFormat, MxIntFormatSpec] = {
+    DataFormat.MxInt8: MxIntFormatSpec(elem_scale=64, elem_max=127, max_ulp_steps=3),
+    DataFormat.MxInt4: MxIntFormatSpec(elem_scale=4, elem_max=7, max_ulp_steps=2),
+    DataFormat.MxInt2: MxIntFormatSpec(elem_scale=1, elem_max=1, max_ulp_steps=1),
 }
+
+# Max representable element magnitude per MxInt format (= elem_max / elem_scale).
+MX_INT_MAX = {fmt: spec.max_normal for fmt, spec in MX_INT_SPECS.items()}
 
 # ============================================================================
 # MX SrcS Slice L1 Layout
 # ============================================================================
 # Each SrcS slice is 8×16 = 128 elements.  In L1 a slice is stored as
 # [scales padded to 16 B][elements padded to 16 B].
+#
+# These constants cover every MX float format whose SrcS elements occupy one
+# byte each in L1 (MxFp8 and MxFp6 alike — MxFp6 is byte-padded, so the layout
+# is identical). MxFp4 is excluded: it packs two elements per byte.
 
 
 def l1_align(size: int) -> int:
@@ -309,20 +426,24 @@ def l1_align(size: int) -> int:
 #   scales:   128 / 32 = 4 bytes   → padded to 16 B
 #   elements: 128 × 1 = 128 bytes  → already 16 B-aligned
 #   total: 16 + 128 = 144 bytes per slice
-MXFP8_SLICE_SCALE_BYTES = SRCS_SLICE_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 4
-MXFP8_SLICE_ELEMENT_BYTES = SRCS_SLICE_ELEMENT_COUNT  # 128
-MXFP8_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_ELEMENT_BYTES
+MXFP_SRCS_SLICE_SCALE_BYTES = SRCS_SLICE_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 4
+MXFP_SRCS_SLICE_ELEMENT_BYTES = SRCS_SLICE_ELEMENT_COUNT  # 128
+MXFP_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP_SRCS_SLICE_SCALE_BYTES) + l1_align(
+    MXFP_SRCS_SLICE_ELEMENT_BYTES
 )
 
 # 32-bit SrcS mode (dest_acc): 4x16 = 64 elements per slice
 #   scales:   64 / 32 = 2 bytes   -> padded to 16 B
 #   elements: 64 x 1  = 64 bytes  -> already 16 B-aligned
 #   total: 16 + 64 = 80 bytes per slice
-MXFP8_SLICE_32B_SCALE_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE  # 2
-MXFP8_SLICE_32B_ELEMENT_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT  # 64
-MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_32B_ELEMENT_BYTES
+MXFP_SRCS_SLICE_32B_SCALE_BYTES = (
+    SRCS_SLICE_32B_ELEMENT_COUNT // MX_FORMAT_BLOCK_SIZE
+)  # 2
+MXFP_SRCS_SLICE_32B_ELEMENT_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT  # 64
+MXFP_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(
+    MXFP_SRCS_SLICE_32B_SCALE_BYTES
+) + l1_align(
+    MXFP_SRCS_SLICE_32B_ELEMENT_BYTES
 )  # 80
 
 # ============================================================================
@@ -628,6 +749,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
+    DataFormat.MxFp6R: 19,
+    DataFormat.MxFp6P: 21,
     DataFormat.MxFp4: 22,
     DataFormat.MxInt8: 2,
     DataFormat.MxInt4: 3,
@@ -691,7 +814,7 @@ class InputOutputFormat:
     def __str__(self):
         if self.register_format_hint is not None:
             return f"InputOutputFormat[L1_Input:{self.input},A(reg_hint):{self.register_format_hint},B(reg_hint):{self.register_format_hint},out:{self.output}]"
-        return f"InputOutputFormat[A:{self.input},B:{self.input_B},out:{self.output}]"
+        return f"InputOutputFormat[L1_Input_A:{self.input},L1_Input_B:{self.input_B},out:{self.output}]"
 
 
 def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:

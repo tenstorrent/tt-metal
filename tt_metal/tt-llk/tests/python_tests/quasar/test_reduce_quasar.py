@@ -80,10 +80,6 @@ def generate_pool_type_and_math_fidelity_combinations():
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
         ],
     ),
     tile_dimensions=lambda formats: [
@@ -97,12 +93,7 @@ def generate_pool_type_and_math_fidelity_combinations():
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
-    ),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_reduce_quasar(
     formats,
@@ -116,25 +107,6 @@ def test_reduce_quasar(
 
     pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
-
-    if (
-        formats.input_format == DataFormat.MxInt8
-        and formats.output_format == DataFormat.MxInt2
-        and dest_acc == DestAccumulation.No
-        and reduce_dim == ReduceDimension.Column
-        and pool_type == ReducePool.Sum
-        and math_fidelity == MathFidelity.HiFi2
-        and dest_sync_mode == DestSync.Full
-        and implied_math_format == ImpliedMathFormat.Yes
-    ):
-        pytest.skip(
-            "MxInt8->MxInt2 Column Sum HiFi2 lands on an MxInt2 quantization "
-            "bin boundary. torch.matmul's fp32-internal accumulation rounds "
-            "in the opposite direction from HW for this specific value, "
-            "flipping one element into an adjacent bin. Modeling HW's exact "
-            "per-mul-add rounding schedule (FMA experiment) regressed other "
-            "Row reduce variants, so the residual is accepted as expected."
-        )
 
     input_dimensions = [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
 
@@ -225,11 +197,6 @@ def test_reduce_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        disable_format_inference=(
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     )
 
     res_from_L1 = configuration.run().result

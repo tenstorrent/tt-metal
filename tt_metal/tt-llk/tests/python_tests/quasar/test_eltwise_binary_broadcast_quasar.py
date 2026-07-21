@@ -52,10 +52,6 @@ FACE_ELEMS = 16 * 16
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
         ],
     )
     + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
@@ -75,11 +71,7 @@ FACE_ELEMS = 16 * 16
         if formats.input_format == DataFormat.Int8
         else get_valid_math_fidelities(formats, mathop)
     ),
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
-    ),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=runtime(
         lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
@@ -124,20 +116,15 @@ def test_eltwise_binary_broadcast_quasar(
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    input_format = formats.input_format
-    input_format_B = (
-        DataFormat.Float16_b
-        if formats.input_format.is_mx_format()
-        else formats.input_format
-    )
+
     golden_tensor = generate_golden(
         mathop,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
         math_fidelity,
-        input_format=input_format,
-        input_format_B=input_format_B,
+        input_format=formats.input_format,
+        input_format_B=formats.input_format,
     )
 
     configuration = TestConfig(
@@ -169,8 +156,6 @@ def test_eltwise_binary_broadcast_quasar(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

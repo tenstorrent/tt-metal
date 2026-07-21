@@ -190,8 +190,8 @@ def calculate_tile_size_bytes(
         int: Tile size in bytes
     """
     from .format_config import (
-        MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
-        MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
+        MXFP_SRCS_SLICE_32B_PACKED_BYTE_LEN,
+        MXFP_SRCS_SLICE_PACKED_BYTE_LEN,
         DataFormat,
     )
 
@@ -203,9 +203,9 @@ def calculate_tile_size_bytes(
             SRCS_SLICE_32B_ELEMENT_COUNT if dest_acc else SRCS_SLICE_ELEMENT_COUNT
         )
         slice_byte_len = (
-            MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
+            MXFP_SRCS_SLICE_32B_PACKED_BYTE_LEN
             if dest_acc
-            else MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
+            else MXFP_SRCS_SLICE_PACKED_BYTE_LEN
         )
         num_slices = (tile_elements + slice_elem_count - 1) // slice_elem_count
         return num_slices * slice_byte_len

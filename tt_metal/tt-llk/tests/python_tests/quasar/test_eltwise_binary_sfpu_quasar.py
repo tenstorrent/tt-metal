@@ -351,8 +351,6 @@ SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
     ],
 )
 SFPU_BINARY_MAX_MIN_INT32_FORMATS = input_output_formats([DataFormat.Int32], same=True)

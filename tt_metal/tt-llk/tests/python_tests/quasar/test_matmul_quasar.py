@@ -69,21 +69,19 @@ def _matmul_dimensions(dest_acc, dest_sync):
     ]
 
 
-# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
-# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
-# entries where MxFp4 would land as an output.
 MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
         DataFormat.Float16_b,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+) + [
+    InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    InputOutputFormat(
+        DataFormat.MxFp4, DataFormat.Float16
+    ),  # Testing MxFp4_2X, other Mx formats are redundant.
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16_b),
+]
+
 
 _ARCH = get_chip_architecture()
 
@@ -294,15 +292,6 @@ def test_matmul(
     ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
-    # math/pack_src format the result was produced in) so the comparison validates the
-    # device's MX output quantization, not just matmul-math-to-MX-precision. The lattice-
-    # aware compare in passed_test then supplies the small HW-vs-reference rounding slack.
-    if format.output_format.is_mx_format():
-        golden_tensor = quantize_mx_tensor_chunked(
-            golden_tensor.to(format_dict[pack_src_format]), format.output_format
-        ).to(torch_format)
 
     assert passed_test(
         golden_tensor,

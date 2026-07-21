@@ -242,6 +242,29 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec.gaussian(
             mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P]
         )
+    if stimuli_format == DataFormat.MxFp6R:
+        return StimuliSpec.gaussian(
+            mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6R]
+        )
+    if stimuli_format == DataFormat.MxFp6P:
+        # E2M3 has a very narrow normal range ([1.0, 7.5], ~3 binades). After the
+        # per-block shared-scale divide, a zero-mean Gaussian (as used by the wider
+        # MX formats) drops ~30% of elements into subnormals. Sample a log-uniform
+        # magnitude band over the normal range instead (low=0.9 keeps ~95% of
+        # elements normal), then apply random signs so the E2M3 sign path is
+        # exercised too (log_uniform itself is strictly positive).
+        log_lo = math.log(0.9)
+        log_hi = math.log(MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6P])
+
+        def _mxfp6p_face(
+            size: int, dtype: torch.dtype, gen: Optional[torch.Generator] = None
+        ) -> torch.Tensor:
+            u = torch.rand(size, generator=gen)
+            mag = torch.exp(u * (log_hi - log_lo) + log_lo)
+            signs = torch.sign(torch.rand(size, generator=gen) - 0.5)
+            return (mag * signs).to(dtype)
+
+        return StimuliSpec(distribution=_mxfp6p_face)
     if stimuli_format == DataFormat.Bfp8_b:
         return StimuliSpec(distribution=_default_bfp8b_face)
     if stimuli_format == DataFormat.Bfp4_b:

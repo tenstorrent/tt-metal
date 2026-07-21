@@ -959,10 +959,10 @@ class RELU_CONFIG(RuntimeParameter):
     relu_config: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int RELU_CONFIG = {self.relu_config};"
+        return f"constexpr std::uint32_t RELU_CONFIG = {self.relu_config}u;"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "int RELU_CONFIG;", "i"
+        return "std::uint32_t RELU_CONFIG;", "I"
 
 
 @dataclass

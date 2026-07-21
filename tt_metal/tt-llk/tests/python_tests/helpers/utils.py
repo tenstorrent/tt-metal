@@ -11,7 +11,13 @@ import numpy as np
 import torch
 from filelock import FileLock
 
-from .format_config import DataFormat, FormatConfig
+from .format_config import (
+    MX_FORMAT_BLOCK_SIZE,
+    MX_FP_SPECS,
+    MX_INT_SPECS,
+    DataFormat,
+    FormatConfig,
+)
 from .llk_params import format_dict
 from .logger import logger
 from .tile_constants import (
@@ -86,6 +92,8 @@ tolerances = {
     DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
+    DataFormat.MxFp6R: Tolerance(atol=0.3, rtol=0.3),
+    DataFormat.MxFp6P: Tolerance(atol=0.2, rtol=0.2),
     DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
     DataFormat.MxInt8: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.MxInt4: Tolerance(atol=0.5, rtol=0.35),
@@ -321,20 +329,6 @@ def _bfp_block_aware_compare(
     return is_valid
 
 
-# Per-format params for _mxint_block_aware_compare: (elem_scale, max_ulp_steps).
-#   elem_scale  = 2^(fractional bits) of the S1.k element -> ULP = block_scale / elem_scale.
-#   max_ulp_steps = accepted lattice steps. 1 ULP covers the spec-legal power-of-2
-#     block-exponent boundary; finer formats add a 2nd ULP for fidelity-dependent
-#     matmul accumulation drift. Sign flips and gross jumps still fail.
-_MXINT_COMPARE_PARAMS = {
-    DataFormat.MxInt2: (1, 1),  # S1.0: 3-level lattice, ULP == block scale
-    DataFormat.MxInt4: (4, 2),  # S1.2: ULP == block scale / 4
-    DataFormat.MxInt8: (64, 3),  # S1.6: ULP == block scale / 64 (finest); 3 ULP
-    #   covers the LoFi accumulation tail (measured worst 2.5 ULP, over3==0
-    #   across the sweep) and ~matches the historical isclose(rtol=0.05) bound.
-}
-
-
 def _mxint_block_aware_compare(
     golden: torch.Tensor,
     result: torch.Tensor,
@@ -361,13 +355,22 @@ def _mxint_block_aware_compare(
     two, so 2^floor(log2(amax)) == amax == max(|g|,|r|) and ULP == block scale,
     preserving the original MxInt2 behavior.
 
-    Tilizes first to match HW's block layout (32-element block = one face
-    row-pair), so block scales line up with how HW derived them.
-    """
-    from helpers.tilize_untilize import tilize_block, untilize_block
+    Golden and result already arrive in HW block order: the result is read back
+    from L1 face-by-face (unpack_res_tiles never untilizes) and the golden is
+    built in the same tile/face layout, so 32 contiguous elements ARE one HW MX
+    block (a face row-pair). We therefore block over contiguous 32-element runs
+    directly and do NOT tilize again -- a second tilize regroups elements across
+    blocks and computes the shared block scale over a scrambled layout, which
+    mis-sizes the per-block ULP for sparse (row/column reduce) outputs where a
+    near-zero element gets paired with unrelated neighbors. Dense outputs are
+    unaffected (block amax is the same either way); only sparse reduce outputs
+    change, and toward the block scale HW actually used.
 
-    BLOCK = 32
-    TILE_SIZE = 1024
+    NOTE: the tolerance absorbs a real, irreducible golden-vs-HW residual --
+    torch reduces with fp32-internal accumulation while the HW FPU accumulates
+    in lower precision, so a near-zero result can land one block-lattice step
+    away. The compare bounds that residual; it does not model HW exactly.
+    """
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
@@ -376,24 +379,15 @@ def _mxint_block_aware_compare(
     if n == 0:
         return torch.ones(0, dtype=torch.bool)
 
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
-        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
-    else:
-        g_til = g_flat
-        r_til = r_flat
-
     # Batch over 32-element blocks (zero-pad a partial tail block; padded zeros
     # never raise a block's amax, so the real elements compare identically).
-    num_blocks = (n + BLOCK - 1) // BLOCK
-    pad = num_blocks * BLOCK - n
+    num_blocks = (n + MX_FORMAT_BLOCK_SIZE - 1) // MX_FORMAT_BLOCK_SIZE
+    pad = num_blocks * MX_FORMAT_BLOCK_SIZE - n
     if pad:
-        g_til = torch.cat([g_til, g_til.new_zeros(pad)])
-        r_til = torch.cat([r_til, r_til.new_zeros(pad)])
-    g_blk = g_til.reshape(num_blocks, BLOCK)
-    r_blk = r_til.reshape(num_blocks, BLOCK)
+        g_flat = torch.cat([g_flat, g_flat.new_zeros(pad)])
+        r_flat = torch.cat([r_flat, r_flat.new_zeros(pad)])
+    g_blk = g_flat.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    r_blk = r_flat.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
     both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
     diff = (g_blk - r_blk).abs()
@@ -419,34 +413,10 @@ def _mxint_block_aware_compare(
     eps_guard = torch.finfo(torch.float32).eps * block_amax
     bound = (max_ulp_steps * (scale_factor / elem_scale) + eps_guard).unsqueeze(1)
 
-    is_valid_til = ((diff <= bound) | both_nan).reshape(-1)[:n]
-
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        is_valid = (
-            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
-            .flatten()
-            .bool()
-        )
-    else:
-        is_valid = is_valid_til
-
-    return is_valid
+    return ((diff <= bound) | both_nan).reshape(-1)[:n]
 
 
 _RECORD_TEST_ORDER: bool = False
-
-# Per-format params for _mxfp_block_aware_compare: (mantissa_bits, max_steps).
-#   mantissa_bits of the SxEyMz element -> local step = 2^(floor(log2|v|) - mantissa_bits).
-#   max_steps = accepted adjacent-representable steps (same role as MxInt's
-#     max_ulp_steps). HW flushes subnormals to 0, so the smallest representable
-#     magnitude is the min normal and the a==0 branch handles flushed values.
-_MXFP_COMPARE_PARAMS = {
-    DataFormat.MxFp4: (1, 2),  # E2M1
-    DataFormat.MxFp8R: (2, 2),  # E5M2
-    DataFormat.MxFp8P: (3, 2),  # E4M3
-}
 
 
 def _mxfp_block_aware_compare(
@@ -454,21 +424,38 @@ def _mxfp_block_aware_compare(
     result: torch.Tensor,
     mantissa_bits: int,
     max_steps: int = 2,
+    exp_min_unbiased: int = None,
+    exp_max_unbiased: int = None,
 ) -> torch.Tensor:
     """Compare two MX-float tensors allowing small representable-adjacency diffs.
 
     Unlike the MxInt formats (uniform integer lattice) and BFP4 (one shared
     exponent per block -> uniform ULP), MX-float elements (MxFp4 E2M1, MxFp8R
     E5M2, MxFp8P E4M3) carry their own exponent on top of the block's E8M0
-    scale, so the representable lattice is non-uniform. For an element format
-    with `mantissa_bits` mantissa bits the local step at a value v is exactly
-    2^(floor(log2|v|) - mantissa_bits) -- derivable per element from v's own
-    magnitude, no block scale needed. A position is valid iff |g-r| is within
-    `max_steps` such local steps (golden and HW within `max_steps` adjacent
-    representable values). Sign flips and larger jumps still fail.
+    scale, so the representable lattice is non-uniform. For a NORMAL element the
+    local step at a value v is 2^(floor(log2|v|) - mantissa_bits). A position is
+    valid if |g-r| is within `max_steps` such local steps. Sign flips and
+    larger jumps still fail.
 
-    HW flushes subnormals to 0, so a flushed value is 0 on both sides and is
-    caught by the a==0 branch (exact match) -- no separate subnormal handling.
+    Subnormal elements need the block scale: below the block's min-normal
+    magnitude the representable step stops halving and is constant
+    (block_scale * 2^(exp_min_unbiased - mantissa_bits)). Golden/result arrive
+    in HW block order (32 contiguous elements = one face-row-pair MX block), so
+    the shared block exponent is floor(log2(block_amax)); we clamp each
+    element's exponent up to the subnormal floor
+    `exp_min_unbiased + block_exp - exp_max_unbiased`. This only ever *raises*
+    the step for subnormal-range elements (normals keep their own exponent,
+    identical to the original per-element formula), so it never tightens a
+    previously-passing comparison; it just stops rejecting spec-legal adjacent
+    subnormals (e.g. MxFp6P 0.5 vs 0.75 one block-lattice step apart in a block
+    scaled by 2). When the format exponents are not supplied the clamp is
+    skipped and behavior matches the original per-element step.
+
+    NOTE: this tolerance exists to absorb a real, irreducible golden-vs-HW
+    residual -- the golden reduces with torch (fp32-internal accumulation, one
+    round) while the HW FPU accumulates in bf16/dest precision, so boundary
+    values disagree by up to ~1 representable step. The compare is not modeling
+    HW exactly; it is bounding that residual.
     """
     g = golden.float().flatten()
     r = result.float().flatten()
@@ -476,27 +463,52 @@ def _mxfp_block_aware_compare(
     if n == 0:
         return torch.ones(0, dtype=torch.bool)
 
-    both_nan = torch.isnan(g) & torch.isnan(r)
+    num_blocks = (n + MX_FORMAT_BLOCK_SIZE - 1) // MX_FORMAT_BLOCK_SIZE
+    pad = num_blocks * MX_FORMAT_BLOCK_SIZE - n
+    if pad:
+        g = torch.cat([g, g.new_zeros(pad)])
+        r = torch.cat([r, r.new_zeros(pad)])
+    g_blk = g.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    r_blk = r.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
-    # Per-element local lattice step from the larger magnitude.
+    both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+
+    # Per-element exponent from the larger magnitude.
     a = torch.nan_to_num(
-        torch.maximum(g.abs(), r.abs()), nan=0.0, posinf=0.0, neginf=0.0
+        torch.maximum(g_blk.abs(), r_blk.abs()), nan=0.0, posinf=0.0, neginf=0.0
     )
     safe = a > 0
     exp = torch.zeros_like(a)
     exp[safe] = torch.floor(torch.log2(a[safe]))
+
+    if exp_min_unbiased is not None and exp_max_unbiased is not None:
+        # Clamp each element's exponent up to the block's subnormal floor.
+        block_amax = a.amax(dim=1)
+        nz = block_amax > 0
+        block_exp = torch.where(
+            nz,
+            torch.floor(
+                torch.log2(torch.where(nz, block_amax, torch.ones_like(block_amax)))
+            ),
+            torch.zeros_like(block_amax),
+        )
+        sub_floor = (exp_min_unbiased + block_exp - exp_max_unbiased).unsqueeze(1)
+        exp = torch.maximum(exp, sub_floor)
+
     local_ulp = torch.where(
         safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(a)
     )
 
-    diff = (g - r).abs()
+    diff = (g_blk - r_blk).abs()
     # Relative float32-rounding guard (~1 ULP at the comparison magnitude) instead of a
     # fixed absolute slack. A constant would dominate `max_steps * local_ulp` for small
     # magnitudes (tiny block scales) and let sign flips / multi-step jumps pass.
     is_valid = torch.where(
-        safe, diff <= max_steps * local_ulp + torch.finfo(torch.float32).eps * a, g == r
+        safe,
+        diff <= max_steps * local_ulp + torch.finfo(torch.float32).eps * a,
+        g_blk == r_blk,
     )
-    return is_valid | both_nan
+    return (is_valid | both_nan).reshape(-1)[:n]
 
 
 def passed_test(
@@ -548,25 +560,26 @@ def passed_test(
         # Uniform integer lattice per block: ULP = block_scale / elem_scale.
         # Replaces the loose torch.isclose(rtol=0.35) + count-based mismatch
         # fallback with a principled per-block lattice-step check; the per-format
-        # (elem_scale, max_ulp_steps) live in _MXINT_COMPARE_PARAMS.
-        elem_scale, max_ulp_steps = _MXINT_COMPARE_PARAMS[output_data_format]
+        # element params come from MX_INT_SPECS.
+        spec = MX_INT_SPECS[output_data_format]
         is_valid = _mxint_block_aware_compare(
             golden_tensor,
             res_tensor,
-            elem_scale=elem_scale,
-            max_ulp_steps=max_ulp_steps,
+            elem_scale=spec.elem_scale,
+            max_ulp_steps=spec.max_ulp_steps,
         )
     elif output_data_format.is_mx_fp_format():
-        # Non-uniform float lattice (E2M1 / E5M2 / E4M3): per-element adjacency
-        # check instead of a fixed ULP. Replaces the loose torch.isclose +
-        # count fallback; per-format (mantissa_bits, max_steps) in
-        # _MXFP_COMPARE_PARAMS.
-        mantissa_bits, max_steps = _MXFP_COMPARE_PARAMS[output_data_format]
+        # Non-uniform float lattice (E2M1 / E5M2 / E4M3 / E3M2 / E2M3): per-element
+        # adjacency check instead of a fixed ULP. Replaces the loose torch.isclose
+        # + count fallback; per-format element params come from MX_FP_SPECS.
+        spec = MX_FP_SPECS[output_data_format]
         is_valid = _mxfp_block_aware_compare(
             golden_tensor,
             res_tensor,
-            mantissa_bits=mantissa_bits,
-            max_steps=max_steps,
+            mantissa_bits=spec.man_bits,
+            max_steps=spec.max_compare_steps,
+            exp_min_unbiased=spec.exp_min_unbiased,
+            exp_max_unbiased=spec.exp_max_unbiased,
         )
     else:
         is_close = torch.isclose(

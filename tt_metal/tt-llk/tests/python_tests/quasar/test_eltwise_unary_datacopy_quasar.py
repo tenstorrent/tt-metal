@@ -113,6 +113,10 @@ DATACOPY_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp6P,
+        DataFormat.MxFp6R,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,

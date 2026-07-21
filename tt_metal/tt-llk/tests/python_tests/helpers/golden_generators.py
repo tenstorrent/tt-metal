@@ -25,6 +25,8 @@ from helpers.llk_params import (
 )
 from helpers.pack import (
     pack_mxfp4,
+    pack_mxfp6p,
+    pack_mxfp6r,
     pack_mxfp8p,
     pack_mxfp8r,
     pack_mxint2,
@@ -34,6 +36,8 @@ from helpers.pack import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import (
     unpack_mxfp4,
+    unpack_mxfp6p,
+    unpack_mxfp6r,
     unpack_mxfp8p,
     unpack_mxfp8r,
     unpack_mxint2,
@@ -468,6 +472,12 @@ def quantize_mx_stimuli(
         case DataFormat.MxFp4:
             packed = pack_mxfp4(tensor, num_faces=num_faces)
             return unpack_mxfp4(packed, num_faces=num_faces)
+        case DataFormat.MxFp6R:
+            packed = pack_mxfp6r(tensor, num_faces=num_faces)
+            return unpack_mxfp6r(packed, num_faces=num_faces)
+        case DataFormat.MxFp6P:
+            packed = pack_mxfp6p(tensor, num_faces=num_faces)
+            return unpack_mxfp6p(packed, num_faces=num_faces)
         case DataFormat.MxInt8:
             packed = pack_mxint8(tensor, num_faces=num_faces)
             return unpack_mxint8(packed, num_faces=num_faces)
@@ -542,14 +552,13 @@ def quantize_mx_tensor_chunked(
 def quantize_input_to_unpack_format(
     operand: torch.Tensor,
     input_format: Optional[DataFormat],
-    *,
-    all_mx_formats: bool = False,
 ) -> torch.Tensor:
     """
     Quantize input stimuli to match the values visible after hardware unpack.
 
-    Some callers only model MXFP4 today; keep that as the default and let broader
-    MX golden paths opt in explicitly.
+    Every MX format is quantized to the lattice the unpacker produces; without
+    this, inputs keep finer-than-format bf16 values and diverge from HW (which
+    quantizes on unpack).
     """
     if input_format == DataFormat.Bfp2_b:
         return _bfp2b_to_float16b(operand)
@@ -558,9 +567,7 @@ def quantize_input_to_unpack_format(
     if input_format == DataFormat.Bfp8_b:
         return _bfp8b_to_float16b(operand)
     if input_format is not None and input_format.is_mx_format():
-        if all_mx_formats or input_format == DataFormat.MxFp4:
-            return quantize_mx_tensor_chunked(operand, input_format)
-        return operand
+        return quantize_mx_tensor_chunked(operand, input_format)
     return operand
 
 
@@ -584,6 +591,8 @@ class SrcFormatModel:
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
+            DataFormat.MxFp6R: SrcFormatModel._mxfp6r_to_tf32,
+            DataFormat.MxFp6P: SrcFormatModel._mxfp6p_to_tf32,
             DataFormat.MxFp4: SrcFormatModel._mxfp4_to_tf32,
             DataFormat.MxInt8: SrcFormatModel._mxint8_to_tf32,
             DataFormat.MxInt4: SrcFormatModel._mxint4_to_tf32,
@@ -748,6 +757,32 @@ class SrcFormatModel:
         Golden generators work on the original stimuli data (before compression).
         MxFp4 stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
         The pack/unpack functions handle the MxFp4 compression/decompression separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxfp6r_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxFp6R format (MX E3M2 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MxFp6R stimuli are generated as torch.bfloat16, so we delegate to Float16_b
+        conversion. The pack/unpack functions handle the MxFp6 roundtrip separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxfp6p_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MxFp6P format (MX E2M3 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MxFp6P stimuli are generated as torch.bfloat16, so we delegate to Float16_b
+        conversion. The pack/unpack functions handle the MxFp6 roundtrip separately.
         """
         return SrcFormatModel._fp16b_to_tf32(tensor)
 
@@ -1643,10 +1678,7 @@ class DataCopyGolden:
     ):
         torch_format = format_dict[data_format]
 
-        # Quantize input to match what hardware actually sees after unpack from L1.
-        operand1 = quantize_input_to_unpack_format(
-            operand1, input_format, all_mx_formats=True
-        )
+        operand1 = quantize_input_to_unpack_format(operand1, input_format)
 
         height, width = input_dimensions[0], input_dimensions[1]
 
@@ -1720,6 +1752,8 @@ class DataCopyGolden:
                 result = _bfp2b_to_float16b(data, dims)
             else:
                 result = _bfp8b_to_float16b(data, dims)
+        elif data_format.is_mx_format():
+            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
 
         # Final FTZ pass: hardware always flushes subnormals to zero. The BFP
         # helpers no longer FTZ internally, so funnel every output (BFP, MX,
@@ -1764,9 +1798,7 @@ class TypecastGolden:
         output_format: DataFormat,
         input_dimensions: list[int] = [32, 32],
     ):
-        operand = quantize_input_to_unpack_format(
-            operand, input_format, all_mx_formats=True
-        )
+        operand = quantize_input_to_unpack_format(operand, input_format)
         if not isinstance(operand, torch.Tensor):
             operand = torch.tensor(operand)
 
@@ -4270,6 +4302,8 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
+        # Quantize every MX input to the lattice the unpacker produces, matching
+        # what HW sees after unpack.
         operand = quantize_input_to_unpack_format(operand, input_format)
 
         result = untilize_block(
