@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -46,10 +47,31 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
 
     // Validate intermediate tensor if provided
     if (tensor_args.optional_intermediate_tensor.has_value()) {
-        ttnn::experimental::ccl::validate_intermediate_tensor(
+        const auto& interm = tensor_args.optional_intermediate_tensor.value();
+        // On the contiguous ring fast path the intermediate is a chunk-paged staging tensor (UINT8,
+        // row-major, interleaved DRAM), not input-shaped, so the legacy layout check does not apply.
+        // Validate against the staging spec instead and point callers at the allocation helper.
+        const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
+        auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
             input_tensor,
-            tensor_args.optional_intermediate_tensor.value(),
-            operation_attributes.optional_intermediate_mem_config);
+            operation_attributes.topology,
+            operation_attributes.dim,
+            operation_attributes.ring_size,
+            fp32_dest_acc_en);
+        if (stage_spec.has_value()) {
+            TT_FATAL(interm.storage_type() == StorageType::DEVICE, "Persistent intermediate tensor must be on device");
+            TT_FATAL(
+                interm.logical_shape() == stage_spec->logical_shape() && interm.dtype() == stage_spec->data_type() &&
+                    interm.layout() == stage_spec->layout() &&
+                    interm.memory_config().buffer_type() == stage_spec->memory_config().buffer_type(),
+                "Persistent intermediate does not match the contiguous reduce-scatter staging layout (expected "
+                "shape {}, UINT8 row-major interleaved DRAM). Allocate it with "
+                "reduce_scatter_minimal_async_create_intermediate_buffer.",
+                stage_spec->logical_shape());
+        } else {
+            ttnn::experimental::ccl::validate_intermediate_tensor(
+                input_tensor, interm, operation_attributes.optional_intermediate_mem_config);
+        }
     }
 
     // Validate semaphore count
@@ -64,6 +86,29 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+
+    auto output_shape = input_tensor.logical_shape();
+    output_shape[operation_attributes.dim] /= operation_attributes.ring_size;
+    TensorSpec output_spec(
+        output_shape,
+        TensorLayout(
+            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
+
+    // Contiguous ring fast path: the intermediate is a chunk-paged, row-major, interleaved-DRAM staging
+    // buffer (page = one chunk = tile_granularity tiles). This lets the writer send whole chunks with a
+    // single contiguous fused-unicast per packet instead of scatter-writes. The same spec is used to
+    // allocate caller-provided persistent buffers (reduce_scatter_ring_interm_staging_spec). See
+    // rs-contiguous-interm-design.
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
+    if (auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
+            input_tensor,
+            operation_attributes.topology,
+            operation_attributes.dim,
+            operation_attributes.ring_size,
+            fp32_dest_acc_en)) {
+        return {*stage_spec, output_spec};
+    }
+
     auto inter_shape = input_tensor.padded_shape();
 
     MemoryConfig adjusted_intermediate_mem_config,
@@ -89,20 +134,12 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_
         adjusted_intermediate_mem_config = intermediate_mem_config;
     }
 
-    auto output_shape = input_tensor.logical_shape();
-    output_shape[operation_attributes.dim] /= operation_attributes.ring_size;
-
     return {
         TensorSpec(
             inter_shape,
             TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
-        TensorSpec(
-            output_shape,
-            TensorLayout(
-                input_tensor.dtype(),
-                input_tensor.tensor_spec().page_config(),
-                operation_attributes.output_mem_config)),
+        output_spec,
     };
 }
 

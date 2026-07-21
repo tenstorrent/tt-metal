@@ -61,6 +61,32 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
+
+    ttnn::bind_function<"reduce_scatter_minimal_async_create_intermediate_buffer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Allocates the intermediate persistent buffer for the contiguous ring reduce_scatter_minimal_async
+        fast path (Ring topology, scatter dim != 0).
+
+        On this path the intermediate is a chunk-paged, row-major, interleaved-DRAM staging tensor rather
+        than an input-shaped tensor, so it must be allocated with the exact layout the op expects. This
+        helper reuses the op's own sizing so the returned tensor is guaranteed to match. Pass it as
+        persistent_output_buffers[0]. The `dim`, `topology`, `cluster_axis`, and `compute_kernel_config`
+        arguments must match those passed to reduce_scatter_minimal_async.
+
+        Raises if the configuration does not use the contiguous path; for the legacy path the intermediate
+        has the input tensor's shape and can be allocated directly.
+
+        Returns:
+            ttnn.Tensor: the intermediate staging buffer, allocated on the input tensor's device.
+        )doc",
+        &ttnn::experimental::reduce_scatter_minimal_async_create_intermediate_buffer,
+        nb::arg("input_tensor"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

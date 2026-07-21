@@ -5,8 +5,10 @@
 #include "reduce_scatter_minimal_async.hpp"
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental {
 
@@ -114,6 +116,43 @@ ttnn::Tensor reduce_scatter_minimal_async(
 
     // Return the output tensor (index 1, intermediate is at index 0)
     return result.at(1);
+}
+
+ttnn::Tensor reduce_scatter_minimal_async_create_intermediate_buffer(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    ttnn::ccl::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required to allocate the reduce_scatter intermediate buffer");
+
+    // Mirror reduce_scatter_minimal_async's resolution so the sizing is identical to what the op derives.
+    const int32_t rank = input_tensor.logical_shape().rank();
+    const int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+    const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    const ttnn::ccl::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+
+    // fp32 inputs default to fp32 dest-acc (see reduce_scatter_minimal_async); this affects tile_granularity
+    // and therefore the staging page size, so it must be resolved the same way here.
+    auto resolved_compute_kernel_config = compute_kernel_config;
+    if (!resolved_compute_kernel_config.has_value() && input_tensor.dtype() == DataType::FLOAT32) {
+        resolved_compute_kernel_config = ttnn::DeviceComputeKernelConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+        };
+    }
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(resolved_compute_kernel_config);
+
+    auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
+        input_tensor, usable_topology, scatter_dim, num_devices, fp32_dest_acc_en);
+    TT_FATAL(
+        stage_spec.has_value(),
+        "reduce_scatter_minimal_async_create_intermediate_buffer only applies to the contiguous fast path "
+        "(Ring topology, scatter dim != 0). For other configurations the intermediate has the input tensor "
+        "shape and can be allocated directly.");
+
+    return create_device_tensor(*stage_spec, mesh_device);
 }
 
 }  // namespace ttnn::experimental
