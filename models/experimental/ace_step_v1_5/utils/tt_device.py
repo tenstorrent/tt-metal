@@ -548,6 +548,13 @@ def ace_step_dit_dispatch_core_config(ttnn_mod: Any) -> Any:
     )
 
 
+def ace_step_preprocess_on_mesh() -> bool:
+    """Phase-A-on-mesh: run preprocess (5 Hz LM / Qwen / condition / detok) on the FULL mesh
+    instead of a 1×1 chip, so their TP shards. Opt-in via ``ACE_STEP_PREPROCESS_ON_MESH``;
+    default off → the validated 1×1 preprocess + DiT-reexec path is unchanged."""
+    return os.environ.get("ACE_STEP_PREPROCESS_ON_MESH", "").strip().lower() in ("1", "on", "true", "yes")
+
+
 def open_preprocess_device(
     ttnn_mod: Any,
     *,
@@ -555,13 +562,24 @@ def open_preprocess_device(
     num_command_queues: int = 1,
     mesh_sku: str | None = None,
 ) -> Any:
-    """Open a 1×1 device for Qwen / 5 Hz LM / detokenizer (never a multi-device mesh).
+    """Open the preprocess device: a 1×1 chip by default (Qwen / 5 Hz LM / detokenizer).
 
-    When ``mesh_sku`` is a multi-device SKU (e.g. ``BH_QB``), sets ``TT_VISIBLE_DEVICES`` to
-    ``device_id`` for this open so UMD does not start all chips during Phase A.
+    When ``ACE_STEP_PREPROCESS_ON_MESH`` is set on a multi-device SKU, open the **full mesh**
+    instead (same path as the DiT mesh: fabric + DiT MGD), so Phase-A modules run on the mesh and
+    their TP activates. The demo then reuses this mesh for DiT (no reexec). Default: 1×1.
 
-    Use :func:`ace_step_preprocess_num_command_queues` when trace replay is enabled.
+    When ``mesh_sku`` is a multi-device SKU (e.g. ``BH_QB``), the 1×1 path sets
+    ``TT_VISIBLE_DEVICES`` to ``device_id`` so UMD does not start all chips during Phase A.
     """
+    if ace_step_preprocess_on_mesh() and mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
+        print("[ace_step_v1_5] Phase-A-on-mesh: opening full mesh for preprocess (TP active)", flush=True)
+        _ensure_full_cluster_env_for_dit(mesh_sku)
+        return open_dit_device(
+            ttnn_mod,
+            mesh_sku=mesh_sku,
+            device_id=device_id,
+            num_command_queues=num_command_queues,
+        )
     return open_single_tt_device(
         ttnn_mod,
         device_id=device_id,

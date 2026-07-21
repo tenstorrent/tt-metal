@@ -294,7 +294,30 @@ class TtQwen3EncoderMLP:
                 mesh_mapper=mapper,
             )
 
-        self.w_down = as_w("down_proj", dtype=_down_dtype)
+        # TP: column-parallel gate/up, row-parallel down + all-reduce. OFF path uses the passed
+        # (replicate) mapper unchanged. deg==1 makes np.split/concat the identity of the old layout.
+        from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import resolve_tp_config, tp_weight_mesh_mapper
+
+        self._tp = resolve_tp_config(device)
+        _deg = self._tp.degree
+        _tp_on = self._tp.enabled and _deg > 1
+        self._local_intermediate = int(intermediate_size) // _deg if _tp_on else int(intermediate_size)
+        _col = tp_weight_mesh_mapper(device, shard_dim=0, cfg=self._tp) if _tp_on else mapper
+        _row = tp_weight_mesh_mapper(device, shard_dim=1, cfg=self._tp) if _tp_on else mapper
+
+        def _interleave(mats: list):
+            splits = [np.split(m, _deg, axis=0) for m in mats]
+            return np.concatenate([splits[j][d] for d in range(_deg) for j in range(len(mats))], axis=0)
+
+        # down_proj: row-parallel (shard input=intermediate on dim 1) under TP, else replicate.
+        self.w_down = ttnn.as_tensor(
+            weights_np[f"{base}.down_proj.weight"],
+            device=device,
+            dtype=_down_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=_row,
+        )
         # Wide cond MLPs (e.g. timbre 6144×2048 gate/up): L1 linear outputs clash with matmul
         # static CBs (L1 buffer @ 1096832 vs CB end @ 1167872 on Blackhole). Keep DRAM activations.
         self._mlp_keep_dram_activations = int(intermediate_size) >= 4608
@@ -302,20 +325,36 @@ class TtQwen3EncoderMLP:
         if self._fused_gate_up:
             gate_host = weights_np[f"{base}.gate_proj.weight"]
             up_host = weights_np[f"{base}.up_proj.weight"]
-            gate_up_host = np.concatenate([gate_host, up_host], axis=0)
+            # Fused: interleave [gate_d, up_d] per chip so a dim-0 shard gives each its half of both.
+            gate_up_host = _interleave([gate_host, up_host])
             self.w_gate_up = ttnn.as_tensor(
                 gate_up_host,
                 device=device,
                 dtype=_gate_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
-                mesh_mapper=mapper,
+                mesh_mapper=_col,
             )
             self.w_gate = None
             self.w_up = None
         else:
-            self.w_gate = as_w("gate_proj", dtype=_gate_dtype)
-            self.w_up = as_w("up_proj", dtype=_gate_dtype)
+            # Unfused: each of gate/up is column-parallel on its own dim 0 (heads/features contiguous).
+            self.w_gate = ttnn.as_tensor(
+                weights_np[f"{base}.gate_proj.weight"],
+                device=device,
+                dtype=_gate_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=_col,
+            )
+            self.w_up = ttnn.as_tensor(
+                weights_np[f"{base}.up_proj.weight"],
+                device=device,
+                dtype=_gate_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=_col,
+            )
             self.w_gate_up = None
 
     def _l1_activation(self, t: ttnn.Tensor) -> ttnn.Tensor:
@@ -337,9 +376,9 @@ class TtQwen3EncoderMLP:
                     self.device,
                     seq_len=int(seq_len),
                     hidden_size=self.hidden_size,
-                    intermediate_size=self.intermediate_size,
+                    intermediate_size=self._local_intermediate,
                     batch_size=int(batch_size),
-                    out_dim=(2 * self.intermediate_size if fused else None),
+                    out_dim=(2 * self._local_intermediate if fused else None),
                 )
                 if pc is not None:
                     self._gate_up_pc_cache[key] = pc
@@ -360,7 +399,7 @@ class TtQwen3EncoderMLP:
             pc = ace_step_cond_linear_program_config(
                 self.device,
                 seq_len=int(seq_len),
-                in_dim=self.intermediate_size,
+                in_dim=self._local_intermediate,
                 out_dim=self.hidden_size,
                 batch_size=int(batch_size),
             )
@@ -391,7 +430,7 @@ class TtQwen3EncoderMLP:
         )
         if self._fused_gate_up:
             gu_bf8 = ttnn.linear(x_bf8, self.w_gate_up, bias=None, transpose_b=True, dtype=_bf8, **lin_gu)
-            inter = self.intermediate_size
+            inter = self._local_intermediate  # per-chip half under TP (== full when off)
             gate = ttnn.slice(gu_bf8, (0, 0, 0, 0), (b_x, 1, s, inter))
             up = ttnn.slice(gu_bf8, (0, 0, 0, inter), (b_x, 1, s, 2 * inter))
             ace_step_safe_deallocate(ttnn, gu_bf8)
@@ -410,6 +449,11 @@ class TtQwen3EncoderMLP:
         lin_down = self._down_linear_kwargs(batch_size=b_x, seq_len=s)
         out_bf8 = ttnn.linear(h_bf8, self.w_down, bias=None, transpose_b=True, dtype=_bf8, **lin_down)
         ace_step_safe_deallocate(ttnn, h_bf8)
+        # Row-parallel down_proj: sum the per-chip partial outputs across the TP shards.
+        if self._tp.enabled and self._tp.degree > 1:
+            from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import tp_all_reduce
+
+            out_bf8 = tp_all_reduce(out_bf8, self.device, cfg=self._tp)
         return ttnn.typecast(out_bf8, dtype=self.dtype, **_tc_kw)
 
 
@@ -490,21 +534,49 @@ class _TtQwen3EncoderLayer:
         # tensor. One matmul (instead of separate q + kv) feeds the single-input
         # ``nlp_create_qkv_heads`` kernel — replaces two ShardedToInterleaved + the slower
         # two-tensor head-split with one of each (mirrors tt_transformers Attention prefill).
+        # TP: head-parallel attention — Q/K/V column-parallel by head, o_proj row-parallel + all-reduce.
+        from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import resolve_tp_config, tp_weight_mesh_mapper
+
+        self._tp = resolve_tp_config(device)
+        _deg = self._tp.degree
+        _tp_on = self._tp.enabled and _deg > 1
+        if _tp_on and (self.nh % _deg != 0 or self.nkv % _deg != 0):
+            raise ValueError(f"TP degree {_deg} must divide nh {self.nh} and nkv {self.nkv}")
+        self._nh_local = self.nh // _deg if _tp_on else self.nh
+        self._nkv_local = self.nkv // _deg if _tp_on else self.nkv
+        _col = tp_weight_mesh_mapper(device, shard_dim=0, cfg=self._tp) if _tp_on else mapper
+        _row = tp_weight_mesh_mapper(device, shard_dim=1, cfg=self._tp) if _tp_on else mapper
+
         wq_host = weights_np[f"{prefix}.self_attn.q_proj.weight"]
         wk_host = weights_np[f"{prefix}.self_attn.k_proj.weight"]
         wv_host = weights_np[f"{prefix}.self_attn.v_proj.weight"]
-        self._q_dim_o = int(wq_host.shape[0])
-        self._kv_dim_o = int(wk_host.shape[0])
-        wqkv_host = np.concatenate([wq_host, wk_host, wv_host], axis=0)
+        # Per-chip local q/kv output dims (== full when TP off).
+        self._q_dim_o = int(wq_host.shape[0]) // _deg if _tp_on else int(wq_host.shape[0])
+        self._kv_dim_o = int(wk_host.shape[0]) // _deg if _tp_on else int(wk_host.shape[0])
+        if _tp_on:
+            # Interleave [q_d, k_d, v_d] per chip so a dim-0 shard gives each its q+k+v heads.
+            gq = np.split(wq_host, _deg, axis=0)
+            gk = np.split(wk_host, _deg, axis=0)
+            gv = np.split(wv_host, _deg, axis=0)
+            wqkv_host = np.concatenate([c for d in range(_deg) for c in (gq[d], gk[d], gv[d])], axis=0)
+        else:
+            wqkv_host = np.concatenate([wq_host, wk_host, wv_host], axis=0)
         self.wqkv = ttnn.as_tensor(
             wqkv_host,
             device=device,
             dtype=self._attn_qo_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
-            mesh_mapper=mapper,
+            mesh_mapper=_col,
         )
-        self.wo = as_t("self_attn.o_proj.weight", qo=True)
+        self.wo = ttnn.as_tensor(
+            weights_np[f"{prefix}.self_attn.o_proj.weight"],
+            device=device,
+            dtype=self._attn_qo_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            mesh_mapper=_row,
+        )
         self.q_norm_w = as_t("self_attn.q_norm.weight")
         self.k_norm_w = as_t("self_attn.k_norm.weight")
         _mlp_kw = dict(
@@ -646,7 +718,7 @@ class _TtQwen3EncoderLayer:
 
         b = int(x.shape[0])
         s = int(x.shape[2])
-        H, kv_h, Dh = self.nh, self.nkv, self.dh
+        H, kv_h, Dh = self._nh_local, self._nkv_local, self.dh  # local head counts under TP
 
         hsz = self.hidden_size
         q_dim_o = self._q_dim_o
@@ -739,6 +811,11 @@ class _TtQwen3EncoderLayer:
         lin_o = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
         ctx_o = self._maybe_shard_attn_in0(ctx, batch_size=b, seq_len=s, in_dim=q_dim_o, out_dim=hsz)
         attn_out = ttnn.linear(ctx_o, self.wo, bias=None, transpose_b=True, **lin_o)
+        # Row-parallel o_proj: sum per-chip partial outputs across TP shards before the residual add.
+        if self._tp.enabled and self._tp.degree > 1:
+            from models.experimental.ace_step_v1_5.ttnn_impl.tp_config import tp_all_reduce
+
+            attn_out = tp_all_reduce(attn_out, self.device, cfg=self._tp)
         ace_step_safe_deallocate(ttnn, ctx_o if ctx_o is not ctx else None)
         ttnn.deallocate(ctx)
         if _l1_mc is not None:
