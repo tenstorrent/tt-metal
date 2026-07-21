@@ -434,7 +434,7 @@ params.kernel_run_args = {{
 SetProgramRunArgs(program, params); // temporary free function
 ```
 
-> **Varargs (niche).** For kernels that read a genuinely dynamic argument tail in a loop — the canonical case being an N-dimensional shape where N is a compile-time `rank` — Metal 2.0 provides a positional "varargs" mechanism alongside named arguments. It is rarely needed; when each argument is read by a constant index, the named form is clearer. See the headers if you encounter it.
+> **Varargs (niche).** For kernels that read a genuinely dynamic argument tail in a loop — the canonical case being an N-dimensional shape where N is a compile-time `rank` — Metal 2.0 provides a positional "varargs" mechanism alongside named arguments.
 
 ---
 
