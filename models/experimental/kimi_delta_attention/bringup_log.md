@@ -303,6 +303,30 @@ kernel** (collapse hundreds of kernels → O(1)); it's the major remaining perf 
 cut *wall-clock* (host dispatch) but not the profiler device-time sum. SP sequence-sharding (task 15,
 Galaxy) is the other open item.
 
+### Phase 9 — C++ fused chunk kernel: decision + plan
+
+**Decision: FORK** `ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/` → new `chunk_kda/`
+(not greenfield, not a `diagonal_gate` flag on the live op). Evidence (recon):
+- ~80% reusable verbatim: op scaffolding, phased prep/scan (grid fan-out + value-parallel scan), and the
+  **WY block-inverse** (`invert16`/`invert_block`/`asm4` in `compute/chunk_gdn_prep.cpp`) — numerically-hard,
+  already-debugged fp32. The op's comments (`chunk_gated_delta_rule.cpp:302-307`) say Neumann-doubling
+  (my prototype's inverse) goes **all-NaN at NC≥16** → greenfield would repeat that. **Keep the op's WY
+  inverse; take the decay math from the prototype.**
+- Scalar→diagonal delta is **~14 localized sites** (all in `compute/chunk_gdn_prep.cpp` + `chunk_gdn_scan.cpp`):
+  gate CBs resize (`cb_g/decay*` `Ct→ck`, `cb_dl` `1→Kt`); 5 row-broadcast decay muls → `[C,K]` elementwise;
+  scalar state-decay `bcast_scalar_mul` → per-K column broadcast (copy `bcast_cols_mul` into scan); host g
+  head-split `[BH,NC,C,1]→[BH,NC,C,K]`; **delete** the `[C,C]` L_mask block (`prep.cpp:450-468`) and its two
+  mask-multiplies, replace by pre-scaling matmul operands `(k⊙eg)@(k⊙eng)ᵀ` — net *simpler*. Prototype
+  already validated this factored form at PCC 0.9999993.
+- Not a flag: the diverging CB tile-sizes + L_mask branch are compile-time; a flag risks regressing the
+  qwen36 production GDN (`fused_chunk.py`, `tp.py`).
+- Build surface: mirror the dir (host op, device op, phased prims, 2 program factories, compute prep/scan,
+  dataflow readers/writers, nanobind), + `sources.cmake`/`CMakeLists.txt`/`transformer_nanobind.cpp`.
+
+**Plan:** (A) fork verbatim + rename + build + verify identical to the original (scalar gate) — de-risk the
+fork mechanics; (B) apply the ~14 gate edits, build, PCC vs `naive_chunk_kda`; (C) wire into the layer,
+measure vs the composed ~10.9 ms. C++ builds are multi-minute; expect kernel-debug iterations.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
