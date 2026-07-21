@@ -142,19 +142,18 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
 
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t kernel_width = get_compile_time_arg_val(9);
-    constexpr bool coalesce_kw_reads = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);
+    constexpr uint32_t kernel_width = get_compile_time_arg_val(8);
+    constexpr bool coalesce_kw_reads = get_compile_time_arg_val(9) == 1;
     // Read-back scratch for the dest-reuse accumulation. The host points this at out_dfb for a single
     // height block (in-place) or at a dedicated scratch CB for multiple blocks.
-    constexpr uint32_t partials_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t partials_cb_id = get_compile_time_arg_val(10);
 
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_in1(in1_cb_id);
