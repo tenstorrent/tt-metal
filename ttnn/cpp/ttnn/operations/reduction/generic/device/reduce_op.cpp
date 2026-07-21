@@ -222,7 +222,7 @@ Tensor reduce(
         // precision. Applies to SUM only:
         // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
         // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
-        // MAX/MIN must not use this path: MIN is lowered to MAX + negate, and the fused-negate
+        // MAX/MIN must not use this path: float/bf16 MIN uses -MAX(-x), and the fused-negate
         // W step produces wrong results with an FP32 intermediate (issue #40854). They also gain
         // no precision from FP32 since they select, not accumulate.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());

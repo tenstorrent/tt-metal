@@ -887,9 +887,9 @@ ALWI void max_reduce_with_indices_init() {
  *
  * | Argument        | Description                                                                     | Type      | Valid Range
  * |-----------------|---------------------------------------------------------------------------------|-----------|-------------------------------------------------------
- * | pool_type       | The type of reduction operation, SUM or AVG (MAX/MIN for REDUCE_COL only)       | PoolType  | SUM, AVG, MAX, MIN
+ * | pool_type       | The type of reduction operation                                                 | PoolType  | SUM, AVG, MAX, MIN
  * | format          | The data format for the reduction operation                                     | DataFormat| Float32, Int32, UInt32, UInt16, Float16_b
- * | reduce_dim      | The reduction dimension                                                         | ReduceDim | REDUCE_COL or REDUCE_ROW (REDUCE_ROW only for SUM and MAX)
+ * | reduce_dim      | The reduction dimension                                                         | ReduceDim | REDUCE_COL or REDUCE_ROW (REDUCE_ROW only for SUM, MAX and MIN)
  * | idst            | The index of the tile in DST register containing the data to be reduced         | uint32_t  | Must be less than the size of the DST register buffer
  * | ct_dim          | Tile dimension along columns (runtime); must be 1 when reduce_dim is REDUCE_COL | uint32_t  | >= 1; default 1
  * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
