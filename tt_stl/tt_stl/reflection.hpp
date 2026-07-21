@@ -1557,7 +1557,7 @@ inline void append_canonical(std::string& out, const T& object) {
         append_bytes(out, &h, sizeof(h));
     } else if constexpr (ttsl::concepts::Reflectable<T>) {
         reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
-    } else if constexpr (detail::is_std_hashable_v<T>) {
+    } else if constexpr (detail::is_std_hashable_v<T>) {  // order matters, is_std_hashable_v must be after Reflectable
         const std::size_t h = std::hash<T>{}(object);  // lossy fallback
         append_bytes(out, &h, sizeof(h));
     } else {
