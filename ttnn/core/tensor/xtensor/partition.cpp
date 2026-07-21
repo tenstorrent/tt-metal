@@ -21,7 +21,7 @@
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/views/xview.hpp>
 
-namespace tt::tt_metal::experimental::xtensor {
+namespace ttnn::experimental::xtensor {
 namespace {
 
 ttsl::SmallVector<int> normalize_dims(const ttsl::SmallVector<int>& dims, size_t tensor_dims) {
@@ -306,4 +306,4 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(float8_e4m3)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
 
-}  // namespace tt::tt_metal::experimental::xtensor
+}  // namespace ttnn::experimental::xtensor

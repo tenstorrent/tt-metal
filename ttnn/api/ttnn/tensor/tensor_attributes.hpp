@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/storage.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
 public:
@@ -31,5 +31,12 @@ public:
 private:
     Storage storage_;
 };
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat alias while call sites migrate to ttnn::.
+using TensorAttributes = ttnn::TensorAttributes;
 
 }  // namespace tt::tt_metal

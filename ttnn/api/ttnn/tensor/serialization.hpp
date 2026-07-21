@@ -10,7 +10,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 enum class DumpTensorMode : std::uint8_t {
     DISTRIBUTED_GATHER = 0,
@@ -24,6 +24,15 @@ enum class DumpTensorMode : std::uint8_t {
 // 2. Metadata includes data offsets and sizes for tensor / tensor shards (multi device context).
 void dump_tensor_flatbuffer(
     const std::string& file_name, const Tensor& tensor, DumpTensorMode mode = DumpTensorMode::DISTRIBUTED_GATHER);
-Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
+Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device = nullptr);
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
+using ttnn::dump_tensor_flatbuffer;
+using ttnn::DumpTensorMode;
+using ttnn::load_tensor_flatbuffer;
 
 }  // namespace tt::tt_metal

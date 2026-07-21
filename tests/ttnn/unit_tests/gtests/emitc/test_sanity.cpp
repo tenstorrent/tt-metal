@@ -39,7 +39,8 @@ TEST(EmitC, Sanity) {
     ttnn::Tensor v1;
     ttnn::Tensor v2;
     std::tie(v1, v2) = create_inputs_for_add();
-    ttnn::Tensor v3 = add(v1, v2);
+    // Qualify: ADL on ttnn::Tensor also finds ttnn::add.
+    ttnn::Tensor v3 = ttnn::test::add(v1, v2);
 }
 
 }  // namespace ttnn::test

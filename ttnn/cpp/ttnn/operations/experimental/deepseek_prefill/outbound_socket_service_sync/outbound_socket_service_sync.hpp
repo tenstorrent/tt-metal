@@ -8,10 +8,14 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 class D2DStreamServiceSender;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using D2DStreamServiceSender = ttnn::D2DStreamServiceSender;
 class D2HStreamService;
-}
+}  // namespace tt::tt_metal
 
 namespace ttnn::experimental {
 

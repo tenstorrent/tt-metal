@@ -34,8 +34,12 @@ struct InboundSocketServiceSyncOperation {
 
 }  // namespace ttnn::experimental::prim
 
-namespace tt::tt_metal {
+namespace ttnn {
 class D2DStreamServiceReceiver;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using D2DStreamServiceReceiver = ttnn::D2DStreamServiceReceiver;
 }  // namespace tt::tt_metal
 
 namespace ttnn::prim {

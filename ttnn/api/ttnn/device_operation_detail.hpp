@@ -12,8 +12,12 @@
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
 class Tensor;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using Tensor = ttnn::Tensor;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed

@@ -24,7 +24,7 @@
 #include "tensor/flatbuffer/overlapped_tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 namespace {
 
 void safe_fwrite(const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {
@@ -66,8 +66,8 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
         v.fused_tensor = cpu_tensor;
     }
 
-    const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
-    if (ctx->rank() == distributed::multihost::Rank(0)) {
+    const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         FILE* output_file = fopen(file_name.c_str(), "wb");
         TT_FATAL(
             output_file != nullptr,
@@ -104,7 +104,7 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
 }
 
 std::vector<OverlappedTensorView> load_overlapped_tensors(
-    const std::string& file_name, distributed::MeshDevice* device) {
+    const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device) {
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
@@ -162,4 +162,4 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
     return views;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

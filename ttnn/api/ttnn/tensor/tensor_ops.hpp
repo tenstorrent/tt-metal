@@ -12,34 +12,51 @@
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshCommandQueue;
 }  // namespace tt::tt_metal::distributed
 
-namespace tt::tt_metal {
+namespace ttnn {
 class Tensor;
-class MemoryConfig;
-class TensorSpec;
+}  // namespace ttnn
+
+// Low-level tensor transfer / layout helpers.
+// Nested under ttnn::tensor_ops so names like to_dtype / to_layout / view do not
+// collide with the high-level ttnn:: operations of the same name.
+namespace ttnn::tensor_ops {
+
+using Tensor = ttnn::Tensor;
+using TensorSpec = tt::tt_metal::TensorSpec;
+using MemoryConfig = tt::tt_metal::MemoryConfig;
+using BufferRegion = tt::tt_metal::BufferRegion;
+using DataType = tt::tt_metal::DataType;
+using Layout = tt::tt_metal::Layout;
+using QueueId = tt::tt_metal::QueueId;
+using TensorTopology = tt::tt_metal::TensorTopology;
 
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
-Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-Tensor create_device_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device, std::optional<TensorTopology> tensor_topology = std::nullopt);
+Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* mesh_device);
+Tensor create_device_tensor(
+    const TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<TensorTopology> tensor_topology = std::nullopt);
 
-tt::tt_metal::Tensor to_device(
-    const tt::tt_metal::Tensor& input_tensor,
-    distributed::MeshDevice* mesh_device,
+Tensor to_device(
+    const Tensor& input_tensor,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
     std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(
-    distributed::MeshCommandQueue& queue,
+    tt::tt_metal::distributed::MeshCommandQueue& queue,
     const std::byte* src,
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
 
 void copy_to_host(
-    distributed::MeshCommandQueue& queue,
+    tt::tt_metal::distributed::MeshCommandQueue& queue,
     const Tensor& device_tensor,
     std::byte* dst,
     const std::optional<BufferRegion>& region = std::nullopt,
@@ -51,7 +68,7 @@ void copy_to_host(
     bool blocking = true,
     std::optional<QueueId> cq_id = std::nullopt);
 
-Tensor to_layout(const Tensor& input_tensor, tt::tt_metal::Layout target_layout);
+Tensor to_layout(const Tensor& input_tensor, Layout target_layout);
 
 Tensor cpu(const Tensor& input_tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
@@ -95,6 +112,46 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
 
-std::string to_string(const Tensor& tensor);
+// NOTE: `to_string(const Tensor&)` lives in to_string.hpp / tensor_impl.hpp — not declared
+// here — to avoid colliding with the high-level `ttnn::to_string` wrapper.
+
+}  // namespace ttnn::tensor_ops
+
+namespace ttnn {
+
+// Non-colliding helpers re-exported into ttnn so ADL on ttnn::Tensor keeps working.
+// Do NOT re-export to_dtype / to_layout / to_device / view / reshape here — they collide
+// with high-level ttnn operations of the same name.
+using tensor_ops::allocate_tensor_on_host;
+using tensor_ops::copy_to_device;
+using tensor_ops::copy_to_host;
+using tensor_ops::cpu;
+using tensor_ops::create_device_tensor;
+using tensor_ops::pad;
+using tensor_ops::pad_to_tile;
+using tensor_ops::unchecked_reinterpret_layout;
+using tensor_ops::unpad;
+using tensor_ops::unpad_from_tile;
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate.
+using ttnn::tensor_ops::allocate_tensor_on_host;
+using ttnn::tensor_ops::copy_to_device;
+using ttnn::tensor_ops::copy_to_host;
+using ttnn::tensor_ops::cpu;
+using ttnn::tensor_ops::create_device_tensor;
+using ttnn::tensor_ops::pad;
+using ttnn::tensor_ops::pad_to_tile;
+using ttnn::tensor_ops::reshape;
+using ttnn::tensor_ops::to_device;
+using ttnn::tensor_ops::to_dtype;
+using ttnn::tensor_ops::to_layout;
+using ttnn::tensor_ops::unchecked_reinterpret_layout;
+using ttnn::tensor_ops::unpad;
+using ttnn::tensor_ops::unpad_from_tile;
+using ttnn::tensor_ops::view;
 
 }  // namespace tt::tt_metal

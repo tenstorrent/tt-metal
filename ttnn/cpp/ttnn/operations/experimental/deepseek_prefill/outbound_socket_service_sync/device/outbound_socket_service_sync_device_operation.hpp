@@ -11,10 +11,14 @@
 #include "outbound_socket_service_sync_device_operation_types.hpp"
 #include "outbound_socket_service_sync_program_factory.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 class D2DStreamServiceSender;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using D2DStreamServiceSender = ttnn::D2DStreamServiceSender;
 class D2HStreamService;
-}
+}  // namespace tt::tt_metal
 
 namespace ttnn::experimental::prim {
 

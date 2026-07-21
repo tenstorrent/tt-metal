@@ -13,7 +13,7 @@
 // Exports symbols
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
@@ -29,11 +29,11 @@ bool is_device_tensor(const Tensor& tensor);
 //
 // The returned reference borrows from the Tensor inside `opt`; the caller must
 // keep `opt` alive for as long as the returned reference is used.
-ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt);
+ttsl::optional_reference<const tt::tt_metal::MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt);
 
 // Returns the optimal worker cores for a sharded tensor.
-std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
-    const Tensor& tensor, NOC noc = NOC::RISCV_0_default);
+std::vector<tt::tt_metal::CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
+    const Tensor& tensor, tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default);
 
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.
@@ -69,12 +69,12 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
  *   CBDescriptor cb = cb_descriptor_from_sharded_tensor(in_cb_id, device_input_tensor);
  * @endcode
  */
-CBDescriptor cb_descriptor_from_sharded_tensor(
+tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
     const Tensor& tensor,
     uint32_t address_offset = 0,
     uint32_t total_size = 0,
-    const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_ranges = std::nullopt);
 
 /**
  * @brief Get the L1 byte address of a CB descriptor.
@@ -82,7 +82,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
  * Returns buffer->address() + address_offset when a buffer is present,
  * or just address_offset when no buffer is set (manually placed CB).
  */
-inline uint32_t get_cb_address(const CBDescriptor& desc) {
+inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
     auto addr_offset = desc.address_offset;
     if (desc.buffer != nullptr) {
         return desc.buffer->address() + addr_offset;
@@ -92,5 +92,17 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
     }
     return addr_offset;
 }
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
+using ttnn::as_optional_mesh_tensor;
+using ttnn::cb_descriptor_from_sharded_tensor;
+using ttnn::get_cb_address;
+using ttnn::get_optimal_worker_cores_for_sharded_tensor;
+using ttnn::is_cpu_tensor;
+using ttnn::is_device_tensor;
 
 }  // namespace tt::tt_metal

@@ -23,14 +23,38 @@
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn::tensor_ops {
 
-Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+namespace tensor_impl = ::tt::tt_metal::tensor_impl;
+namespace non_uniform_data_movement = ::tt::tt_metal::non_uniform_data_movement;
+
+using tt::tt_metal::enqueue_read_tensor;
+using tt::tt_metal::enqueue_write_tensor;
+using tt::tt_metal::is_uniform_write;
+using tt::tt_metal::PageConfig;
+using tt::tt_metal::raw_optional;
+using tt::tt_metal::Shape;
+using tt::tt_metal::TensorLayout;
+using tt::tt_metal::Tile;
+
+using tt::tt_metal::BufferRegion;
+using tt::tt_metal::DeviceStorage;
+using tt::tt_metal::DistributedHostBuffer;
+using tt::tt_metal::GraphTracker;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::Layout;
+using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::QueueId;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+
+Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
-    std::vector<distributed::MeshCoordinate> coords;
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
     coords.reserve(device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
 
@@ -44,7 +68,9 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
 }
 
 Tensor create_device_tensor(
-    const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device, std::optional<TensorTopology> tensor_topology) {
+    const TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<TensorTopology> tensor_topology) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -64,12 +90,12 @@ Tensor create_device_tensor(
         //
         // Use Replicate as default value for placements in MeshMapperConfig
         const auto& mesh_shape = mesh_device->shape();
-        ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(
+        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
             mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
 
-        std::vector<distributed::MeshCoordinate> coordinates;
+        std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
         coordinates.reserve(mesh_shape.mesh_size());
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
+        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
             coordinates.push_back(coord);
         }
 
@@ -83,13 +109,10 @@ Tensor create_device_tensor(
 
     return output;
 }
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 Tensor to_device(
     const Tensor& input_tensor,
-    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
@@ -126,7 +149,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 }
 
 void copy_to_device(
-    distributed::MeshCommandQueue& queue,
+    tt::tt_metal::distributed::MeshCommandQueue& queue,
     const std::byte* src,
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region) {
@@ -136,7 +159,7 @@ void copy_to_device(
 }
 
 void copy_to_host(
-    distributed::MeshCommandQueue& queue,
+    tt::tt_metal::distributed::MeshCommandQueue& queue,
     const Tensor& device_tensor,
     std::byte* dst,
     const std::optional<BufferRegion>& region,
@@ -417,7 +440,10 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
     return output;
 }
 
-Tensor view(const Tensor& input_tensor, const Shape& new_shape) { return view(input_tensor, new_shape, new_shape); }
+Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
+    // Qualify: unity TUs can see high-level ttnn::view via enclosing-ns lookup.
+    return tensor_ops::view(input_tensor, new_shape, new_shape);
+}
 
 Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_layout) {
     const auto& old_spec = input_tensor.tensor_spec();
@@ -451,11 +477,12 @@ Tensor reshape(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape) {
-    return view(input_tensor, new_logical_shape, new_padded_shape);
+    // Qualify: unity TUs can see high-level ttnn::view / ttnn::reshape.
+    return tensor_ops::view(input_tensor, new_logical_shape, new_padded_shape);
 }
 
 Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape) {
-    return reshape(input_tensor, new_shape, new_shape);
+    return tensor_ops::reshape(input_tensor, new_shape, new_shape);
 }
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
@@ -465,6 +492,4 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     return output_tensor;
 }
 
-std::string to_string(const Tensor& tensor) { return tensor_impl::to_string(tensor); }
-
-}  // namespace tt::tt_metal
+}  // namespace ttnn::tensor_ops

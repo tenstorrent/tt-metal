@@ -25,12 +25,22 @@
 
 #include <tt_stl/optional_reference.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
 
-namespace distributed {
-class MeshDevice;
-class MeshCommandQueue;
-}  // namespace distributed
+using tt::tt_metal::Buffer;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::DataType;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::Layout;
+using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::MemoryPin;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::NdShardSpec;
+using tt::tt_metal::ShardSpec;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
+using tt::tt_metal::Tile;
 
 class Tensor {
 public:
@@ -82,7 +92,7 @@ public:
     [[nodiscard]] static Tensor from_span(
         ttsl::Span<const T> buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
@@ -125,7 +135,7 @@ public:
     [[nodiscard]] static Tensor from_vector(
         const std::vector<T>& buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(ttsl::Span<const T>(buffer), spec, device, cq_id, pad_value);
@@ -137,7 +147,7 @@ public:
     [[nodiscard]] static Tensor from_vector(
         std::vector<T>&& buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        tt::tt_metal::distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
@@ -150,7 +160,7 @@ public:
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
-        distributed::MeshDevice* mesh_device,
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
@@ -242,11 +252,11 @@ public:
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    const distributed::MeshBuffer& mesh_buffer() const;
+    const tt::tt_metal::distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
     // Returns nullptr if the tensor is not allocated on a device (on host/ deallocated).
-    distributed::MeshDevice* device() const;
+    tt::tt_metal::distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
 
@@ -271,11 +281,13 @@ Tensor set_tensor_id(const Tensor& tensor);
 
 std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
-}  // namespace tt::tt_metal
-
-namespace ttnn {
-
-using Tensor = tt::tt_metal::Tensor;
-using TensorSpec = tt::tt_metal::TensorSpec;
-
 }  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
+using Tensor = ttnn::Tensor;
+using ttnn::operator<<;
+using ttnn::set_tensor_id;
+
+}  // namespace tt::tt_metal

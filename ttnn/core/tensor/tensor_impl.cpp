@@ -265,15 +265,16 @@ std::string to_string_impl(const Tensor& tensor) {
             // (float8_e4m3::operator float) so print sees real float values. Checked before the
             // ROW_MAJOR early return below because an FP8 tensor satisfies that early-return
             // condition but still needs the dtype pivot.
-            return tt::tt_metal::to_dtype(tensor, DataType::FLOAT32);
+            return ttnn::tensor_ops::to_dtype(tensor, DataType::FLOAT32);
         }
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         }
         if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            return ttnn::tensor_ops::to_layout(
+                ttnn::tensor_ops::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         }
-        return to_layout(tensor, Layout::ROW_MAJOR);
+        return ttnn::tensor_ops::to_layout(tensor, Layout::ROW_MAJOR);
     };
 
     auto get_host_buffers = [&](const HostStorage& storage) {

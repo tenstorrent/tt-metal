@@ -9,9 +9,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+namespace ttnn {
+class D2DStreamServiceReceiver;
+}  // namespace ttnn
+
 namespace tt::tt_metal {
 class H2DStreamService;
-class D2DStreamServiceReceiver;
+using D2DStreamServiceReceiver = ttnn::D2DStreamServiceReceiver;
 }  // namespace tt::tt_metal
 
 namespace ttnn::experimental {

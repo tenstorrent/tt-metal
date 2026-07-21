@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {
+
 enum class PyDType {
     FLOAT32,
     FLOAT64,
@@ -23,9 +28,6 @@ enum class PyDType {
     UINT64,
     BOOL
 };
-}
-
-namespace tt::tt_metal {
 
 // Specifies Tensor storage type.
 enum class StorageType {
@@ -43,5 +45,21 @@ using Array5D = std::array<uint32_t, 5>;
 using Array6D = std::array<uint32_t, 6>;
 using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
+using ttnn::Array1D;
+using ttnn::Array2D;
+using ttnn::Array3D;
+using ttnn::Array4D;
+using ttnn::Array5D;
+using ttnn::Array6D;
+using ttnn::Array7D;
+using ttnn::Array8D;
+using ttnn::MAX_NUM_DIMENSIONS;
+using ttnn::StorageType;
 
 }  // namespace tt::tt_metal

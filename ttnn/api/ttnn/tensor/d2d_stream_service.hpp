@@ -24,7 +24,12 @@ namespace tt::tt_metal::distributed {
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
-namespace tt::tt_metal {
+namespace ttnn {
+
+using TensorSpec = tt::tt_metal::TensorSpec;
+using CoreRange = tt::tt_metal::CoreRange;
+using CoreCoord = tt::tt_metal::CoreCoord;
+using DeviceAddr = tt::tt_metal::DeviceAddr;
 
 // Persistent device-to-device streaming service backed by a fixed device tensor
 // on each side and a MeshSocket running over tt-fabric. The D2D analog of
@@ -57,7 +62,7 @@ struct D2DStreamConfig {
     // Forwarded (mostly verbatim) to MeshSocket::create_socket_pair. Controls
     // socket_storage_type (L1 or DRAM for the receiver-side FIFO), fifo_size,
     // and any sub-device fields. V0 recommends L1.
-    distributed::SocketMemoryConfig socket_mem_config;
+    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config;
 
     // Worker grid on the sender mesh that produces into the sender backing
     // tensor. Uniform across every participating sender device.
@@ -119,12 +124,12 @@ struct D2DStreamConfig {
 // bring-up) before either factory is called.
 struct D2DEndpointConfig {
     // World ranks of the sender-side and receiver-side hosts.
-    distributed::multihost::Rank sender_rank{0};
-    distributed::multihost::Rank receiver_rank{0};
+    tt::tt_metal::distributed::multihost::Rank sender_rank{0};
+    tt::tt_metal::distributed::multihost::Rank receiver_rank{0};
 
     // Communicator the two endpoints rendezvous over (service-core exchange +
     // MeshSocket handshake). nullptr => DistributedContext::get_current_world().
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context = nullptr;
 };
 
 // Sender-side handle. Owns: the sender backing tensor, one claimed service core
@@ -154,11 +159,11 @@ public:
 
     // Logical CoreCoord of this coord's sender service core. Workers must
     // convert via worker_core_from_logical_core before using as a NoC target.
-    CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
+    CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Service-core L1 slot. Sender workers atomic-inc here once per iter. Per-
     // coord because each device's service core is independent.
-    DeviceAddr get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_data_ready_counter_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 GlobalSemaphore. Sender workers spin on the local copy after
     // each produce; the service kernel multicast-incs it once per drained iter.
@@ -170,7 +175,7 @@ public:
     // acking; the sender service reads it locally and ships it after the data
     // drain. Per-coord because each device's service core is independent.
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
-    DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
     // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
@@ -228,7 +233,7 @@ public:
 
     // Logical CoreCoord of this coord's receiver service core. Workers must
     // convert via worker_core_from_logical_core before using as a NoC target.
-    CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
+    CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 GlobalSemaphore. Receiver workers spin on the local copy each
     // iter; the service kernel multicast-incs after the transfer has landed.
@@ -237,7 +242,7 @@ public:
 
     // Service-core L1 slot. Receiver workers atomic-inc here once per iter. Per-
     // coord because each device's service core is independent.
-    DeviceAddr get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_consumed_counter_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 address of the inline-metadata buffer. The receiver service
     // multicasts the metadata blob here on every (device, receiver worker core)
@@ -293,8 +298,8 @@ class D2DStreamService {
 public:
     // Single-host: caller owns both meshes.
     static std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>> create_pair(
-        const std::shared_ptr<distributed::MeshDevice>& sender_mesh,
-        const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
         D2DStreamConfig cfg);
 
     // Multi-host sender endpoint. Called on the process that owns `sender_mesh`
@@ -302,14 +307,14 @@ public:
     // handshake until the peer process calls create_receiver with a matching
     // D2DEndpointConfig (subject to the handshake's timeout).
     static std::unique_ptr<D2DStreamServiceSender> create_sender(
-        const std::shared_ptr<distributed::MeshDevice>& sender_mesh,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
 
     // Multi-host receiver endpoint. Mirror of create_sender; called on the process
     // that owns `receiver_mesh` (its rank must equal endpoints.receiver_rank).
     static std::unique_ptr<D2DStreamServiceReceiver> create_receiver(
-        const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
 
@@ -325,18 +330,29 @@ private:
     // handle's private Impl. The per-shard spec, topology, and chunk plan are
     // re-derived from `backing` + `cfg` inside.
     static std::unique_ptr<D2DStreamServiceSender> finalize_sender(
-        const std::shared_ptr<distributed::MeshDevice>& mesh,
-        distributed::MeshSocket socket,
-        std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
-        const std::map<distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+        tt::tt_metal::distributed::MeshSocket socket,
+        std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
-        const std::shared_ptr<distributed::MeshDevice>& mesh,
-        distributed::MeshSocket socket,
-        std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+        tt::tt_metal::distributed::MeshSocket socket,
+        std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
 };
+
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+
+// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
+using ttnn::D2DEndpointConfig;
+using ttnn::D2DStreamConfig;
+using ttnn::D2DStreamService;
+using ttnn::D2DStreamServiceReceiver;
+using ttnn::D2DStreamServiceSender;
 
 }  // namespace tt::tt_metal

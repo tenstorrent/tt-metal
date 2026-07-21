@@ -8,8 +8,12 @@
 
 #include <vector>
 
-namespace tt::tt_metal {
+namespace ttnn {
 class Tensor;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using Tensor = ttnn::Tensor;
 }
 
 namespace ttnn::ccl {
