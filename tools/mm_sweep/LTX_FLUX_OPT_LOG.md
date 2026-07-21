@@ -105,3 +105,22 @@ this shape's table entry was suboptimal.
   keyed entry => zero effect on other shapes by construction.
 - **Decision: KEPT, −2.8%.** Commit: this branch. Artifacts: ltxflux_sweep_64x4608x6144.json.
 - **LESSON**: the LTX/FLUX lookup table is NOT uniformly optimal — sweep each shape rather than assume.
+
+### [4] 128x6144x4608 (Mt4, Nt144) — CLOSED: practical floor
+- Baseline: auto (1,12,1,2,1), us_med 125.6, ideal 116.0, wall/ideal 1.08, 474 GB/s, all-RISC cobound
+  (riscImb 1%), core_spread 16%.
+- Sweep (524 configs; ltxflux_sweep_128x6144x4608.json): best (1,6,1,2,3)=125.04µs vs auto 125.16µs =>
+  **0.1% headroom**. Picker-optimal. Top cluster all 125.0–127.0 (468–475 GB/s).
+- Classification: practical floor — 474 GB/s (near the ~500 read ceiling), cobound, no idle-RISC stall
+  (triage riscImb 1%). No picker or kernel opportunity. Speedup 0% (kept nothing).
+- Artifacts: ltxflux_sweep_128x6144x4608.json.
+
+### [5] 128x6144x2304 (Mt4, Nt72) — CLOSED: near-optimal (1.5% sub-gate)
+- Baseline: auto (1,12,1,2,1), us_med 68.6, ideal 59.5, wall/ideal 1.15, 444 GB/s, cobound (riscImb 1%),
+  core_spread 28%.
+- Sweep (301 configs; ltxflux_sweep_128x6144x2304.json): best (1,6,1,2,3)=66.72µs vs auto 67.72µs =>
+  **1.5% headroom, below the 2-3% gate**. Direction = shallower split-K (Pk6 vs Pk12), same as the
+  systematic Mt4/K6144 pattern. Not adopted (sub-gate).
+- Classification: geometry/near-floor. Speedup 0% (kept nothing). Artifacts: ltxflux_sweep_128x6144x2304.json.
+- PATTERN: Mt4 K=6144 shapes (768/2304/4608) all auto=Pk12 with Pk6 ~1-1.5% better — systematic sub-gate
+  picker bias toward over-splitting K; not individually adoptable.
