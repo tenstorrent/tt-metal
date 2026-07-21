@@ -20,7 +20,7 @@ from .ttnn_kda_ops import causal_conv1d_silu_ttnn, conv_weight_taps, kda_gate_tt
 _CHUNK = 64  # chunked prefill when T % _CHUNK == 0, else token-recurrent (decode / ragged)
 
 _MM = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
 )
 
 

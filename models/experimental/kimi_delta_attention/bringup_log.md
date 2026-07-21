@@ -265,6 +265,22 @@ op count / fuse; then matmul fidelity/config.
 **Distribution + fusion scorecard (T=640, per-chip device time):**
 - token-loop, TP=1: 217 ms → chunk, TP=1: 33 ms → chunk, TP=4, RS+AG: **10.9 ms** (**~20× from the start**).
 
+### Phase 9 — perf loop iteration 4: matmul fidelity (HiFi4→HiFi2) — a no-op
+
+**Hypothesis:** the 3.9 ms matmul group is FLOP-bound (big projections) → lower fidelity helps.
+**Result:** HiFi2 everywhere (chunk + projections) → matmul 3923→3878 µs (~1%), chunk op 5249→5209 µs
+(~1%), PCC 0.9999 (unchanged). **Refuted — everything is launch-bound.** At TP=4 the projections are only
+~70–140 µs of actual compute; the matmul group is dominated by the chunk op's ~70 *small* matmuls at
+per-kernel launch overhead. **Conclusion: kernel COUNT is the only lever, not fidelity; the composed
+chunk op is at its structural floor (~371 kernels / ~5 ms).** Kept HiFi2 (production-realistic, PCC fine).
+
+**Where this leaves the loop.** Cumulative T=640: 217 → 10.9 ms (~20×) via chunking + RS/AG collective.
+Both the chunk op (~5 ms) and the layer (10.9 ms) are launch-bound at hundreds of kernels — the composed
+ttnn approach cannot reach the ~44 µs compute roofline (which assumes ~1 fused kernel). **The next real
+lever is a fused C++ diagonal-gate chunk kernel** (collapses hundreds of kernels → O(1)); composed
+micro-opts (hoist redundant ops, fewer reshapes) are ≤10–20% and hit the same floor. Documented as the
+major remaining perf item; SP sequence-sharding (task 15) is the other (Galaxy-relevant).
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
