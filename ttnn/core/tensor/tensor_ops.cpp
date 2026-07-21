@@ -65,7 +65,7 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::dist
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(HostTensor::from_buffer(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
+    return Tensor(host_tensor_from_buffer(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
 }
 
 Tensor create_device_tensor(
@@ -103,7 +103,7 @@ Tensor create_device_tensor(
         return TensorTopology{mesh_shape, placements, std::move(coordinates)};
     });
 
-    output = Tensor(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, topology));
+    output = Tensor(allocate_mesh_tensor_on_device(*mesh_device, tensor_spec, topology));
     output = ttnn::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -393,7 +393,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_buffer.address());
 
         MeshTensor view_mesh_tensor =
-            MeshTensor::from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
+            mesh_tensor_from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
         DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
@@ -407,7 +407,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
 
         MeshTensor view_mesh_tensor =
-            MeshTensor::from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
+            mesh_tensor_from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
         DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
@@ -444,7 +444,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     ttnn::DeviceStorage view_storage(
         input_tensor.device_storage(),
-        MeshTensor::from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology()));
+        mesh_tensor_from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology()));
     return Tensor(std::move(view_storage));
 }
 
@@ -484,7 +484,7 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
     const auto& topology = input_tensor.tensor_topology();
 
     if (is_cpu_tensor(input_tensor)) {
-        return Tensor(HostTensor::from_buffer(input_tensor.host_tensor().buffer(), new_spec, topology));
+        return Tensor(host_tensor_from_buffer(input_tensor.host_tensor().buffer(), new_spec, topology));
     }
 
     const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
@@ -494,7 +494,7 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
         input_buffer.device(),
         input_buffer.address());
 
-    MeshTensor reinterpreted = MeshTensor::from_buffer(std::move(*new_mesh_buffer), new_spec, topology);
+    MeshTensor reinterpreted = mesh_tensor_from_buffer(std::move(*new_mesh_buffer), new_spec, topology);
     DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
     return Tensor(std::move(reinterpreted_storage));
 }

@@ -14,7 +14,6 @@
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -28,6 +27,7 @@ namespace tt::tt_metal {
 
 // Implementation details for HostTensor
 class HostTensorImpl;
+class TensorTopology;
 
 /**
  * HostTensor represents a Tensor in host memory. It is intended to be used with MeshTensor for host <-> device
@@ -94,15 +94,10 @@ public:
     // Factory methods for creating an Engaged HostTensor.
 
     /**
-     * Constructs a host tensor from a distributed host buffer.
-     */
-    static HostTensor from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
-    /**
      * Constructs a host tensor from a single device host buffer.
-     * The buffer occupies the 0x0 shard of the distributed host buffer.
+     * The buffer occupies the 0x0 shard of the distributed host buffer (unit TensorTopology).
      */
-    static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
+    static HostTensor from_buffer(HostBuffer buffer, TensorSpec spec);
 
     /**
      * Converts a buffer of elements of type `T` to a `Tensor`.
@@ -200,7 +195,9 @@ public:
     const HostTensorImpl& impl() const;
 
 private:
-    // Internal constructors. Use the from_buffer factories to build a HostTensor from a backing buffer.
+    friend HostTensor host_tensor_from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+    // Internal constructors. Use free-function factories to build a HostTensor from a backing buffer.
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     // impl_ could be a nullptr if HostTensor is in a moved-from state.

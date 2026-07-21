@@ -101,14 +101,14 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     const uint32_t epc_a = (num_entries_a + num_consumers - 1) / num_consumers;
     const uint32_t epc_b = (num_entries_b + num_consumers - 1) / num_consumers;
 
-    MeshTensor in_a  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a), TensorTopology{});
-    MeshTensor in_b  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
-    MeshTensor out_a = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a), TensorTopology{});
-    MeshTensor out_b = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
+    MeshTensor in_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
+    MeshTensor in_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
+    MeshTensor out_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
+    MeshTensor out_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
     DataMovementHardwareConfig producer_cfg;
@@ -312,16 +312,15 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     const uint32_t epp = num_entries;
     const uint32_t epc = num_entries;
 
-    MeshTensor in_a  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor in_b  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor out_a = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor out_b = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor ring  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
+    MeshTensor in_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor in_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor out_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor out_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor ring = MeshTensor::allocate_on_device(*mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries));
 
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;

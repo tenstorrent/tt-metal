@@ -20,6 +20,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 using namespace ttnn::operations::sliding_window;
 
@@ -135,7 +136,7 @@ ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_t
 
     auto transformed_buffer = conv_weight_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+    return Tensor(tt::tt_metal::host_tensor_from_buffer(
         std::move(transformed_buffer), output_spec, conv_weight_tensor.tensor_topology()));
 }
 

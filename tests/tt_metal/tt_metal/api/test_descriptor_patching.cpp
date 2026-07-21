@@ -72,7 +72,7 @@ MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDev
     auto tensor_layout = TensorLayout(
         DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
     auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-    return MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+    return MeshTensor::allocate_on_device(*mesh_device, spec);
 }
 
 // ============================================================================

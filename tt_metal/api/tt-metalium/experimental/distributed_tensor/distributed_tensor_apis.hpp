@@ -8,9 +8,11 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 
 #include <tt_stl/optional_reference.hpp>
@@ -21,6 +23,20 @@ class MemoryConfig;
 }
 
 namespace tt::tt_metal {
+
+// ======================================================================================
+//                        Factories
+// ======================================================================================
+
+// NOLINTNEXTLINE(readability-redundant-declaration)
+HostTensor host_tensor_from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+// NOLINTNEXTLINE(readability-redundant-declaration)
+MeshTensor mesh_tensor_from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
+
+// NOLINTNEXTLINE(readability-redundant-declaration)
+MeshTensor allocate_mesh_tensor_on_device(
+    distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
 
 // ======================================================================================
 //                        Topology accessors
