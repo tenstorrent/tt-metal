@@ -79,6 +79,50 @@ _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 
+# Decode-only FFN program configs (S==1).  BYTE-IDENTICAL to the auto config (in0_block_w=2 is the
+# K-reduction block auto uses for these shapes — proven maxabsdiff==0 vs auto in
+# tests/perf/ffn_byteident_ibw_sweep.py), so the K-reduction order — hence the bf16 rounding — is
+# preserved.  The win is the cfg-batch-2 weight-read-once pattern extended to the FFN: the cfg-b2
+# LM fusion batched the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each
+# FFN weight matrix TWICE (once per CFG row).  per_core_M=2 folds both rows into M so the weights
+# are read once -> ~1.9x on the down-proj + ~1.85x each on gate/up at B=2, all long-form-safe (Tier-0).
+# per_core_M makes these valid ONLY for S==1 decode; prefill (S>1) keeps auto.
+_FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+_FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+# gate/up (1536x8960): N=8960=280 tiles, so per_core_N=4 over an 11x8=88 grid (352>=280).  Only the
+# B=2 batched case beats auto (B=1 gate/up candidates were slower than auto).
+_FFN_GATEUP_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=4,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight preparation
@@ -691,12 +735,33 @@ class TTVibeVoiceLM:
         return out
 
     def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
-        """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj."""
-        gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj.
+
+        Decode (S==1) uses byte-identical program configs that batch the CFG rows so the FFN
+        weights are read once (see _FFN_*_DECODE_PROGCFG_*); prefill (S>1) keeps auto.
+        """
+        B, S = x.shape[0], x.shape[2]
+        if S == 1 and B == 2:  # cfg-batch-2 deploy decode
+            gate_pc, down_pc = _FFN_GATEUP_DECODE_PROGCFG_B2, _FFN_DOWN_DECODE_PROGCFG_B2
+        elif S == 1 and B == 1:  # eager / B=1 traced decode (gate/up: no win over auto)
+            gate_pc, down_pc = None, _FFN_DOWN_DECODE_PROGCFG_B1
+        else:  # prefill (S>1) → auto
+            gate_pc, down_pc = None, None
+        gate = ttnn.linear(
+            x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        up = ttnn.linear(
+            x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.linear(hidden, layer_w.w2, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            hidden,
+            layer_w.w2,
+            compute_kernel_config=_HIFI4,
+            program_config=down_pc,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         return out
 
     def _transformer_layer(
