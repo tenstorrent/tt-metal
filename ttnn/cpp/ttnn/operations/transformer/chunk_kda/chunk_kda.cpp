@@ -187,8 +187,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     // Otherwise head-split to [BH,T,V] as usual.
     ttnn::Tensor v = flat_v ? (v_in.dtype() != DataType::BFLOAT16 ? ttnn::typecast(v_in, DataType::BFLOAT16) : v_in)
                             : head_split_tile(v_in, B, T, HV, V);
-    ttnn::Tensor g = headvec_split_tile(g_in, B, T, HV);        // [B*HV, T] TILE
-    ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, HV);  // [B*HV, T] TILE
+    // KDA: diagonal gate g_in [B,T,HV,K] -> [BH,T,K] fp32 TILE (fp32 head-split; head_split_tile is bf16).
+    ttnn::Tensor g = g_in;
+    if (g.dtype() != DataType::FLOAT32) {
+        g = ttnn::typecast(g, DataType::FLOAT32);
+    }
+    g = ttnn::permute(g, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B, HV, T, K] TILE
+    g = ttnn::reshape(g, ttnn::Shape({B * HV, T, K}));             // [BH, T, K] TILE
+    ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, HV);  // [B*HV, T] TILE (scalar per token)
 
     // GQA expand q,k from H heads to HV heads (repeat_interleave along head-major dim 0).
     // OPT-A: for flat q/k the reader maps value-head hv -> key-head hk=hv/G at read time, so no expand.
@@ -231,8 +237,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     ttnn::Tensor q_c = flat_qk ? q : to_chunks_tile(q, K);
     ttnn::Tensor k_c = flat_qk ? k : to_chunks_tile(k, K);
     ttnn::Tensor v_c = flat_v ? v : to_chunks_tile(v, V);
-    // g, beta -> [BH, NC, C, 1] TILE (already TILE; reshape only).
-    ttnn::Tensor g_c = ttnn::reshape(g, ttnn::Shape({BH, NC, C, 1}));
+    // KDA: g -> [BH, NC, C, K] (diagonal); beta -> [BH, NC, C, 1] (scalar). Already TILE; reshape only.
+    ttnn::Tensor g_c = ttnn::reshape(g, ttnn::Shape({BH, NC, C, K}));
     ttnn::Tensor beta_c = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
 
     // Constant tiles eye_C, tril_C, ones_C [1,1,C,C], masks [1,1,32,96]. Caller-supplied (built once

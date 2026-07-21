@@ -103,6 +103,25 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     cb_push_back(o, n);
 }
 
+// KDA: out[Mt,Nt] = A[Mt,Nt] * col[Mt,1] (broadcast col's column 0 across N). Used for per-K state decay.
+void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
+    cb_reserve_back(o, Mt * Nt);
+    pack_reconfig_data_format(o);
+    reconfig_data_format(a, col);
+    mul_bcast_cols_init_short(a, col);
+    for (uint32_t mi = 0; mi < Mt; mi++) {
+        for (uint32_t ni = 0; ni < Nt; ni++) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(a, col, mi * Nt + ni, mi, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, o, mi * Nt + ni);
+            tile_regs_release();
+        }
+    }
+    cb_push_back(o, Mt * Nt);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -167,11 +186,11 @@ void kernel_main() {
         POP(cb_kdec_t, kc);
         POP(cb_vnew, cv);
 
-        // S_new = cur_S * dl + s_upd  (dl scalar in cb_dl tile [0,0])
-        WAIT(cb_dl, 1);
-        bcast_scalar_mul(cur_S, cb_dl, cb_stmp, kv);
+        // S_new = cur_S * dl + s_upd  (KDA: dl is per-K [K,1] = Kt tiles; broadcast col 0 across V)
+        WAIT(cb_dl, Kt);
+        bcast_cols_mul(cur_S, cb_dl, cb_stmp, Kt, Vt);
         WAIT(cb_stmp, kv);
-        POP(cb_dl, 1);
+        POP(cb_dl, Kt);
         POP(cur_S, kv);
         ew(cb_stmp, cb_supd, dst, kv, 0);
         POP(cb_stmp, kv);

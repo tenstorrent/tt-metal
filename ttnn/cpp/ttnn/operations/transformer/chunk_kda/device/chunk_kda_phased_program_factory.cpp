@@ -207,16 +207,16 @@ tt::tt_metal::ProgramDescriptor ChunkKdaPrepProgramFactory::create_descriptor(
     add_cb(pcb::q, ck, 1, df_io);
     add_cb(pcb::k, ck, 1, df_io);
     add_cb(pcb::v, cv, 1, df_io);
-    add_cb(pcb::g, Ct);
+    add_cb(pcb::g, ck);  // KDA: diagonal gate is [C,K] (was scalar [C,1] = Ct)
     add_cb(pcb::beta, Ct);
     add_cb(pcb::eye, cc);
     add_cb(pcb::tril, cc);
     add_cb(pcb::ones, cc);
     add_cb(pcb::S, kv, 2);
-    add_cb(pcb::decay, Ct);
-    add_cb(pcb::decay_exp, Ct);
-    add_cb(pcb::decayfac, Ct);
-    add_cb(pcb::lmask, cc);
+    add_cb(pcb::decay, ck);      // KDA: [C,K]
+    add_cb(pcb::decay_exp, ck);  // KDA: [C,K]  (eg = exp(decay))
+    add_cb(pcb::decayfac, ck);   // KDA: [C,K]
+    add_cb(pcb::lmask, ck);      // KDA: L_mask deleted; repurposed as k_keng = k (.) exp(-decay) [C,K]
     add_cb(pcb::Tinv, cc);
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
@@ -389,7 +389,7 @@ tt::tt_metal::ProgramDescriptor ChunkKdaScanProgramFactory::create_descriptor(
     add_cb(pcb::qdecay, ck, 1);
     add_cb(pcb::intra, cc, 1);
     add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, 1, 1);
+    add_cb(pcb::dl, Kt, 1);  // KDA: dl = exp(g_sum) per-K [K,1] (was scalar 1 tile)
     add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);

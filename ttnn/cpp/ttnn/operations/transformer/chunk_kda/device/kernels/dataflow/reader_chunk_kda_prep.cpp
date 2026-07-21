@@ -147,7 +147,7 @@ void kernel_main() {
         } else {
             read_into(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
+        read_into(g_acc, cb_g, hc * ck, ck, tb_f);  // KDA: g is [C,K] = ck tiles (was scalar [C,1] = Ct)
         read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
     }
 }

@@ -97,7 +97,7 @@ void kernel_main() {
         read_into(qd_acc, cb_qdecay, hc * ck, ck);
         read_into(it_acc, cb_intra, hc * cc, cc);
         read_into(kc_acc, cb_kdec_t, hc * kc, kc);
-        read_into(dl_acc, cb_dl, hc * 1, 1);
+        read_into(dl_acc, cb_dl, hc * Kt, Kt);  // KDA: dl is per-K [K,1] = Kt tiles (was scalar 1 tile)
         read_into(ti_acc, cb_Tinv, hc * cc, cc);
     }
 }

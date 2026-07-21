@@ -72,7 +72,7 @@ ChunkKdaPrepOperation::spec_return_value_t ChunkKdaPrepOperation::compute_output
         f32(ttnn::Shape({BH, NC, C, K})),  // q_decay
         f32(ttnn::Shape({BH, NC, C, C})),  // intra
         f32(ttnn::Shape({BH, NC, K, C})),  // k_dec_t
-        f32(ttnn::Shape({BH, NC, 1, 1})),  // dl (1 tile per chunk)
+        f32(ttnn::Shape({BH, NC, K, 1})),  // KDA: dl is per-K [K,1] (was scalar [1,1])
         f32(ttnn::Shape({BH, NC, C, C})),  // t_inv
     };
 }

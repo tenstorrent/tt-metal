@@ -77,6 +77,6 @@ void kernel_main() {
         drain(cb_intra, it_acc, cc, hc * cc);
         drain(cb_qdecay, qd_acc, ck, hc * ck);
         drain(cb_kdec_t, kc_acc, kc, hc * kc);
-        drain(cb_dl, dl_acc, 1, hc * 1);
+        drain(cb_dl, dl_acc, Kt, hc * Kt);  // KDA: dl is per-K [K,1] = Kt tiles (was scalar 1 tile)
     }
 }

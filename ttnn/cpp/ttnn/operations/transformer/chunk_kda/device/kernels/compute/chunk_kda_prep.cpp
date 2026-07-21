@@ -121,6 +121,27 @@ void expc(uint32_t in, uint32_t o, uint32_t n) {
     cb_push_back(o, n);
 }
 
+// KDA: o = exp(-in), n tiles. (negate the dst reg with a scalar mul, then exp.)
+void expc_neg(uint32_t in, uint32_t o, uint32_t n) {
+    cb_reserve_back(o, n);
+    pack_reconfig_data_format(o);
+    reconfig_data_format_srca(in);
+    copy_tile_to_dst_init_short(in);
+    binop_with_scalar_tile_init();
+    exp_tile_init();
+    for (uint32_t i = 0; i < n; i++) {
+        tile_regs_acquire();
+        copy_tile(in, i, 0);
+        mul_unary_tile(0, 0xBF800000u);  // * -1.0f
+        exp_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o, i);
+        tile_regs_release();
+    }
+    cb_push_back(o, n);
+}
+
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
 void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
     cb_reserve_back(o, Mt * Nt);
@@ -442,53 +463,43 @@ void kernel_main() {
         POP(cb_beta, Ct);
         POP(cb_v, cv);
 
-        // ---- P2: decay = tril@g, decay_exp, decay_row ----
-        mm(cb_tril, cb_g, cb_decay, Ct, Ct, 1, false);
-        WAIT(cb_decay, Ct);
-        expc(cb_decay, cb_decay_exp, Ct);
-        WAIT(cb_decay_exp, Ct);
-        transpose_col(cb_decay, cb_scr1, Ct);  // decay_row in scr1
-        WAIT(cb_scr1, Ct);
-
-        // ---- L_mask = tril(exp(decay_i - decay_j)) ----
-        bcast_cols_mul(cb_ones, cb_decay, cb_scr2, Ct, Ct);  // decay_i everywhere
-        WAIT(cb_scr2, cc);
-        bcast_rows_sub(cb_scr2, cb_scr1, cb_scr3, Ct, Ct);  // decay_i - decay_j
-        WAIT(cb_scr3, cc);
-        POP(cb_scr1, Ct);  // decay_row done
-        POP(cb_scr2, cc);
-        ew(cb_scr3, cb_tril, cb_scr2, cc, 2);  // *tril (zero upper)
-        WAIT(cb_scr2, cc);
-        POP(cb_scr3, cc);
-        expc(cb_scr2, cb_scr3, cc);  // exp
-        WAIT(cb_scr3, cc);
-        POP(cb_scr2, cc);
-        ew(cb_scr3, cb_tril, cb_lmask, cc, 2);  // *tril again -> L_mask
-        WAIT(cb_lmask, cc);
-        POP(cb_scr3, cc);
-
-        // ---- decayfac = exp(g_sum - decay) ----
-        // (dl = exp(g_sum) is recomputed at the scan from decayfac[0]*decay_exp[0] so its CB
-        //  slot can be reused as the third ping-pong state buffer cb_s3.)
-        mm(cb_ones, cb_g, cb_scr1, Ct, Ct, 1, false);  // g_sum in every row (col form)
-        WAIT(cb_scr1, Ct);
-        POP(cb_g, Ct);
-        ew(cb_scr1, cb_decay, cb_scr2, Ct, 1);  // g_sum - decay
-        WAIT(cb_scr2, Ct);
-        POP(cb_scr1, Ct);
-        POP(cb_decay, Ct);
-        expc(cb_scr2, cb_decayfac, Ct);
-        WAIT(cb_decayfac, Ct);
-        POP(cb_scr2, Ct);
+        // ---- KDA P2: decay=cumsum(g) [C,K]; eg=exp(decay); k_keng=k(.)exp(-decay); decayfac; w ----
+        // Per-channel (diagonal) gate: the scalar [C,1] decay / [C,C] L_mask become [C,K]. The L_mask is
+        // deleted — decay is absorbed into the matmul operands (A=(k(.)eg)@(k(.)eng)^T). cb_lmask is
+        // repurposed to hold k_keng=k(.)exp(-decay); w=k_beta(.)eg is hoisted here (also A's operand).
+        mm(cb_tril, cb_g, cb_decay, Ct, Ct, Kt, false);   // decay = tril @ g   [C,K]
+        WAIT(cb_decay, ck);
+        expc(cb_decay, cb_decay_exp, ck);                 // eg = exp(decay)    [C,K]
+        WAIT(cb_decay_exp, ck);
+        expc_neg(cb_decay, cb_scr1, ck);                  // eng = exp(-decay)  [C,K]
+        WAIT(cb_scr1, ck);
+        ew(Kk, cb_scr1, cb_lmask, ck, 2);                 // k_keng = k (.) eng [C,K] (persists past inverse)
+        WAIT(cb_lmask, ck);
+        POP(cb_scr1, ck);
+        // decayfac = exp(g_sum - decay); g_sum = ones @ g  [C,K]
+        mm(cb_ones, cb_g, cb_scr1, Ct, Ct, Kt, false);    // g_sum broadcast to every row [C,K]
+        WAIT(cb_scr1, ck);
+        POP(cb_g, ck);
+        ew(cb_scr1, cb_decay, cb_scr2, ck, 1);            // g_sum - decay
+        WAIT(cb_scr2, ck);
+        POP(cb_scr1, ck);
+        POP(cb_decay, ck);
+        expc(cb_scr2, cb_decayfac, ck);                   // decayfac [C,K]
+        WAIT(cb_decayfac, ck);
+        POP(cb_scr2, ck);
+        // w = k_beta (.) eg  (WY state operand AND factored operand for A)
+        ew(cb_kbeta, cb_decay_exp, cb_w, ck, 2);          // w = k_beta * eg [C,K]
+        WAIT(cb_w, ck);
+        POP(cb_kbeta, ck);
 
         // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
         // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each
         // 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded Horners, and
         // merge off-diagonal blocks EXACTLY. This keeps every intermediate bounded, unlike a single
         // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
-        mm(cb_kbeta, Kk, cb_scr1, Ct, Kt, Ct, true);  // kk = k_beta @ k^T (Kk = normalized k)
+        mm(cb_w, cb_lmask, cb_scr1, Ct, Kt, Ct, true);  // A_full = w @ k_keng^T [C,C] (cb_lmask = k_keng)
         WAIT(cb_scr1, cc);
-        ew(cb_scr1, cb_lmask, cb_scr2, cc, 2);  // kk_masked = kk * L_mask
+        ew(cb_scr1, cb_tril, cb_scr2, cc, 2);  // A_masked = A_full * tril (lower incl) -> cb_scr2
         WAIT(cb_scr2, cc);
         POP(cb_scr1, cc);
         ew(cb_scr2, cb_eye, cb_scr1, cc, 2);  // diag(kk_masked)
@@ -541,33 +552,26 @@ void kernel_main() {
             POP(cb_scr3, cc);
         }
 
-        // ---- un-premultiplied WY hand-off: output v_beta (cb_vbeta), kd=k_beta*decay_exp (cb_w),
-        // T_inv (cb_Tinv). The scan computes v_new = T_inv @ (v_beta - kd@S), applying the inverse
-        // AFTER the subtraction so its fp error is not amplified by the u - w@S cancellation.
-        bcast_cols_mul(cb_kbeta, cb_decay_exp, cb_w, Ct, Kt);  // kd -> cb_w (output)
-        WAIT(cb_w, ck);
-        POP(cb_kbeta, ck);
-        // cb_vbeta (v_beta) and cb_Tinv (T_inv) remain pushed for the writer; NOT popped here.
+        // cb_vbeta (v_beta), cb_w (kd=k_beta*eg, from P2), cb_Tinv (T_inv) remain pushed for the writer.
 
-        // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
-        mm(Q, Kk, cb_scr1, Ct, Kt, Ct, true);  // qk = q @ k^T (Q/Kk = normalized q,k)
-        WAIT(cb_scr1, cc);
-        ew(cb_scr1, cb_lmask, cb_intra, cc, 2);
-        WAIT(cb_intra, cc);
-        POP(cb_scr1, cc);
-        POP(cb_lmask, cc);
-        bcast_cols_mul(Q, cb_decay_exp, cb_qdecay, Ct, Kt);
+        // ---- q_decay = q (.) eg ; intra = q_decay @ k_keng^T (lower-incl) ----
+        ew(Q, cb_decay_exp, cb_qdecay, ck, 2);            // q_decay = q * eg [C,K]
         WAIT(cb_qdecay, ck);
         POP(Q, ck);
-        // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
-        bcast_cols_mul(Kk, cb_decayfac, cb_scr1, Ct, Kt);  // k * exp(decay_last-decay)
+        mm(cb_qdecay, cb_lmask, cb_scr1, Ct, Kt, Ct, true);  // qk_full = q_decay @ k_keng^T [C,C]
+        WAIT(cb_scr1, cc);
+        ew(cb_scr1, cb_tril, cb_intra, cc, 2);            // intra = qk_full * tril (lower incl)
+        WAIT(cb_intra, cc);
+        POP(cb_scr1, cc);
+        POP(cb_lmask, ck);  // k_keng done
+
+        // ---- k_dec = k (.) decayfac ; k_dec_t = transpose(k_dec) [K,C] ----
+        ew(Kk, cb_decayfac, cb_scr1, ck, 2);              // k_dec = k * decayfac [C,K]
         WAIT(cb_scr1, ck);
         POP(Kk, ck);
-        // decayfac kept alive: reused at the scan to recompute dl = exp(g_sum).
-        // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
         cb_reserve_back(cb_kdec_t, Kt * Ct);
         pack_reconfig_data_format(cb_kdec_t);
-        reconfig_data_format_srca(cb_scr1);  // unary: in->srcA
+        reconfig_data_format_srca(cb_scr1);
         transpose_init(cb_scr1);
         for (uint32_t ki = 0; ki < Kt; ki++) {
             for (uint32_t ci = 0; ci < Ct; ci++) {
@@ -582,12 +586,26 @@ void kernel_main() {
         cb_push_back(cb_kdec_t, Kt * Ct);
         POP(cb_scr1, ck);
 
-        // ---- dl = exp(g_sum) = decayfac[i]*decay_exp[i] (same for all i); 1 tile, [0,0] holds dl.
-        // The scan kernel uses it to decay the recurrent state: S <- S*dl + k_dec_t@v_new.
-        ew(cb_decayfac, cb_decay_exp, cb_dl, 1, 2);
-        WAIT(cb_dl, 1);
-        POP(cb_decayfac, Ct);
-        POP(cb_decay_exp, Ct);
+        // ---- dl = exp(g_sum) per-K, as [K,1]: dl_bcast = decayfac (.) eg [C,K] (all rows equal =
+        // exp(g_sum)); transpose each of the Kt tiles (row->col) so the scan's bcast_cols_mul reads col 0.
+        ew(cb_decayfac, cb_decay_exp, cb_scr1, ck, 2);    // dl_bcast [C,K]
+        WAIT(cb_scr1, ck);
+        POP(cb_decayfac, ck);
+        POP(cb_decay_exp, ck);
+        cb_reserve_back(cb_dl, Kt);
+        pack_reconfig_data_format(cb_dl);
+        reconfig_data_format_srca(cb_scr1);
+        transpose_init(cb_scr1);
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            tile_regs_acquire();
+            transpose_tile(cb_scr1, ki, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_dl, ki);
+            tile_regs_release();
+        }
+        cb_push_back(cb_dl, Kt);
+        POP(cb_scr1, ck);
         // u, w, k_dec_t, q_decay, intra, dl remain pushed in their CBs -> prep writer -> DRAM.
         // (They are NOT popped here; the writer drains them per chunk.)
     }
