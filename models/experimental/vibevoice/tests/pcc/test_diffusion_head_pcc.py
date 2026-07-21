@@ -57,8 +57,8 @@ def _reference_diffusion_head_forward(
     norm_eps: float = 1e-5,
 ) -> torch.Tensor:
     """Run reference VibeVoiceDiffusionHead forward using loaded weights."""
-    from vibevoice.modular.configuration_vibevoice import VibeVoiceDiffusionHeadConfig
-    from vibevoice.modular.modular_vibevoice_diffusion_head import VibeVoiceDiffusionHead
+    from modular.configuration_vibevoice import VibeVoiceDiffusionHeadConfig
+    from modular.modular_vibevoice_diffusion_head import VibeVoiceDiffusionHead
 
     cfg = VibeVoiceDiffusionHeadConfig(
         hidden_size=hidden_size,
