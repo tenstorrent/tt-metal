@@ -302,6 +302,29 @@ determine_matmul_op_config_from_conv_op_config_qsr(
     return matmul_config;
 }
 
+// Forward declaration: the Quasar split-program stem OOM guard in conv2d_L1 re-dispatches large
+// per-core-M convs through the DRAM height-slicing path (defined later in this translation unit).
+Result conv2d_DRAM(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
+
 Result conv2d_L1(
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
@@ -577,6 +600,130 @@ Result conv2d_L1(
             capped_act_block_h,
             per_core_h_ntiles,
             per_core_h_ntiles / capped_act_block_h);
+    }
+
+    // ---- Quasar SPLIT-PROGRAM stem OOM guard: DRAM height-slicing for large per-core M ----
+    // Program A of the split (TT_METAL_QSR_CONV_SPLIT_PROGRAM) gathers + tilizes and MATERIALIZES the
+    // whole per-core tilized activation [per_core_M, full_K] as a resident L1 output tensor (see
+    // conv2d_device_operation.cpp::compute_output_specs). For a large per-core M — the resnet stem
+    // sharded over only the 2-core emulator (full_K = 16 tiles -> ~3.67 MB/core) — that buffer plus
+    // the resident halo input overflows the L1 bank at create_output_tensors. On real 32+ core parts
+    // per_core_M is tiny and it fits; it is specifically the small-core emulator that makes M huge.
+    //
+    // When the full [per_core_M, full_K] tilized activation will NOT fit, re-dispatch this conv
+    // through the EXISTING DRAM output-height-slicing path (conv2d_DRAM -> op_slicing::run_sliced_op):
+    // each output-height slice is a small sub-conv whose [M_slice, full_K] tilized activation fits
+    // L1, quasar padded_slice extracts each input slice and quasar slice_write reassembles the [M, N]
+    // conv result in a DRAM-interleaved output; we then reshard back to the height-sharded L1 output
+    // the model (maxpool) expects. This PRESERVES the split's key property — a whole block is tilized
+    // in its own Program A before Program B's matmul consumes it (no per-tile fused interleave -> no
+    // 0x19) — while shrinking the peak tilized activation from per_core_M*full_K to
+    // (per_core_M/num_slices)*full_K. run_L1_op re-enters conv2d_L1 per slice with a SMALL
+    // input_height -> small per_core_M -> this guard is false -> the plain split runs (recursion
+    // terminates). Quasar + split-env + genuine (non-1x1, non-depthwise) height-sharded conv only;
+    // WH/BH and the fused path are untouched, and small-M shapes (all the gap tests) stay on the plain
+    // in-L1 split so their validated behavior is unchanged.
+    if (arch_is_quasar && split_env_requested && height_sharded_conv && !mm_conv && !conv_is_1d_depthwise &&
+        conv_config.full_inner_dim) {
+        const uint32_t per_core_m_ntiles = opt_conv_op_parallel_config.per_core_out_matrix_height_ntile;
+        const uint32_t out_tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+        // Program A's resident output = per-core tilized activation [per_core_M, full_K] tiles.
+        const uint64_t tilized_act_bytes =
+            static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
+        const uint64_t l1_bank = device->l1_size_per_core();
+        // "Won't fit": the tilized-activation output alone crowds the bank. Reserve ~20 % for the
+        // resident halo input, weights, matmul CBs and allocator fragmentation. The stem tilized
+        // (~3.67 MB) exceeds 0.80*bank (~3.11 MB) -> slice; small-M gap shapes stay far below -> plain
+        // split. (The OOM is at output-tensor allocation with the halo input already resident, so the
+        // tilized output is the dominant, split-specific term.)
+        const uint64_t fit_threshold = (l1_bank * 80) / 100;
+        if (tilized_act_bytes > fit_threshold) {
+            // Number of output-height slices so each slice's tilized activation
+            // ((per_core_M/num_slices)*full_K) stays under half the bank, leaving ample room for the
+            // slice's halo input, weights and matmul CBs. num_slices >= 2 (a single slice does not fit
+            // or we would not be here). Clamp to the number of output image rows available to slice;
+            // run_sliced_op clamps further against its tile-row rounding.
+            const uint64_t tilized_budget = l1_bank / 2;
+            uint32_t num_slices =
+                static_cast<uint32_t>(tt::div_up(tilized_act_bytes, std::max<uint64_t>(tilized_budget, 1)));
+            num_slices = std::max<uint32_t>(num_slices, 2);
+            num_slices = std::min<uint32_t>(num_slices, std::max<uint32_t>(output_height, 1));
+
+            log_debug(
+                tt::LogOp,
+                "conv2d Quasar split: per-core tilized activation [{} x {}] tiles (~{} B) exceeds L1 fit threshold "
+                "{} B (bank {} B); routing through DRAM height-slicing with num_slices={} (peak per-slice tilized "
+                "~{} B).",
+                per_core_m_ntiles,
+                full_inner_dim_k_ntiles,
+                tilized_act_bytes,
+                fit_threshold,
+                l1_bank,
+                num_slices,
+                tilized_act_bytes / num_slices);
+
+            // conv2d_DRAM / run_sliced_op need a DRAM-interleaved source to padded_slice per slice.
+            // Move the (already-folded, pre-halo) activation to DRAM interleaved; quasar
+            // to_memory_config routes sharded L1 -> interleaved DRAM through the ported
+            // sharded_to_interleaved. Use input_tensor_post_tm (the conv's sharded input): the folded
+            // `input_tensor` may already have been deallocated by shard_or_reshard when
+            // deallocate_activation is set, whereas input_tensor_post_tm is guaranteed live here.
+            ttnn::Tensor dram_input = input_tensor_post_tm;
+            if (!dram_input.memory_config().is_dram() ||
+                dram_input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED) {
+                dram_input = ttnn::operations::experimental::quasar::to_memory_config(
+                    dram_input,
+                    tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM},
+                    std::nullopt);
+            }
+
+            const Conv2dSliceConfig height_slice_cfg{
+                .slice_type = Conv2dSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = num_slices};
+
+            // conv2d_DRAM re-runs fold_input_tensor_if_required (a no-op for the stride-1 stem), slices
+            // along output height, runs the split per slice (the env var still selects it), and
+            // slice_writes the [M, N] result into a DRAM-interleaved output. Pass the ORIGINAL
+            // conv_config_ so each per-slice conv2d_L1 re-derives its own (small) sharding and
+            // re-enables the split via force_conv_no_spill; conv2d_DRAM always outputs DRAM interleaved
+            // (memory_config ignored there), so we pass nullopt and reshard below.
+            Result dram_result = conv2d_DRAM(
+                dram_input,
+                weight_tensor,
+                device,
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                groups,
+                dtype,
+                bias_tensor,
+                conv_config_,
+                compute_config_,
+                std::nullopt,
+                height_slice_cfg);
+
+            ttnn::Tensor sliced_output = std::get<0>(dram_result);
+            // Final reshard: the model consumes a height-sharded L1 activation (the maxpool input).
+            // Reshard the DRAM-interleaved [M, N] conv result to the height-sharded conv output config
+            // (or the caller's memory_config when supplied).
+            const tt::tt_metal::MemoryConfig target_mem_config =
+                memory_config.has_value() ? memory_config.value() : conv_out_memory_config;
+            if (sliced_output.memory_config() != target_mem_config) {
+                sliced_output = ttnn::operations::experimental::quasar::to_memory_config(
+                    sliced_output, target_mem_config, std::nullopt);
+            }
+            return {
+                sliced_output,
+                std::get<1>(dram_result),
+                std::get<2>(dram_result),
+                std::get<3>(dram_result),
+                std::get<4>(dram_result)};
+        }
     }
 
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
