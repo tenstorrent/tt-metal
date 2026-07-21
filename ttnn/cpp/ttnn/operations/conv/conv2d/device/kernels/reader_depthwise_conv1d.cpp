@@ -61,7 +61,7 @@ void kernel_main() {
             reader_offsets[reader_offset_idx++] = reader_offset_row;
             reader_offset_row += dilation_w;
         }
-        // -1 to go back to previous reader_offset
+        // Advance to the same column offset in the next filter row.
         reader_offset += conv_act_size_w_padded;
     }
 

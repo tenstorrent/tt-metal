@@ -196,7 +196,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        conv_groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
+        conv_groups, in_channels, out_channels, kernel_size[0], dims.full_input_height, bias_tensor.has_value());
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         conv_is_1d_depthwise,
         parallel_config.shard_scheme,
@@ -248,8 +248,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
             output_parallel_config,
             groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             opt_conv_op_block_config.act_block_h_ntiles,
-            input_height,
-            input_width,
+            dims.full_input_height,
+            dims.full_input_width,
             mm_conv && auto_shard,
             out_channels,  // explicit out_channels for grouped convolutions
             bias_tensor.has_value(),

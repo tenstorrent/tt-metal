@@ -216,8 +216,7 @@ Result conv2d_L1(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride,
-        true);
+        orig_stride);
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
