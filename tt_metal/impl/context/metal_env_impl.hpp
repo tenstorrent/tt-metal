@@ -131,6 +131,7 @@ private:
 
     void initialize_base_objects();
     void verify_fw_capabilities();
+    bool should_enable_blackhole_dram_programmable_cores();
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();

@@ -122,6 +122,49 @@ const Hal& MetalEnvImpl::get_hal() { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
+bool MetalEnvImpl::should_enable_blackhole_dram_programmable_cores() {
+    const auto override = rtoptions_->get_blackhole_dram_programmable_cores_override();
+    if (override.has_value()) {
+        log_info(
+            tt::LogMetal,
+            "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES={} — {} DRAM programmable cores",
+            *override ? "1" : "0",
+            *override ? "force enabling" : "force disabling");
+        return *override;
+    }
+
+    // Auto-detect: enable on Blackhole with no harvested DRAM channels (or a single device).
+    const auto platform_arch = get_platform_architecture(*this->rtoptions_);
+    if (platform_arch != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    if (this->rtoptions_->get_simulator_enabled()) {
+        return false;
+    }
+
+    const auto all_chips = cluster_->all_chip_ids();
+    if (all_chips.size() <= 1) {
+        log_info(tt::LogMetal, "Auto-enabling Blackhole DRAM programmable cores (single device)");
+        return true;
+    }
+
+    for (const auto& chip : all_chips) {
+        const uint32_t dram_harvesting_mask =
+            cluster_->get_driver()->get_soc_descriptor(chip).harvesting_masks.dram_harvesting_mask;
+        if (dram_harvesting_mask != 0) {
+            log_info(
+                tt::LogMetal,
+                "Auto-disabling Blackhole DRAM programmable cores (DRAM harvesting on chip {} mask={:#x})",
+                chip,
+                dram_harvesting_mask);
+            return false;
+        }
+    }
+
+    log_info(tt::LogMetal, "Auto-enabling Blackhole DRAM programmable cores (no DRAM harvesting on {} devices)", all_chips.size());
+    return true;
+}
+
 void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
@@ -153,7 +196,7 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        this->rtoptions_->get_enable_blackhole_dram_programmable_cores());
+        this->should_enable_blackhole_dram_programmable_cores());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());

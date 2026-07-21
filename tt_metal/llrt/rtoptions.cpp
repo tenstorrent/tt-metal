@@ -704,11 +704,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
-        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
+        // Controls Blackhole DRAM programmable cores in the HAL:
+        //   =1 → force enable, =0 → force disable, unset → auto-detect (firmware + topology)
+        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0
         case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
-            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
+            this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
             break;
 
         // TT_METAL_USE_MGD_2_0

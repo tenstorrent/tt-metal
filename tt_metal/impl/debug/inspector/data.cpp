@@ -288,9 +288,10 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
         // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
-        // This reflects the runtime option used when initializing HAL on silicon.
+        // This reflects the HAL registration decided at init (auto-detect or env override).
         build_info.setDramProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(
+                tt::tt_metal::HalProgrammableCoreType::DRAM));
     }
 }
 
