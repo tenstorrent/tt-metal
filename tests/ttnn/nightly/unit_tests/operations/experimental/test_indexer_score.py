@@ -1314,6 +1314,7 @@ _MATH_UTIL_CASES = [
     _MATH_UTIL_CASES,
     ids=[c[0] for c in _MATH_UTIL_CASES],
 )
+@pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expected_util):
@@ -1321,10 +1322,10 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
     asserted within +/- INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus
     glm5_tp1 / dsv32_tp1 at the resharded TP=1/SP=32 grid-fill shapes. Profiles one dispatch of the case's op
     with the real-time device profiler and compares the achieved math_util to the expected value (measured on
-    a BH dev board). Pinned to the IOMMU-enabled BH sku (see ops_unit_tests.yaml) and excluded by name from the
-    broad non-IOMMU globs, so an inactive profiler here is a regression -> fail."""
+    a BH dev board). Marked requires_host_iommu so the marker-selected IOMMU job runs it and broad non-IOMMU
+    jobs exclude it; an inactive profiler here is therefore a regression -> fail."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
-        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU globs exclude it by name), so an inactive
+        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU globs exclude it by marker), so an inactive
         # profiler means it regressed on a sku that should have it -- fail (not skip), matching the sprint /
         # ring-joint perf checks.
         pytest.fail("Real-time profiler must be active for indexer_score perf checks (needs IOMMU)")

@@ -233,6 +233,7 @@ _NV = {
     ],
     ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
 )
+@pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
@@ -241,7 +242,7 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
 
     if not ttnn.device.IsProgramRealtimeProfilerActive():
-        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob deselects it by name), so an
+        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
         # sprint / ring-joint perf checks.
         pytest.fail("Real-time profiler must be active for sparse_sdpa perf checks (needs IOMMU)")

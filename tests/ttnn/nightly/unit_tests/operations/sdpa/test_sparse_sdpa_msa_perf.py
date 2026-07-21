@@ -23,10 +23,10 @@ from models.common.utility_functions import run_for_blackhole, skip_with_llk_ass
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import make_msa_inputs, run_op_msa_native
 
-# CI runs these only on the IOMMU-enabled BH sku (see ops_unit_tests.yaml); the broad non-IOMMU sdpa glob
-# --ignores this whole file, and the perf helper fails (not skips) if the RT profiler is inactive, so an
-# IOMMU regression on the pinned sku reds rather than passing silently.
-pytestmark = pytest.mark.use_module_device
+# CI selects these by marker on the IOMMU-enabled BH sku (see ops_unit_tests.yaml); broad non-IOMMU jobs
+# exclude the marker, and the perf helper fails (not skips) if the RT profiler is inactive, so an IOMMU
+# regression on the pinned sku reds rather than passing silently.
+pytestmark = [pytest.mark.requires_host_iommu, pytest.mark.use_module_device]
 
 # Symmetric +/- band on the expected device kernel duration (ms), measured on a Blackhole p150b. Observed
 # run-to-run spread is <1%; 5% leaves comfortable headroom for board/thermal variance while still catching a
@@ -38,7 +38,7 @@ def _assert_msa_duration(device, run_fn, expected_ms, label):
     """Profile one dispatch of the op with the real-time device profiler and assert its device kernel duration
     is within +/- MSA_PERF_MARGIN of expected_ms. Returns the op output for the shape check."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
-        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob --ignores this file), so an
+        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
         # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
         # sprint / ring-joint perf checks.
         pytest.fail("Real-time profiler must be active for sparse_sdpa_msa perf checks (needs IOMMU)")
