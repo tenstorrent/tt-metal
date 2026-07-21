@@ -15,13 +15,13 @@ namespace compute_kernel_lib {
 template <
     PoolType pool,
     ReduceDim rdim,
+    uint32_t cb_in,
+    uint32_t cb_scaler,
+    uint32_t cb_acc,
     ReduceInputPolicy in_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
     typename PostOp>
 ALWI void accumulate_reduce_block(
-    uint32_t cb_in,
-    uint32_t cb_scaler,
-    uint32_t cb_acc,
     ReduceInputBlockShape block_shape,
     uint32_t b,
     uint32_t num_blocks,
@@ -29,20 +29,14 @@ ALWI void accumulate_reduce_block(
     PostOp post_op_final) {
     const bool is_last = (b + 1 == num_blocks);
     if (is_last) {
-        reduce<pool, rdim, in_policy, reconfig_mode>(
-            cb_in,
-            cb_scaler,
-            cb_acc,
+        reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode>(
             block_shape,
             ReduceInputMemoryLayout::contiguous(),
             Accumulate::at(cb_acc, b),
             post_op_final,
             partial);
     } else {
-        reduce<pool, rdim, in_policy, reconfig_mode>(
-            cb_in,
-            cb_scaler,
-            cb_acc,
+        reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode>(
             block_shape,
             ReduceInputMemoryLayout::contiguous(),
             Accumulate::at(cb_acc, b),
@@ -54,20 +48,20 @@ ALWI void accumulate_reduce_block(
 template <
     PoolType pool,
     ReduceDim rdim,
+    uint32_t cb_in,
+    uint32_t cb_scaler,
+    uint32_t cb_acc,
     ReduceInputPolicy in_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
     typename PostOp>
 ALWI void accumulate_reduce(
-    uint32_t cb_in,
-    uint32_t cb_scaler,
-    uint32_t cb_acc,
     ReduceInputBlockShape block_shape,
     uint32_t num_blocks,
     ReducePartialScaler partial,
     PostOp post_op_final) {
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        accumulate_reduce_block<pool, rdim, in_policy, reconfig_mode>(
-            cb_in, cb_scaler, cb_acc, block_shape, b, num_blocks, partial, post_op_final);
+        accumulate_reduce_block<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode>(
+            block_shape, b, num_blocks, partial, post_op_final);
     }
 }
 

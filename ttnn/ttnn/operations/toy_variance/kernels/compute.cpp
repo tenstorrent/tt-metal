@@ -63,8 +63,8 @@ void kernel_main() {
     // ---------- Pass 1: streaming mean ----------
     // Scaler = 1/N (with partial-scaler-zeroed padded positions) converts SUM
     // into mean. accumulate_reduce owns the block loop.
-    ckl::accumulate_reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-        cb_in, cb_scaler, cb_mean, reduce_block_shape, NUM_BLOCKS, partial_scaler);
+    ckl::accumulate_reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_mean>(
+        reduce_block_shape, NUM_BLOCKS, partial_scaler);
 
     // ---------- Pass 2: streaming variance via (x - mean)^2 ----------
     // Per block:
@@ -96,21 +96,22 @@ void kernel_main() {
         ckl::square<cb_centered, cb_centered>(bin_block_shape);
 
         if constexpr (COMPUTE_STD_DEV) {
-            ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            ckl::accumulate_reduce_block<
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
                 cb_centered,
                 cb_scaler,
-                cb_variance,
-                reduce_block_shape,
-                b,
-                NUM_BLOCKS,
-                partial_scaler,
-                [](uint32_t dst) {
-                    sqrt_tile_init();
-                    sqrt_tile(dst);
-                });
+                cb_variance>(reduce_block_shape, b, NUM_BLOCKS, partial_scaler, [](uint32_t dst) {
+                sqrt_tile_init();
+                sqrt_tile(dst);
+            });
         } else {
-            ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                cb_centered, cb_scaler, cb_variance, reduce_block_shape, b, NUM_BLOCKS, partial_scaler);
+            ckl::accumulate_reduce_block<
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                cb_centered,
+                cb_scaler,
+                cb_variance>(reduce_block_shape, b, NUM_BLOCKS, partial_scaler);
         }
     }
 

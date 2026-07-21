@@ -126,17 +126,9 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(
  * @tparam partial_positions Number of valid elements along the reduce axis in the
  *         partial tile. Must be in [1, tile_dim - 1]; if you'd pass tile_dim use
  *         prepare_reduce_scaler with the single-tile path instead.
- * @tparam compute_uses_reduce_tile When true, forces row-0 fill (reduce LLK layout)
- *         even for SUM/AVG + REDUCE_ROW combinations that would normally use col-0
- *         fill (matmul layout). See prepare_reduce_scaler for full description.
  * @param scaler_f Float scaler value to fill both tiles with
  */
-template <
-    uint32_t cb_id,
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t partial_positions,
-    bool compute_uses_reduce_tile = false>
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions>
 FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
 
 /**
@@ -151,15 +143,13 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
  * @tparam reduce_dim Reduction dimension (REDUCE_SCALAR is rejected)
  * @tparam partial_positions Valid elements in the partial tile, in [1, tile_dim - 1]
  * @tparam reduce_factor Number of elements being reduced (used by AVG only)
- * @tparam compute_uses_reduce_tile See prepare_reduce_scaler for description
  */
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t partial_positions,
-    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,
-    bool compute_uses_reduce_tile = false>
+    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
 FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers();
 
 }  // namespace dataflow_kernel_lib
