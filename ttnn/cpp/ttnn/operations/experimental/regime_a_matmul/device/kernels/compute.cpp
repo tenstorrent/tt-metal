@@ -14,7 +14,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
@@ -36,9 +36,9 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
-// Like copy_block but NEVER applies the fused activation. Used by split-K NON-root bands (bottom band of a
+// Like copy_and_pack_block but NEVER applies the fused activation. Used by split-K NON-root bands (bottom band of a
 // Pk>1 chain) so they forward the RAW matmul partial up the reduction chain; the activation is applied
-// exactly once at the reduction ROOT (is_top). copy_block itself always applies activation when defined and
+// exactly once at the reduction ROOT (is_top). copy_and_pack_block itself always applies activation when defined and
 // is used only where the block IS the final output (no-fusion path, or activation-only root).
 void copy_block_raw(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -80,7 +80,7 @@ void reduce_add_in_place(uint32_t intermediate_cb, uint32_t reduce_cb, uint32_t 
 
 // Split-K plan B: out = a + b, full elementwise (both M_block_tiles x N_block_tiles). Used by the
 // column reduction to add this band's matmul partial (a) to the running sum forwarded up from the band
-// below (b). Pushes out_cb one M-row at a time, matching copy_block/add_bias_block.
+// below (b). Pushes out_cb one M-row at a time, matching copy_and_pack_block/add_bias_block.
 void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     add_tiles_init(a_cb, b_cb);
     reconfig_data_format(a_cb, b_cb);
@@ -556,13 +556,13 @@ void kernel_main() {
 #ifdef DIAG_NO_REDUCE
             // NO_REDUCE ablation: force the bottom-band copy path on EVERY core so it never waits for or adds
             // cb_reduce. The writer bypasses the matching reduction traffic; only the top band writes.
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             cb_pop_front(intermediate_cb, out_block_num_tiles);
 #elif !defined(REGIME_A_FUSED)
             // NO-FUSION path (byte-identical to the historical Regime-A output stage): top and non-top reduce
             // bands are identical; the writer decides forward-up vs DRAM-write.
             if (is_reduce_bottom) {
-                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+                copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
                 cb_wait_front(cb_reduce, out_block_num_tiles);
                 reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
@@ -608,7 +608,7 @@ void kernel_main() {
                 cb_pop_front(in2_cb, N_block_tiles);
                 cb_pop_front(intermediate_cb, out_block_num_tiles);
 #else   // activation-only root
-                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);  // applies SFPU activation
+                copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);  // applies SFPU activation
                 cb_pop_front(intermediate_cb, out_block_num_tiles);
 #endif  // fusion kind
             }
@@ -616,7 +616,7 @@ void kernel_main() {
 #elif !defined(FUSE_TERNARY)
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
             cb_wait_front(in2_cb, N_block_tiles);
             add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
