@@ -31,6 +31,41 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
+
+// --pin: bind a std::thread to a single core so it can't be descheduled by other work. Used to give the
+// host-ring flushers dedicated cores, isolating them from the live-Tracy machinery (see MPMC diagnostics).
+static void pin_thread_to_core(std::thread& t, int core) {
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(core, &set);
+    int rc = pthread_setaffinity_np(t.native_handle(), sizeof(set), &set);
+    // Read back so we KNOW the pin took (a cgroup cpuset can silently confine us to a different set).
+    cpu_set_t got;
+    CPU_ZERO(&got);
+    pthread_getaffinity_np(t.native_handle(), sizeof(got), &got);
+    int actual = -1;
+    for (int c = 0; c < CPU_SETSIZE; c++) {
+        if (CPU_ISSET(c, &got)) {
+            actual = c;
+            break;
+        }
+    }
+    printf(
+        "[pin]   requested core %d  set_rc=%d  now-allowed-first-core=%d  count=%d\n",
+        core,
+        rc,
+        actual,
+        CPU_COUNT(&got));
+#else
+    (void)t;
+    (void)core;
+#endif
+}
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -71,7 +106,7 @@ static uint64_t HACKED_ADDR_H(uint64_t h) { return HACKED_BASE + h * 0x40; }
 static constexpr uint64_t P_STOP = MBOX_PARAMS + 0x28;
 static uint64_t harthb(int h) { return 0x08011040ULL + 0x100 + (uint64_t)h * 8; }
 
-static constexpr uint64_t WIN_STRIDE = 0x200000ULL;
+static constexpr uint64_t DEFAULT_WIN_STRIDE = 0x200000ULL;  // 2 MB default host-ring budget; --winmb overrides
 static constexpr int NRISC = 5;
 static constexpr uint32_t RING_CAP = 512;  // worker L1 ring depth (words) -- MUST match profstream.c/producer
 
@@ -113,11 +148,19 @@ struct BatchQ {
     std::queue<Batch> q;
     size_t cap;
     bool closed = false;
+    size_t peak = 0;           // DIAG: max occupancy ever reached (batches)
+    uint64_t push_blocks = 0;  // DIAG: # pushes that found the queue full and had to wait (real MPMC back-pressure)
     explicit BatchQ(size_t c) : cap(c) {}
     void push(Batch&& b) {
         std::unique_lock<std::mutex> lk(m);
+        if (q.size() >= cap) {
+            push_blocks++;  // flusher is about to block on a full queue => this is where MPMC back-pressure starts
+        }
         cv_push.wait(lk, [&] { return q.size() < cap; });
         q.push(std::move(b));
+        if (q.size() > peak) {
+            peak = q.size();
+        }
         cv_pop.notify_one();
     }
     bool pop(Batch& out) {
@@ -143,6 +186,7 @@ int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     int device_id = 0, l2cpu = 0, pll = 1000;
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
+    uint64_t win_stride = DEFAULT_WIN_STRIDE;  // --winmb: host-ring budget (rings share it); capped by chan_sz/2
     uint32_t prog_id = 0xA5A5A5A5u, hring_words = 65536, prod_delay = 0;  // 256 KB/ring: relay never hostfull-stalls
                                                                           // (gives the push-to-host headroom over
                                                                           // the readers); fits 4 rings in the 2 MB win
@@ -168,6 +212,9 @@ int main(int argc, char** argv) {
                                // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
+    bool do_pin = false;       // --pin: bind each flusher to its own core (0,1,...). Pair with `taskset -c 2-N`
+                               // on the process so cores 0/1 are otherwise empty -> flushers can't be descheduled
+                               // by the live-Tracy consumer/send-worker/capture (the measured stall source).
     bool do_csv = false;       // --csv [path]: instead of Tracy, hold decoded records in memory (cheap append on
                                // the hot path) and write them to CSV in large batches AFTER the drain -- so the
                                // consumer callback never back-pressures the X280 (goal: 0 stalls, like the sink).
@@ -186,6 +233,8 @@ int main(int argc, char** argv) {
             nread = std::stoull(next());
         } else if (a == "--hring") {
             hring_words = (uint32_t)std::stoul(next());
+        } else if (a == "--winmb") {
+            win_stride = (uint64_t)std::stoull(next()) << 20;  // host-ring budget in MB (rings share it)
         } else if (a == "--proddelay") {
             prod_delay = (uint32_t)std::stoul(next());
         } else if (a == "--progid") {
@@ -237,6 +286,8 @@ int main(int argc, char** argv) {
             mq_cap = std::stoi(next());
         } else if (a == "--tracy") {
             do_tracy = true;
+        } else if (a == "--pin") {
+            do_pin = true;
         } else if (a == "--csv") {
             do_csv = true;
             if (i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0) {
@@ -323,7 +374,7 @@ int main(int argc, char** argv) {
     uint64_t pcie_enc = ((uint64_t)pc.x & 0x3f) | (((uint64_t)pc.y & 0x3f) << 6);
     uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(device_id);
     uint64_t chan_sz = cluster.get_host_channel_size(device_id, 0);
-    uint64_t data_off = (chan_sz / 2) & ~(WIN_STRIDE - 1);
+    uint64_t data_off = (chan_sz / 2) & ~(win_stride - 1);
     uint64_t host_base = pcie_base + data_off;
     uint64_t hring_bytes = (uint64_t)hring_words * 4;
     uint64_t ring_stride = hring_bytes + 64;  // ring data + 64 B trailer (SENT pointer in host sysmem)
@@ -331,8 +382,19 @@ int main(int argc, char** argv) {
                                               // writes reader h -> ring h), each drained by its own host thread
     // SENT pointer for ring h lives in sysmem at data_off + h*ring_stride + hring_bytes (the trailer).
     auto sent_off = [&](uint64_t h) { return data_off + h * ring_stride + hring_bytes; };
-    if (ring_stride * ndh > WIN_STRIDE) {
-        fprintf(stderr, "[d2h] %llu host rings exceed 2 MB window\n", (unsigned long long)ndh);
+    if (ring_stride * ndh > win_stride) {
+        fprintf(
+            stderr,
+            "[d2h] %llu host rings (%llu B each) exceed %llu MB window -- lower --hring or raise --winmb\n",
+            (unsigned long long)ndh,
+            (unsigned long long)ring_stride,
+            (unsigned long long)(win_stride >> 20));
+        std::_Exit(2);
+    }
+    // data_off starts at chan_sz/2, so the rings have the whole second half of the PCIe channel to grow into;
+    // the X280 writes them through the PCIe tile which maps the full channel, so win_stride is just a budget.
+    if (data_off + ring_stride * ndh > chan_sz) {
+        fprintf(stderr, "[d2h] rings overflow host channel (%llu MB)\n", (unsigned long long)(chan_sz >> 20));
         std::_Exit(2);
     }
     // The real test runs through the production MPMC pipeline (flush+demux -> record MPMC -> consumers).
@@ -780,18 +842,19 @@ int main(int argc, char** argv) {
     }
     auto tracy_consumer = [&]() {
         Batch b;
-        bool anchored = false;
-        uint64_t cnt = 0;
+        uint64_t ts_base = 0;   // first device timestamp seen; markers are rebased to it so the device
+        bool anchored = false;  // timeline starts at the capture origin (the context anchor's gpuTime=0),
+        uint64_t cnt = 0;       // not ~device-ts (~seconds) into the trace. Durations are unaffected.
         while (mq.pop(b)) {
             for (auto& r : b) {
                 uint32_t ci = r.lane / (uint32_t)NRISC, risc = r.lane % (uint32_t)NRISC;
                 if (ci >= num_cores) {
                     continue;
                 }
-                if (!anchored) {  // anchor device-first-ts to tracy-now (Tracy clock domain); relative spacing exact
-                    tracy_handler->CalibrateDevice((uint32_t)device_id, tracy::Profiler::GetTime(), r.ts, tracy_freq);
-                    anchored = true;
-                }
+                if (!anchored) {
+                    ts_base = r.ts;   // rebase origin. NOTE: no CalibrateDevice -- GPU drift-calibration is
+                    anchored = true;  // intentionally off (it scaled durations ~9x); the AddDevice anchor
+                }  // (gpuTime=0 <-> host_start) + this rebase give correct placement.
                 auto it = zone_names.find(r.zone);
                 if (it == zone_names.end()) {  // unnamed hash -> stable fallback string
                     char nb[24];
@@ -807,7 +870,7 @@ int main(int argc, char** argv) {
                 zp.risc = risc;
                 zp.timer_id = r.zone;
                 zp.name = it->second;
-                zp.timestamp = r.ts;
+                zp.timestamp = (r.ts >= ts_base) ? (r.ts - ts_base) : 0;  // rebased to capture origin (clamp)
                 zp.is_start = (r.type == PP_ZONE_START);
                 tracy_handler->HandleWorkerZone(zp);
                 cnt++;
@@ -825,6 +888,15 @@ int main(int argc, char** argv) {
     if (mpmc > 0) {
         for (uint64_t h = 0; h < ndh; h++) {
             flushers.emplace_back(flusher, h);
+        }
+        if (do_pin) {
+            for (uint64_t h = 0; h < ndh; h++) {
+                pin_thread_to_core(flushers[h], (int)h);  // flusher h -> core h (0,1,...); leave rest to the OS
+            }
+            printf(
+                "[pin] pinned %llu flusher(s) to cores 0..%llu (run under taskset -c 2-N to keep them empty)\n",
+                (unsigned long long)ndh,
+                (unsigned long long)(ndh - 1));
         }
         bool special_spawned = false;
         const char* consumer_desc = nullptr;
@@ -1173,6 +1245,12 @@ int main(int argc, char** argv) {
             "  X280-STALL   : %llu back-pressure zones  (delay=%u/marker)  [0 = drain fully kept up]\n",
             (unsigned long long)stall,
             prod_delay);
+        printf(
+            "  MPMC (mq)    : peak %zu / cap %zu batches   flusher push-blocks: %llu  [0 blocks => MPMC never the "
+            "bottleneck]\n",
+            mq.peak,
+            mq.cap,
+            (unsigned long long)mq.push_blocks);
         printf(
             "  prog id      : %llu/%llu markers carried 0x%x   ts regressions: %llu   ring overflow: %llu  (sink "
             "%llx)\n",
