@@ -18,7 +18,7 @@ from models.tt_dit.utils.ltx import (
 )
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
-from .ltx_mesh_params import LTX_PIPELINE_MESH_PARAMS, _2x4sp1tp0nl2_line_is_fsdp0
+from .ltx_mesh_params import LTX_PIPELINE_MESH_PARAMS_DL, _2x4sp1tp0nl2_line_is_fsdp0, _with_dynamic_load
 
 
 def _default_distilled_lora() -> str:
@@ -41,10 +41,9 @@ def _default_distilled_lora() -> str:
     "no_prompt",
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
-@pytest.mark.parametrize("dynamic_load", [False])
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
-    LTX_PIPELINE_MESH_PARAMS,
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    LTX_PIPELINE_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_two_stages(
@@ -140,10 +139,9 @@ def test_pipeline_two_stages(
 # ---------------------------------------------------------------------------
 # I2V smoke test (image + text -> video)
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("dynamic_load", [True])
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
-    [_2x4sp1tp0nl2_line_is_fsdp0],
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    [_with_dynamic_load(_2x4sp1tp0nl2_line_is_fsdp0, True)],
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_two_stages_i2v_smoke(

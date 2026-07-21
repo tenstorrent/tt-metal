@@ -115,6 +115,86 @@ LTX_PIPELINE_MESH_PARAMS = [
     _4x32sp1tp0nl2_ring_is_fsdp0,
 ]
 
+
+def _with_dynamic_load(param, dynamic_load):
+    """Append dynamic_node arg to a 7-field mesh param, yielding the pipeline signature
+    (mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load).
+    Some tests use 7-field mesh_device params, some need an 8th dynamic_load. This function
+    allows us concatenate them together"""
+    v = param.values  # (mesh_shape, sp, tp, num_links, device_params, topology, is_fsdp)
+    assert len(v) == 7, f"expected a 7-field mesh param, got {len(v)}: {param.id}"
+    return pytest.param(*v, dynamic_load, marks=param.marks, id=param.id)
+
+
+# dynamic_load=True only for the 2x4 (BH-like) configs — mirrors production, where 2x4 pages
+# weights in/out (dynamic_load path) to avoid init-time DRAM OOM rather than per-layer FSDP gathers.
+_PIPELINE_DL_TRUE = {"2x4sp0tp1nl1_line_is_fsdp1", "2x4sp1tp0nl2_line_is_fsdp0"}
+
+LTX_PIPELINE_MESH_PARAMS_DL = [_with_dynamic_load(p, p.id in _PIPELINE_DL_TRUE) for p in LTX_PIPELINE_MESH_PARAMS]
+
+
+def _override_base_device_params(base, device_params, *, id=None):
+    """Swap the device_params (element 4) of a shared building block, keeping its geometry.
+    Optional id override for variants that need a distinct test id (e.g. the i2v prefix)."""
+    v = base.values  # (mesh_shape, sp, tp, num_links, device_params, topology, is_fsdp)
+    return pytest.param(*v[:4], device_params, *v[5:], marks=base.marks, id=id or base.id)
+
+
+# ---------------------------------------------------------------------------
+# Distilled AV pipeline mesh params. Same geometry as the pipeline configs, but the audio
+# decode chain needs bigger device pools on a few configs, and the WH 4x8 ring config runs
+# dynamic_load. Reuse the shared building blocks for geometry (single-sourced); override
+# device_params only where audio decode diverges, then append the distilled dynamic_load.
+# ---------------------------------------------------------------------------
+# Override device_params for the audio decode chain. Each dict augments the base line/ring
+# params only with the pool(s) that config actually needs:
+#   l1_small_size: the audio vocoder's native conv1d/conv2d taps (depthwise audio filters) run an
+#     UntilizeWithHalo gather whose sharding/config tensors allocate from the dedicated L1_SMALL
+#     pool. It defaults to 0, which OOMs the vocoder in decode; 32 KB matches the audio component
+#     tests.
+#   worker_l1_size: the WH 4x8 ring config's RingAttention otherwise hits a kernel code-size error;
+#     the larger worker L1 gives its command stream room.
+#   trace_region_size: under LTX_TRACED=1 both stage traces' command streams (stage-1 + the
+#     larger-sequence stage-2) live here; measured need is ~236 MB at 1080p (get_trace_buffers_size),
+#     so 500 MB leaves headroom.
+_line_l1small = {**_line, "l1_small_size": 32768}
+_ring_worker_l1 = {"worker_l1_size": 1344544, **_ring}
+_line_trace = {**_line, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+_ring_trace = {**_ring, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+
+LTX_DISTILLED_MESH_PARAMS_DL = [
+    _with_dynamic_load(_2x2sp0tp1nl2_line_is_fsdp1, False),
+    _with_dynamic_load(_2x4sp0tp1nl1_line_is_fsdp1, True),
+    # BH on 2x4: L1_SMALL scratch for the vocoder conv taps.
+    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_l1small), True),
+    # WH (ring) on 4x8: bigger worker L1 for RingAttention.
+    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl4_ring_is_fsdp1, _ring_worker_l1), True),
+    # BH (linear) on 4x8.
+    _with_dynamic_load(_4x8sp1tp0nl2_line_is_fsdp0, False),
+    # BH (ring) on 4x8: trace region + L1_SMALL for the traced decode.
+    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace), False),
+    _with_dynamic_load(_4x32sp1tp0nl2_ring_is_fsdp0, False),
+]
+
+# I2V chained t2v->i2v; both configs are traced (trace region + L1_SMALL). 4x8 Galaxy (ring):
+# full-res 1088x1920 latent shards unevenly on the 4x8 mesh (s1 cond latent 17x30, full 34x60),
+# so the VAE encoder fold + even-shard padding must handle non-mesh-aligned dims here — the 2x4
+# loudbox shards evenly and never hits this, so it's kept as a distinct id.
+LTX_DISTILLED_I2V_MESH_PARAMS_DL = [
+    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
+    _with_dynamic_load(
+        _override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace, id="i2v_4x8sp1tp0nl2_ring_is_fsdp0"),
+        False,
+    ),
+]
+
+# Audio-decode-only profiling: both configs use the traced line params (trace region + L1_SMALL)
+# so LTX_TRACED=1 can capture the vocoder.
+LTX_DISTILLED_AUDIO_MESH_PARAMS_DL = [
+    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
+    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_line_is_fsdp0, _line_trace), False),
+]
+
 # No 1x1 config: real-grid shapes require SP padding, and video self-attention only masks
 # padded keys via ring SDPA's logical_n (sp>1). Production never runs sp=1.
 LTX_TRANSFORMER_MESH_PARAMS = [
