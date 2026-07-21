@@ -27,7 +27,7 @@
 #   - runs.jsonl uses file locking for safe concurrent appends
 #   - ckernel_sfpu.h is NOT edited during generation — update it after
 #   - Wave 8-9 depends on Waves 1-7; do NOT run Wave 8-9 in parallel with earlier waves
-#   - Simulator tests are serialized via the per-arch lock /tmp/tt-llk-test-<arch>.lock
+#   - Simulator tests are serialized via the single global lock /tmp/tt-llk-test.lock
 #     (.claude/scripts/run_test.sh acquires it internally before the consumer step)
 
 set -euo pipefail

@@ -1,5 +1,9 @@
 # LLK CodeGen
 
+## Execution Policy:
+
+Run every step synchronously in the foreground. Never set `run_in_background` on a Bash or Agent call (worktree setup, the orchestrator, `run_test.sh`), and never end your turn while a step is still running — the tool's synchronous return is your wait. `run_test.sh` is a single blocking call that returns a terminal code (0/1/2/3/5); it has no resume loop. Pass the Bash-tool maximum `timeout: 600000` as a backstop — the run bounds itself via hang detection.
+
 ## Git Policy:
 
 This router uses git READ-ONLY (`rev-parse`, `log`, `status`, `diff`, `show`) —
@@ -85,12 +89,27 @@ Then set:
 
 ## Step 2: Create Branch and Worktree
 
+For `REQUEST_TYPE=generate` on quasar, put the run in motion before creating the worktree:
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_begin_setup {kernel} {target_arch} /proj_sw/user_dev/llk_code_gen
+# Echoes LOG_DIR, RUN_ID, START_TIME — carry these to Step 3.
+```
+
 Set up an isolated worktree so all code changes happen on a dedicated branch based on `origin/main`.
 
 ```bash
 source codegen/scripts/setup_worktree.sh
 setup_worktree {TASK_ID}
 # Exports: WORKTREE_DIR, WORKTREE_BRANCH
+```
+
+For `REQUEST_TYPE=generate` on quasar, mark setup finished (use the `LOG_DIR` from `execute_step_begin_setup`):
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_setup_ready {log_dir}
 ```
 
 Exports two variables, passed to the orchestrator in Step 3:
@@ -117,7 +136,15 @@ python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH 
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
+# From execute_step_begin_setup (Step 2) so the orchestrator reuses the same run identity:
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR    "{log_dir}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set RUN_ID     "{run_id}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set START_TIME "{start_time}"
 ```
+Optional per-run override flags — set the same way (`state.py --worktree-dir … set <FLAG> true`) only when the request asks for them:
+- `SKIP_TESTER` — the writer validates against the existing tests; tester/refiner are skipped.
+- `HIDE_EXISTING_KERNEL` — the orchestrator's Step 2b git-removes-and-commits the target op's existing files on the worktree branch, so it regenerates blind. Never `rm` the files in the prompt; set this flag and let the orchestrator do it.
+
 Then invoke the orchestrator, telling it only `WORKTREE_DIR={worktree_dir}` —
 it reads everything else back the same way, via `state.py --worktree-dir`.
 
@@ -165,12 +192,12 @@ cleanup_worktree {TASK_ID}          # removes ONLY this run's worktree (safe und
 
 After the cleanup we are left with:
 - `LOG_DIR` is the path the orchestrator set during its run — take the concrete path from the orchestrator's report.
-- `generated.patch` + `base_commit` in `LOG_DIR`.
-- The local fix commit on `WORKTREE_BRANCH`.
+- `generated.patch` + `base_commit` in `LOG_DIR` — always present, always sufficient on its own.
+- The local fix commit on `WORKTREE_BRANCH` — issue-solver only. Quasar kernel-gen never commits the generated kernel (writer/optimizer/prettifier leave it as an uncommitted working-tree diff, captured only by `generated.patch`); with `HIDE_EXISTING_KERNEL=true` the branch instead carries commits that *delete* the target op's prior files, so checking out that branch alone yields a regression, not a recovery.
 
 Recovering a run's work later:
-- `git checkout <base_commit> && git apply <LOG_DIR>/generated.patch` — from the `LOG_DIR`, independent of repo state.
-- `git worktree add <path> <WORKTREE_BRANCH>` — re-materialize the fix from the branch.
+- `git checkout <base_commit> && git apply <LOG_DIR>/generated.patch` — works for every flow, independent of repo state. Use this for kernel-gen.
+- `git worktree add <path> <WORKTREE_BRANCH>` — issue-solver only, re-materializes its fix commit. For quasar kernel-gen this recovers nothing (or, under `HIDE_EXISTING_KERNEL`, something actively worse than nothing).
 
 **Pushing / PR creation is a separate, explicit action** (still requires the
 user's go-ahead). Perform when `CREATE_PR=yes`, push `WORKTREE_BRANCH` and open the PR
@@ -185,9 +212,10 @@ The mechanism is concurrency-safe — launch as many as the machine can handle:
   even two runs of the *same* issue never collide.
 - Fixes are committed to **separate branches**, so concurrent local commits
   never touch each other.
-- Simulator access is serialized per-arch by `.claude/scripts/run_test.sh` via
-  `/tmp/tt-llk-test-<arch>.lock`, so parallel runs compile in parallel and only
-  queue at the (single) simulator step.
+- Device access is serialized by `.claude/scripts/run_test.sh` via a single
+  global lock (`/tmp/tt-llk-test.lock`), so parallel runs compile in parallel
+  (lock-free) and queue only at the `simulate`/`run` step; whoever holds the lock
+  rebuilds under it if a peer's compile invalidated the shared build cache.
 
 Launch pattern (mirrors `batch_generate.sh` for kernels): run one
 `claude -p "solve issue #<N> ..."` per issue, passing every input the Startup

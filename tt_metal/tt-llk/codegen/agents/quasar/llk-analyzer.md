@@ -1,8 +1,8 @@
 ---
 name: llk-analyzer
 description: Analyze a problem (kernel generation or issue fix) and produce a solution approach grounded in target-architecture instructions. Runs first on every LLK task; invokes the llk-arch-lookup skill to discover usable instructions.
-model: opus
-tools: Read, Glob, Grep, Write, Skill, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question
+model: inherit
+tools: Read, Glob, Grep, Write, Bash, Skill, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question
 ---
 
 # LLK Analyzer Agent
@@ -12,174 +12,184 @@ Your mission is to describe **how a problem should be approached** on the target
 You are the FIRST stop for every LLK task, covering both flows:
 
 - **Kernel generation / port**: semantic understanding comes from the reference implementation; solution approach targets the new architecture.
-- **Issue fix**: semantic understanding comes from the issue body + current broken code; solution approach targets the specific failure.
-
-Output goes to `codegen/artifacts/{kernel}_analysis.md`.
 
 ---
 
 ## Inputs
 
-You will receive one of:
+**Resolve inputs before any other work, by EXECUTING the following:**
 
-- **Generation**: `KERNEL_NAME`, `KERNEL_TYPE` (sfpu/math/pack/unpack), `REFERENCE_ARCH`, `TARGET_ARCH`, `REFERENCE_PATH`.
-- **Issue fix**: `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_COMMENTS` (verbatim), `TARGET_ARCH`, suspect file paths.
+```bash
+# 1. Worktree root — derived from the checkout, not an env var. (git worktree root
+#    == WORKTREE_DIR; code lives at $WORKTREE_DIR/tt_metal/tt-llk.)
+WORKTREE_DIR="$(git rev-parse --show-toplevel 2>/dev/null)"
+echo "WORKTREE_DIR=${WORKTREE_DIR:-<UNRESOLVED>}"
+if [ -z "$WORKTREE_DIR" ]; then
+    echo "FALLBACK: not in a checkout — use the values passed inline in your prompt"
+else
+    cd "$WORKTREE_DIR/tt_metal/tt-llk"
+    ST="python codegen/scripts/state.py"
 
-Plus `WORKTREE_DIR` (`cd "$WORKTREE_DIR/tt_metal/tt-llk"` before any I/O) and `LOG_DIR`.
+    # 2. LOG_DIR is the bootstrap key kept in the worktree store (--worktree-dir).
+    LOG_DIR="$($ST --worktree-dir "$WORKTREE_DIR" get LOG_DIR)"
 
-If `REFERENCE_PATH` was not passed, fall back to Glob:
+    # 3. Everything else lives in the run store ($LOG_DIR/state.json) — the
+    #    orchestrator mirrors the router keys there too, so read them all from it.
+    KERNEL_NAME="$($ST      --log-dir "$LOG_DIR" get KERNEL_NAME)"
+    KERNEL_TYPE="$($ST      --log-dir "$LOG_DIR" get KERNEL_TYPE)"
+    TARGET_ARCH="$($ST      --log-dir "$LOG_DIR" get TARGET_ARCH)"
+    REFERENCE_ARCH="$($ST   --log-dir "$LOG_DIR" get REF_ARCH)"
+    REFERENCE_PATH="$($ST   --log-dir "$LOG_DIR" get KERNEL_PATH)"
+    GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
+    SFPI_MODE="$($ST        --log-dir "$LOG_DIR" get SFPI_MODE)"
+
+    # 4. Echo the resolved set; any "<empty>" is a key the store did not have.
+    for v in LOG_DIR KERNEL_NAME KERNEL_TYPE REFERENCE_ARCH TARGET_ARCH REFERENCE_PATH GENERATED_KERNEL SFPI_MODE; do
+        echo "$v=${!v:-<empty>}"
+    done
+fi
 ```
-tt_llk_{ref_arch}/**/ckernel_*{op}*.h
-tt_llk_{ref_arch}/**/llk_*{op}*.h
+---
+
+**RULES YOU MUST FOLLOW:**
+
+Run all subsequent file I/O from `$WORKTREE_DIR/tt_metal/tt-llk`. Your output goes to
+`codegen/artifacts/{KERNEL_NAME}_analysis.md`.
+
+**Throughout this playbook**, `{...}` denotes the value of the variable `...` echoed above
+(e.g. with `KERNEL_NAME=gelu`, `codegen/artifacts/{KERNEL_NAME}_analysis.md` means
+`codegen/artifacts/gelu_analysis.md`).
+
+---
+
+ONLY IF `REFERENCE_PATH` came back empty, fall back to Glob — search the same locations the
+orchestrator's discovery step covers, in this order (paths relative to
+`$WORKTREE_DIR/tt_metal/tt-llk`, matching `execute_step_discover_kernels`):
 ```
+# SFPU — metal-layer LLK API (prefer when the op exists in both layers, UNLESS it
+# is only a thin wrapper: it #includes sfpu/ckernel_sfpu_{op}.h and its calculate_*/
+# *_init just forward to the lib's _calculate_*_/_init_*_ with no raw TTI_/sfpi:: of
+# its own — a wrapper has no algorithm, so use the tt-llk library file below instead)
+../hw/ckernels/{REFERENCE_ARCH}/metal/llk_api/llk_sfpu/ckernel_sfpu_{KERNEL_NAME}.h
+# SFPU — tt-llk library (the real algorithm; use this when the metal file is a wrapper)
+tt_llk_{REFERENCE_ARCH}/common/inc/sfpu/ckernel_sfpu_{KERNEL_NAME}.h
+# Math / pack / unpack — tt-llk library
+tt_llk_{REFERENCE_ARCH}/llk_lib/llk_math_*{KERNEL_NAME}*.h
+tt_llk_{REFERENCE_ARCH}/llk_lib/llk_pack*{KERNEL_NAME}*.h
+tt_llk_{REFERENCE_ARCH}/llk_lib/llk_unpack*{KERNEL_NAME}*.h
+```
+
+---
+
+## Step 0: Pure-SFPI reference — verbatim copy
+
+If the reference contains **no** raw `TTI_`/`TT_` instructions (pure SFPI), skip the target-specific design — regardless of `SFPI_MODE`. Copy it verbatim to `{GENERATED_KERNEL}` and set the skip flag:
+
+```bash
+WORKTREE_DIR="$(git rev-parse --show-toplevel)"; cd "$WORKTREE_DIR/tt_metal/tt-llk"
+ST="python codegen/scripts/state.py"
+LOG_DIR="$($ST         --worktree-dir "$WORKTREE_DIR" get LOG_DIR)"
+REFERENCE_PATH="$($ST   --log-dir "$LOG_DIR" get KERNEL_PATH)"
+GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
+if [ -f "$REFERENCE_PATH" ] && ! grep -qE '\bTTI?_[A-Z]' "$REFERENCE_PATH"; then
+    dest="$WORKTREE_DIR/$GENERATED_KERNEL"   # GENERATED_KERNEL is repo-root-relative
+    mkdir -p "$(dirname "$dest")"
+    cp "$REFERENCE_PATH" "$dest"
+    $ST --log-dir "$LOG_DIR" set SKIP_WRITER true --json
+    echo COPIED
+fi
+```
+
+If it printed `COPIED`, still write `codegen/artifacts/{KERNEL_NAME}_analysis.md`, but make only these substantive: Problem Statement (Step 1 — semantics), Kernel Type + SFPU Category (so the tester picks the right harness), and Format Applicability (Step 7 — the formats to test). Fill every other required section with `Verbatim SFPI copy — no target-specific design.`. Then return the normal report and stop. The writer reads `SKIP_WRITER=true` and validates the copied kernel instead of generating.
+
+Otherwise (the reference contains raw `TTI_`/`TT_`) continue to Step 1.
 
 ---
 
 ## Step 1: Frame the Problem
 
-Write a **Problem Statement** section — one short paragraph that states what must compute (for generation) or what is broken (for issue fix). This is the contract the rest of the analysis answers.
-
-### 1a: Generation flow
+Write a **Problem Statement** section — one short paragraph that states what must compute. This is the contract the rest of the analysis answers.
 
 Read the reference to extract **semantics only** — what the kernel computes, not how. Example: *"GELU computes `x * Φ(x)` elementwise over a tile of Dest. On the target we need a Quasar-shaped SFPU kernel that consumes values from Dest and writes GELU(x) back to Dest."*
 
-Do **not** copy implementation details from the reference into the problem statement; those are decided in Step 6 from target instructions.
+Do **NOT** copy implementation details from the reference into the problem statement;
 
-#### Enumerate ALL exported helpers in the reference header (MANDATORY)
+#### Enumerate the kernel in the reference header (MANDATORY)
 
-A single reference header commonly exports multiple `_calculate_*_` helpers — they are distinct public API surfaces that downstream LLK wrappers and `MathOperation` entries call by name. You MUST list every one and plan to port every one. Examples:
+A single reference header commonly exports multiple helpers — they are distinct public API surfaces that downstream LLK wrappers and `MathOperation` entries call by name. You MUST list every one and plan to port every one.
 
-- `ckernel_sfpu_fill.h` exports `_calculate_fill_`, `_calculate_fill_int_`, `_calculate_fill_bitcast_` → three helpers, three phases.
-- `ckernel_sfpu_typecast.h` exports per-format `_calculate_typecast_<SRC,DST>_` variants → one phase per variant family.
-- `ckernel_sfpu_cast.h` exports `_calculate_cast_` plus any `*_rnd_` / `*_sat_` siblings → port every variant.
-
-Grep the reference header to enumerate them before writing Problem Statement:
+Reference entry-point helpers carry `calculate` in their name with inconsistent underscores across headers. Grep the substring `calculate` and read each surrounding signature to enumerate them:
 
 ```
-Grep: pattern="^(template .*\\n)*inline void _calculate_[a-z0-9_]+_", path="<REFERENCE_PATH>", multiline=true, output_mode="content"
+Grep: pattern="\\bvoid\\s+\\w*calculate\\w*\\s*\\(", path="<REFERENCE_PATH>", output_mode="content"
 ```
 
-Record the full list in the Problem Statement so the rest of the analysis plans for every entry point. **Scope narrowing is not permitted** — if the test harness currently only exercises one variant, the others still get ported; the tester will add coverage. If a specific variant is genuinely infeasible on target (hardware gap), call it out explicitly in §6e Risks with a cited reason; do **not** silently drop it.
-
-### 1b: Issue-fix flow
-
-Read the issue verbatim. Record:
-- What the reporter expected vs. what actually happened.
-- Exact error messages, stack traces, reproduction commands — do not paraphrase.
-- Which files/functions are named.
-
-Then read the current (broken) target code at the named paths. Form a hypothesis about the failure mode (compile error? wrong result? perf regression? missing format support?) — this steers the instruction discovery in Step 3.
+Then read each hit to classify it as a top-level entry point vs. an internal `_sfp_rows_`/helper. Record the full list of entry points in the Problem Statement and keep every one in scope. Only a genuine hardware gap on the target removes an entry point from scope — call that out explicitly; do **NOT** silently drop it. A missing golden, `MathOperation`/`SfpuType` enum entry, or dispatcher wiring does **NOT** put an operation out of scope — the writer and tester create that infrastructure. Keep the operation in scope and add a bullet in §6e stating that its golden and any missing test infrastructure must be implemented in the plan.
 
 ---
 
 ## Step 2: Survey the Target — Existing Kernels First
 
-Before designing anything, internalize the target's conventions. New code that deviates fails compile or produces wrong shape. The reference is the wrong source of truth for shape — only the target's existing code is.
+Survey **sibling** kernels for conventions, but the **target op itself may have been hidden for blind regeneration** — if its file is absent from the branch, treat the op as new and design it from the reference implementation + ISA. Do NOT resurrect a prior version of the target op from `git show HEAD/origin/main:<path>` or history; if it is not on the branch, it does not exist.
 
-### 2a: Read the canonical target pattern (MANDATORY)
+Before designing anything, look at how kernels are already written for the target. Do **not** port the reference function-by-function. The reference usually splits one operation across many near-duplicate functions — one per situation (float vs int, each data-format width, each mode, approximate vs accurate). Your job is the opposite: read those variants to learn *how each situation must be handled*, then fold them into a **single generic entry point** where each situation is a template parameter, resolved by traits / `if constexpr` — not a separate copy-pasted function.
 
-**SFPU kernels** — read at least two of exp, gelu, relu, sigmoid, sqrt from `tt_llk_{target_arch}/common/inc/sfpu/` for the canonical shape. (Those existing siblings still live in the tt-llk lib; **newly generated Quasar SFPU kernels are written to the CKernels LLK API folder** `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` instead — the writer's `kernel_template.py` chooses the path, so you do not need to prescribe an output path, only the function shape.) Every Quasar SFPU kernel has the same shape; document it in the output:
+Example: a reference that splits one operation across many near-duplicate functions — one per data-format width, one per comparison/mode, float vs int variants — folds into a single Quasar entry point `calculate_{op}<APPROX, FMT, MODE, ITERATIONS>()`, with format resolved through a traits struct and mode resolved through `if constexpr`. One entry, every situation handled inside it.
 
+Take *what the kernel does* from the reference. The reference is a different architecture;
+
+### 2a: Read the canonical target pattern
+
+For SFPU kernels, each existing kernel exposes its interface through a **single entry point** — the `calculate_{op}` compute function, plus an `init_{op}` only when the op needs LUT/constant pre-loading. Everything else (the `_sfp_rows_` inner processor, work registers, addrmods) is implementation detail reached from that entry. Read the entry point(s) to learn the shape. Every Quasar SFPU kernel has the same shape; document it in the output. Math/pack/unpack kernels do not follow this shape — read the closest sibling `llk_*` kernel and document its own conventions instead.
+
+Example of SFPU kernel type:
 ```cpp
 namespace ckernel { namespace sfpu {
 
-// Optional — only if LUT/constant pre-loading is needed (e.g., gelu)
-inline void _init_{op}_();
+// Optional — only if constant pre-loading is needed (e.g., gelu)
+inline void init_{KERNEL_NAME}();
 
-// Inner row processor — ONLY include when the per-row body is ≥2 instructions.
-// Typical body: TTI_SFPLOAD → one or more compute ops → TTI_SFPSTORE.
-// If the loop body is a single TTI_ call (e.g., a pure SFPSTORE with no preceding
-// SFPLOAD), omit this wrapper and inline the instruction directly in the loop.
-// A one-line wrapper is never justified — the writer playbook forbids it.
 [template <...>]
-inline void _calculate_{op}_sfp_rows_([runtime_args]);
+inline void _calculate_{KERNEL_NAME}_sfp_rows_([runtime_args]);
 
 // Outer loop: called once per face by the LLK wrapper; unrolls 8×, increments Dest pointer
 [template <...>]
-inline void _calculate_{op}_(const int iterations [, runtime_args]) {
+inline void calculate_{KERNEL_NAME}([runtime_args]) {
     #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
-        _calculate_{op}_sfp_rows_(...);   // or inline single instruction here
-        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();
+        // Internal logic, function calls...
+        _calculate_{KERNEL_NAME}_sfp_rows_...
     }
 }
 
 }} // namespace
 ```
 
-Record the universal conventions:
-- **SFPI is available.** Quasar supports both the SFPI C++ DSL (`sfpi::vFloat`, `sfpi::dst_reg[...]`, `v_if` / `v_endif`, etc.) and raw `TTI_` / `TT_` macros operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols. Existing Quasar SFPU kernels are written in raw intrinsics — when extending or composing with them, match the sibling kernel's style; for new kernels either style is acceptable. If the reference uses SFPI, its constructs may be carried over directly instead of translated.
-  `sfpi::SFPLOADI_MOD0_*` constants from `sfpi_constants.h` (in `namespace sfpi`, reachable via `ckernel_sfpu.h` → `sfpi.h` → `sfpi_constants.h`) MUST be used for `TTI_SFPLOADI` / `TT_SFPLOADI` mode operands — never raw hex.
-- Includes: `ckernel_trisc_common.h`, `cmath_common.h`, optional `ckernel_ops.h`; sibling kernels for composition (e.g., silu includes `ckernel_sfpu_sigmoid.h`). Include `sfpi.h` directly when SFPI types or `sfpi::` constants are used.
-- Namespace: `namespace ckernel { namespace sfpu { ... } }` (Blackhole uses `ckernel::sfpu` — do **not** copy that form).
-- Address mode: `ADDR_MOD_7`, pre-configured by `_eltwise_unary_sfpu_configure_addrmod_()`. Never invent a new addrmod.
-- Default load/store: `TTI_SFPLOAD(reg, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)` — format-agnostic (see Step 7). Exceptions: typecast / `*_int` kernels that set an explicit `sfpmem::` mode.
-- LREG convention: LREG0 = primary load/store register; LREG1–LREG2 = work; higher LREGs = constants/LUT entries.
-- Unroll: `#pragma GCC unroll 8` on the iterations loop.
-- Conditional execution: `TTI_SFPSETCC` + `TTI_SFPENCC` (hardware CC register) in raw-intrinsic kernels; `v_if / v_endif` in SFPI kernels.
-- LUT access: `TTI_SFPLUTFP32(dst, mode)` with values pre-loaded via `_sfpu_load_config32_(...)` or `TTI_SFPLOADI`; SFPI `lut` / `lut2` helpers are also available.
+When analyzing, be aware of:
 
-**Math / pack / unpack** — read 2–3 closest sibling kernels in `tt_llk_{target_arch}/llk_lib/`. Extract the equivalent conventions for that kernel family and document them. Quasar math/pack/unpack code is raw Tensix intrinsics.
+- Neccessery includes for this kernel
+- Namespace: `namespace ckernel { namespace sfpu { ... } }` (Blackhole uses `ckernel::sfpu` — do **not** copy that form).
+- Address mode: `ADDR_MOD_7`, pre-configured by `_eltwise_sfpu_configure_addrmod_()`. Never invent a new addrmod.
+- If writing init function with address mode settings, use `ADDR_MOD_6`. DO NOT use `csr_read<CSR::TRISC_ID>()` when programming this address mode, this is done on blackhole or wormhole but should not be explicit like this for quasar.
+- Default load/store: `TTI_SFPLOAD(reg, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)`, use if applicable
+- Unroll: `#pragma GCC unroll 8` on the iterations loop.
+- Use available CONSTANTS and helpers in the REPO!!
+- Conditional execution: `TTI_SFPSETCC` + `TTI_SFPENCC` (hardware CC register) in raw-intrinsic kernels for SFPU kerenles if applicable
+- Never mix `SFPI` and raw `TTI`/`TT` in one kernel — every function in the file must use the same style. Pick one (all `SFPI` or all `TTI`/`TT`) and convert any mixed reference to it.
+- `SFPI_MODE=false` → target the raw `TTI`/`TT` version. `SFPI_MODE=true` → plan the `TTI`/`TT` sequence first, then map each step to its SFPI equivalent, using only features and builtins current SFPI supports (verify support before relying on one).
+- Use `TT_*` instruction ONLY when we can't pass all compile time argumentss
+- LUT access: `TTI_SFPLUTFP32(dst, mode)` with values pre-loaded via `_sfpu_load_config32_(...)` or `TTI_SFPLOADI`;
+- Any other kernel that is being ported (not SFPU type), analyzed based on how the flow of kernel is being executed. Be aware that when porting any HW bug writtern for reference arhitecure does not apply for Quasar.
 
 ### 2b: Read the target test harness
 
 **SFPU kernels — the test harness is a fixed unified test, not a per-op file.** New
-SFPU ops are *appended* to a consolidated test for their category; the workflow no
-longer creates `sfpu_{op}_{arch}_test.cpp` / `test_{op}_{arch}.py`. First classify
-the op, then read that category's unified harness.
+SFPU ops are *appended* to a consolidated test for their category. **Classify the op** from the parent wrapper it must fit:
+- One Dest source → **unary**
+- Two Dest sources → result → **binary**
+- Three or more operands (select between them) → **ternary**
 
-**Classify the op** from the parent wrapper it must fit (read in 2c):
-- Uses `_llk_math_eltwise_unary_sfpu_params_` (one Dest source) → **unary**
-- Uses `_llk_math_eltwise_binary_sfpu_params_` (two Dest sources → result) → **binary**
-- Selects between operands by a condition tile (where-shaped, 3 operands) → **ternary**
-
-Resolve the unified target from the category:
-
-| `SFPU_CATEGORY` | Python unified test | C++ test source | Op-registration point |
-|---|---|---|---|
-| **unary** | `tests/python_tests/{target_arch}/test_eltwise_unary_sfpu_{target_arch}.py` | `tests/sources/{target_arch}/eltwise_unary_sfpu_{target_arch}_test.cpp` | `tests/helpers/include/sfpu_operations_{target_arch}.h` → `init/call_unary_sfpu_operation_{target_arch}` |
-| **binary** | `tests/python_tests/{target_arch}/test_eltwise_binary_sfpu_{target_arch}.py` | `tests/sources/{target_arch}/eltwise_binary_sfpu_{target_arch}_test.cpp` | `tests/helpers/include/sfpu_operations_{target_arch}.h` → `init/call_binary_sfpu_operation_{target_arch}` |
-| **ternary** | `tests/python_tests/{target_arch}/test_sfpu_where_{target_arch}.py` | `tests/sources/{target_arch}/sfpu_where_{target_arch}_test.cpp` | where-specific harness (no shared dispatcher yet) |
-
-The unified `.cpp` test selects the op purely via its `SFPU_UNARY_OPERATION` /
-`SFPU_BINARY_OP` template param and delegates to the dispatcher header — so adding a
-unary/binary op means editing the **dispatcher header**, not the `.cpp` test. Ternary
-(`where`) has no shared dispatcher today; a second ternary op will require generalizing
-that harness (flag it in §6e Risks if applicable).
-
-Read the resolved unified test (`.py` + `.cpp`) and the dispatcher header. Record:
-- The exact function signatures / template params the dispatcher invokes for this category.
-- How the python sweep registers an op (unary: `OP_CONFIGS`; binary: the per-family op list).
-- Scenarios exercised (format combos, dest_acc, etc.).
-
-**Math / pack / unpack kernels** — there is no unified test. Use Grep to find the
-closest sibling test source and its `#ifdef ARCH_{TARGET_UPPER}` branch:
-```
-Grep: pattern="{op}", path="tests/sources/{target_arch}", glob="*.cpp", output_mode="files_with_matches"
-```
-Record the exact function signatures, template params, and scenarios.
-
-The test is a hard contract; deviating breaks the build.
-
-### 2c: Read the parent/caller file
-
-For SFPU: `tt_llk_{target_arch}/llk_lib/llk_math_eltwise_unary_sfpu_common.h` defines:
-
-```cpp
-template <bool APPROXIMATE, class F, class... ARGS>
-inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args) {
-    _llk_math_eltwise_unary_sfpu_start_(dst_tile_index);
-    for (std::uint32_t face = 0; face < NUM_FACES; face++) {
-        sfpu_func(static_cast<ARGS&&>(args)...);
-        _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
-    }
-    _llk_math_eltwise_unary_sfpu_done_();
-}
-```
-
-This wrapper calls `sfpu_func(args...)` once per face. Your function signature MUST fit: `void _calculate_{op}_(int iterations, ...runtime_args)`. Not `void _calculate_{op}_<ITERATIONS>()` — Blackhole's template-int ITERATIONS form is wrong shape on Quasar.
-
-For math/pack/unpack, locate the matching `_llk_{family}_params_` wrapper and record its calling contract.
+Record the category in the `## SFPU Category` section of the output — its unified test and dispatcher paths are listed there (see Output Document Structure).
 
 ---
 
@@ -193,27 +203,27 @@ Skill: llk-arch-lookup
 
 Treat the injected content as your playbook for this step. For the problem at hand, follow its SFPU / math / pack-unpack track:
 
-1. **Primary arch spec** — SFPU MAS (`1256423592`) for SFPU; FPU MAS (`881197063`) for math; pack/unpack discovery via CQL.
-2. **Instruction set** — Tensix SFPU ISA (`1170505767`) or the full ISA tree (`1613201604`). Search for the specific instructions you expect:
+1. **Instruction set** — Tensix SFPU ISA (`1170505767`) or the full ISA tree (`1613201604`). Search for the specific instructions you expect:
    ```
    mcp__atlassian__searchConfluenceUsingCql with cql: title = "SFPNONLINEAR" AND ancestor = "1613201604"
    ```
-3. **Registers** — SrcS (`141000706`), Dest (`195493892`), SrcA/B (`65798149` / `66158593`) for math.
-4. **Formats** — **Data Format Handling (`2521530390`)** is the primary, end-to-end reference: it covers the four configurable format-attachment points along the compute datapath (L1/DMA → SrcA/SrcB/SrcS → FPU/SFPU → Dest → Packer) and the explicit-vs-implicit source for each, the format encodings (4-bit legacy, 8-bit `format_encodings_e`, BFP/MX block-float), the per-format property & bias table, explicit format config registers (`ALU_FORMAT_SPEC_REG*`, SrcS/SFPU, unpacker/packer), implicit format handling (saved Dest formats, implied SrcA/SrcB, the SFPLOAD/SFPSTORE `DEFAULT_FORMAT` semantics in §5.3, explicit-vs-implicit override arbitration), and exponent rebiasing (MOVD2A/MOVD2B/MOVB2A). Supplement with the narrower pages when you need storage-layout detail: Tensix Formats (`237174853`), Dest storage (`80674824`), SrcA/B storage (`83230723`). Mandatory even for format-agnostic SFPU kernels — downstream agents need the constraint list.
-5. **Cross-check with `assembly.yaml`** — for every instruction you cite, confirm it exists on the target:
+2. **Registers** — SrcS (`141000706`), Dest (`195493892`), SrcA/B (`65798149` / `66158593`) for math.
+3. **Formats** — **Data Format Handling (`2521530390`)**, **Implied Format (547258441)**, **Tensix Formats (237174853)**
+4. **Cross-check with `assembly.yaml`** — for every instruction you cite, confirm it exists on the target:
    ```
-   Grep: pattern="^{INSTRUCTION}:", path="tt_llk_{target_arch}/instructions/assembly.yaml"
+   Grep: pattern="^{INSTRUCTION}:", path="tt_llk_{TARGET_ARCH}/instructions/assembly.yaml"
    ```
    If zero matches, the instruction does not exist on this arch. Find an alternative or flag as gap.
-6. **Reference-side ISA** — `mcp__deepwiki__ask_question` on `tenstorrent/tt-isa-documentation` for Blackhole equivalents when porting.
+5. **Reference-side ISA** — `mcp__deepwiki__ask_question` on `tenstorrent/tt-isa-documentation` for Blackhole/Wormhole equivalents when porting.
 
 Produce an **Available Instructions** table:
 
-| Instruction | Purpose | Operand constraints | TTI_ viable? | Source |
+| Instruction | Purpose | Operand constraints | TTI_ viable? | Sources |
 |-------------|---------|---------------------|--------------|--------|
 | SFPNONLINEAR | Unary transcendentals (exp/tanh/sqrt/recip/relu/sigmoid modes) | mode is immediate | Yes | Confluence page 1170505767 |
 | SFPLOADI | Load 16-bit immediate into LREG half | value and mode are immediate | Yes if value/mode constexpr | ISA child page |
 | SFPMAD | 3-op multiply-add, 2-cycle | reg operands immediate | Yes | … |
+| ... | ... | ... | ... | ... |
 
 Record enough to make Step 4 mechanical.
 
@@ -221,19 +231,10 @@ Record enough to make Step 4 mechanical.
 
 ## Step 4: Map Semantics → Target Instructions
 
-This is where the approach takes shape. For each semantic step in the problem statement:
-
-1. **Check for single-instruction collapse first.** On Quasar, many transcendentals collapse to one `TTI_SFPNONLINEAR(src, dst, MODE)` — modes include `EXP_MODE`, `TANH_MODE`, `SQRT_MODE`, `RECIP_MODE`, `RELU_MODE`, and (when available) `SIGMOID_MODE`. A 50-line Blackhole polynomial can become 3 Quasar instructions. Check the SFPNONLINEAR page for the full mode list before designing composites.
-2. **Check for existing composites in sibling kernels.** If the operation builds on something that already exists on target (e.g., silu = `x * sigmoid(x)`), include the sibling header and call its helper — do not reimplement. Use Grep to find candidates:
-   ```
-   Grep: pattern="_calculate_{sub_op}_", path="tt_llk_{target_arch}/common/inc/sfpu"
-   ```
+1. **Check for single-instruction collapse first.** On Quasar, many transcendentals collapse to one for example `TTI_SFPNONLINEAR(src, dst, MODE)` — modes include `EXP_MODE`, `TANH_MODE`, `SQRT_MODE`, `RECIP_MODE`, `RELU_MODE`, and (when available) `SIGMOID_MODE`. A 50-line Blackhole polynomial can become 3 Quasar instructions. Check the SFPNONLINEAR page for the full mode list before designing composites.
+2. **Build semantic** - from reference kernel, divide into semantic blocks for composition in the table described below
 3. **Compose from primitives.** If no single instruction or sibling exists, design a sequence. Prefer TTI_ forms (see Step 5).
 4. **Fall back to algorithm redesign.** If the target truly cannot compose the operation, flag it explicitly — the port may need a different mathematical approach (e.g., Taylor series instead of LUT, or emulating via int ops).
-
-**SFPMAD operand constraint:** `TTI_SFPMAD` / `TTI_SFPADD` / `TTI_SFPMUL` take general-purpose LREG operands (LREG0–7). Polynomial coefficients used in `TTI_SFPMAD` must be pre-loaded into LREG0–7 via `TTI_SFPLOADI` before the per-row loop. `_sfpu_load_config32_()` loads into the LUT/config register file, which is only readable via `TTI_SFPLUTFP32` — it does NOT make config-register values accessible as `TTI_SFPMAD` operands. Mixing these two register files produces wrong results silently.
-
-**Exponent extraction path for log-family kernels:** When the kernel must convert an extracted floating-point exponent from integer to float (e.g., for a log implementation), prefer the **biased-exponent path**: `TTI_SFPEXEXP(src, dst, 1)` → biased exponent is always in 0–255 (no sign bit) → `TTI_SFPCAST(dst, dst, 0)` → single INT32→FP32 conversion → `TTI_SFPMAD(LCONST_neg127, dst, LCONST_0, dst, 0)` to debias. This path uses only SFPCAST(mod=0), which has confirmed simulator support. Avoid the alternative unbiased path (`SFPEXEXP(mod=0)` → `SFPCAST(mod=3, SMAG32)` → `SFPCAST(mod=0)`) unless SFPCAST(mod=3) has been independently confirmed on the target simulator — it introduces a two-step conversion with a mode that is not validated by sibling kernels.
 
 Produce a **Semantic → Instruction Mapping** table:
 
@@ -252,26 +253,10 @@ Instruction encoding drives API design, not semantic intent. Before finalizing a
 
 ### The TTI_ / TT_ distinction
 
-- **`TTI_` macros** (immediate): emit instructions inline via `".word" : : "i"(operand)`. The `"i"` constraint means **all operands must be compile-time constants** when inlined. Zero overhead.
+- **`TTI_` macros** (immediate): The `"I"` constraint means **all operands must be compile-time constants** when inlined. Zero overhead.
 - **`TT_` macros** (runtime): write instructions to `instrn_buffer[]`. Operands may be runtime values. Costs one extra memory write per instruction.
 
 **Always prefer `TTI_`.** A semantically clean API that forces `TT_` is worse than a slightly awkward one that preserves `TTI_`.
-
-### Parameter-type rules
-
-1. **Bit-pattern inputs feeding `TTI_SFPLOADI`** — accept `uint32_t` (pre-computed bits), **not** `float`. Caller converts float→bits before calling. `uint32_t >> 16` stays constexpr when inlined with a constant argument; `float` → bits via `memcpy`/`reinterpret_cast` forces a fallback to `TT_SFPLOADI`.
-   *Validated by `ckernel_sfpu_lrelu.h`: `_calculate_lrelu_(iterations, uint32_t slope)` does `TTI_SFPLOADI(LREG2, 0, slope >> 16)` — works because `slope >> 16` is constexpr at the inlined call site when `slope` is a constant.*
-
-2. **Mode operands feeding `TTI_SFPSTORE` / `TTI_SFPLOADI` / `TTI_SFPNONLINEAR`** — if the mode varies between call sites, make it a **template parameter**, not a runtime parameter. `if constexpr` dispatch preserves `TTI_`; runtime `if/else` forces `TT_`.
-
-3. **General rule**: any value the reference passes at runtime but the target needs as an immediate must become either:
-   - A template parameter (if it varies between call sites).
-   - A pre-computed integer passed by the caller (if derived from a higher-level type).
-   - A constexpr (if fixed).
-
-### Contradiction check
-
-For each function signature you propose, walk through the instruction sequence. If any `TTI_` operand traces back to a runtime function parameter that is not of the right type to fold into a constexpr, your spec is internally inconsistent — either change the parameter type (preferred) or downgrade that instruction to `TT_` and document the cost.
 
 ---
 
@@ -279,75 +264,35 @@ For each function signature you propose, walk through the instruction sequence. 
 
 Put it all together. This is the section the writer will use as its primary spec.
 
-### Implementation style: SFPI or raw intrinsics
-
-Quasar supports the SFPI compiler. Pseudocode and proposed function bodies may use either the SFPI C++ DSL or raw `TTI_` / `TT_` intrinsics operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*`. State the chosen style explicitly in §6a so the writer doesn't mix them within one kernel. If the reference uses SFPI, its constructs can be carried over as-is; when you instead choose the raw-intrinsic style, translate each SFPI construct to its Tensix-intrinsic equivalent below before writing the pseudocode:
-
-| SFPI construct (reference) | Quasar equivalent (target) |
-|----------------------------|----------------------------|
-| `sfpi::vFloat in = sfpi::dst_reg[0]` | `TTI_SFPLOAD(LREG0, sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)` |
-| `sfpi::dst_reg[0] = result` | `TTI_SFPSTORE(LREG_result, 0, ADDR_MOD_7, 0, 0)` |
-| `a * b + c` | `TTI_SFPMAD(a, b, c, dst, 0)` (2-cycle — mind hazards) |
-| `a * b` | `TTI_SFPMUL(a, b, LCONST_0, dst, 0)` (2-cycle) |
-| `a + b` | `TTI_SFPADD(LCONST_1, a, b, dst, 0)` (2-cycle) |
-| `v_if (x < 0.0f) { ... } v_endif` | `TTI_SFPSETCC(0, x, 0)` / ops / `TTI_SFPENCC(0, 0)` |
-| `lut(x, l0, l1, l2)` / `lut2_sign(...)` | `_sfpu_load_config32_(...)` preloads + `TTI_SFPLUTFP32(dst, mode)` |
-| `sfpi::sFloat16b(0.5f)` constant | `TTI_SFPLOADI(LREG, 0x8, 0x3F00)` (or pre-loaded constexpr pair) |
-| `sfpi::l_reg[LRegs::LRegN] = ...` save/restore | Not needed — Quasar LREGs are scratch |
-| `dst_reg++` | `ckernel::math::_incr_counters_<0,0,SFP_ROWS,0>()` (once per iteration, outside row body) |
-| `template <int ITERATIONS>` compile-time loop | `const int iterations` runtime parameter |
-
-If you chose the raw-intrinsic style and cannot translate a specific SFPI construct with an entry in this table, either keep that construct in SFPI form or flag it in Step 6e risks.
-
-
 ### 6a: Function shape
 
-**You must produce a signature block for EVERY helper enumerated in Step 1a**, not just the most-commonly-used one. If the reference header exports three `_calculate_*_` variants, §6a must have three entries. The writer uses §6a as an exhaustive to-do list.
+State the target file as `{GENERATED_KERNEL}`; do not choose a different path. Specify the exact signature(s) the writer will implement. Per Step 2 this is normally a **single generic entry point** — one `calculate_{KERNEL_NAME}` that folds every situation (format, mode, approximate/accurate) the reference split across separate functions into template parameters, resolved by traits / `if constexpr`. Do **not** emit one signature per reference helper; only split into a second entry point when a situation genuinely cannot be reached from the same one (and say why in §6e). For SFPU kernels, name each entry point `calculate_{KERNEL_NAME}` and drop the reference's leading and trailing underscores; math/pack/unpack keep the target's existing `llk_*` naming and shape.
 
 ```cpp
-// Optional — include only if LUT/constant pre-loading is needed
-inline void _init_{op}_();
+// Optional — only if LUT/constant pre-loading is needed
+inline void init_{KERNEL_NAME}();
 
-// Inner row processor — ONLY include when the per-row body is ≥2 instructions
-// (the typical case: SFPLOAD → compute → SFPSTORE).
-// If the entire per-row body is a single TTI_ call, omit this helper and inline
-// that instruction directly in the outer loop. The writer's "no single-instruction
-// wrappers" rule takes precedence — do NOT spec a _sfp_rows_ function whose body
-// would be one instruction. Explicitly state in §6a whether the wrapper is needed
-// and why.
+// Inner row processor — omit if the per-row body is a single instruction (inline it instead)
 [template <...>]
-inline void _calculate_{op}_sfp_rows_([runtime_args]);
+inline void _calculate_{KERNEL_NAME}_sfp_rows_([runtime_args]);
 
-// Outer iteration loop — signature must fit _llk_math_eltwise_unary_sfpu_params_
+// Outer entry point — the interface the LLK wrapper / dispatcher calls
 [template <...>]
-inline void _calculate_{op}_(const int iterations [, runtime_args]);
-
-// Repeat the pair above for every sibling variant in the reference header
-// (e.g., _calculate_{op}_int_, _calculate_{op}_bitcast_, _calculate_{op}_<MODE>_).
+inline void calculate_{KERNEL_NAME}([runtime_args]);
 ```
 
-For each template parameter: name it, cite which `TTI_` operand it feeds, justify why it must be compile-time.
-For each runtime parameter: name it, state its type (usually `uint32_t`), and cite how it's consumed.
-Explicitly list reference-only template/runtime params to DROP (e.g., Blackhole's `template <int ITERATIONS>` becomes Quasar's runtime `int iterations`).
-If you're dropping a whole helper rather than a parameter, stop and justify in §6e Risks — silent scope narrowing is a defect (see Step 1a).
+- For every **template parameter**: name it, state which situation it resolves (format / mode / comparison / …), cite the `TTI_` operand or the `if constexpr` / traits dispatch it feeds, and justify why it must be compile-time.
+- For every **runtime parameter**: name it, give its type (usually `uint32_t`), and cite how it is consumed.
+- Explicitly list any reference-only parameter to DROP (e.g. Blackhole's `template <int ITERATIONS>` → Quasar's runtime `int iterations`).
+- If you drop a whole behavior rather than folding it into a template param, justify it in §6e Risks — silent scope narrowing is a defect.
 
 ### 6b: Instruction sequence pseudocode
 
-For every function, write the `TTI_` / `TT_` sequence in order, with a comment per line:
+Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `NOP` instruction).
 
-```
-_calculate_{op}_sfp_rows_:
-    TTI_SFPLOAD(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)    // load tile row from Dest
-    TTI_SFPNONLINEAR(LREG0, LREG1, p_sfpnonlinear::EXP_MODE)         // x -> e^x
-    TTI_SFPADD(LCONST_1, LREG1, LCONST_1, LREG2, 0)                  // 1 + e^x  (2-cycle)
-    TTI_SFPNONLINEAR(LREG2, LREG0, p_sfpnonlinear::RECIP_MODE)       // 1 / (1 + e^x)
-    TTI_SFPSTORE(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)   // store back to Dest
-```
+**Immediate-value convention in pseudocode.** When an instruction takes a hex immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias... Any constant that will need naming
 
-Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `TTI_NOP`).
-
-**Immediate-value convention in §6b pseudocode.** When an instruction takes a hex immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias, an imm12 bit-mask — write the pseudocode with a descriptive placeholder name (e.g. `FP16B_INV_PI`, `FP16B_SIN_C3`, `SFPSETCC_IMM_FP32_TEST`) and give its fp16b bit-pattern + decimal identity in a "Named constants" mini-table at the end of §6b:
-
+Example:
 ```
 Named constants this kernel requires:
 | Name                 | fp16b  | Meaning                                   |
@@ -357,58 +302,35 @@ Named constants this kernel requires:
 | SFPSETCC_IMM_FP32_TEST | 0x800 | imm12 bit 11 = "treat LREG as fp32"     |
 ```
 
-Use the names in the pseudocode, not the raw hex. This lets the writer lift them straight into `constexpr std::uint32_t` declarations at the top of `namespace sfpu` without having to invent names on the fly. Positional `0` / `1` arguments (mod1, done, dest_reg, imm12) stay as bare literals in the pseudocode — the writer will annotate them inline per its own rules.
-
-### 6c: Register allocation
-
-| LREG | Role |
-|------|------|
-| LREG0 | Primary load from Dest; final result before store |
-| LREG1 | Work register (intermediate) |
-| LREG2 | Runtime constant (slope / threshold) — loaded once before the iterations loop |
-| LREG6+ | LUT / config entries (only if using `SFPLUTFP32` or similar) |
-
-### 6d: Init / uninit symmetry
-
-If `_init_{op}_()` exists, table the state changes and how they are reversed (or why reversal is unnecessary):
-
-| Init action | Needs undo? | How / why not |
-|-------------|-------------|---------------|
-| Preloads LUT entries into LREG6–LREG14 | No | LREGs are scratch — subsequent kernels reload as needed |
-
-For kernels with no init, omit this subsection.
+Use the names in the pseudocode, not the raw hex.
 
 ### 6e: Risks and open questions
 
-Surface every uncertainty before handing off:
+Surface every uncertainty, if exists, before handing off:
 - Any cited instruction not yet confirmed in `assembly.yaml`.
 - Format edge cases where the infrastructure may disagree.
 - Reference-only features being explicitly dropped (call them out so the next agent doesn't resurrect them).
 - Hardware constraints you're unsure about (pipeline hazards, 2-cycle ops, LOADMACRO rules).
+- Every in-scope operation lacking a golden, `MathOperation`/`SfpuType` enum entry, or dispatcher wiring — state that its golden and missing test infrastructure must be implemented in the plan.
 
 ---
 
 ## Step 7: Format Applicability (MANDATORY)
 
-**Reference:** ground this section in **Data Format Handling (`2521530390`)** — the authoritative spec for how formats flow through the compute datapath. §5.3 (SFPLOAD/SFPSTORE `DEFAULT_FORMAT`) and §8.4 (SFPLOAD/SFPSTORE implicit vs explicit) explain *why* most SFPU kernels are format-agnostic (the "SFPU-specific rule" below); §3 (per-format property & bias table) and §6 (exponent rebiasing) are what you cite when an op IS format-specific (typecast / `*_int`).
+**Reference:** ground this section in **Data Format Handling (`2521530390`) and **Tensix Formats (237174853)** - Confluence** — the authoritative spec for how formats flow through the compute datapath for given kernel.
 
-Start from the FULL Quasar-supported format set (`QUASAR_DATA_FORMAT_ENUM_VALUES` in `tests/python_tests/helpers/format_config.py`). Evaluate each independently — do **not** use the reference's `static_assert` as the filter. Quasar supports formats Blackhole lacks (Int16, MxFp8R, MxFp8P, Tf32).
-
-**Float16 is valid on Quasar (MANDATORY CHECK):** Float16 appears in both `QUASAR_DATA_FORMAT_ENUM_VALUES` (`format_config.py`) and `VALID_QUASAR_DEST_REG_FORMATS` (`data_format_inference.py`). Do NOT exclude Float16 based on inference from any format list — confirm by running `grep -n "Float16" tests/python_tests/helpers/data_format_inference.py` and verifying the format is present in `VALID_QUASAR_DEST_REG_FORMATS`. Float16 exclusions backed by format-list inference rather than a direct read of these files must be flagged as assumptions with a risk of being wrong.
-
-### SFPU-specific rule
-
-Most SFPU kernels use `TTI_SFPLOAD(..., p_sfpu::sfpmem::DEFAULT, ...)` — they are **format-agnostic**. The format is set by the unpack/math infrastructure that programmed Dest. For testing you permute L1 formats and `dest_acc`; the infrastructure handles conversion. Do NOT exclude integer formats just because the kernel uses float-mode instructions.
-
-**Exception**: kernels that set a non-DEFAULT format mode in SFPLOAD/SFPSTORE (typecast, `*_int`) ARE format-specific and need per-format analysis.
+Start from the FULL Quasar-supported format set (`QUASAR_DATA_FORMAT_ENUM_VALUES` in `tests/python_tests/helpers/format_config.py`). Evaluate each independently.
 
 ### Classify the operation's format domain
 
-- **Float-only**: exp, sqrt, sigmoid, tanh, reciprocal, gelu, silu, log, trig → Float16, Float16_b, Float32, Tf32, MxFp8R, MxFp8P.
-- **Integer-only**: add_int, sub_int, mul_int, bitwise, shift → Int8, UInt8, Int16, Int32.
-- **Universal**: square, abs, negative, fill, threshold, where, data copy, pack, unpack, eltwise add/sub/mul → all Quasar-supported formats that can flow through the unpack-to-dest pipeline.
+- **Float-only**: E.g. Float16, Float16_b, Float32, Tf32, MxFp8R, MxFp8P.
+- **Integer-only**: E.g. Int8, UInt8, Int16, Int32.
+- **Universal** - List the Data Formats
 
 ### Applicable-formats table
+
+For each format below, decide whether it applies to this operation, and whether the operation must handle it explicitly (a format-specific branch) or for SFPU kernels use DEFAULT mod to cover.
+Everything has to come from
 
 | Format | Applicable | Rationale |
 |--------|-----------|-----------|
@@ -423,18 +345,16 @@ Most SFPU kernels use `TTI_SFPLOAD(..., p_sfpu::sfpmem::DEFAULT, ...)` — they 
 | UInt16 | Yes/No | … |
 | MxFp8R | Yes/No | L1-only, unpacked to Float16_b |
 | MxFp8P | Yes/No | L1-only, unpacked to Float16_b |
+| ... | Yes/No | ... |
 
 ### Format constraints
 
-Copy the infrastructure rules that gate test combinations:
-- MX formats require `implied_math_format=Yes`.
-- Int32 / UInt32 require `dest_acc=Yes` (unpacker limitation).
-- Cross-exponent-family conversions (expB input → Float16 output) require `dest_acc=Yes`.
-- Float32 → Float16 on Quasar requires `dest_acc=Yes`.
-- Non-Float32 → Float32 on Quasar requires `dest_acc=Yes`.
-- Integer and float formats cannot be mixed in input→output.
-- **SFPU tests use `unpack_to_dest=True` — exclude mixed-bitwidth `dest_acc` combinations.** Non-32-bit formats must pair with `dest_acc=No`; 32-bit formats must pair with `dest_acc=Yes`. The combinations (non-32-bit + `dest_acc=Yes`) and (32-bit + `dest_acc=No`) require the FPU/datacopy path and must not appear in the **Recommended Test Formats** section of the analysis. The tester enforces this via the `_is_invalid_quasar_combination` filter.
-- Any operation-specific constraints you identified.
+- If there is any reason why data format can't be implemented in contrast to reference architecture explain the produce the explanation for that HAS to CONTAIN proof of Confluence pages or code lines that are proof that it can't work
+
+[FORMAT] -> {
+    [REASON]
+}
+...
 
 ---
 
@@ -445,30 +365,19 @@ Copy the infrastructure rules that gate test combinations:
 - **Simple** — single target instruction or 2–3 primitives. E.g., `relu` → `TTI_SFPNONLINEAR(RELU_MODE)`. Writer time: <30 min.
 - **Medium** — composable from existing primitives with moderate design work. E.g., `sigmoid` → mov + nonlinear + add + nonlinear.
 - **Complex** — requires algorithm redesign or new patterns (LUT + polynomial + conditional execution).
-- **No Direct Equivalent** — fundamental capability gap; escalate to user.
+- **No Direct Equivalent** — fundamental target hardware gap for the whole op. Do NOT write a normal analysis reporting this complexity; return `ANALYSIS_FAILED` instead (see Report on return).
 
-A kernel the reference implements in 50 SFPI lines can still be **Simple** on Quasar if one SFPNONLINEAR mode matches. Classify by target complexity, not reference line count.
-
-### Sub-kernel phases
-
-Every exported `_calculate_*_` helper in the reference header (enumerated in Step 1a) gets its own phase. Additional phases exist for init/uninit, typecast families, and approximate/accurate pairs. Do NOT collapse distinct helpers into one phase — each phase is an independent compile + test surface.
-
-| Phase | Name | Functions | Dependencies |
-|-------|------|-----------|--------------|
-| 1 | init + basic | `_init_X_`, `_calculate_X_sfp_rows_`, `_calculate_X_` | none |
-| 2 | int variant | `_calculate_X_int_` | Phase 1 |
-| 3 | bitcast variant | `_calculate_X_bitcast_` | Phase 1 |
-
-Ordering rules: simplest first; more complex variants after the baseline; dependencies satisfied. A kernel whose reference header exports a single helper has a single phase; a kernel whose reference exports three helpers has three phases — never fewer.
+A kernel the reference implements in 50 SFPI lines can still be **Simple** on Quasar if one SFPNONLINEAR mode matches. Classify by target complexity, not reference line count. Because SFPNONLINIEAR is a new instrcutin that can simplify the kernel.
+These rules are applied for all types of kernels.
 
 ---
 
 ## Output Document Structure
 
-Write `codegen/artifacts/{kernel}_analysis.md` with these sections, in order:
+Write `codegen/artifacts/{KERNEL_NAME}_analysis.md` with these sections, in order:
 
 ```markdown
-# Analysis: {kernel}
+# Analysis: {KERNEL_NAME}
 
 ## Problem Statement
 [Step 1 — one paragraph stating what must compute / what is broken]
@@ -478,34 +387,34 @@ Write `codegen/artifacts/{kernel}_analysis.md` with these sections, in order:
 
 ## SFPU Category
 {unary | binary | ternary}
-[sfpu only — write the bare category word on the line above so the orchestrator can parse it; omit this whole section for math/pack/unpack]
-- Unified Python test: `tests/python_tests/{target_arch}/test_eltwise_{category}_sfpu_{target_arch}.py` (ternary: `test_sfpu_where_{target_arch}.py`)
-- Unified C++ test: `tests/sources/{target_arch}/eltwise_{category}_sfpu_{target_arch}_test.cpp` (ternary: `sfpu_where_{target_arch}_test.cpp`)
-- Dispatcher header: `tests/helpers/include/sfpu_operations_{target_arch}.h` (ternary: none — where-specific harness)
+[sfpu only — write the bare category word on the line above so the tester can read it; omit this whole section for math/pack/unpack]
+- Unified Python test: `tests/python_tests/{TARGET_ARCH}/test_eltwise_{category}_sfpu_{TARGET_ARCH}.py` (ternary: `test_sfpu_where_{TARGET_ARCH}.py`)
+- Unified C++ test: `tests/sources/{TARGET_ARCH}/eltwise_{category}_sfpu_{TARGET_ARCH}_test.cpp` (ternary: `sfpu_where_{TARGET_ARCH}_test.cpp`)
+- Dispatcher header: `tests/helpers/include/sfpu_operations_{TARGET_ARCH}.h` (ternary: none — where-specific harness)
 
 ## Reference (for generation) / Broken Code (for issue fix)
-`{path}`
+`{REFERENCE_PATH}`
 
 ## Target Pattern Survey
-[Step 2 — canonical target kernel shape, API contract from parent file, test harness expectations, universal idioms]
+[Findings from Step 2]
 
 ## Available Instructions
-[Step 3 — instruction table with operand constraints and TTI_ viability]
+[Findings from Step 3]
 
 ## Semantic → Instruction Mapping
-[Step 4 — one row per semantic step; every row cites a source]
+[Findings from Step 4]
 
 ## Instruction Encoding Constraints
-[Step 5 — per-parameter constness analysis for every proposed function signature]
+[Findings from Step 5]
 
 ## Solution Approach
-[Step 6 — function shape, instruction sequence pseudocode, register allocation, init/uninit symmetry, risks]
+[Findings from Step 6]
 
 ## Format Applicability
-[Step 7 — format domain, per-format table, constraints]
+[Findings from Step 7]
 
 ## Complexity & Phases
-[Step 8 — classification and phase plan]
+[Findings from Step 8]
 ```
 
 ---
@@ -515,12 +424,12 @@ Write `codegen/artifacts/{kernel}_analysis.md` with these sections, in order:
 You are done when the analysis document:
 
 1. States the problem, not a description of the reference.
-2. Enumerates every exported `_calculate_*_` helper in the reference header and plans to port each one (Step 1a). Dropping a helper is permitted only with an explicit §6e Risks justification citing a target-architecture gap.
-3. Cites at least one existing target kernel as the shape-of-truth (Step 2a).
-4. Maps every semantic step to target instructions, each backed by a Confluence page or existing file (Step 4).
-5. Proposes function signatures that pass the `TTI_` constness check (Step 5), one block per exported helper (Step 6a).
-6. Gives the writer a concrete instruction sequence they can implement without going back to the reference (Step 6b).
-7. Lists format applicability with technical rationale for every exclusion (Step 7).
+2. Enumerates the reference header and plans to port.
+3. Cites at least one existing target kernel as the shape-of-truth.
+4. Maps every semantic step to target instructions, each backed by a Confluence page or existing file.
+5. Proposes function signatures that pass the `TTI_` constness check
+6. Gives the writer a concrete instruction sequence they can implement without going back to the reference
+7. Lists format applicability with technical rationale for every exclusion
 8. Surfaces risks explicitly rather than hiding assumptions.
 
 Report on return:
@@ -529,8 +438,15 @@ Problem: {one-line statement}
 Complexity: {Simple | Medium | Complex | No Direct Equivalent}
 Instructions to use: {count} mapped
 Phases: {count}
-Analysis complete: codegen/artifacts/{kernel}_analysis.md
-Ready for: llk-planner agent (or writer, if planner step is collapsed)
+Analysis complete: codegen/artifacts/{KERNEL_NAME}_analysis.md
+Ready for: llk-kernel-writer agent
+```
+
+If you cannot produce the analysis — the reference cannot be located, or the whole operation is **No Direct Equivalent** (a fundamental target hardware gap, not a per-entry-point flag handled in §6e) — do **NOT** write a partial analysis file. Return this block instead, with the blocker as the first line:
+```
+ANALYSIS_FAILED: {one-line blocker — the unresolved reference path, or the target capability that is missing}
+Kernel: {KERNEL_NAME} ({TARGET_ARCH})
+Reason: {what was attempted and why it cannot proceed}
 ```
 
 ---
@@ -538,25 +454,20 @@ Ready for: llk-planner agent (or writer, if planner step is collapsed)
 ## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
 **Before returning, write `{LOG_DIR}/agent_analyzer.md` using the `Write` tool.**
-The file MUST contain the sections below in order. The orchestrator's Step 5f
-concatenates the structured sections from every agent log into the final run
-report; missing sections break the report. Raw chronology (assistant text +
-tool calls + trimmed results) is captured separately by
-`codegen/scripts/extract_run_transcripts.py` at Step 5e.1 — this log is for
+The file MUST contain the sections below in order. This log is for
 the **curated narrative and assumptions**, not a full transcript.
 
-If no `LOG_DIR` was provided, skip logging.
+If no `LOG_DIR` was provided, place it in `codegen/artifacts`.
 
-### Required sections (omit nothing — write "none" if a section genuinely has no content)
+### Required sections (Write "None" if a section genuinely has no content)
 
 ```markdown
-# Agent: llk-analyzer — {kernel} ({target_arch})
+# Agent: llk-analyzer — {KERNEL_NAME} ({TARGET_ARCH})
 
 ## Inputs received
-- Flow: {generation | issue-fix}
-- Kernel / kernel_type: {name} / {sfpu|math|pack|unpack}
-- Reference arch / target arch: {ref} / {target}
-- Reference path: {path}
+- Kernel / kernel_type: {KERNEL_NAME} / {KERNEL_TYPE}
+- Reference arch / target arch: {REFERENCE_ARCH} / {TARGET_ARCH}
+- Reference path: {REFERENCE_PATH}
 - Any additional context the orchestrator passed (verbatim, do not summarize)
 
 ## Assumptions made
@@ -566,20 +477,20 @@ One bullet per assumption, in the shape:
 Examples:
 - Used ADDR_MOD_7 rather than ADDR_MOD_3 — every existing Quasar SFPU kernel uses ADDR_MOD_7
   (`ckernel_sfpu_square.h`, `lrelu.h`, `typecast*.h`) and
-  `_eltwise_unary_sfpu_configure_addrmod_()` explicitly programs ADDR_MOD_7 —
+  `_eltwise_sfpu_configure_addrmod_()` explicitly programs ADDR_MOD_7 —
   would break if the parent wrapper is changed to program a different addrmod.
 - Treated `DataFormat.UInt16` as test-infrastructure-excluded, not kernel-excluded —
   `VALID_QUASAR_DEST_REG_FORMATS` in `data_format_inference.py` rejects UInt16 before
   the kernel runs — this assumption becomes wrong the moment the valid-formats list
   is widened.
 
-**If you made no non-trivial assumptions, write "none" — but do not skip the section.**
+**If you made no non-trivial assumptions, write "None" — but do not skip the section.**
 
 ## Reasoning summary (4–6 sentences)
-Plain-prose summary of the approach. Not an enumeration of everything you read —
-the chronology in `transcripts/` already has that. Name the key decisions and
-their reasons. If the analysis had to pivot (e.g., you started planning for a
-UINT16-inclusive test matrix and then discovered the infra exclusion), say so.
+Plain-prose summary of the approach. Name the key decisions and their reasons —
+which reference variants you folded into template params, which target instructions
+you built on, and why. If the analysis had to pivot (e.g., you started planning for
+a UINT16-inclusive test matrix and then discovered the infra exclusion), say so.
 
 ## Decisions & trade-offs
 For each non-trivial choice, write:
@@ -587,28 +498,21 @@ For each non-trivial choice, write:
 - **Alternatives**: what you considered.
 - **Why**: the deciding factor (citation to Confluence / sibling kernel / ISA).
 
-Typical analyzer decisions: LREG allocation, whether to add `_init_*_`, whether to
-fuse `_sfp_rows_` into the outer loop, which reference helpers to port vs. flag,
-which Confluence instructions to rely on.
-
-## Commands run (summary)
-Curated — NOT the full transcript (which is already captured in
-`{LOG_DIR}/transcripts/01_{slug}_commands.md`). List the **material** commands
-that shaped the analysis, one bullet each, with a one-line purpose:
-
-- `grep -n "^SFPLOADI:\|^SFPSTORE:" tt_llk_quasar/instructions/assembly.yaml` —
-  confirmed both instructions exist on Quasar before citing them.
+Typical analyzer decisions: the entry-point signature and which situations become
+template params vs. `if constexpr` / traits dispatch, whether to add `init_{op}`,
+whether to fuse `_sfp_rows_` into the outer loop, which reference variants to fold
+in vs. flag as infeasible (§6e), which Confluence instructions to rely on.
 
 ## Artifacts read / written
 - **Read** (files): list of paths with the role each played ("reference semantics",
-  "canonical Quasar SFPU shape", "parent wrapper contract", ...).
+  "canonical Quasar SFPU shape", "target test harness", ...).
 - **Read** (Confluence pages): page ID + title + the single key finding extracted.
 - **Read** (DeepWiki): repo + question + the summarized answer.
-- **Written**: `codegen/artifacts/{kernel}_analysis.md` + this self-log.
+- **Written**: `codegen/artifacts/{KERNEL_NAME}_analysis.md` + this self-log.
 
 ## Open questions / handoffs
 Things the writer / tester must verify or that you left unresolved. If none,
-write "none". Examples:
+write "None". Examples:
 - The 2-cycle hazard for SFPMAD→SFPSTORE is cited from the SFPU MAS but not
   confirmed with a simulator trace — writer should add a NOP if the test fails.
 ```
