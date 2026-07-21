@@ -19,7 +19,7 @@ void kernel_main() {
     uint32_t dst_size = get_arg_val<uint32_t>(6);
     uint32_t k_block_A = get_arg_val<uint32_t>(7);
     uint32_t k_block_B = get_arg_val<uint32_t>(8);
-    uint32_t out_block_tiles = get_arg_val<uint32_t>(8);
+    uint32_t out_block_tiles = get_arg_val<uint32_t>(9);
 
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
