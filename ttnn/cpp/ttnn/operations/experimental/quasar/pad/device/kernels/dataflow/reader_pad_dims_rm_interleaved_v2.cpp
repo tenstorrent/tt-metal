@@ -25,7 +25,9 @@
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     DataflowBuffer& cb, const uint32_t num_bytes, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
-    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); ++i) {
+    // Round up so a non-4-byte-aligned tail stick is fully filled (the loop-back read consumes all num_bytes).
+    const uint32_t num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; ++i) {
         ptr[i] = val;
     }
 }
