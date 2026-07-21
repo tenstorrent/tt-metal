@@ -1255,8 +1255,8 @@ struct EltwiseChain {
 // SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
 // chain elements that inherit directly from `CopyTileTag` / `PackTileTag` / `DestOnlyTag`
 // without inheriting from `UnaryOp`/`BinaryOp`/`TernaryOp` bases) default
-// to 1. Multiple-inheritance ambiguity (e.g. `OptionalChainElement<true, FillScalar>`)
-// is sidestepped by reading via this detector instead of `Es::lane_width` directly.
+// to 1. Member ambiguity in caller-defined multiple-inheritance elements is sidestepped
+// by reading via this detector instead of `Es::lane_width` directly.
 namespace detail {
 template <class, class = void>
 struct elem_lane_width : std::integral_constant<uint32_t, 1> {};
@@ -2668,8 +2668,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
 // =============================================================================
 // 11c. Public eltwise_chain — forwards every element straight to eltwise_chain_impl.
 //
-// A compile-time-disabled optional (`OptionalChainElement<false, _>`) is a members-less,
-// tag-less marker. Every op-kind trait (is_cb_reader / is_pack / is_dest_only / is_math_mop
+// A compile-time-disabled optional resolves to the shared, members-less,
+// tag-less `DisabledChainElement`. Every op-kind trait (is_cb_reader / is_pack / is_dest_only / is_math_mop
 // = std::is_base_of on a tag it lacks) is false for it, and every ElemDesc accessor is
 // SFINAE-guarded (dfb_* gate on the op-kind, lane_width defaults to 1, etc.), so it reflects
 // into a NEUTRAL ElemDesc — no CB, no reconfig, no pack, lane_width 1 — and every stage

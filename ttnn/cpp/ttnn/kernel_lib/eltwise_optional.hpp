@@ -3,12 +3,14 @@
 
 #pragma once
 
+#include <type_traits>
+
 /**
  * @file eltwise_optional.hpp
  * @brief Conditional / optional chain element wrappers.
  *
- * Compile-time conditional: `OptionalChainElement<bool COND, Inner>` forwards to `Inner`
- * when COND is true. When false, it is a tag-less inert marker that remains in the chain;
+ * Compile-time conditional: `OptionalChainElement<bool COND, Inner>` is `Inner`
+ * when COND is true. When false, it is one shared tag-less inert marker that remains in the chain;
  * the chain describes it with neutral traits and emits no work for it. Its variadic ctor
  * swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
  * either COND.
@@ -31,10 +33,18 @@
 
 namespace compute_kernel_lib {
 
-/// Conditional chain element — when COND is false it is an inert, tag-less chain position.
+/// Shared inert, tag-less chain position used by every disabled optional. Its variadic
+/// constructor accepts the same runtime arguments the enabled inner element would receive.
+struct DisabledChainElement {
+    constexpr DisabledChainElement() noexcept = default;
+
+    template <class... Ignored>
+    constexpr explicit DisabledChainElement(Ignored&&...) noexcept {}
+};
+
+/// Enabled optionals are exactly `Inner`; disabled optionals all share one short marker type.
+/// The inner type therefore does not leak into disabled worker/debug specializations.
 template <bool COND, class Inner>
-struct OptionalChainElement;
+using OptionalChainElement = std::conditional_t<COND, Inner, DisabledChainElement>;
 
 }  // namespace compute_kernel_lib
-
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.inl"
