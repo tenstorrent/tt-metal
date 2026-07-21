@@ -23,13 +23,13 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 KVPE_DIM = 576
 
 
-def _build_reference_kv_tensor(submesh, num_users, max_seq_len):
+def _build_reference_kv_tensor(submesh, num_users, max_seq_len, k_chunk_size):
     """Create a KV cache via the original from_torch + ShardTensor2dMesh path."""
     mesh_rows = submesh.shape[0]
     mesh_cols = submesh.shape[1]
     per_device_seq = max_seq_len // mesh_rows
 
-    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
+    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=k_chunk_size, exp_approx_mode=False)
     kv_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=[1, 1, program_config.k_chunk_size, KVPE_DIM],
         grid=program_config.grid.optimal_dram_grid(),
@@ -148,7 +148,7 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int, k_c
     )
 
     # Verify topology matches reference from_torch + ShardTensor2dMesh path
-    ref_tensor = _build_reference_kv_tensor(submesh, num_users, max_seq_len)
+    ref_tensor = _build_reference_kv_tensor(submesh, num_users, max_seq_len, k_chunk_size)
 
     ref_topo = ref_tensor.tensor_topology()
     out_topo = output_tensor.tensor_topology()
