@@ -24,7 +24,7 @@ def make_depthwise_conv1d_tensors(device, channels=64, input_width=10, kernel_wi
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
-def test_quasar_depthwise_rejects_actual_block_layout_with_height_config(device):
+def test_quasar_depthwise_rejects_actual_block_layout_with_height_config(device, expect_error):
     channels = 64
     input_width = 10
     block_memory_config = ttnn.create_sharded_memory_config(
@@ -44,7 +44,7 @@ def test_quasar_depthwise_rejects_actual_block_layout_with_height_config(device)
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Quasar 1D depthwise convolution does not support BLOCK_SHARDED layout"):
         ttnn.experimental.quasar.conv2d(
             input_tensor=input_tt,
             weight_tensor=weight_tt,
