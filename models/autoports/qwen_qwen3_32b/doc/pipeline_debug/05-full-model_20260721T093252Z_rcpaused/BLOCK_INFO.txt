@@ -1,0 +1,5 @@
+rc=paused (killed while converging, per user pause)
+terminal=active/converging
+run=/home/mvasiljevic/codex-runs/meta-05-full-model-qwen_qwen3_32b_-20260721T093252Z/multigoal_logs
+note=CCL fix re-verified; capacity work + new generator.py/model.py/test_full_model.py preserved in untracked_new_files.tar.gz; SKILL.md overlay excluded from patch
+captured_at=2026-07-21T12:09:51Z

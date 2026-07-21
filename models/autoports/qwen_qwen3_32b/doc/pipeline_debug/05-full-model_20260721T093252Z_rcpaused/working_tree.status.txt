@@ -1,0 +1,15 @@
+ M .agents/skills/forge-functional-decoder-from-ir/SKILL.md
+ M models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py
+ M models/autoports/qwen_qwen3_32b/tt/multichip_decoder.py
+ M models/common/readiness_check/generate.py
+ M models/common/readiness_check/mesh_device.py
+ M models/common/readiness_check/run_autoregressive.py
+ M models/common/readiness_check/run_prefill_check.py
+ M models/common/readiness_check/run_teacher_forcing.py
+?? AUTOTRIAGE.md
+?? models/autoports/qwen_qwen3_32b/doc/full_model/
+?? models/autoports/qwen_qwen3_32b/doc/pipeline_debug/
+?? models/autoports/qwen_qwen3_32b/tests/test_full_model.py
+?? models/autoports/qwen_qwen3_32b/tt/generator.py
+?? models/autoports/qwen_qwen3_32b/tt/model.py
+?? models/common/readiness_check/test_schema.py

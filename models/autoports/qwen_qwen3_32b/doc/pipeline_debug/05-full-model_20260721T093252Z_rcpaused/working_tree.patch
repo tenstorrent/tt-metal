@@ -1,0 +1,918 @@
+diff --git a/models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py b/models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py
+index 5ea4a56af8f..283b1ced276 100644
+--- a/models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py
++++ b/models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py
+@@ -9,10 +9,12 @@ import os
+ import hashlib
+ import json
+ from pathlib import Path
++import time
+ 
+ import pytest
+ import torch
+ 
++import ttnn
+ from models.autoports.qwen_qwen3_32b.tests.test_functional_decoder import (
+     EMITTED_BATCH,
+     REPRESENTATIVE_LAYER,
+@@ -49,6 +51,36 @@ def _write_capacity_result(seq_len: int, payload: dict) -> None:
+     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+ 
+ 
++def _dram_snapshot(mesh_device) -> dict:
++    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
++    return {
++        "num_banks": int(view.num_banks),
++        "total_bytes_per_device": int(view.num_banks * view.total_bytes_per_bank),
++        "allocated_bytes_per_device": int(view.num_banks * view.total_bytes_allocated_per_bank),
++        "free_bytes_per_device": int(view.num_banks * view.total_bytes_free_per_bank),
++        "largest_contiguous_bytes_free_per_bank": int(view.largest_contiguous_bytes_free_per_bank),
++    }
++
++
++def _write_full_model_capacity_result(seq_len: int, payload: dict) -> None:
++    directory = os.getenv(RESULTS_DIR_ENV)
++    if not directory:
++        return
++    repo_root = Path(__file__).resolve().parents[4]
++    source_paths = (
++        "models/autoports/qwen_qwen3_32b/tt/model.py",
++        "models/autoports/qwen_qwen3_32b/tt/generator.py",
++        "models/autoports/qwen_qwen3_32b/tt/multichip_decoder.py",
++        "models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py",
++    )
++    payload["source_sha256"] = {
++        path: hashlib.sha256((repo_root / path).read_bytes()).hexdigest() for path in source_paths
++    }
++    output = Path(directory) / f"full_model_capacity_{seq_len}.json"
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
++
++
+ @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+ def test_batch32_prefill_capacity_probe(mesh_device):
+     length_text = os.environ.get(PROBE_LENGTH_ENV)
+@@ -124,3 +156,146 @@ def test_batch32_prefill_capacity_probe(mesh_device):
+             "output_shape": list(host.shape),
+         },
+     )
++
++
++@pytest.mark.skipif(
++    os.getenv(DECODER_ENV) != "full_model",
++    reason=f"Set {DECODER_ENV}=full_model for the exact 64-layer capacity probe",
++)
++@pytest.mark.parametrize(
++    "device_params",
++    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 200_000_000}],
++    indirect=True,
++)
++@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
++@pytest.mark.timeout(2400)
++def test_exact_full_model_capacity_probe(mesh_device):
++    """Measure full-stack weight, KV, trace, and max-public-prefill residency."""
++
++    from models.autoports.qwen_qwen3_32b.tt.generator import SamplingSettings, build_generator
++    from models.autoports.qwen_qwen3_32b.tt.multichip_decoder import _paged_prefill_capacity
++
++    length_text = os.environ.get(PROBE_LENGTH_ENV)
++    if not length_text:
++        pytest.skip(f"Set {PROBE_LENGTH_ENV} to run an isolated context-capacity measurement")
++    seq_len = int(length_text)
++    expect_oom = os.environ.get(EXPECT_OOM_ENV) == "1"
++    paged_capacity = _paged_prefill_capacity(seq_len, 64)
++    result = {
++        "decoder": "full_model",
++        "batch": EMITTED_BATCH,
++        "sequence_length": seq_len,
++        "paged_capacity_per_slot": paged_capacity,
++        "mesh": "4x Blackhole p300c, 1x4 FABRIC_1D_RING",
++        "trace_region_size": 200_000_000,
++        "memory": {"before_model": _dram_snapshot(mesh_device)},
++    }
++    generator = None
++    stage = "build_model"
++    started = time.perf_counter()
++    try:
++        generator = build_generator(
++            Path(__file__).resolve().parents[1],
++            mesh_device,
++            max_seq_len=seq_len,
++        )
++        result["memory"]["after_weights"] = _dram_snapshot(mesh_device)
++        stage = "allocate_full_kv_and_page_table"
++        state = generator._ensure_internal_state()
++        result["memory"]["after_kv_cache"] = _dram_snapshot(mesh_device)
++
++        stage = "capture_and_replay_split_sampling_traces"
++        short_prompt = generator.tokenizer.encode("Capacity trace smoke.", add_special_tokens=True)
++        short_output = generator.generate(
++            short_prompt,
++            2,
++            enable_trace=True,
++            sampling_settings=SamplingSettings(),
++        )
++        ttnn.synchronize_device(mesh_device)
++        result["trace"] = {
++            "output_tokens": short_output,
++            "counters": generator.trace_counters,
++            "model_trace_id_present": generator._trace.model_trace_id is not None,
++            "sampling_trace_id_present": generator._trace.sampling_trace_id is not None,
++            "token_feedback_alias": (
++                generator._tensor_identity(generator._trace.sampled_token)
++                == generator._tensor_identity(generator._trace.token_buffer)
++            ),
++        }
++        timing_replays = 10
++        started_model = time.perf_counter()
++        for _ in range(timing_replays):
++            ttnn.execute_trace(
++                mesh_device, generator._trace.model_trace_id, cq_id=0, blocking=False
++            )
++        ttnn.synchronize_device(mesh_device)
++        model_trace_s = (time.perf_counter() - started_model) / timing_replays
++
++        started_sampler = time.perf_counter()
++        for _ in range(timing_replays):
++            ttnn.execute_trace(
++                mesh_device, generator._trace.sampling_trace_id, cq_id=0, blocking=False
++            )
++        ttnn.synchronize_device(mesh_device)
++        sampler_trace_s = (time.perf_counter() - started_sampler) / timing_replays
++
++        started_combined = time.perf_counter()
++        for _ in range(timing_replays):
++            ttnn.execute_trace(
++                mesh_device, generator._trace.model_trace_id, cq_id=0, blocking=False
++            )
++            ttnn.execute_trace(
++                mesh_device, generator._trace.sampling_trace_id, cq_id=0, blocking=False
++            )
++        ttnn.synchronize_device(mesh_device)
++        combined_trace_s = (time.perf_counter() - started_combined) / timing_replays
++        result["trace_timing"] = {
++            "replays_per_phase": timing_replays,
++            "model_trace_ms": 1000 * model_trace_s,
++            "sampler_trace_ms": 1000 * sampler_trace_s,
++            "combined_trace_ms": 1000 * combined_trace_s,
++            "combined_trace_t_s_u": 1 / combined_trace_s,
++            "sampler_fraction_of_separate_sum": sampler_trace_s / (model_trace_s + sampler_trace_s),
++        }
++        result["memory"]["after_trace"] = _dram_snapshot(mesh_device)
++        generator.teardown()
++
++        stage = "public_prefill_at_max_context"
++        repeated_token = int(short_prompt[-1])
++        tokens = torch.full((1, seq_len), repeated_token, dtype=torch.int64)
++        logits = generator.prefill_forward(
++            tokens,
++            page_table=state.page_table,
++            kv_cache=state.kv_cache,
++            prompt_lens=[seq_len],
++            return_all_logits=False,
++        )
++        ttnn.synchronize_device(mesh_device)
++        result["max_context_logits_shape"] = list(logits.shape)
++        result["memory"]["after_max_prefill"] = _dram_snapshot(mesh_device)
++        ttnn.deallocate(logits, True)
++        result["result"] = "pass"
++    except RuntimeError as error:
++        detail = next(
++            (line.strip() for line in str(error).splitlines() if "Out of Memory" in line),
++            str(error).splitlines()[0],
++        )
++        result.update({"result": "out_of_memory", "failed_stage": stage, "error": detail})
++        if not expect_oom or "Out of Memory" not in str(error):
++            raise
++    finally:
++        result["elapsed_s"] = time.perf_counter() - started
++        if generator is not None:
++            result["policy"] = generator.runtime_fallback_audit()
++            try:
++                generator.teardown()
++            except Exception:
++                pass
++        _write_full_model_capacity_result(seq_len, result)
++        print(json.dumps(result, indent=2, sort_keys=True), flush=True)
++
++    if expect_oom:
++        assert result["result"] == "out_of_memory"
++    else:
++        assert result["result"] == "pass"
+diff --git a/models/autoports/qwen_qwen3_32b/tt/multichip_decoder.py b/models/autoports/qwen_qwen3_32b/tt/multichip_decoder.py
+index 28a1fcd5961..960aa18f532 100644
+--- a/models/autoports/qwen_qwen3_32b/tt/multichip_decoder.py
++++ b/models/autoports/qwen_qwen3_32b/tt/multichip_decoder.py
+@@ -65,6 +65,23 @@ PRECISION_POLICIES = {
+ }
+ 
+ 
++def _paged_prefill_capacity(max_cache_len: int, page_block_size: int = PAGE_BLOCK_SIZE) -> int:
++    """Physical paged-cache extent needed to cover a logical context."""
++
++    if max_cache_len < 1:
++        raise ValueError(f"max_cache_len must be positive, got {max_cache_len}")
++    if page_block_size < 32 or page_block_size % 32:
++        raise ValueError("page_block_size must be a positive multiple of 32")
++    return page_block_size * math.ceil(max_cache_len / page_block_size)
++
++
++def _rotary_table_rows(max_cache_len: int, page_block_size: int = PAGE_BLOCK_SIZE) -> int:
++    """Cover page-padded prefill and one decode standby row on whole tiles."""
++
++    required = max(_paged_prefill_capacity(max_cache_len, page_block_size), max_cache_len + 1)
++    return 32 * math.ceil(required / 32)
++
++
+ def _replicated_tensor(
+     host: torch.Tensor,
+     *,
+@@ -162,6 +179,9 @@ class MultichipDecoder(OptimizedDecoder):
+         decode_matmul_mode: str = "dram_sharded",
+         prefill_matmul_input_l1: bool = False,
+         residual_contract: str = "sharded",
++        shared_rotary_tensors=None,
++        shared_tt_ccl=None,
++        shared_decode_collective_buffers=None,
+     ) -> "MultichipDecoder":
+         if precision_policy not in PRECISION_POLICIES:
+             raise ValueError(f"Unknown precision policy {precision_policy!r}")
+@@ -261,6 +281,7 @@ class MultichipDecoder(OptimizedDecoder):
+         self.local_attention_width = attention_width // TP_DEGREE
+         self.local_intermediate_size = intermediate_size // TP_DEGREE
+         self.page_block_size = page_block_size
++        self.paged_prefill_capacity = _paged_prefill_capacity(max_cache_len, page_block_size)
+         self.precision_policy_name = precision_policy
+         self.precision_policy = dict(PRECISION_POLICIES[precision_policy])
+         self.kv_cache_dtype = self.precision_policy["kv_cache"]
+@@ -298,7 +319,7 @@ class MultichipDecoder(OptimizedDecoder):
+         self.prefill_in0_block_w = prefill_in0_block_w
+         self.topology = ttnn.Topology.Ring
+         self.num_links = get_num_links(mesh_device)
+-        self.tt_ccl = get_tt_ccl(mesh_device)
++        self.tt_ccl = get_tt_ccl(mesh_device) if shared_tt_ccl is None else shared_tt_ccl
+         self._eager_position_buffers = None
+ 
+         self.input_norm = _replicated_tensor(input_norm, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+@@ -326,18 +347,29 @@ class MultichipDecoder(OptimizedDecoder):
+         self.q_norm = _replicated_tensor(q_norm, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+         self.k_norm = _replicated_tensor(k_norm, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+ 
+-        rotary = Qwen3RotaryEmbedding(hf_config)
+-        positions = torch.arange(max_cache_len, dtype=torch.long).unsqueeze(0)
+-        rope_probe = torch.zeros((1, 1, max_cache_len, head_dim), dtype=torch.bfloat16)
+-        cos, sin = rotary(rope_probe, positions)
+-        self.rotary_cos = _replicated_tensor(
+-            cos.to(torch.bfloat16).unsqueeze(1), mesh_device=mesh_device, dtype=ttnn.bfloat16
+-        )
+-        self.rotary_sin = _replicated_tensor(
+-            sin.to(torch.bfloat16).unsqueeze(1), mesh_device=mesh_device, dtype=ttnn.bfloat16
+-        )
+-        self.rotary_cos_row_major = ttnn.to_layout(self.rotary_cos, ttnn.ROW_MAJOR_LAYOUT)
+-        self.rotary_sin_row_major = ttnn.to_layout(self.rotary_sin, ttnn.ROW_MAJOR_LAYOUT)
++        if shared_rotary_tensors is None:
++            rotary_rows = _rotary_table_rows(max_cache_len, page_block_size)
++            rotary = Qwen3RotaryEmbedding(hf_config)
++            positions = torch.arange(rotary_rows, dtype=torch.long).unsqueeze(0)
++            rope_probe = torch.zeros((1, 1, rotary_rows, head_dim), dtype=torch.bfloat16)
++            cos, sin = rotary(rope_probe, positions)
++            self.rotary_cos = _replicated_tensor(
++                cos.to(torch.bfloat16).unsqueeze(1), mesh_device=mesh_device, dtype=ttnn.bfloat16
++            )
++            self.rotary_sin = _replicated_tensor(
++                sin.to(torch.bfloat16).unsqueeze(1), mesh_device=mesh_device, dtype=ttnn.bfloat16
++            )
++            self.rotary_cos_row_major = ttnn.to_layout(self.rotary_cos, ttnn.ROW_MAJOR_LAYOUT)
++            self.rotary_sin_row_major = ttnn.to_layout(self.rotary_sin, ttnn.ROW_MAJOR_LAYOUT)
++        else:
++            if len(shared_rotary_tensors) != 4:
++                raise ValueError("shared_rotary_tensors must contain tiled cos/sin and row-major cos/sin")
++            (
++                self.rotary_cos,
++                self.rotary_sin,
++                self.rotary_cos_row_major,
++                self.rotary_sin_row_major,
++            ) = shared_rotary_tensors
+ 
+         self.attention_compute_config = _compute_config(
+             mesh_device, self.precision_policy["attention_fidelity"]
+@@ -347,10 +379,19 @@ class MultichipDecoder(OptimizedDecoder):
+         self._build_multichip_configs()
+         self._decode_ag_buffer_index = 0
+         self._decode_rs_buffer_index = 0
+-        self._decode_ag_persistent_buffers = []
+-        self._decode_rs_persistent_buffers = []
+-        self._decode_fused_rs_persistent_buffers = []
+-        if use_persistent_decode_collectives:
++        if shared_decode_collective_buffers is None:
++            self._decode_ag_persistent_buffers = []
++            self._decode_rs_persistent_buffers = []
++            self._decode_fused_rs_persistent_buffers = []
++        else:
++            if len(shared_decode_collective_buffers) != 3:
++                raise ValueError("shared_decode_collective_buffers must contain AG, RS, and fused-RS pools")
++            (
++                self._decode_ag_persistent_buffers,
++                self._decode_rs_persistent_buffers,
++                self._decode_fused_rs_persistent_buffers,
++            ) = shared_decode_collective_buffers
++        if use_persistent_decode_collectives and shared_decode_collective_buffers is None:
+             for _ in range(2):
+                 self._decode_ag_persistent_buffers.append(
+                     _replicated_tensor(
+@@ -372,7 +413,7 @@ class MultichipDecoder(OptimizedDecoder):
+                         memory_config=self.local_residual_memory_config,
+                     )
+                     self._decode_rs_persistent_buffers.append([rs_intermediate, rs_output])
+-        if use_fused_decode_reduce_scatter:
++        if use_fused_decode_reduce_scatter and shared_decode_collective_buffers is None:
+             if ccl_payload_dtype != ttnn.bfloat16:
+                 raise ValueError("fused decode reduce-scatter currently requires BF16 CCL payloads")
+             for _ in range(2):
+@@ -948,12 +989,19 @@ class MultichipDecoder(OptimizedDecoder):
+             layout=ttnn.ROW_MAJOR_LAYOUT,
+         )
+ 
+-    def _validate_hidden_states(self, hidden_states, expected_seq_len: int | None = None) -> int:
++    def _validate_hidden_states(
++        self,
++        hidden_states,
++        expected_seq_len: int | None = None,
++        *,
++        expected_batch: int | None = None,
++    ) -> int:
+         shape = tuple(hidden_states.shape)
+-        expected_prefix = (1, self.batch)
++        batch = self.batch if expected_batch is None else expected_batch
++        expected_prefix = (1, batch)
+         if len(shape) != 4 or shape[:2] != expected_prefix or shape[3] != self.local_hidden_size:
+             raise ValueError(
+-                f"hidden_states must be a TP-fractured [1,{self.batch},seq,{self.local_hidden_size}] "
++                f"hidden_states must be a TP-fractured [1,{batch},seq,{self.local_hidden_size}] "
+                 f"mesh tensor, got {shape}"
+             )
+         seq_len = int(shape[2])
+@@ -963,7 +1011,7 @@ class MultichipDecoder(OptimizedDecoder):
+             raise ValueError(f"seq_len must be in [1,{self.max_cache_len}], got {seq_len}")
+         return seq_len
+ 
+-    def _cache_mode(self, key_cache, value_cache, page_table) -> str:
++    def _cache_mode(self, key_cache, value_cache, page_table, *, prefill: bool = False) -> str:
+         if tuple(key_cache.shape) != tuple(value_cache.shape):
+             raise ValueError("key and value cache shapes differ")
+         shape = tuple(key_cache.shape)
+@@ -978,15 +1026,23 @@ class MultichipDecoder(OptimizedDecoder):
+             raise ValueError("paged cache requires a replicated page_table")
+         if shape[2] < 32 or shape[2] % 32:
+             raise ValueError(f"invalid page block size {shape[2]}")
+-        if tuple(page_table.shape)[0] != self.batch:
+-            raise ValueError(f"page_table must have {self.batch} rows, got {tuple(page_table.shape)}")
++        page_rows = int(tuple(page_table.shape)[0])
++        valid_rows = (1, self.batch) if prefill else (self.batch,)
++        if page_rows not in valid_rows:
++            raise ValueError(f"page_table must have rows in {valid_rows}, got {tuple(page_table.shape)}")
+         return "paged"
+ 
+-    def _all_gather_hidden(self, tensor, *, memory_config):
++    def _all_gather_hidden(
++        self,
++        tensor,
++        *,
++        memory_config,
++        use_persistent_decode_buffer: bool = True,
++    ):
+         if self.ccl_payload_dtype != tensor.dtype:
+             tensor = ttnn.typecast(tensor, self.ccl_payload_dtype)
+         persistent_output = None
+-        if self.use_persistent_decode_collectives and tuple(tensor.shape) == (
++        if use_persistent_decode_buffer and self.use_persistent_decode_collectives and tuple(tensor.shape) == (
+             1,
+             1,
+             self.batch,
+@@ -1011,6 +1067,17 @@ class MultichipDecoder(OptimizedDecoder):
+             gathered = ttnn.typecast(gathered, ttnn.bfloat16)
+         return gathered
+ 
++    def _validate_prefill_extent(self, *, seq_len: int, chunk_start_idx: int, cache_mode: str) -> int:
++        if seq_len < 1 or chunk_start_idx < 0:
++            raise ValueError(f"invalid prefill extent start={chunk_start_idx}, length={seq_len}")
++        prefill_capacity = self.paged_prefill_capacity if cache_mode == "paged" else self.max_cache_len
++        if chunk_start_idx + seq_len > prefill_capacity:
++            raise ValueError(
++                f"prefill extent [{chunk_start_idx},{chunk_start_idx + seq_len}) is outside cache capacity "
++                f"{prefill_capacity}"
++            )
++        return chunk_start_idx + seq_len
++
+     def _reduce_scatter_hidden(self, tensor, *, memory_config, decode: bool):
+         if tensor.is_sharded():
+             tensor = ttnn.sharded_to_interleaved(
+@@ -1254,11 +1321,25 @@ class MultichipDecoder(OptimizedDecoder):
+         # it in the executable candidate so the plan is tested as advised.
+         return ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+ 
+-    def allocate_decode_position_buffers(self, current_pos: int) -> DecodePositionBuffers:
+-        if current_pos < 0 or current_pos >= self.max_cache_len:
+-            raise ValueError(f"current_pos must be in [0,{self.max_cache_len}), got {current_pos}")
++    def _normalize_decode_positions(self, current_pos) -> torch.Tensor:
++        values = torch.as_tensor(current_pos, dtype=torch.int32).flatten()
++        if values.numel() == 1:
++            values = values.repeat(self.batch)
++        if values.numel() != self.batch:
++            raise ValueError(f"decode positions must be scalar or have {self.batch} values")
++        if torch.any(values < -1) or torch.any(values >= self.max_cache_len):
++            raise ValueError(f"decode positions must be in [-1,{self.max_cache_len})")
++        return values
++
++    @staticmethod
++    def _position_marker(values: torch.Tensor) -> tuple[int, ...]:
++        return tuple(int(value) for value in values.tolist())
++
++    def allocate_decode_position_buffers(self, current_pos) -> DecodePositionBuffers:
++        positions = self._normalize_decode_positions(current_pos)
++        rope_positions = positions.clamp_min(0)
+         rope_index = _replicated_tensor(
+-            torch.full((1, 32), current_pos, dtype=torch.int64),
++            rope_positions.reshape(1, self.batch).to(torch.int64),
+             mesh_device=self.mesh_device,
+             dtype=ttnn.uint32,
+             layout=ttnn.ROW_MAJOR_LAYOUT,
+@@ -1278,7 +1359,7 @@ class MultichipDecoder(OptimizedDecoder):
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+         )
+         update_indices = _replicated_tensor(
+-            torch.full((self.batch,), current_pos, dtype=torch.int32),
++            positions,
+             mesh_device=self.mesh_device,
+             dtype=ttnn.int32,
+             layout=ttnn.ROW_MAJOR_LAYOUT,
+@@ -1290,24 +1371,29 @@ class MultichipDecoder(OptimizedDecoder):
+             sin_embedding_output=sin_embedding_output,
+             rope_index=rope_index,
+             update_indices=update_indices,
+-            current_pos=current_pos,
++            current_pos=self._position_marker(positions),
+         )
+ 
+     def prepare_decode_position_buffers(
+-        self, buffers: DecodePositionBuffers, current_pos: int
++        self,
++        buffers: DecodePositionBuffers,
++        current_pos,
++        *,
++        force: bool = False,
+     ) -> DecodePositionBuffers:
+-        if current_pos == buffers.current_pos:
++        positions = self._normalize_decode_positions(current_pos)
++        marker = self._position_marker(positions)
++        if not force and marker == buffers.current_pos:
+             return buffers
+-        if current_pos < 0 or current_pos >= self.max_cache_len:
+-            raise ValueError(f"current_pos must be in [0,{self.max_cache_len}), got {current_pos}")
++        rope_positions = positions.clamp_min(0)
+         rope_host = ttnn.from_torch(
+-            torch.full((1, 32), current_pos, dtype=torch.int64),
++            rope_positions.reshape(1, self.batch).to(torch.int64),
+             dtype=ttnn.uint32,
+             layout=ttnn.ROW_MAJOR_LAYOUT,
+             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+         )
+         update_host = ttnn.from_torch(
+-            torch.full((self.batch,), current_pos, dtype=torch.int32),
++            positions,
+             dtype=ttnn.int32,
+             layout=ttnn.ROW_MAJOR_LAYOUT,
+             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+@@ -1330,14 +1416,18 @@ class MultichipDecoder(OptimizedDecoder):
+             memory_config=buffers.sin_embedding_output.memory_config(),
+             output_tensor=buffers.sin_embedding_output,
+         )
+-        buffers.current_pos = current_pos
++        buffers.current_pos = marker
+         return buffers
+ 
+-    def _eager_decode_position_buffers(self, current_pos: int) -> DecodePositionBuffers:
++    def _eager_decode_position_buffers(self, current_pos) -> DecodePositionBuffers:
++        marker = self._position_marker(self._normalize_decode_positions(current_pos))
+         if self._eager_position_buffers is None:
+             self._eager_position_buffers = self.allocate_decode_position_buffers(current_pos)
+         else:
+-            self.prepare_decode_position_buffers(self._eager_position_buffers, current_pos)
++            self.prepare_decode_position_buffers(
++                self._eager_position_buffers,
++                marker,
++            )
+         return self._eager_position_buffers
+ 
+     def _prefill_linear(self, tensor, weight, *, k: int, n: int, compute_kernel_config):
+@@ -1445,7 +1535,11 @@ class MultichipDecoder(OptimizedDecoder):
+ 
+     def _prefill_mlp_chunk(self, residual):
+         rows = int(residual.shape[-2])
+-        gathered = self._all_gather_hidden(residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        gathered = self._all_gather_hidden(
++            residual,
++            memory_config=ttnn.DRAM_MEMORY_CONFIG,
++            use_persistent_decode_buffer=False,
++        )
+         normed = ttnn.rms_norm(
+             gathered,
+             epsilon=self.rms_norm_eps,
+@@ -1533,12 +1627,24 @@ class MultichipDecoder(OptimizedDecoder):
+             ttnn.deallocate(chunk, True)
+         return output
+ 
+-    def _fill_prefill_cache(self, cache, tensor, *, page_table, mode: str):
+-        for user_id in range(self.batch):
++    def _fill_prefill_cache(
++        self,
++        cache,
++        tensor,
++        *,
++        page_table,
++        mode: str,
++        prefill_user_id: int | None,
++    ):
++        tensor_batch = int(tensor.shape[0])
++        if prefill_user_id is not None and tensor_batch != 1:
++            raise ValueError("single-slot prefill requires a one-row K/V tensor")
++        for tensor_user_id in range(tensor_batch):
++            cache_user_id = tensor_user_id if prefill_user_id is None else prefill_user_id
+             user_view = ttnn.slice(
+                 tensor,
+-                [user_id, 0, 0, 0],
+-                [user_id + 1, self.local_num_kv_heads, tensor.shape[2], self.head_dim],
++                [tensor_user_id, 0, 0, 0],
++                [tensor_user_id + 1, self.local_num_kv_heads, tensor.shape[2], self.head_dim],
+             )
+             # An aligned slice may be an alias.  Materialize it before cache
+             # conversion/padding so releasing the per-user temporary cannot
+@@ -1546,7 +1652,7 @@ class MultichipDecoder(OptimizedDecoder):
+             user = ttnn.clone(user_view, dtype=cache.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+             owns_user_buffer = True
+             if mode == "contiguous":
+-                ttnn.fill_cache(cache, user, user_id)
++                ttnn.fill_cache(cache, user, cache_user_id)
+             else:
+                 page_len = int(page_table.shape[1]) * int(cache.shape[2])
+                 if int(user.shape[2]) < page_len:
+@@ -1569,7 +1675,13 @@ class MultichipDecoder(OptimizedDecoder):
+                         ttnn.deallocate(user, True)
+                     user = sliced
+                     owns_user_buffer = True
+-                ttnn.experimental.paged_fill_cache(cache, user, page_table, batch_idx=user_id)
++                page_table_user_id = 0 if int(page_table.shape[0]) == 1 else cache_user_id
++                ttnn.experimental.paged_fill_cache(
++                    cache,
++                    user,
++                    page_table,
++                    batch_idx=page_table_user_id,
++                )
+             if owns_user_buffer:
+                 ttnn.deallocate(user, True)
+ 
+@@ -1580,14 +1692,35 @@ class MultichipDecoder(OptimizedDecoder):
+         value_cache,
+         *,
+         page_table=None,
++        chunk_page_table=None,
++        chunk_start_idx: int = 0,
++        prefill_user_id: int | None = None,
+     ):
+         if self.residual_contract != "sharded":
+             raise ValueError("prefill is supported only for the selected sharded residual contract")
+-        seq_len = self._validate_hidden_states(hidden_states)
+-        cache_mode = self._cache_mode(key_cache, value_cache, page_table)
+-        rows = self.batch * seq_len
++        prefill_batch = int(hidden_states.shape[1])
++        if prefill_batch not in (1, self.batch):
++            raise ValueError(f"prefill batch must be 1 or {self.batch}, got {prefill_batch}")
++        if prefill_batch == 1 and (prefill_user_id is None or not 0 <= prefill_user_id < self.batch):
++            raise ValueError(f"single-slot prefill requires prefill_user_id in [0,{self.batch})")
++        if prefill_batch == self.batch and prefill_user_id is not None:
++            raise ValueError("batched prefill must not supply prefill_user_id")
++        seq_len = self._validate_hidden_states(hidden_states, expected_batch=prefill_batch)
++        cache_mode = self._cache_mode(key_cache, value_cache, page_table, prefill=True)
++        self._validate_prefill_extent(
++            seq_len=seq_len,
++            chunk_start_idx=chunk_start_idx,
++            cache_mode=cache_mode,
++        )
++        if chunk_page_table is not None and cache_mode != "paged":
++            raise ValueError("chunk_page_table is valid only with paged cache")
++        rows = prefill_batch * seq_len
+         residual = ttnn.reshape(hidden_states, [1, 1, rows, self.local_hidden_size])
+-        gathered = self._all_gather_hidden(residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        gathered = self._all_gather_hidden(
++            residual,
++            memory_config=ttnn.DRAM_MEMORY_CONFIG,
++            use_persistent_decode_buffer=False,
++        )
+         normed = ttnn.rms_norm(
+             gathered,
+             epsilon=self.rms_norm_eps,
+@@ -1604,7 +1737,7 @@ class MultichipDecoder(OptimizedDecoder):
+             compute_kernel_config=self.attention_compute_config,
+         )
+         ttnn.deallocate(normed, True)
+-        fused_qkv = ttnn.reshape(fused_qkv, [self.batch, seq_len, self.local_qkv_size])
++        fused_qkv = ttnn.reshape(fused_qkv, [prefill_batch, seq_len, self.local_qkv_size])
+         query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+             fused_qkv,
+             None,
+@@ -1634,8 +1767,16 @@ class MultichipDecoder(OptimizedDecoder):
+         )
+         ttnn.deallocate(key, True)
+         key = normalized_key
+-        cos = ttnn.slice(self.rotary_cos, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+-        sin = ttnn.slice(self.rotary_sin, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
++        cos = ttnn.slice(
++            self.rotary_cos,
++            [0, 0, chunk_start_idx, 0],
++            [1, 1, chunk_start_idx + seq_len, self.head_dim],
++        )
++        sin = ttnn.slice(
++            self.rotary_sin,
++            [0, 0, chunk_start_idx, 0],
++            [1, 1, chunk_start_idx + seq_len, self.head_dim],
++        )
+         rotated_query = ttnn.experimental.rotary_embedding(
+             query, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG
+         )
+@@ -1649,44 +1790,63 @@ class MultichipDecoder(OptimizedDecoder):
+         query = ttnn.slice(
+             rotated_query,
+             [0, 0, 0, 0],
+-            [self.batch, self.local_num_heads, seq_len, self.head_dim],
++            [prefill_batch, self.local_num_heads, seq_len, self.head_dim],
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+         )
+         key = ttnn.slice(
+             rotated_key,
+             [0, 0, 0, 0],
+-            [self.batch, self.local_num_kv_heads, seq_len, self.head_dim],
++            [prefill_batch, self.local_num_kv_heads, seq_len, self.head_dim],
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+         )
+         # Full-tile slices can alias the rotated parents.  Retain both parents
+         # through cache fill/SDPA so aligned logical lengths remain valid.
++        fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+         self._fill_prefill_cache(
+             key_cache,
+             key,
+-            page_table=page_table,
++            page_table=fill_page_table,
+             mode=cache_mode,
++            prefill_user_id=prefill_user_id,
+         )
+         self._fill_prefill_cache(
+             value_cache,
+             value,
+-            page_table=page_table,
++            page_table=fill_page_table,
+             mode=cache_mode,
++            prefill_user_id=prefill_user_id,
+         )
+-        attention = ttnn.transformer.scaled_dot_product_attention(
+-            query,
+-            key,
+-            value,
+-            is_causal=True,
+-            scale=self.scale,
+-            program_config=ttnn.SDPAProgramConfig(
+-                compute_with_storage_grid_size=(8, 8),
+-                exp_approx_mode=False,
+-                q_chunk_size=64,
+-                k_chunk_size=64,
+-            ),
+-            compute_kernel_config=self.attention_compute_config,
+-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+-        )
++        sdpa_program = ttnn.SDPAProgramConfig(
++            compute_with_storage_grid_size=(8, 8),
++            exp_approx_mode=False,
++            q_chunk_size=64,
++            k_chunk_size=64,
++        )
++        if chunk_start_idx > 0:
++            if cache_mode != "paged" or int(page_table.shape[0]) != 1:
++                raise ValueError("chunked prefill requires a one-row paged page table")
++            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
++                input_tensor_q=query,
++                input_tensor_k=key_cache,
++                input_tensor_v=value_cache,
++                page_table_tensor=page_table,
++                chunk_start_idx=chunk_start_idx,
++                scale=self.scale,
++                program_config=sdpa_program,
++                compute_kernel_config=self.attention_compute_config,
++                memory_config=ttnn.DRAM_MEMORY_CONFIG,
++            )
++        else:
++            attention = ttnn.transformer.scaled_dot_product_attention(
++                query,
++                key,
++                value,
++                is_causal=True,
++                scale=self.scale,
++                program_config=sdpa_program,
++                compute_kernel_config=self.attention_compute_config,
++                memory_config=ttnn.DRAM_MEMORY_CONFIG,
++            )
+         ttnn.deallocate(query, True)
+         ttnn.deallocate(key, True)
+         ttnn.deallocate(value, True)
+@@ -1709,7 +1869,7 @@ class MultichipDecoder(OptimizedDecoder):
+         ttnn.deallocate(attention_shard, True)
+         residual = self._prefill_mlp(attention_residual)
+         ttnn.deallocate(attention_residual, True)
+-        return ttnn.reshape(residual, [1, self.batch, seq_len, self.local_hidden_size])
++        return ttnn.reshape(residual, [1, prefill_batch, seq_len, self.local_hidden_size])
+ 
+     def _decode_mlp(self, residual):
+         normed = self._decode_norm(residual, self.post_attention_norm)
+@@ -1841,8 +2001,7 @@ class MultichipDecoder(OptimizedDecoder):
+         else:
+             self._validate_hidden_states(hidden_states, expected_seq_len=1)
+         cache_mode = self._cache_mode(key_cache, value_cache, page_table)
+-        if current_pos < 0 or current_pos >= self.max_cache_len:
+-            raise ValueError(f"current_pos must be in [0,{self.max_cache_len}), got {current_pos}")
++        current_marker = self._position_marker(self._normalize_decode_positions(current_pos))
+         boundary_width = (
+             self.hidden_size if self.residual_contract == "replicated_provenance" else self.local_hidden_size
+         )
+@@ -1904,10 +2063,10 @@ class MultichipDecoder(OptimizedDecoder):
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+         )
+         if position_buffers is None:
+-            position_buffers = self._eager_decode_position_buffers(current_pos)
+-        elif position_buffers.current_pos != current_pos:
++            position_buffers = self._eager_decode_position_buffers(current_marker)
++        elif position_buffers.current_pos != current_marker:
+             raise ValueError(
+-                f"position_buffers hold {position_buffers.current_pos}, expected {current_pos}"
++                f"position_buffers hold {position_buffers.current_pos}, expected {current_marker}"
+             )
+         query = ttnn.experimental.rotary_embedding(
+             query, position_buffers.cos, position_buffers.sin, 0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+diff --git a/models/common/readiness_check/generate.py b/models/common/readiness_check/generate.py
+index 645b6c947b0..5f90a220b7e 100644
+--- a/models/common/readiness_check/generate.py
++++ b/models/common/readiness_check/generate.py
+@@ -34,6 +34,7 @@ import argparse
+ import bz2
+ import json
+ import os
++from collections.abc import Mapping
+ from pathlib import Path
+ from typing import Optional
+ 
+@@ -127,6 +128,11 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template:
+             add_generation_prompt=True,
+             tokenize=True,
+         )
++        if isinstance(prompt_tokens, Mapping):
++            try:
++                prompt_tokens = prompt_tokens["input_ids"]
++            except KeyError as error:
++                raise RuntimeError("chat-template tokenizer result does not contain input_ids") from error
+     else:
+         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+ 
+diff --git a/models/common/readiness_check/mesh_device.py b/models/common/readiness_check/mesh_device.py
+index cd7b66bc550..5e1eb0a7619 100644
+--- a/models/common/readiness_check/mesh_device.py
++++ b/models/common/readiness_check/mesh_device.py
+@@ -14,6 +14,7 @@ from typing import Any
+ MESH_SHAPES: dict[str, tuple[int, int]] = {
+     "N150": (1, 1),
+     "N300": (1, 2),
++    "P300X4": (1, 4),
+     "T3K": (1, 8),
+     "TG": (8, 4),
+ }
+@@ -39,9 +40,19 @@ def add_mesh_device_args(parser: argparse.ArgumentParser) -> None:
+             "meshes. Omit for single-chip (N150) or when the model does not need fabric."
+         ),
+     )
++    parser.add_argument(
++        "--trace-region-size",
++        type=int,
++        default=0,
++        help="Per-device trace-region bytes; use 0 for the runtime default.",
++    )
+ 
+ 
+-def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None = None) -> Any:
++def open_readiness_mesh_device(
++    mesh_device_label: str,
++    fabric_config: str | None = None,
++    trace_region_size: int = 0,
++) -> Any:
+     """Open a mesh device, optionally enabling fabric first."""
+     import ttnn  # noqa: WPS433 — lazy
+ 
+@@ -60,7 +71,10 @@ def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None
+         }[fabric_config]
+         ttnn.set_fabric_config(fabric)
+ 
+-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
++    if trace_region_size < 0:
++        raise ValueError("--trace-region-size must be non-negative")
++    open_kwargs = {"trace_region_size": trace_region_size} if trace_region_size else {}
++    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape), **open_kwargs)
+ 
+ 
+ def close_readiness_mesh_device(mesh_device: Any, fabric_config: str | None = None) -> None:
+diff --git a/models/common/readiness_check/run_autoregressive.py b/models/common/readiness_check/run_autoregressive.py
+index ed00364cfde..57072010c8d 100644
+--- a/models/common/readiness_check/run_autoregressive.py
++++ b/models/common/readiness_check/run_autoregressive.py
+@@ -129,8 +129,8 @@ def run_autoregressive(
+     """
+     build_kwargs = build_kwargs or {}
+ 
+-    prompt_text = prompt_file.read_text(encoding="utf-8").strip()
+-    if not prompt_text:
++    prompt_text = prompt_file.read_text(encoding="utf-8")
++    if not prompt_text.strip():
+         raise ValueError(f"Prompt file {prompt_file} is empty")
+ 
+     tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
+@@ -162,12 +162,20 @@ def run_autoregressive(
+             max_new_tokens=max_new_tokens,
+             next_input=None,
+         )
++        generation_metrics = dict(getattr(generator, "last_generation_metrics", {}))
++        trace_counters = dict(getattr(generator, "trace_counters", {}))
++        audit_fn = getattr(generator, "runtime_fallback_audit", None)
++        fallback_audit = audit_fn() if callable(audit_fn) else {}
+     finally:
+         teardown = getattr(generator, "teardown", None)
+         if callable(teardown):
+             teardown()
+     tt_text = tokenizer.decode(tt_tokens, skip_special_tokens=False)
+     print(f"TT produced {len(tt_tokens)} tokens.")
++    if generation_metrics:
++        print(f"TT generation metrics: {generation_metrics}")
++    if trace_counters:
++        print(f"TT trace counters: {trace_counters}")
+ 
+     hf_path = output_dir / "hf_completion.txt"
+     tt_path = output_dir / "tt_completion.txt"
+@@ -184,7 +192,13 @@ def run_autoregressive(
+                 "prompt_token_ids": prompt_token_ids,
+                 "max_new_tokens": max_new_tokens,
+                 "hf": {"token_ids": list(hf_tokens), "num_tokens": len(hf_tokens)},
+-                "tt": {"token_ids": list(tt_tokens), "num_tokens": len(tt_tokens)},
++                "tt": {
++                    "token_ids": list(tt_tokens),
++                    "num_tokens": len(tt_tokens),
++                    "generation_metrics": generation_metrics,
++                    "trace_counters": trace_counters,
++                    "fallback_audit": fallback_audit,
++                },
+             },
+             indent=2,
+         ),
+@@ -230,7 +244,9 @@ def _main() -> None:
+ 
+     output_dir = args.output_dir or (args.model_dir / "readiness_autoregressive")
+ 
+-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
++    mesh_device = open_readiness_mesh_device(
++        args.mesh_device, args.fabric_config, args.trace_region_size
++    )
+     try:
+         run_autoregressive(
+             model_dir=args.model_dir.resolve(),
+diff --git a/models/common/readiness_check/run_prefill_check.py b/models/common/readiness_check/run_prefill_check.py
+index de72dcab6c3..344d22163a7 100644
+--- a/models/common/readiness_check/run_prefill_check.py
++++ b/models/common/readiness_check/run_prefill_check.py
+@@ -251,7 +251,9 @@ def _main() -> None:
+     add_mesh_device_args(parser)
+     args = parser.parse_args()
+ 
+-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
++    mesh_device = open_readiness_mesh_device(
++        args.mesh_device, args.fabric_config, args.trace_region_size
++    )
+     try:
+         run_prefill_check(
+             model_dir=args.model_dir.resolve(),
+diff --git a/models/common/readiness_check/run_teacher_forcing.py b/models/common/readiness_check/run_teacher_forcing.py
+index e0461ec72b7..b5aca266ccf 100644
+--- a/models/common/readiness_check/run_teacher_forcing.py
++++ b/models/common/readiness_check/run_teacher_forcing.py
+@@ -278,7 +278,9 @@ def _main() -> None:
+     add_mesh_device_args(parser)
+     args = parser.parse_args()
+ 
+-    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
++    mesh_device = open_readiness_mesh_device(
++        args.mesh_device, args.fabric_config, args.trace_region_size
++    )
+     try:
+         run_teacher_forcing(
+             model_dir=args.model_dir.resolve(),

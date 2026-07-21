@@ -1,0 +1,3 @@
+{"ts": "20260721T093252Z", "direction": "send", "message": {"id": "69c9a9aa-497f-4cea-b839-c58bfa8b433d", "method": "initialize", "params": {"clientInfo": {"name": "tt-metal-multigoal", "title": "TT Metal Multigoal Runner", "version": "1"}, "capabilities": {"experimentalApi": true}}}}
+{"ts": "20260721T093252Z", "direction": "recv", "message": {"id": "69c9a9aa-497f-4cea-b839-c58bfa8b433d", "result": {"userAgent": "tt-metal-multigoal/0.144.4 (Ubuntu 24.4.0; x86_64) unknown (tt-metal-multigoal; 1)", "codexHome": "/home/mvasiljevic/codex-runs/meta-05-full-model-qwen_qwen3_32b_-20260721T093252Z/codex_home", "platformFamily": "unix", "platformOs": "linux"}}}
+{"ts": "20260721T093252Z", "direction": "send", "message": {"method": "initialized"}}

@@ -1,0 +1,5 @@
+rc=124 (timeout, 7h first-pass)
+terminal=timeout
+run=/home/mvasiljevic/codex-runs/05-full-model-qwen_qwen3_32b_-20260720T084501Z/multigoal_logs
+note=first-pass stage-05 timeout; working-tree patch N/A here (see the 093252Z retry dir for in-progress fixes)
+captured_at=2026-07-21T12:09:55Z
