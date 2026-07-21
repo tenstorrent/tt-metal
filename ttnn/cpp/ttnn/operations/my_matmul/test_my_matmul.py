@@ -9,7 +9,10 @@ def pcc(a, b):
 
 
 def main():
-    M, K, N = 1024, 1024, 1024
+    # M, K, N = 1024, 1024, 1024
+    # M, K, N = 2048, 2048, 2048
+    # M, K, N = 4096, 4096, 4096
+    M, K, N = 4096, 16384, 4096
     torch.manual_seed(42)
 
     a = torch.randn(M, K, dtype=torch.bfloat16)
