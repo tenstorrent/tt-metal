@@ -14,7 +14,7 @@ on:
         options:
           - all
           - llama3.1-8b
-          - sdxl-perf
+          - sdxl
       sku:
         description: "Select SKU to test"
         required: false
