@@ -182,6 +182,11 @@ any D, no L1-scratch. Result: `conv1d_op` PCC 1.0; layer PCC byte-identical to t
 - **2026-07-20 17:48Z** — Ported short-conv off the CPU fallback to **on-device FIR** (after native
   `ttnn.conv1d` hung at T=1 and can't handle D=4096 — see Learnings). Forward path now **fully on
   device, no CPU fallback**. Full suite **16/16 green**.
+- **2026-07-21** — Phase 8 (Model distribution) analysis → `DISTRIBUTION.md`. Scope: KDA layer on
+  Galaxy 8×4, prefill, + full-model sketch. Recommend **SP=8 (axis0) × TP=4 (axis1)** = production MLA
+  mesh; KDA honors MLA's boundary contract, its only new collective a fixed-size SP-axis **state-scan**
+  (~9µs/layer) replacing MLA's KV all-gather. First-order estimate: prefill compute-bound (~8–18:1
+  C:DM). **At the judgment-call gate — awaiting decision before any distribution code.**
 
 ### Phase 5/6 — device validation ledger (LoudBox, 1× Blackhole p150b, fp32)
 

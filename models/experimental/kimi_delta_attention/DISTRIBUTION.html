@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KDA distribution — Galaxy 8×4, prefill</title>
+<style>
+  :root{
+    color-scheme: light;
+    --bg:#f6f6f4; --surface-1:#fcfcfb; --surface-2:#f0efec; --border:#dcdbd5;
+    --text-1:#0b0b0b; --text-2:#52514e; --muted:#8a897f;
+    --accent:#2a78d6;
+    --s1:#2a78d6;  /* compute        */
+    --s2:#008300;  /* proj collective */
+    --s3:#e87ba4;  /* state-scan     */
+    --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){ :root:where(:not([data-theme="light"])){
+    color-scheme: dark;
+    --bg:#131312; --surface-1:#1a1a19; --surface-2:#232322; --border:#33332f;
+    --text-1:#ffffff; --text-2:#c3c2b7; --muted:#8e8d82;
+    --accent:#3987e5;
+    --s1:#3987e5; --s2:#008300; --s3:#d55181;
+  }}
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --bg:#131312; --surface-1:#1a1a19; --surface-2:#232322; --border:#33332f;
+    --text-1:#ffffff; --text-2:#c3c2b7; --muted:#8e8d82;
+    --accent:#3987e5; --s1:#3987e5; --s2:#008300; --s3:#d55181;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text-1);font-family:var(--sans);
+    line-height:1.55;font-size:16px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding:32px 20px 96px}
+  h1{font-size:1.9rem;line-height:1.15;margin:0 0 6px}
+  h2{font-size:1.3rem;margin:44px 0 10px;padding-top:14px;border-top:1px solid var(--border)}
+  h3{font-size:1.02rem;margin:22px 0 6px}
+  p,li{color:var(--text-2)} strong{color:var(--text-1)}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  code{background:var(--surface-2);padding:.1em .35em;border-radius:4px}
+  a{color:var(--accent)}
+  .sub{color:var(--muted);font-size:.95rem;margin:0 0 4px}
+  .toc{display:flex;flex-wrap:wrap;gap:6px 14px;margin:18px 0 8px;font-size:.9rem}
+  .toc a{text-decoration:none;color:var(--text-2)} .toc a:hover{color:var(--accent)}
+  .card{background:var(--surface-1);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+  .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .verdict{background:var(--surface-1);border:1px solid var(--border);border-left:4px solid var(--good);
+    border-radius:12px;padding:16px 18px;margin:16px 0}
+  .pill{display:inline-block;font-family:var(--mono);font-size:.8rem;padding:.15em .5em;border-radius:999px;
+    border:1px solid var(--border);background:var(--surface-2);color:var(--text-2)}
+  .flag{border-left:4px solid var(--warn)}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:10px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
+  td.num,th.num{text-align:right;font-family:var(--mono)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:6px 0 14px;font-size:.85rem}
+  .legend span{display:inline-flex;align-items:center;gap:6px;color:var(--text-2)}
+  .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+  /* bars */
+  .bars{display:flex;flex-direction:column;gap:14px;margin:8px 0}
+  .barrow{display:grid;grid-template-columns:96px 1fr;gap:10px;align-items:center}
+  .barlab{font-size:.85rem;color:var(--text-2);text-align:right}
+  .track{display:flex;flex-direction:column;gap:5px}
+  .seg{height:16px;border-radius:0 4px 4px 0;display:flex;align-items:center;min-width:2px;position:relative}
+  .seg b{position:absolute;left:calc(100% + 6px);white-space:nowrap;font-family:var(--mono);
+    font-size:.72rem;color:var(--text-2);font-weight:500}
+  .seg.inlabel b{left:auto;right:6px;color:#fff}
+  .cbar{background:var(--s1)} .pbar{background:var(--s2)} .sbar{background:var(--s3)}
+  /* mesh */
+  .mesh-wrap{overflow-x:auto}
+  .mesh{display:grid;grid-template-columns:auto repeat(4,1fr);gap:4px;min-width:420px;margin-top:8px}
+  .mh{font-size:.72rem;color:var(--muted);font-family:var(--mono);text-align:center;padding:4px}
+  .rl{font-size:.72rem;color:var(--muted);font-family:var(--mono);display:flex;align-items:center;padding-right:6px}
+  .chip{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:8px 4px;
+    text-align:center;font-family:var(--mono);font-size:.68rem;color:var(--text-2)}
+  .chip .h{color:var(--s1);font-weight:700}
+  .axis-tp{color:var(--s1)} .axis-sp{color:var(--s2)}
+  /* pipeline */
+  .pipe{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-family:var(--mono);font-size:.78rem;margin:8px 0}
+  .step{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:5px 8px;color:var(--text-2)}
+  .step.k{border-color:var(--s1);color:var(--text-1)}
+  .arw{color:var(--muted)}
+  /* calculator */
+  .calc{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:680px){.calc{grid-template-columns:1fr}}
+  .ctrl{margin:10px 0}
+  .ctrl label{display:flex;justify-content:space-between;font-size:.85rem;color:var(--text-2);margin-bottom:3px}
+  .ctrl label b{font-family:var(--mono);color:var(--text-1)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .seg-btns{display:flex;gap:4px;flex-wrap:wrap}
+  .seg-btns button{font-family:var(--mono);font-size:.78rem;padding:4px 9px;border-radius:6px;
+    border:1px solid var(--border);background:var(--surface-2);color:var(--text-2);cursor:pointer}
+  .seg-btns button[aria-pressed=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .readout{font-family:var(--mono);font-size:.85rem}
+  .big{font-size:2rem;font-weight:700;font-family:var(--mono);line-height:1}
+  .note{font-size:.82rem;color:var(--muted);margin-top:6px}
+  .warnbox{background:var(--surface-2);border:1px solid var(--warn);border-radius:8px;padding:8px 10px;
+    font-size:.82rem;color:var(--text-2);margin-top:8px;display:none}
+  footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--border);font-size:.82rem;color:var(--muted)}
+  .cite{font-family:var(--mono);font-size:.78rem}
+</style>
+</head>
+<body>
+<div class="wrap viz-root" data-palette="#2a78d6,#008300,#e87ba4">
+
+<p class="sub">tt-metal · Kimi Delta Attention · bringup Phase 8</p>
+<h1>KDA distribution on Galaxy 8×4 — prefill</h1>
+<p class="sub">First-order analysis &amp; recommendation · judgment-call gate · 2026-07-21</p>
+
+<div class="verdict">
+  <strong>Recommendation — Option B: SP=8 (axis 0, sequence) × TP=4 (axis 1, heads).</strong>
+  Map KDA onto the production MLA mesh and honor the same block-boundary contract. KDA's only
+  layer-specific collective is a <strong>fixed-size state-scan on the SP axis</strong> (~9 µs/layer),
+  which <em>replaces</em> MLA's expensive KV all-gather. Prefill is <strong>compute-bound</strong>
+  (~8–18 : 1 compute : data-movement) and slots into the hybrid with zero change to the attention↔MoE
+  boundary.
+  <div style="margin-top:8px">
+    <span class="pill">Galaxy = 32× Blackhole p150b</span>
+    <span class="pill">mesh (8,4)</span>
+    <span class="pill">FABRIC_2D · 2 links · Linear</span>
+    <span class="pill">~400 GB/s eff</span>
+  </div>
+</div>
+
+<div class="toc">
+  <a href="#why">1 · Why KDA is easy</a>
+  <a href="#mesh">2 · Mesh &amp; contract</a>
+  <a href="#options">3 · Options</a>
+  <a href="#calc">4 · Live calculator</a>
+  <a href="#scan">5 · SP state-scan</a>
+  <a href="#full">6 · Full-model sketch</a>
+  <a href="#open">7 · Open questions</a>
+</div>
+
+<h2 id="why">1 · Why KDA is easy to distribute</h2>
+<div class="grid3">
+  <div class="card"><h3 style="margin-top:0">Per-head independent</h3><p style="margin:0">
+    No cross-device comms <em>inside</em> the delta rule — heads partition across TP, the recurrence
+    runs locally. Head-parallelism is nearly free.</p></div>
+  <div class="card"><h3 style="margin-top:0">Projections dominate (95%)</h3><p style="margin:0">
+    Per token: <span class="mono">39.5 M</span> MACs of q/k/v/o/gate projections vs
+    <span class="mono">2.1 M</span> of recurrence. The heavy part distributes like a normal TP dense
+    layer.</p></div>
+  <div class="card"><h3 style="margin-top:0">Fixed-size state</h3><p style="margin:0">
+    State is <span class="mono">[heads, K, V]</span>, independent of sequence length — so
+    sequence-parallelism exchanges a <em>constant</em> amount of data, unlike attention's growing KV.</p></div>
+</div>
+
+<h2 id="mesh">2 · The mesh &amp; the contract KDA must honor</h2>
+<p>Production sparse-MLA (the family Kimi-Linear belongs to) runs on <strong>SP=8 × TP=4</strong>,
+mesh <code>(8,4) = (sp_size, tp_size)</code>, <span class="axis-sp"><strong>axis 0 = SP (sequence)</strong></span>,
+<span class="axis-tp"><strong>axis 1 = TP (heads)</strong></span> — hard-asserted in the MLA code.
+TP=4 shards the 32 heads → <strong>8 heads/chip</strong>; SP=8 shards the sequence into 8 spans.</p>
+
+<div class="mesh-wrap"><div class="mesh" aria-label="8 by 4 device mesh">
+  <div class="mh"></div>
+  <div class="mh axis-tp">heads 0–7</div><div class="mh axis-tp">8–15</div><div class="mh axis-tp">16–23</div><div class="mh axis-tp">24–31</div>
+</div><div class="mesh" id="meshgrid"></div>
+<p class="note"><span class="axis-sp">▲ axis 0 (SP)</span> rows = sequence spans &nbsp;·&nbsp;
+   <span class="axis-tp">◀▶ axis 1 (TP)</span> columns = head groups. Each chip: 8 heads × one seq span.</p>
+</div>
+
+<p><strong>Contract:</strong> KDA consumes a TP-sharded hidden and produces one — exactly like MLA — so
+the attention↔MoE boundary is unchanged. KDA replaces the attention op in the 3-of-4 linear-attention
+layers; norms, residual and MoE are untouched.</p>
+
+<div class="card flag" style="margin-top:12px">
+  <strong>⚑ Inconsistency flagged.</strong> The older <code>deepseek_v3</code> MoE tree puts TP on axis 1
+  with <code>cols==8</code> (a <code>(4,8)</code> convention); the active sparse-MLA
+  <code>deepseek_v3_d_p</code> tree uses <code>(8,4)</code> SP=8×TP=4. Kimi-Linear is sparse-MLA-family,
+  so this plan anchors on <strong>(8,4) / axis0=SP</strong>. Which tree Kimi-Linear integrates into is an
+  open question for the full-model phase.
+</div>
+
+<h2 id="options">3 · Candidate mappings</h2>
+<p>Per-KDA-layer, prefill, batch=1, T=32 768. First-order: 400 GB/s eff fabric; compute at 50 TFLOP/s
+bf16 (assumption). <strong>Total compute is fixed</strong> once all 32 chips are used — the lever is how
+you split them between SP and TP.</p>
+
+<div class="legend">
+  <span><i class="sw cbar"></i>compute</span>
+  <span><i class="sw pbar"></i>projection collectives</span>
+  <span><i class="sw sbar"></i>state-scan</span>
+</div>
+<div class="bars" id="optbars"></div>
+
+<table>
+  <thead><tr><th>Option</th><th>Split</th><th class="num">compute/dev (ms)</th>
+    <th class="num">proj coll (ms)</th><th class="num">scan (ms)</th><th class="num">C : DM</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td><strong>A</strong></td><td class="mono">TP=32, SP=1</td><td class="num">1.70</td><td class="num">0.755</td><td class="num">—</td><td class="num">~2:1</td><td>comms-bound; breaks TP=4 contract</td></tr>
+    <tr><td><strong>B</strong></td><td class="mono">SP=8 × TP=4</td><td class="num">1.70</td><td class="num">0.094</td><td class="num">0.009</td><td class="num"><strong>~16:1</strong></td><td><strong>compute-bound; = production mesh</strong></td></tr>
+    <tr><td><strong>C</strong></td><td class="mono">TP=4, DP=8</td><td class="num">13.62</td><td class="num">0.755</td><td class="num">—</td><td class="num">~18:1</td><td>8× worse latency for one long prompt</td></tr>
+  </tbody>
+</table>
+<p class="note"><strong>A vs B:</strong> identical total compute, but B shards the collective volume by
+SP=8 and shrinks the TP group 32→4 → ~8× less data-movement, free. <strong>C</strong> leaves 8× compute
+on the critical path for a single long sequence (DP helps throughput, not latency).</p>
+
+<h2 id="calc">4 · Live calculator</h2>
+<p class="note">Reproduces the estimate formula. Constants: hidden 2304, 32 heads, head-dim 128,
+key/value-dim 4096. <span class="mono">compute = 2·MACs/TP·(T/SP)/FLOPs</span>;
+<span class="mono">projColl = 2·(T/SP)·2304·2 / BW</span>;
+<span class="mono">scan = (SP−1)·(32/TP)·128²·4 / BW</span>.</p>
+<div class="calc">
+  <div>
+    <div class="ctrl"><label>Sequence length T <b id="vT">32 768</b></label>
+      <input type="range" id="T" min="0" max="4" step="1" value="2">
+      <div class="note mono">4K · 16K · 32K · 128K · 1M</div></div>
+    <div class="ctrl"><label>SP (sequence-parallel, axis 0)</label>
+      <div class="seg-btns" id="SP"></div></div>
+    <div class="ctrl"><label>TP (tensor-parallel, axis 1)</label>
+      <div class="seg-btns" id="TP"></div></div>
+    <div class="ctrl"><label>compute <b><span id="vF">50</span> TFLOP/s</b></label>
+      <input type="range" id="F" min="25" max="150" step="5" value="50"></div>
+    <div class="ctrl"><label>fabric BW <b><span id="vB">400</span> GB/s</b></label>
+      <input type="range" id="B" min="100" max="800" step="25" value="400"></div>
+    <div class="warnbox" id="devwarn"></div>
+  </div>
+  <div class="card">
+    <div class="note">devices used <b class="mono" id="ndev">32</b> · compute : data-movement</div>
+    <div class="big" id="cdm">—</div>
+    <div class="bars" id="calcbars" style="margin-top:14px"></div>
+    <div class="readout note" id="calcread"></div>
+  </div>
+</div>
+
+<h2 id="scan">5 · The one genuinely-new piece — SP state-scan</h2>
+<p>MLA's SP axis <strong>all-gathers the KV cache</strong> (re-materializes the whole sequence — the
+flagged prefill bottleneck). KDA needs no such thing: the recurrence carries a fixed-size state, so SP
+over KDA is a <strong>scan of that state along axis 0</strong>.</p>
+<ol>
+  <li><strong>Local, fully parallel</strong> — each SP rank runs the chunked recurrence over its span →
+    local output + a local state-transition <span class="mono">(Ā_span, correction)</span>.</li>
+  <li><strong>Scan across axis 0</strong> (8 ranks, line) — combine to get each span's incoming prefix
+    state. Exchanged object = <span class="mono">[8 heads, 128, 128]</span> fp32 =
+    <strong>512 KB/boundary</strong>; 7 line hops ÷ 400 GB/s ≈ <strong>9 µs</strong>.</li>
+  <li><strong>Apply prefix correction</strong> locally — add the <span class="mono">q·S_prefix</span>
+    term to each span's output.</li>
+</ol>
+<p class="note">So KDA's sequence-parallelism is <em>structurally cheaper</em> than MLA's — fixed-size
+state, not the growing cache. Start with a simple sequential line-scan (9 µs is already negligible at
+SP=8); an associative log-depth scan is a later refinement.</p>
+
+<h2 id="full">6 · Full-model sketch (consistency)</h2>
+<p>On the shared <code>(8,4)</code> mesh, attention and MoE use different parallelism on the same
+devices, reconciled by collectives at the block boundary. KDA introduces <strong>no new boundary
+collective</strong>:</p>
+<div class="pipe">
+  <span class="step">hidden (TP-sharded)</span><span class="arw">→</span>
+  <span class="step k">KDA / MLA<br>TP heads + SP seq</span><span class="arw">→</span>
+  <span class="step">all_gather<br>(axis 1)</span><span class="arw">→</span>
+  <span class="step">MoE gate</span><span class="arw">→</span>
+  <span class="step">all_to_all<br>dispatch (axis 0)</span><span class="arw">→</span>
+  <span class="step">experts (EP)</span><span class="arw">→</span>
+  <span class="step">all_to_all<br>combine (axis 0)</span><span class="arw">→</span>
+  <span class="step">reduce_scatter<br>(axis 1)</span>
+</div>
+<p class="note">KDA layers (3/4): TP=4 shards 32→8 heads, SP=8 state-scan. MLA layers (1/4): unchanged.
+MoE (every layer): expert-parallel, all_to_all on axis 0. The only new primitive anywhere is the KDA
+SP-axis state-scan.</p>
+
+<h2 id="open">7 · Open questions / needs measurement</h2>
+<ol>
+  <li><strong>Compute FLOP/s</strong> (50–100 TFLOP/s) — the C:DM ratio depends on it; confirm with a
+    Tracy dump of the TP=4 projection matmuls at 8 heads/chip.</li>
+  <li><strong>TP=4 matmul efficiency</strong> at 8 heads/chip — large enough to be efficient, or
+    dispatch-bound?</li>
+  <li><strong>State-scan implementation</strong> — sequential line vs associative parallel; whether to
+    fuse it into the chunk kernel.</li>
+  <li><strong>Chunk size × SP interplay</strong> — per-span chunked scan must tile into T/SP; interaction
+    with the MLA stack's block-cyclic SP seq layout.</li>
+  <li><strong>Which tree</strong> Kimi-Linear integrates into — the <code>(8,4)</code> vs <code>(4,8)</code>
+    convention inconsistency.</li>
+  <li><strong>Decode</strong> (out of scope) inverts the balance to latency/collective-bound — a separate
+    mapping analysis when decode is prioritized.</li>
+</ol>
+
+<footer>
+  <p><strong>Provenance.</strong> First-order estimates — order-of-magnitude, to be firmed up by a
+  profiler in the perf phase. A serial sum of collectives is an <em>upper</em> bound (ignores
+  compute/CCL overlap). Palette: dataviz reference instance (slots 1–3), unmodified.</p>
+  <p class="cite">Mesh facts: test_sparse_mla_perf.py:278-279,308-310 · tt/mla/mla.py:259,360,1386 ·
+  test_sparse_mla_ccl_perf.py:34-41 · sparse_mla_mesh.py:7-8 · tt/mla/mla2d.py:85-95,188-211 ·
+  tt/moe.py:213-214,450-487 · moe_decoder_block_2d.py:138-272 · experts.py:286-297.
+  KDA dims: models/experimental/kimi_delta_attention (config.json 48B-A3B).</p>
+  <button id="theme" class="seg-btns" style="margin-top:8px;padding:5px 12px;border:1px solid var(--border);
+    background:var(--surface-2);color:var(--text-2);border-radius:6px;cursor:pointer;font-family:var(--mono)">
+    toggle light/dark</button>
+</footer>
+
+</div>
+<script>
+const H=2304, NH=32, D=128, KD=NH*D;
+const PROJ = 4*H*KD + 2*(H*D+D*KD) + H*NH;
+const REC  = 4*D*D*NH;
+const TOT  = PROJ+REC;
+const Ts=[4096,16384,32768,131072,1048576], Tlab=["4K","16K","32K","128K","1M"];
+
+function est(T,SP,TP,flops,bw){
+  const tokd=T/SP;
+  const compute = 2*TOT/TP*tokd/flops*1e3;
+  const proj    = 2*(tokd*H*2)/bw*1e3;
+  const scan    = (SP-1)*((NH/TP)*D*D*4)/bw*1e3;
+  return {compute,proj,scan};
+}
+function fmt(x){return x>=10?x.toFixed(1):x>=1?x.toFixed(2):x.toFixed(3);}
+
+// ---- mesh grid ----
+(function(){
+  const g=document.getElementById('meshgrid');
+  for(let r=0;r<8;r++){
+    const rl=document.createElement('div'); rl.className='rl axis-sp'; rl.textContent='span '+r; g.appendChild(rl);
+    for(let c=0;c<4;c++){
+      const d=document.createElement('div'); d.className='chip';
+      d.innerHTML='<span class="h">8 heads</span>';
+      g.appendChild(d);
+    }
+  }
+})();
+
+// ---- bar chart helper ----
+function renderBars(el, rows, max){
+  el.innerHTML='';
+  rows.forEach(r=>{
+    const row=document.createElement('div'); row.className='barrow';
+    const lab=document.createElement('div'); lab.className='barlab'; lab.textContent=r.label;
+    const track=document.createElement('div'); track.className='track';
+    r.segs.forEach(s=>{
+      const seg=document.createElement('div'); seg.className='seg '+s.cls;
+      seg.style.width=Math.max(0.4, s.v/max*100)+'%';
+      const b=document.createElement('b'); b.textContent=fmt(s.v)+' ms'; seg.appendChild(b);
+      track.appendChild(seg);
+    });
+    row.appendChild(lab); row.appendChild(track); el.appendChild(row);
+  });
+}
+
+// ---- static options chart ----
+(function(){
+  const opts=[
+    {label:'A · TP32', ...est(32768,1,32,50e12,400e9)},
+    {label:'B · SP8×TP4', ...est(32768,8,4,50e12,400e9)},
+    {label:'C · TP4/DP8', ...est(32768,1,4,50e12,400e9)},
+  ];
+  const max=Math.max(...opts.map(o=>Math.max(o.compute,o.proj+o.scan)));
+  renderBars(document.getElementById('optbars'), opts.map(o=>({label:o.label,segs:[
+    {cls:'cbar',v:o.compute},{cls:'pbar',v:o.proj},{cls:'sbar',v:o.scan}
+  ]})), max);
+})();
+
+// ---- calculator ----
+const state={Ti:2,SP:8,TP:4,F:50,B:400};
+function mkSeg(id,vals,key){
+  const host=document.getElementById(id); host.innerHTML='';
+  vals.forEach(v=>{
+    const b=document.createElement('button'); b.textContent=v; b.dataset.v=v;
+    b.setAttribute('aria-pressed', state[key]==v);
+    b.onclick=()=>{state[key]=v; mkSeg(id,vals,key); update();};
+    host.appendChild(b);
+  });
+}
+function update(){
+  const T=Ts[state.Ti];
+  document.getElementById('vT').textContent=T.toLocaleString();
+  document.getElementById('vF').textContent=state.F;
+  document.getElementById('vB').textContent=state.B;
+  const ndev=state.SP*state.TP;
+  document.getElementById('ndev').textContent=ndev;
+  const warn=document.getElementById('devwarn');
+  if(ndev>32){warn.style.display='block';warn.textContent='⚠ SP×TP = '+ndev+' exceeds the 32-chip Galaxy.';}
+  else if(ndev<32){warn.style.display='block';warn.textContent='◦ SP×TP = '+ndev+' < 32 — '+(32-ndev)+' chips idle (or used for data-parallel batch).';}
+  else warn.style.display='none';
+
+  const e=est(T,state.SP,state.TP,state.F*1e12,state.B*1e9);
+  const dm=e.proj+e.scan, cdm=dm>0? e.compute/dm : Infinity;
+  document.getElementById('cdm').textContent=(isFinite(cdm)?cdm.toFixed(0):'∞')+' : 1';
+  document.getElementById('cdm').style.color = cdm>=3?'var(--good)':cdm>=1?'var(--warn)':'var(--crit)';
+  const max=Math.max(e.compute,e.proj,e.scan,0.001);
+  renderBars(document.getElementById('calcbars'),[
+    {label:'compute',segs:[{cls:'cbar',v:e.compute}]},
+    {label:'proj coll',segs:[{cls:'pbar',v:e.proj}]},
+    {label:'state-scan',segs:[{cls:'sbar',v:e.scan}]},
+  ],max);
+  document.getElementById('calcread').textContent =
+    `per layer: compute ${fmt(e.compute)} · projColl ${fmt(e.proj)} · scan ${fmt(e.scan)} ms  →  `
+    + (cdm>=3?'compute-bound':cdm>=1?'balanced':'comms-bound');
+}
+document.getElementById('T').oninput=e=>{state.Ti=+e.target.value;update();};
+document.getElementById('F').oninput=e=>{state.F=+e.target.value;update();};
+document.getElementById('B').oninput=e=>{state.B=+e.target.value;update();};
+mkSeg('SP',[1,2,4,8],'SP'); mkSeg('TP',[1,2,4,8,16,32],'TP'); update();
+
+// ---- theme toggle ----
+document.getElementById('theme').onclick=()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const dark = cur ? cur==='dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', dark?'light':'dark');
+};
+</script>
+</body>
+</html>
