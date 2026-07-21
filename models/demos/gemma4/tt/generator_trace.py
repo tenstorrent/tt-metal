@@ -532,12 +532,17 @@ def warmup_gemma4_batched_prefill_traces(
     sequence_lengths_to_warmup = model_args.get_warmup_prefill_supported_seq_lens()
     trace_isls = set(model_args.trace_prefill_supported_seq_lens)
     max_batch_size = model_args.max_batch_size
-    warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= max_batch_size)
+    # Cap at the B≤4 hang ceiling (see GEMMA4_MAX_BATCHED_PREFILL_USERS).
+    from models.demos.gemma4.tt.generator import max_batched_prefill_users
+
+    user_cap = max_batched_prefill_users()
+    warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= max_batch_size and b <= user_cap)
 
     logger.info(
-        "Gemma4 batched prefill trace warmup: batch sizes {} x trace ISLs {}",
+        "Gemma4 batched prefill trace warmup: batch sizes {} x trace ISLs {} (user_cap={})",
         warmup_batch_sizes,
         sorted(trace_isls),
+        user_cap,
     )
 
     skip_sequence_lengths = False
@@ -696,12 +701,81 @@ def warmup_gemma4_model_prefill(
                     warmup_prefill=False,
                 )
         return
-    from models.tt_transformers.tt.generator import Generator
 
-    Generator.warmup_model_prefill(
-        generator,
-        kv_cache=kv_cache,
-        enable_trace=enable_trace,
-        can_sample_on_device=can_sample_on_device,
-        greedy_only=greedy_only,
+    # Eager (non-traced) warmup for long-ISL demos (prefill trace gated off).
+    # Skip the stock 32/128/512/1024/2048/4096 sweep — it only matters for
+    # trace capture. Warm a short length (+ chunk size) once.
+    #
+    # Important: do NOT run the chunk-sized prefill with on-device SamplingParams.
+    # Stock Generator only compiles sampling on the first short bucket, then uses
+    # sampling_params=None for longer lengths. Pairing SamplingParams with the
+    # 4096 eager warmup hung indefinitely on 31B/P150x8 (256k bounded).
+    #
+    # Also warm max_batch×128 (no SamplingParams) when max_batch>1. Otherwise
+    # demos that gate off prefill-trace (e.g. former batch-32 @ max_seq_len=4096)
+    # only compile B=1 and wedge on the first real batched prefill CCL.
+    if getattr(generator, "already_warmed_up_prefill", False):
+        return
+    generator.already_warmed_up_prefill = True
+
+    chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+    lengths = []
+    for length in (128, chunk):
+        if length > 0 and length not in lengths:
+            lengths.append(length)
+
+    sampling_params_short = None
+    if can_sample_on_device:
+        params = generator._create_sampling_params(
+            can_sample_on_device=True,
+            batch_size=1,
+            greedy_only=greedy_only,
+        )
+        sampling_params_short = params[0] if params else None
+
+    prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+    logger.info(
+        "Eager prefill warmup (no trace): lengths={} sampling_on_short={}",
+        lengths,
+        sampling_params_short is not None,
     )
+    for i, length in enumerate(lengths):
+        # Match stock: sampling compile on the first/short bucket only.
+        sampling_params = sampling_params_short if i == 0 else None
+        logger.info(
+            "Warming up eager prefill seq_len={} sampling={}",
+            length,
+            sampling_params is not None,
+        )
+        warmup_args = generator._mock_tokens(1, length, kv_cache, 0)
+        prefill_forward(
+            **warmup_args,
+            kv_cache=kv_cache,
+            enable_trace=False,
+            model_id_warmup=0,
+            sampling_params=sampling_params,
+            warmup_prefill=False,
+        )
+        logger.info("Finished eager prefill warmup seq_len={}", length)
+
+    from models.demos.gemma4.tt.generator import max_batched_prefill_users
+
+    max_batch = int(getattr(generator.model_args[0], "max_batch_size", 1) or 1)
+    warm_batch = min(max_batch, max_batched_prefill_users())
+    # Largest supported size ≤ warm_batch (matches runtime chunk padding).
+    warm_batch = max((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= warm_batch), default=1)
+    if warm_batch > 1 and 128 * warm_batch < MAX_BATCHED_PREFILL_SEQ_LEN:
+        logger.info(
+            "Warming up eager batched prefill batch_size={} seq_len=128 (no sampling)",
+            warm_batch,
+        )
+        warmup_args = generator._mock_tokens(warm_batch, 128, kv_cache, 0)
+        prefill_forward(
+            **warmup_args,
+            kv_cache=kv_cache,
+            enable_trace=False,
+            model_id_warmup=0,
+            sampling_params=None,
+            warmup_prefill=False,
+        )
+        logger.info("Finished eager batched prefill warmup batch_size={}", warm_batch)
