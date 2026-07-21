@@ -4,6 +4,8 @@
 
 #include "untilize_codegen_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -25,17 +27,29 @@ UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperati
     const auto& input_tensor = tensor_args.input;
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
-    // Same scheme as native UntilizeDeviceOperation::compute_output_specs: the output keeps
-    // the input's PADDED shape (so a non-tile-aligned logical shape still gets a physically
-    // tile-row/column-aligned buffer the program factory can write in full tile-rows), with
-    // only the logical_shape metadata cropping it back down on read.
+    const auto& logical_shape = input_tensor.logical_shape();
+    const bool tile_aligned =
+        logical_shape[-2] % tt::constants::TILE_HEIGHT == 0 && logical_shape[-1] % tt::constants::TILE_WIDTH == 0;
+    if (!tile_aligned) {
+        // Mirrors native UntilizeWithUnpaddingDeviceOperation::compute_output_specs: the writer
+        // (build_with_unpadding) strips physical tile padding down to the logical shape, so the
+        // output tensor is genuinely compact -- padded_shape == logical_shape, not the input's
+        // tile-grid-rounded padded_shape.
+        return TensorSpec(
+            logical_shape,
+            TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
+    }
+
+    // Tile-aligned: same scheme as native UntilizeDeviceOperation::compute_output_specs. The
+    // output keeps the input's PADDED shape (so the program factory can write in full physical
+    // tile-rows), with only the logical_shape metadata cropping it back down on read.
     return TensorSpec(
-        input_tensor.logical_shape(),
+        logical_shape,
         TensorLayout::fromPaddedShape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
             operation_attributes.output_mem_config,
-            input_tensor.logical_shape(),
+            logical_shape,
             input_tensor.padded_shape()));
 }
 
