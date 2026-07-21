@@ -809,14 +809,23 @@ def _check_requires_grid_size(device_or_mesh, marker):
 
 @pytest.fixture(autouse=True)
 def check_requires_grid_size(request):
-    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores)."""
-    marker = request.node.get_closest_marker("requires_grid_size")
-    if marker is None:
+    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores).
+
+    Enforces *every* requires_grid_size marker on the item, not just the closest
+    one. A parametrized case commonly carries both a function-level default
+    requirement and a stricter per-param requirement (via pytest.param(marks=...));
+    get_closest_marker() would return only one of them and silently drop the other,
+    letting an under-provisioned grid (e.g. a harvested board) run a case that needs
+    more cores. Applying all markers makes the strictest requirement win.
+    """
+    markers = list(request.node.iter_markers("requires_grid_size"))
+    if not markers:
         return
     for name in ("bh_2d_mesh_device", "mesh_device", "device"):
         if name in request.fixturenames:
             device_or_mesh = request.getfixturevalue(name)
-            _check_requires_grid_size(device_or_mesh, marker)
+            for marker in markers:
+                _check_requires_grid_size(device_or_mesh, marker)
             return
     pytest.skip(
         "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"

@@ -126,6 +126,12 @@ jobs:
   models-unit-tests:
     needs: [build-artifact, resolve-skus]
     secrets: inherit
+    # OIDC only on this caller (the reusable workflow's multihost job needs ttop auth), not
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate what tests need.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

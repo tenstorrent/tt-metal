@@ -256,6 +256,24 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
+// Fixed per-processor-type clock (MHz) for Quasar. A DM core targets 2.0 GHz and a Neo TRISC
+// targets 1.4 GHz; the emulator reports aiclk=0, so these fixed clocks are used instead.
+// Returns nullopt for non-Quasar RISCs (WH/BH), which fall back to the runtime device aiclk.
+std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
+    using tracy::RiscType;
+    static_assert(
+        static_cast<int>(RiscType::QUASAR_DM7) - static_cast<int>(RiscType::QUASAR_DM0) == 7 &&
+            static_cast<int>(RiscType::QUASAR_NEO3_TRISC3) - static_cast<int>(RiscType::QUASAR_NEO0_TRISC0) == 15,
+        "quasar_processor_clock_mhz relies on contiguous QUASAR_DM*/QUASAR_NEO*_TRISC* enum blocks");
+    if (risc >= RiscType::QUASAR_DM0 && risc <= RiscType::QUASAR_DM7) {
+        return 2000;  // DM: 2.0 GHz
+    }
+    if (risc >= RiscType::QUASAR_NEO0_TRISC0 && risc <= RiscType::QUASAR_NEO3_TRISC3) {
+        return 1400;  // Neo TRISC: 1.4 GHz
+    }
+    return std::nullopt;
+}
+
 AnalysisResults parse_duration(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
@@ -267,6 +285,7 @@ AnalysisResults parse_duration(
     std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>&
         results_per_program_execution_uid = analysis_results.results_per_program_execution_uid;
     ChipId device_id = -1;
+    tracy::RiscType zone_start_risc = tracy::RiscType::NONE;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
@@ -280,6 +299,9 @@ AnalysisResults parse_duration(
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (program_results == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
                 program_results.start_timestamp = marker.timestamp;
+                if (zone_start_risc == tracy::RiscType::NONE) {
+                    zone_start_risc = marker.risc;
+                }
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
@@ -297,8 +319,10 @@ AnalysisResults parse_duration(
     for (auto& [_, result] : results_per_program_execution_uid) {
         if (result != PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+            // Quasar DM/TRISC use hardcoded clock frequencies for now
             const int chip_frequency_mhz =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+                quasar_processor_clock_mhz(zone_start_risc)
+                    .value_or(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id));
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }

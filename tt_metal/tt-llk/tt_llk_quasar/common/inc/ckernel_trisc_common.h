@@ -33,6 +33,16 @@ enum class TriscID : std::uint8_t
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
+// Selects how L1 is addressed for an op when building its buffer descriptor.
+// Continuous: normal tile layout (y_dim = face_r_dim).
+// Strided: PACR/UNPACR_STRIDE tiny-tile quirk. HW/programming constraints require the buffer
+//          descriptor to be programmed as y_dim = 1 so that L1 rows are indexed as tiles.
+enum class L1AccessMode : std::uint8_t
+{
+    Continuous = 0,
+    Strided    = 1,
+};
+
 using ckernel::FACE_C_DIM;
 using ckernel::FACE_R_DIM;
 using ckernel::TILE_C_DIM;
@@ -119,7 +129,10 @@ inline bool _divisible_by_pow_two_(const std::uint32_t value, const std::uint32_
     16x16: x=16, y=16, z=1
     32x32: x=16, y=16, z=4
  * @param buf_desc: Contains L1 buffer descriptor information
+ * @tparam MODE: L1 access mode the descriptor was built for. Strided ops (PACR/UNPACR_STRIDE
+ *        tiny-tiles) must be programmed with y_dim = 1 to index L1 rows as tiles.
  */
+template <L1AccessMode MODE = L1AccessMode::Continuous>
 inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
 {
     LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
@@ -131,6 +144,10 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
     {
         LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
     }
+    if constexpr (MODE == L1AccessMode::Strided)
+    {
+        LLK_ASSERT(buf_desc.f.y_dim == 1, "Strided L1 access requires buffer descriptor y_dim == 1");
+    }
 }
 
 /**
@@ -140,7 +157,6 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
 {
-    validate_buffer_desc(buf_desc);
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {
         bd_table[buf_desc_id].words[i] = buf_desc.words[i];
@@ -399,12 +415,15 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
  * Currently supported buffer descriptor dimensions are:
  * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
  *
+ * @tparam MODE: L1 access mode. Strided (PACR/UNPACR_STRIDE tiny-tiles) forces y_dim = 1 so L1
+ *        rows are indexed as tiles; Continuous keeps the tensor-shape derived y_dim.
  * @param tensor_shape: Tile/face dimensions and shape of input tensor
  * @param base_l1_16B: base address of the buffer in L1
  * @param data_format: L1 data encoding format
  * @param buf_desc_id: buffer descriptor table ID
  * @param reg_data_format: Register data encoding format
  */
+template <L1AccessMode MODE = L1AccessMode::Continuous>
 inline tdma_descriptor_t construct_tdma_desc(
     const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
 {
@@ -421,6 +440,14 @@ inline tdma_descriptor_t construct_tdma_desc(
     }
     buf_desc.f.l1_addr_16B = base_l1_16B;
     buf_desc.f.format      = static_cast<std::uint8_t>(data_format);
+
+    if constexpr (MODE == L1AccessMode::Strided)
+    {
+        // PACR_STRIDE quirk: program BD as 1x1x16 so L1 addressing indexes rows as tiles.
+        buf_desc.f.y_dim = 1;
+    }
+
+    validate_buffer_desc<MODE>(buf_desc);
 
     tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
 
