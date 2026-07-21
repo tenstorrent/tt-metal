@@ -96,7 +96,7 @@ ttnn:
     bh_p150b_civ2: 1045
     wh_n150_civ2: 1185
     wh_n300_civ2: 1175
-    bh_p150b_civ2_viommu: 125
+    bh_p150b_civ2_viommu: 115
   e2e:
     wh_llmbox: 90
     wh_galaxy: 120
