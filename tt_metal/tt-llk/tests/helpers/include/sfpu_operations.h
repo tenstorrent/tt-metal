@@ -637,10 +637,17 @@ void call_unary_sfpu_operation_init()
     {
         // These ops execute via self-contained tt-llk primitives that need only the generic per-op init (SFPU config
         // reg + ADDR_MOD_7 from llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
-        // the bare `unused` init. Their production/metal <op>_init() all reduce to math::reset_counters, but the
-        // OPERATION-keyed bare init here either has no delegate branch (add1/identity/cast_fp32_to_fp16a/tanh_derivative/
-        // sqrt_custom/rsqrt_compat/expm1_cw) or no linkable definition in this test build, since only the tt-llk common
-        // (not the metal llk_api) header is included (relu_max/relu_min/lrelu/hardtanh/clamp/zero-comparisons).
+        // the bare `unused` init. The reason each op is safe to route this way varies:
+        //   - floor/ceil/trunc/frac/round/relu_max/relu_min: their production/metal <op>_init()
+        //     (rounding_op_tile_init, relu_max_tile_init, relu_min_tile_init) genuinely reduces to
+        //     math::reset_counters, so the bare init here matches production behavior.
+        //   - add1/identity/cast_fp32_to_fp16a/tanh_derivative/sqrt_custom/rsqrt_compat/expm1_cw: the
+        //     OPERATION-keyed bare init has no delegate branch.
+        //   - lrelu/hardtanh/clamp/zero-comparisons: no linkable definition in this test build, since only the
+        //     tt-llk common (not the metal llk_api) header is included.
+        //   - silu: production silu_tile_init is NOT trivial (it wires sfpu::silu_init -> sigmoid_init<false>()),
+        //     but this harness uses the self-contained legacy _calculate_silu_ (piecewise-linear, no LUT/
+        //     reciprocal), which needs no op-specific init.
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
     }
     else
