@@ -476,8 +476,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
             const uint32_t input_tile_id_end =
                 ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
-            const uint32_t local_output_start = (input_tile_id_start * num_output_chunks) / num_input_pages;
-            const uint32_t local_output_end = (input_tile_id_end * num_output_chunks) / num_input_pages;
+            const uint32_t local_output_start =
+                (static_cast<uint64_t>(input_tile_id_start) * num_output_chunks) / num_input_pages;
+            const uint32_t local_output_end =
+                (static_cast<uint64_t>(input_tile_id_end) * num_output_chunks) / num_input_pages;
             const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
             const uint32_t half = num_worker_output_chunks / 2;
 
