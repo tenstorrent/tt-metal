@@ -6,6 +6,8 @@
 #
 # This file contains metadata for all data movement tests including:
 # - name: Human-readable test name
+# - directory: Folder name where the test is located
+# - web_viewer_name: (optional) Short UI label for the web viewer; presence means the test is displayed
 # - comment: (optional) Additional notes about test behavior and performance
 #
 # Required fields for packet sizes tests:
@@ -36,20 +38,24 @@
 tests:
   0:
     name: "DRAM Packet Sizes"
+    directory: "dram_unary"
     memory_type: "dram"
     mechanism: "unicast"
     pattern: "one_to_one"
 
   1:
     name: "DRAM Core Locations"
+    directory: "dram_unary"
     comment: |
       This test appears to be broken. The graph is showing numbers that dont make sense.
 
   2:
     name: "DRAM Channels"
+    directory: "dram_unary"
 
   3:
     name: "DRAM Directed Ideal"
+    directory: "dram_unary"
     comment: |
       This test shows the ideal read and write bandwidth when transferring multiple 8KB packets.
       The read bandwidth is what is expected, however write bandwidth is expected to be 64
@@ -58,81 +64,96 @@ tests:
 
   4:
     name: "One to One Packet Sizes"
+    directory: "one_to_one"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_one"
 
   5:
     name: "One from One Packet Sizes"
+    directory: "one_from_one"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_from_one"
 
   6:
     name: "One to All Unicast 2x2 Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
 
   7:
     name: "One to All Unicast 5x5 Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
 
   8:
     name: "One to All Unicast Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
 
   9:
     name: "One to All Multicast 2x2 Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
 
   10:
     name: "One to All Multicast 5x5 Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
 
   11:
     name: "One to All Multicast Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
 
   13:
     name: "One to All Multicast Linked 5x5 Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
 
   14:
     name: "One to All Multicast Linked Packet Sizes"
+    directory: "one_to_all"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
 
   15:
     name: "One from All Packet Sizes"
+    directory: "one_from_all"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_from_all"
 
   16:
     name: "Loopback Packet Sizes"
+    directory: "loopback"
+    web_viewer_name: "Packet Sizes"
 
   17:
     name: "Reshard Hardcoded Small"
+    directory: "reshard_hardcoded"
     comment: |
       This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions
       and transactions size. Reshard perf is dictated based on the number of transactions and the
@@ -142,6 +163,7 @@ tests:
 
   18:
     name: "Reshard Hardcoded Medium"
+    directory: "reshard_hardcoded"
     comment: |
       This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions
       and transactions size. Reshard perf is dictated based on the number of transactions and the
@@ -151,6 +173,7 @@ tests:
 
   19:
     name: "Reshard Hardcoded Many Cores"
+    directory: "reshard_hardcoded"
     comment: |
       This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions
       and transactions size. Reshard perf is dictated based on the number of transactions and the
@@ -160,6 +183,7 @@ tests:
 
   20:
     name: "Reshard Hardcoded 2 Cores to Many Cores"
+    directory: "reshard_hardcoded"
     comment: |
       This is a 2 core to 8 reader reshard. It seems to be getting expected perf based on number of
       transactions and transactions size. Reshard perf is dictated based on the number of transactions
@@ -169,6 +193,7 @@ tests:
 
   21:
     name: "Conv Act with halo 3x3"
+    directory: "conv_hardcoded"
     comment: |
       Convolution has a large number of transactions and a small transaction size. The performance is
       similar to what it would be for a similarly configured one from one. Convolution may benefit from
@@ -177,6 +202,7 @@ tests:
 
   22:
     name: "Conv Act with halo 3x3 Small"
+    directory: "conv_hardcoded"
     comment: |
       Convolution has a large number of transactions and a small transaction size. The performance is
       similar to what it would be for a similarly configured one from one. Convolution may benefit from
@@ -185,6 +211,7 @@ tests:
 
   23:
     name: "Conv Halo Gather"
+    directory: "conv_hardcoded"
     comment: |
       The performance of this test is similar to how other tests perform based on the number of
       transactions and the transaction size, but with extra degradation due to needing to read
@@ -192,6 +219,7 @@ tests:
 
   24:
     name: "One to All Multicast Linked Semaphore 2x2 Packet Sizes"
+    directory: "one_to_all"
     comment: |
       Unlike other One to All tests, we measure performance using the receiver cores.
       This is because we no longer use write barriers to wait for all cores to finish writing.
@@ -200,6 +228,7 @@ tests:
 
   25:
     name: "One to All Multicast Linked Semaphore 5x5 Packet Sizes"
+    directory: "one_to_all"
     comment: |
       Unlike other One to All tests, we measure performance using the receiver cores.
       This is because we no longer use write barriers to wait for all cores to finish writing.
@@ -208,6 +237,7 @@ tests:
 
   26:
     name: "One to All Multicast Linked Semaphore Packet Sizes"
+    directory: "one_to_all"
     comment: |
       Unlike other One to All tests, we measure performance using the receiver cores.
       This is because we no longer use write barriers to wait for all cores to finish writing.
@@ -216,159 +246,223 @@ tests:
 
   30:
     name: "One from All Directed Ideal"
+    directory: "one_from_all"
 
   40:
     name: "DRAM Packet Sizes 2.0"
+    directory: "dram_unary"
+    web_viewer_name: "Packet Sizes"
 
   41:
     name: "DRAM Directed Ideal 2.0"
+    directory: "dram_unary"
 
   42:
     name: "DRAM Core Locations 2.0"
+    directory: "dram_unary"
 
   43:
     name: "DRAM Channels 2.0"
+    directory: "dram_unary"
 
   44:
     name: "Loopback Packet Sizes 2.0"
+    directory: "loopback"
 
   45:
     name: "Loopback Directed Ideal 2.0"
+    directory: "loopback"
 
   50:
     name: "One to One Directed Ideal"
+    directory: "one_to_one"
 
   51:
     name: "One from One Directed Ideal"
+    directory: "one_from_one"
 
   52:
     name: "One to All Unicast Directed Ideal"
+    directory: "one_to_all"
 
   53:
     name: "One to All Multicast Directed Ideal"
+    directory: "one_to_all"
 
   54:
     name: "One to All Multicast Linked Directed Ideal"
+    directory: "one_to_all"
 
   55:
     name: "Loopback Directed Ideal"
+    directory: "loopback"
 
   56:
     name: "One to All Multicast Linked Semaphore Directed Ideal"
+    directory: "one_to_all"
 
   61:
     name: "DRAM Interleaved Page Numbers"
+    directory: "interleaved"
+    web_viewer_name: "DRAM Page Numbers"
 
   62:
     name: "DRAM Interleaved Page Core Locations"
+    directory: "interleaved"
 
   63:
     name: "DRAM Interleaved Page Read Numbers"
+    directory: "interleaved"
+    web_viewer_name: "DRAM Read Numbers"
 
   64:
     name: "DRAM Interleaved Page Write Numbers"
+    directory: "interleaved"
+    web_viewer_name: "DRAM Write Numbers"
 
   65:
     name: "DRAM Interleaved Page Directed Ideal"
+    directory: "interleaved"
 
   66:
     name: "L1 Interleaved Page Numbers"
+    directory: "interleaved"
+    web_viewer_name: "L1 Page Numbers"
 
   67:
     name: "L1 Interleaved Page Core Locations"
+    directory: "interleaved"
 
   68:
     name: "L1 Interleaved Page Read Numbers"
+    directory: "interleaved"
+    web_viewer_name: "L1 Read Numbers"
 
   69:
     name: "L1 Interleaved Page Write Numbers"
+    directory: "interleaved"
+    web_viewer_name: "L1 Write Numbers"
 
   71:
     name: "L1 Interleaved Page Directed Ideal"
+    directory: "interleaved"
 
   72:
     name: "DRAM Interleaved Page Read Noc Swap"
+    directory: "interleaved"
 
   73:
     name: "DRAM Interleaved Page Write Noc Swap"
+    directory: "interleaved"
 
   74:
     name: "L1 Interleaved Page Read Noc Swap"
+    directory: "interleaved"
 
   75:
     name: "L1 Interleaved Page Write Noc Swap"
+    directory: "interleaved"
 
   80:
     name: "One Packet Read Sizes"
+    directory: "one_packet"
 
   81:
     name: "One Packet Write Sizes"
+    directory: "one_packet"
 
   82:
     name: "One Packet Read Directed Ideal"
+    directory: "one_packet"
 
   83:
     name: "One Packet Write Directed Ideal"
+    directory: "one_packet"
 
   84:
     name: "DRAM Sharded Read Directed Ideal"
+    directory: "dram_sharded"
 
   85:
     name: "DRAM Sharded Read Tile Numbers"
+    directory: "dram_sharded"
 
   86:
     name: "DRAM Sharded Read Bank Numbers"
+    directory: "dram_sharded"
 
   87:
     name: "DRAM Sharded Read Transaction ID Directed Ideal"
+    directory: "dram_sharded"
 
   90:
     name: "One Packet Read Sizes 2.0"
+    directory: "one_packet"
+    web_viewer_name: "Read Sizes"
 
   91:
     name: "One Packet Write Sizes 2.0"
+    directory: "one_packet"
+    web_viewer_name: "Write Sizes"
 
   92:
     name: "One Packet Read Directed Ideal 2.0"
+    directory: "one_packet"
 
   93:
     name: "One Packet Write Directed Ideal 2.0"
+    directory: "one_packet"
 
   94:
     name: "DRAM Sharded Read Directed Ideal 2.0"
+    directory: "dram_sharded"
 
   95:
     name: "DRAM Sharded Read Tile Numbers 2.0"
+    directory: "dram_sharded"
+    web_viewer_name: "Tile Numbers"
 
   96:
     name: "DRAM Sharded Read Bank Numbers 2.0"
+    directory: "dram_sharded"
+    web_viewer_name: "Bank Numbers"
 
   97:
     name: "DRAM Sharded Read Transaction ID Directed Ideal 2.0"
+    directory: "dram_sharded"
 
   100:
     name: "Multicast Schemes (Loopback Enabled)"
+    directory: "one_to_all"
 
   101:
     name: "Multicast Schemes (Loopback Disabled)"
+    directory: "one_to_all"
 
   102:
     name: "Multicast Single Scheme"
+    directory: "one_to_all"
 
   110:
     name: "Multi Interleaved Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   111:
     name: "Multi Interleaved Sizes"
+    directory: "multi_interleaved"
+    web_viewer_name: "Sizes"
     bandwidth_mode: "combined"
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   113:
     name: "Multi Interleaved Read Sizes"
+    directory: "multi_interleaved"
+    web_viewer_name: "Read Sizes"
     memory_type: "dram"
     mechanism: "unicast"
     pattern: "one_from_one"
@@ -376,188 +470,259 @@ tests:
 
   114:
     name: "Multi Interleaved Write Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   115:
     name: "Multi Interleaved Write Sizes"
+    directory: "multi_interleaved"
+    web_viewer_name: "Write Sizes"
     bandwidth_mode: "combined"
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
+    directory: "multi_interleaved"
     bandwidth_mode: "combined"
 
   128:
     name: "Multi Interleaved Grid Sweep Sizes"
+    directory: "multi_interleaved"
+    web_viewer_name: "Grid Sweep Sizes"
     bandwidth_mode: "combined"
 
   129:
     name: "Multi Interleaved Read Grid Sweep Sizes"
+    directory: "multi_interleaved"
+    web_viewer_name: "Grid Sweep Read Sizes"
     bandwidth_mode: "combined"
 
   130:
     name: "Multi Interleaved Write Grid Sweep Sizes"
+    directory: "multi_interleaved"
+    web_viewer_name: "Grid Sweep Write Sizes"
     bandwidth_mode: "combined"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
+    directory: "core_bidirectional"
 
   141:
     name: "Core Bidirectional Directed Ideal Different Kernels"
+    directory: "core_bidirectional"
 
   142:
     name: "Core Bidirectional Same Virtual Channel Same Kernel"
+    directory: "core_bidirectional"
 
   143:
     name: "Core Bidirectional Same Virtual Channel Different Kernels"
+    directory: "core_bidirectional"
 
   144:
     name: "Core Bidirectional Write Virtual Channel Sweep Same Kernel"
+    directory: "core_bidirectional"
 
   145:
     name: "Core Bidirectional Write Virtual Channel Sweep Different Kernels"
+    directory: "core_bidirectional"
 
   146:
     name: "Core Bidirectional Packet Sizes Same Kernel"
+    directory: "core_bidirectional"
+    web_viewer_name: "Packet Sizes (Same Kernel)"
 
   147:
     name: "Core Bidirectional Packet Sizes Different Kernels"
+    directory: "core_bidirectional"
+    web_viewer_name: "Packet Sizes (Different Kernels)"
 
   148:
     name: "Core Bidirectional Custom"
+    directory: "core_bidirectional"
 
   150:
     name: "One to One Virtual Channels"
+    directory: "one_to_one"
+    web_viewer_name: "Virtual Channels"
 
   151:
     name: "One to One Custom"
+    directory: "one_to_one"
 
   152:
     name: "One from One Virtual Channels"
+    directory: "one_from_one"
+    web_viewer_name: "Virtual Channels"
 
   153:
     name: "One from One Custom"
+    directory: "one_from_one"
 
   154:
     name: "One to All Unicast Virtual Channels"
+    directory: "one_to_all"
 
   155:
     name: "One to All Unicast Custom"
+    directory: "one_to_all"
 
   156:
     name: "One from All Virtual Channels"
+    directory: "one_from_all"
 
   157:
     name: "One from All Custom"
+    directory: "one_from_all"
 
   158:
     name: "One to One Packet Sizes 2.0"
+    directory: "one_to_one"
+    web_viewer_name: "Packet Sizes"
 
   159:
     name: "One from One Packet Sizes 2.0"
+    directory: "one_from_one"
+    web_viewer_name: "Packet Sizes"
 
   160:
     name: "One to One Directed Ideal 2.0"
+    directory: "one_to_one"
 
   161:
     name: "One from One Directed Ideal 2.0"
+    directory: "one_from_one"
 
   162:
     name: "One from All Packet Sizes 2.0"
+    directory: "one_from_all"
+    web_viewer_name: "Packet Sizes"
 
   163:
     name: "One from All Directed Ideal 2.0"
+    directory: "one_from_all"
 
   164:
     name: "One from All Virtual Channels 2.0"
+    directory: "one_from_all"
+    web_viewer_name: "Virtual Channels"
 
   165:
     name: "One from All Custom 2.0"
+    directory: "one_from_all"
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
+    directory: "one_to_all"
 
   171:
     name: "One to All Unicast 5x5 Packet Sizes 2.0"
+    directory: "one_to_all"
 
   172:
     name: "One to All Unicast Packet Sizes 2.0"
+    directory: "one_to_all"
+    web_viewer_name: "Unicast Packet Sizes"
 
   173:
     name: "One to All Multicast 2x2 Packet Sizes 2.0"
+    directory: "one_to_all"
 
   174:
     name: "One to All Multicast 5x5 Packet Sizes 2.0"
+    directory: "one_to_all"
 
   175:
     name: "One to All Multicast Packet Sizes 2.0"
+    directory: "one_to_all"
+    web_viewer_name: "Multicast Packet Sizes"
 
   176:
     name: "One to All Multicast Linked 2x2 Packet Sizes 2.0"
+    directory: "one_to_all"
 
   177:
     name: "One to All Multicast Linked 5x5 Packet Sizes 2.0"
+    directory: "one_to_all"
 
   178:
     name: "One to All Multicast Linked Packet Sizes 2.0"
+    directory: "one_to_all"
+    web_viewer_name: "Multicast Linked Packet Sizes"
 
   179:
     name: "One to All Multicast Linked Loopback Directed Ideal 2.0"
+    directory: "one_to_all"
 
   180:
     name: "Multicast Schemes (Loopback Disabled)"
+    directory: "one_to_all"
+    web_viewer_name: "Multicast Schemes (Loopback Disabled)"
 
   200:
     name: "Deinterleave Single Core"
+    directory: "deinterleave_hardcoded"
     comment: |
       With a single core the graphs shows performance increases as the threshold increases.
       This is because frequent flushes don't hide the round trip latency.
 
   201:
     name: "Deinterleave Multi Core"
+    directory: "deinterleave_hardcoded"
     comment: |
       With multiple cores the graph shows that a small threshold always provides bad performance.
       This is because frequent flushes don't hide the round trip latency. At larger thresholds,
@@ -567,60 +732,79 @@ tests:
 
   300:
     name: "All to All Directed Ideal"
+    directory: "all_to_all"
 
   301:
     name: "All to All Packet Sizes"
+    directory: "all_to_all"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_to_all"
 
   302:
     name: "All to All 2x2 To 1x1 Directed Ideal"
+    directory: "all_to_all"
 
   303:
     name: "All to All 4x4 To 1x1 Directed Ideal"
+    directory: "all_to_all"
 
   304:
     name: "All to All 1x1 To 2x2 Directed Ideal"
+    directory: "all_to_all"
 
   305:
     name: "All to All 1x1 To 4x4 Directed Ideal"
+    directory: "all_to_all"
 
   306:
     name: "All to All 2x2 To 2x2 Directed Ideal"
+    directory: "all_to_all"
 
   307:
     name: "All to All Virtual Channels"
+    directory: "all_to_all"
 
   308:
     name: "All to All Custom"
+    directory: "all_to_all"
 
   309:
     name: "All to All Packet Sizes 2.0"
+    directory: "all_to_all"
+    web_viewer_name: "Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_to_all"
 
   310:
     name: "All to All Directed Ideal 2.0"
+    directory: "all_to_all"
 
   311:
     name: "All to All 2x2 to 1x1 Directed Ideal 2.0"
+    directory: "all_to_all"
 
   312:
     name: "All to All 4x4 to 1x1 Directed Ideal 2.0"
+    directory: "all_to_all"
 
   313:
     name: "All to All 1x1 to 2x2 Directed Ideal 2.0"
+    directory: "all_to_all"
 
   314:
     name: "All to All 1x1 to 4x4 Directed Ideal 2.0"
+    directory: "all_to_all"
 
   315:
     name: "All to All 2x2 to 2x2 Directed Ideal 2.0"
+    directory: "all_to_all"
 
   316:
     name: "All to All Grid Sweep Packet Sizes 2.0"
+    directory: "all_to_all"
+    web_viewer_name: "Grid Sweep Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_to_all"
@@ -628,60 +812,79 @@ tests:
 
   320:
     name: "All from All Directed Ideal"
+    directory: "all_from_all"
 
   321:
     name: "All from All Packet Sizes"
+    directory: "all_from_all"
+    web_viewer_name: "Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
 
   322:
     name: "All from All 2x2 From 1x1 Directed Ideal"
+    directory: "all_from_all"
 
   323:
     name: "All from All 4x4 From 1x1 Directed Ideal"
+    directory: "all_from_all"
 
   324:
     name: "All from All 1x1 From 2x2 Directed Ideal"
+    directory: "all_from_all"
 
   325:
     name: "All from All 1x1 From 4x4 Directed Ideal"
+    directory: "all_from_all"
 
   326:
     name: "All from All 2x2 From 2x2 Directed Ideal"
+    directory: "all_from_all"
 
   327:
     name: "All from All Virtual Channels"
+    directory: "all_from_all"
 
   328:
     name: "All from All Custom"
+    directory: "all_from_all"
 
   329:
     name: "All from All Packet Sizes 2.0"
+    directory: "all_from_all"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
 
   330:
     name: "All from All Directed Ideal 2.0"
+    directory: "all_from_all"
 
   331:
     name: "All from All 2x2 From 1x1 Directed Ideal 2.0"
+    directory: "all_from_all"
 
   332:
     name: "All from All 4x4 From 1x1 Directed Ideal 2.0"
+    directory: "all_from_all"
 
   333:
     name: "All from All 1x1 From 2x2 Directed Ideal 2.0"
+    directory: "all_from_all"
 
   334:
     name: "All from All 1x1 From 4x4 Directed Ideal 2.0"
+    directory: "all_from_all"
 
   335:
     name: "All from All 2x2 From 2x2 Directed Ideal 2.0"
+    directory: "all_from_all"
 
   336:
     name: "All from All Grid Sweep Packet Sizes 2.0"
+    directory: "all_from_all"
+    web_viewer_name: "Grid Sweep Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
@@ -689,48 +892,65 @@ tests:
 
   340:
     name: "Atomic Semaphore Adjacent Bandwidth Sweep"
+    directory: "atomics"
+    web_viewer_name: "Adjacent Bandwidth Sweep"
 
   341:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+    directory: "atomics"
+    web_viewer_name: "Non Adjacent Bandwidth Sweep"
 
   342:
     name: "Single source Multicast Atomic Increment"
+    directory: "multicast_atomics"
 
   343:
     name: "Multi source Multicast Atomic Increment"
+    directory: "multicast_atomics"
 
   344:
     name: "Single source Multicast Atomic Increment - NOC 1"
+    directory: "multicast_atomics"
 
   345:
     name: "Multi source Multicast Atomic Increment - NOC 1"
+    directory: "multicast_atomics"
 
   346:
     name: "Multicast Atomic Larger Increment"
+    directory: "multicast_atomics"
 
   347:
     name: "Multicast Atomic Larger Increment - NOC 1"
+    directory: "multicast_atomics"
 
   348:
     name: "Single source Multicast Atomic Increment 2.0"
+    directory: "multicast_atomics"
 
   349:
     name: "Multicast Atomic Larger Increment 2.0"
+    directory: "multicast_atomics"
 
   350:
     name: "Multi source Multicast Atomic Increment 2.0"
+    directory: "multicast_atomics"
 
   351:
     name: "Single source Multicast Atomic Increment - NOC 1 2.0"
+    directory: "multicast_atomics"
 
   352:
     name: "Multi source Multicast Atomic Increment - NOC 1 2.0"
+    directory: "multicast_atomics"
 
   353:
     name: "Multicast Atomic Larger Increment - NOC 1 2.0"
+    directory: "multicast_atomics"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
+    directory: "interleaved_to_sharded_hardcoded"
     comment: |
       Here, we are getting ~4B/cycle. There are multiple reasons for such BW.
       The first one is the large number of get_noc_addr(stick_id, s0) calls, without them the BW
@@ -744,11 +964,13 @@ tests:
 
   401:
     name: "I2S - DRAM Sharded Tile Writer"
+    directory: "interleaved_to_sharded_hardcoded"
     comment: |
       Here, we are getting ~16.7B/cycle which is the expected BW, for the config: num of transactions = 8, transaction size = 4096B
 
   402:
     name: "I2S - DRAM Interleaved Tile Reader"
+    directory: "interleaved_to_sharded_hardcoded"
     comment: |
       Here, we are getting ~11.5B/cycle when reading from DRAM, with the num of transactions = 4, and
       transaction size = 2048B. Compared to our DRAM Interleaved Page Read Numbers, we can see that
@@ -756,12 +978,14 @@ tests:
 
   403:
     name: "I2S - L1 Interleaved Tile Reader"
+    directory: "interleaved_to_sharded_hardcoded"
     comment: |
       When reading from L1 we are getting ~14B/cycle, which is also expected
       compared to our L1 Interleaved Page Read Numbers
 
   404:
     name: "I2S - DRAM Interleaved Row Major Reader"
+    directory: "interleaved_to_sharded_hardcoded"
     comment: |
       Here, we are getting ~11B/cycle when reading from DRAM, with the num of transactions = 128,
       and transaction size = 512B. Compared to our DRAM Interleaved Page Read Numbers, we can see that
@@ -770,6 +994,7 @@ tests:
 
   405:
     name: "I2S - L1 Interleaved Row Major Reader"
+    directory: "interleaved_to_sharded_hardcoded"
     comment: |
       When reading from L1 with the same config we are also getting ~11.5B/cycle, which is ~60%
       of the performance when compared to our L1 Interleaved Page Read Numbers. The reason for this is the
@@ -778,70 +1003,97 @@ tests:
 
   500:
     name: "Inline Direct Write Performance Comparison"
+    directory: "direct_write"
+    web_viewer_name: "Performance Comparison"
     comment: |
       Compares stateful vs non-stateful NOC inline write performance.
       Shows scaling advantage of stateful approach with increasing write counts.
 
   501:
     name: "Inline Direct Write Address Pattern"
+    directory: "direct_write"
+    web_viewer_name: "Address Pattern"
     comment: |
       Evaluates the performance impact of stateful versus stateless approaches under scenarios
       involving both identical and differing values and destinations.
 
   502:
     name: "DRAM Neighbour Directed Ideal"
+    directory: "dram_neighbour"
 
   503:
     name: "Number of Pages Sweep for DRAM Closest Neighbour"
+    directory: "dram_neighbour"
+    web_viewer_name: "Pages Sweep (Closest)"
     bandwidth_mode: "combined"
 
   504:
     name: "Number of Banks Sweep for DRAM Closest Neighbour"
+    directory: "dram_neighbour"
+    web_viewer_name: "Banks Sweep (Closest)"
     bandwidth_mode: "combined"
 
   505:
     name: "Number of Pages Sweep for Single Row DRAM"
+    directory: "dram_neighbour"
+    web_viewer_name: "Pages Sweep (Single Row)"
     bandwidth_mode: "combined"
 
   507:
     name: "Inline Direct Write Multicast"
+    directory: "direct_write"
 
   508:
     name: "Number of Pages Sweep for DRAM One Hop"
+    directory: "dram_neighbour"
+    web_viewer_name: "Pages Sweep (One Hop)"
     bandwidth_mode: "combined"
 
   509:
     name: "Number of Pages Sweep for DRAM Loop Back"
+    directory: "dram_neighbour"
+    web_viewer_name: "Pages Sweep (Loop Back)"
     bandwidth_mode: "combined"
 
   600:
     name: "Transaction ID - Read After Write"
+    directory: "transaction_id"
 
   601:
     name: "Transaction ID - Read After Write One Packet"
+    directory: "transaction_id"
 
   602:
     name: "Transaction ID - Read After Write One Packet Stateful"
+    directory: "transaction_id"
 
   603:
     name: "PCIe Read Bandwidth"
+    directory: "pcie_read_bw"
 
   604:
     name: "PCIe Write Bandwidth Sweep"
+    directory: "pcie_write_bw"
+    web_viewer_name: "Bandwidth Sweep"
     bandwidth_unit: "gbps"
 
   605:
     name: "PCIe Read Bandwidth Sweep"
+    directory: "pcie_read_bw"
+    web_viewer_name: "Bandwidth Sweep"
     bandwidth_unit: "gbps"
 
   606:
     name: "PCIe Host Write (H2D) Bandwidth Sweep"
+    directory: "device_pcie_loopback"
 
   607:
     name: "PCIe Host Read (D2H) Bandwidth Sweep"
+    directory: "device_pcie_loopback"
 
   610:
     name: "Transaction ID - Write After Read"
+    directory: "transaction_id"
     comment: |
       This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
       has an input and output port. We have a core that is sending and receiving data at the same time,
@@ -850,6 +1102,7 @@ tests:
 
   611:
     name: "Transaction ID - Write After Read One Packet Stateful"
+    directory: "transaction_id"
     comment: |
       This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
       has an input and output port. We have a core that is sending and receiving data at the same time,
@@ -858,21 +1111,32 @@ tests:
 
   620:
     name: "Transaction ID - Read After Write 2.0"
+    directory: "transaction_id"
+    web_viewer_name: "Read After Write"
 
   621:
     name: "Transaction ID - Read After Write One Packet 2.0"
+    directory: "transaction_id"
+    web_viewer_name: "Read After Write (One Packet)"
 
   622:
     name: "Transaction ID - Read After Write One Packet Stateful 2.0"
+    directory: "transaction_id"
+    web_viewer_name: "Read After Write (One Packet Stateful)"
 
   630:
     name: "Transaction ID - Write After Read 2.0"
+    directory: "transaction_id"
+    web_viewer_name: "Write After Read"
 
   631:
     name: "Transaction ID - Write After Read One Packet Stateful 2.0"
+    directory: "transaction_id"
+    web_viewer_name: "Write After Read (One Packet Stateful)"
 
   700:
     name: "NOC API Latency - Unicast Write"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC unicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
@@ -881,6 +1145,7 @@ tests:
 
   701:
     name: "NOC API Latency - Unicast Read"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC unicast read API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
@@ -889,6 +1154,7 @@ tests:
 
   702:
     name: "NOC API Latency - Stateful Write"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC stateful write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
@@ -898,6 +1164,7 @@ tests:
 
   703:
     name: "NOC API Latency - Stateful Read"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC stateful read API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
@@ -907,6 +1174,7 @@ tests:
 
   704:
     name: "NOC API Latency - Multicast Write 2x2"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a 2x2 multicast grid.
@@ -915,6 +1183,7 @@ tests:
 
   705:
     name: "NOC API Latency - Multicast Write 5x5"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a 5x5 multicast grid.
@@ -923,6 +1192,7 @@ tests:
 
   706:
     name: "NOC API Latency - Multicast Write All Cores"
+    directory: "noc_api_latency"
     comment: |
       Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
       Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a multicast grid
@@ -932,226 +1202,307 @@ tests:
 
   800:
     name: "Noc Estimator - L1 One to One"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 One to One"
 
   801:
     name: "Noc Estimator - L1 One from One"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 One from One"
 
   802:
     name: "Noc Estimator - L1 One to All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 One to All"
 
   803:
     name: "Noc Estimator - L1 One from All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 One from All"
 
   804:
     name: "Noc Estimator - L1 All to All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 All to All"
 
   805:
     name: "Noc Estimator - L1 All from All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 All from All"
 
   806:
     name: "Noc Estimator - L1 One to Row"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 One to Row"
 
   807:
     name: "Noc Estimator - L1 Row to Row"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 Row to Row"
 
   808:
     name: "Noc Estimator - L1 One to Column"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 One to Column"
 
   809:
     name: "Noc Estimator - L1 Column to Column"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "L1 Column to Column"
 
   810:
     name: "Noc Estimator - DRAM Sharded One from One"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Sharded One from One"
 
   811:
     name: "Noc Estimator - DRAM Sharded All from All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Sharded All from All"
     bandwidth_mode: "combined"
 
   812:
     name: "Noc Estimator - DRAM Interleaved One from All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Interleaved One from All"
 
   813:
     name: "Noc Estimator - DRAM Interleaved All from All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Interleaved All from All"
     bandwidth_mode: "combined"
 
   814:
     name: "Noc Estimator - DRAM Sharded One to One"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Sharded One to One"
 
   815:
     name: "Noc Estimator - DRAM Sharded All to All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Sharded All to All"
     bandwidth_mode: "combined"
 
   816:
     name: "Noc Estimator - DRAM Interleaved One to All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Interleaved One to All"
 
   817:
     name: "Noc Estimator - DRAM Interleaved All to All"
+    directory: "noc_estimator_tests"
+    web_viewer_name: "DRAM Interleaved All to All"
     bandwidth_mode: "combined"
 
   900:
     name: "Quasar Addrgen - Strided1D SrcOnly"
+    directory: "quasar_examples"
 
   901:
     name: "Quasar Addrgen - Strided1D DstOnly"
+    directory: "quasar_examples"
 
   902:
     name: "Quasar Addrgen - Strided1D Both"
+    directory: "quasar_examples"
 
   903:
     name: "Quasar Addrgen - Strided2D SrcOnly"
+    directory: "quasar_examples"
 
   904:
     name: "Quasar Addrgen - Strided2D DstOnly"
+    directory: "quasar_examples"
 
   905:
     name: "Quasar Addrgen - Strided2D Both"
+    directory: "quasar_examples"
 
   906:
     name: "Quasar Addrgen - Face SrcOnly"
+    directory: "quasar_examples"
 
   907:
     name: "Quasar Addrgen - Face DstOnly"
+    directory: "quasar_examples"
 
   908:
     name: "Quasar Addrgen - Face Both"
+    directory: "quasar_examples"
 
   909:
     name: "Quasar Addrgen - Interleaved Banking"
+    directory: "quasar_examples"
 
   910:
     name: "Quasar IDMA - Basic"
+    directory: "quasar_examples"
 
   911:
     name: "Quasar IDMA - 1D Strided"
+    directory: "quasar_examples"
 
   1012:
     name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1013:
     name: "1D Matmul Test 1013 - 3x2 K=3 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1023:
     name: "1D Matmul Test 1023 - 2x4 K=2 (K<C) Subblock C Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1024:
     name: "1D Matmul Test 1024 - 2x3 K=3 (K==C) Subblock R Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1025:
     name: "1D Matmul Test 1025 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1026:
     name: "1D Matmul Test 1026 - 4x4 K=4 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1027:
     name: "1D Matmul Test 1027 - 4x4 K=8 Subblock R Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1028:
     name: "1D Matmul Test 1028 - 4x4 K=8 Subblock C Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1029:
     name: "1D Matmul Test 1029 - 4x4 K=1 Subblock R Sweep (single transaction)"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1030:
     name: "1D Matmul Test 1030 - 4x4 K=8 (sub_r, sub_c) 2D Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1031:
     name: "1D Matmul Test 1031 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1112:
     name: "1D V2 Matmul Test 1112 - 2x2 K=2 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1113:
     name: "1D V2 Matmul Test 1113 - 3x2 K=3 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1123:
     name: "1D V2 Matmul Test 1123 - 2x4 K=2 (K<C) Subblock C Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1124:
     name: "1D V2 Matmul Test 1124 - 2x3 K=3 (K==C) Subblock R Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1125:
     name: "1D V2 Matmul Test 1125 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1126:
     name: "1D V2 Matmul Test 1126 - 4x4 K=4 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1127:
     name: "1D V2 Matmul Test 1127 - 4x4 K=8 Subblock R Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1128:
     name: "1D V2 Matmul Test 1128 - 4x4 K=8 Subblock C Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1129:
     name: "1D V2 Matmul Test 1129 - 4x4 K=1 Subblock R Sweep (single transaction)"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1130:
     name: "1D V2 Matmul Test 1130 - 4x4 K=8 (sub_r, sub_c) 2D Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1131:
     name: "1D V2 Matmul Test 1131 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1212:
     name: "2D Matmul Test 1212 - 2x2 K=2 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1213:
     name: "2D Matmul Test 1213 - 3x2 K=3 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1223:
     name: "2D Matmul Test 1223 - 2x4 K=2 (K<C) Subblock C Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1224:
     name: "2D Matmul Test 1224 - 2x3 K=3 (K==C) Subblock R Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1225:
     name: "2D Matmul Test 1225 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1226:
     name: "2D Matmul Test 1226 - 4x4 K=4 Subblock K Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1227:
     name: "2D Matmul Test 1227 - 4x4 K=8 Subblock R Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1228:
     name: "2D Matmul Test 1228 - 4x4 K=8 Subblock C Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1229:
     name: "2D Matmul Test 1229 - 4x4 K=1 Subblock R Sweep (single transaction)"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1230:
     name: "2D Matmul Test 1230 - 4x4 K=8 (sub_r, sub_c) 2D Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
 
   1231:
     name: "2D Matmul Test 1231 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    directory: "matmul"
     bandwidth_mode: "combined"
