@@ -21,6 +21,14 @@ pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_y
 ```
 
 ### Model performant running with Trace+2CQ
+
+Measured end-to-end throughput (single device, batch=1, trace + 2 CQ):
+
+| Device | Resolution | FPS |
+|---|---|---|
+| Wormhole N150 | 640×640 | 215 |
+| Blackhole P150 | 640×640 | **372** |
+
 #### Single Device (BS=1):
 - end-2-end perf is `215` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```

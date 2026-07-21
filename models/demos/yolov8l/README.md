@@ -28,6 +28,14 @@ pytest --disable-warnings models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_y
 ```
 
 ### 2) Trace + 2 CQ performance smoke (throughput / FPS)
+
+Measured end-to-end throughput (single device, batch=1, trace + 2 CQ):
+
+| Device | Resolution | FPS |
+|---|---|---|
+| Blackhole P150 | 640×640 | **150** |
+| Blackhole P150 | 1280×1280 | **30** |
+
 Single device — the test runs **both** 640 and 1280; select one with `-k`:
 
 ```bash
