@@ -422,6 +422,8 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
+      CPM_S3_BUCKET: cpm
+      CPM_S3_PREFIX: cpm/tt-metal
       CCACHE_S3_READONLY: "false"
       CCACHE_S3_DEBUG: "false"
     container:
@@ -591,13 +593,12 @@ jobs:
         # and let CMake configure fetch CPM sources from scratch.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         env:
-          CPM_S3_PREFIX: tt-metal/cpm
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
           set -u
           SIGV4="aws:amz:garage:s3"
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
-          URL="${AWS_ENDPOINT_URL_S3}/${CCACHE_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
+          URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
           echo "Restoring CPM cache from: ${URL}"
           # -f => non-2xx (incl. 404 miss) exits non-zero; --retry rides out transient blips.
           if curl -fsS --retry 3 --retry-delay 2 --max-time 120 \
@@ -667,7 +668,6 @@ jobs:
           steps.cpm-cache.outputs.hit != 'true' &&
           (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         env:
-          CPM_S3_PREFIX: tt-metal/cpm
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
           set -u
@@ -677,7 +677,7 @@ jobs:
           fi
           SIGV4="aws:amz:garage:s3"
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
-          URL="${AWS_ENDPOINT_URL_S3}/${CCACHE_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
+          URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
           echo "Saving CPM cache to: ${URL} ($(du -h .cpmcache.tar.zst | cut -f1))"
           # Use --upload-file instead of --data-binary so curl streams the tarball
           # from disk. A 1.2 GB CPM archive caused OOM with --data-binary @file.
