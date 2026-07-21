@@ -58,6 +58,7 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
+            get_rpc_server().setGetSocketsCallback([this](auto result) { this->rpc_get_sockets(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
@@ -157,6 +158,32 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
         mesh_device.setInitialized(mesh_device_data.initialized);
         mesh_device.setProgramCacheEnabled(
             const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
+    }
+}
+
+void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_sockets_mutex);
+    auto sockets = results.initSockets(mesh_sockets_data.size());
+    uint32_t i = 0;
+    for (const auto& socket_data : mesh_sockets_data) {
+        auto socket = sockets[i++];
+        socket.setIsSender(socket_data.is_sender);
+        socket.setConfigBufferAddress(socket_data.config_buffer_address);
+        socket.setDataBufferAddress(socket_data.data_buffer_address);
+        auto conns = socket.initConnections(socket_data.connections.size());
+        uint32_t j = 0;
+        for (const auto& c : socket_data.connections) {
+            auto conn = conns[j++];
+            conn.setLocalChipId(c.local_chip_id);
+            conn.setLocalCoreX(c.local_core_x);
+            conn.setLocalCoreY(c.local_core_y);
+            conn.setLocalMeshId(c.local_mesh_id);
+            conn.setLocalFabricChipId(c.local_fabric_chip_id);
+            conn.setPeerMeshId(c.peer_mesh_id);
+            conn.setPeerFabricChipId(c.peer_fabric_chip_id);
+            conn.setPeerCoreX(c.peer_core_x);
+            conn.setPeerCoreY(c.peer_core_y);
+        }
     }
 }
 

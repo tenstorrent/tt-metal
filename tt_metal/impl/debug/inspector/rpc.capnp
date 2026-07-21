@@ -51,6 +51,25 @@ struct MeshCoordinate {
     coordinates @0 :List(Int32);
 }
 
+struct MeshSocketConnection {
+    localChipId @0 :UInt32;       # metal device id owning this endpoint's config buffer (for noc reads)
+    localCoreX @1 :UInt32;
+    localCoreY @2 :UInt32;
+    localMeshId @3 :UInt32;       # fabric node id of this endpoint (cross-rank stitch key)
+    localFabricChipId @4 :UInt32;
+    peerMeshId @5 :UInt32;        # fabric node id of the peer endpoint (matches the peer's local id)
+    peerFabricChipId @6 :UInt32;
+    peerCoreX @7 :UInt32;
+    peerCoreY @8 :UInt32;
+}
+
+struct MeshSocketRecord {
+    isSender @0 :Bool;
+    configBufferAddress @1 :UInt64;
+    dataBufferAddress @2 :UInt64;   # 0 for sender endpoints
+    connections @3 :List(MeshSocketConnection);
+}
+
 struct MeshWorkloadProgramData {
     programId @0 :UInt64;
     coordinates @1 :List(MeshCoordinate);
@@ -236,4 +255,7 @@ interface Inspector {
 
     # Get the host's SystemMesh shape (global + local).
     getSystemMesh @11 () -> (systemMesh :SystemMeshData);
+
+    # Get MeshSocket endpoints created during this run (config buffer address + graph edges).
+    getSockets @12 () -> (sockets :List(MeshSocketRecord));
 }

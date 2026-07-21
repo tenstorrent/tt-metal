@@ -58,6 +58,28 @@ struct MeshDeviceData {
     bool initialized = false;
 };
 
+// local_chip_id: metal device id owning this endpoint's config buffer (for triage noc reads).
+// local/peer mesh_id+fabric_chip_id: cross-rank graph stitch keys (receiver's peer == sender's local).
+struct MeshSocketConnectionData {
+    uint32_t local_chip_id{};
+    uint32_t local_core_x{};
+    uint32_t local_core_y{};
+    uint32_t local_mesh_id{};
+    uint32_t local_fabric_chip_id{};
+    uint32_t peer_mesh_id{};
+    uint32_t peer_fabric_chip_id{};
+    uint32_t peer_core_x{};
+    uint32_t peer_core_y{};
+};
+
+// Where a MeshSocket endpoint's buffers live, for triage. Appended once at creation (no destroy hook).
+struct MeshSocketData {
+    bool is_sender{};
+    uint64_t config_buffer_address{};
+    uint64_t data_buffer_address{};  // 0 for sender endpoints
+    std::vector<MeshSocketConnectionData> connections;
+};
+
 struct MeshWorkloadRuntimeEntry {
     uint64_t workload_id = 0;
     uint64_t runtime_id = 0;

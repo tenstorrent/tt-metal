@@ -19,6 +19,7 @@ namespace tt::tt_metal {
 namespace distributed {
 class MeshDeviceImpl;
 class MeshWorkloadImpl;
+class MeshSocket;
 }  // namespace distributed
 
 namespace inspector {
@@ -54,6 +55,9 @@ public:
         const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept;
     static void mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept;
     static void mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept;
+
+    // Records a MeshSocket endpoint's config buffer address + graph edges for triage.
+    static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
 
     static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
