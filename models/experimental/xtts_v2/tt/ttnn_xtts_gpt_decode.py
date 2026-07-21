@@ -45,6 +45,7 @@ class TTNNGPTDecoder(TTNNGPTCore):
             activation_dtype=ttnn.bfloat16,
             attention="sdpa",
         )
+        self.ln_sharded = True  # single-token decode: use the width-sharded LayerNorm path
         # BUG-1: scaled_dot_product_attention_decode returns garbage when the KV-cache
         # sequence length is an ODD number of 32-tiles (e.g. 736 = 23 tiles -> PCC 0.63).
         # An even tile count (multiple of 64) is always correct. Round the cache up so the
@@ -138,6 +139,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         import torch
 
         cfg = self.config
+        self.ln_sharded = True  # single-token decode: use the width-sharded LayerNorm path
         # BUG-1: sdpa_decode is wrong when the KV-cache length is an odd number of 32-tiles;
         # round up to an even tile count (multiple of 64). See TTNNGPTDecoder for details.
         self.max_seq = ((max_seq + 63) // 64) * 64
