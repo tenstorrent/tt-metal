@@ -258,3 +258,35 @@ serially does receive-4-partials + accumulate + write-all-output while leaves id
 Prototyping H1/H2 is the next step. Instrumentation (DIAG_ZONES) is committed + mask-0 byte-identical
 (regression gate). **PAUSING for review per goal before prototyping** (esp. H2 reopens a previously-rejected
 direction — worth a steer). Artifacts: ltxflux_sweep_256x2048x1024.json, zone_parse.py, this log.
+
+### [DEEP-1 REV2] 256x2048x1024 — corrected timeline (per review feedback)
+Fixes: harness reads "risc" (not per_risc_us); failed sweep cfg (2,1,6,1,2) classified = TRANSIENT (reruns ok,
+77us non-competitive); added compute-side zones + raw absolute-timestamp artifact (zone_raw_256x2048x1024.json,
+800 core-zone series). Perturbation with compute zones = +0.6%.
+
+**Compute-side decomposition (TRISC per-core; the missing piece).** Regular start/end zones around the k-loop
+waits (SumN accumulators do NOT flush for the compute kernel; K_num_blocks small so per-block markers cheap):
+| TRISC | median us | max us |
+|---|---|---|
+| matmul (residual) | 9.1 | 14.4 |
+| in0-wait (ring exposed to compute) | 4.9 | 8.4 |
+| in1-wait | 1.4 | 7.3 |
+=> the coarse Z_RING (11us) is NOT all exposed: only ~4.9us of in0-ring latency is exposed as COMPUTE stall;
+in1 read is largely hidden (1.4us). Whole-phase duration != exposed headroom (confirmed).
+
+**Per-role timeline + wall accounting (from absolute timestamps).** Roles: 32 readers (Z_IN1READ) / 32 slaves;
+27 split-K roots / 37 leaves. The WALL (~22.3us) is gated by ROOT cores: writer(NCRISC) does Z_RING(~11us)
+THEN Z_PHASE2 reduce+output(~9us) SEQUENTIALLY. Root Z_PHASE2 med 9.0us vs leaf 4.8us (+4.2us root tail).
+Reader Z_IN1READ (~13us) OVERLAPS the writer and is not the tail. Accounted wall ~= ring(11) + root
+reduce/output(9) + startup ~= 22us.
+
+**Refined hypotheses (ceilings need the NCRISC sub-zone breakdown — next increment):**
+- H-A: **reduction/output root tail** extends the wall ~4-5us beyond compute (root Z_PHASE2 9us, +4.2us vs
+  leaf; root ends the wall). NOT "add a per-block output pipeline" (already exists). Need Z_PHASE2 sub-zones
+  (partial-recv-wait / out_cb-wait / output-issue+flush) to locate the recoverable sub-component.
+- H-B: **in0-ring on the critical path AND exposed** (~4.9us compute in0-wait; ring is the sequential first
+  half of the root path). Reopen in0 ONLY with a NOT-already-tested mechanism (scatter/exchange/repl/chunk
+  all rejected ON THIS SHAPE). Need ring sub-zones (inject / recv-wait / forward) to bound the recoverable.
+
+**Status: NOT prototyping.** Next: NCRISC ring + reduction sub-zones -> numerical ceilings + precise
+experiments, then report. Artifacts: zone_raw_256x2048x1024.json, zone_parse.py, ltxflux_sweep_256x2048x1024.json.

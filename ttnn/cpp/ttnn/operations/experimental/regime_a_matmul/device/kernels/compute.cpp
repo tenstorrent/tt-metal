@@ -14,6 +14,20 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
+// Test-only causal timing zones (compile-gated; mask 0 => no-op => byte-identical). See DIAG_ZONES.
+// SumN{1,2} accumulate a repeated region's total time across the k-loop into one zone (2 accumulator slots).
+// The compute/TRISC kernel does NOT auto-inject the profiler header (dataflow kernels do), so include it.
+#ifdef DIAG_ZONES
+#include "tools/profiler/kernel_profiler.hpp"
+// Regular start/end zones (SumN accumulators do not flush to the CSV for the compute kernel). K_num_blocks
+// is small so per-k-block markers are cheap; the analysis SUMS the per-instance durations to get total wait.
+#define RA_ZONE_SUM1(n) DeviceZoneScopedN(n)
+#define RA_ZONE_SUM2(n) DeviceZoneScopedN(n)
+#else
+#define RA_ZONE_SUM1(n)
+#define RA_ZONE_SUM2(n)
+#endif
+
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -500,11 +514,15 @@ void kernel_main() {
                 // is popped only once, after all reuse (below). The writer pushes W blocks at a time, so a
                 // wait for a mid-batch boundary is simply satisfied when that W-batch lands.
                 if (m_block_iter == 0 && n_block_iter == 0) {
+                    RA_ZONE_SUM1("Z_C_IN0WAIT");  // compute stalled on progressive in0 (ring exposure to compute)
                     cb_wait_front(in0_cb, (k_block + 1) * in0_block_num_tiles);
                 }
 #endif
 #endif
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                {
+                    RA_ZONE_SUM2("Z_C_IN1WAIT");  // compute stalled on in1 delivery (read exposure to compute)
+                    cb_wait_front(in1_cb, in1_block_num_tiles);
+                }
 
                 matmul_blocks(
                     in0_cb,

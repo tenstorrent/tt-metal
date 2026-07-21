@@ -97,9 +97,15 @@ def sweep(M, K, N, iters=8):
         r = ds.run_one(M, K, N, cfg, 0, iters=iters)
         w = r.get("wall_us")
         gb = rb.logical_bytes(M, K, N) / (w / 1e6) / 1e9 if w else None
-        pr = r.get("per_risc_us")
+        # run_one returns "risc": {BRISC/NCRISC/TRISC: {n,max_us,med_us,min_us}} (NOT "per_risc_us"/"spread").
+        pr = r.get("risc") or {}
+        # critical-RISC core imbalance = (max-min)/min over cores of the slowest (max_us) RISC.
+        crit = max(pr, key=lambda t: pr[t].get("max_us", 0)) if pr else None
+        spread = (round((pr[crit]["max_us"] / pr[crit]["min_us"] - 1) * 100, 1)
+                  if crit and pr[crit].get("min_us") else None)
         rec = {"cfg": list(cfg), "W": g["W"], "cores": g["cores"], "wall_us": w, "gbps": gb,
-               "per_risc": pr, "spread": r.get("spread"), "ok": r.get("ok"), "is_auto": cfg == auto}
+               "risc": pr, "crit_risc": crit, "core_spread_pct": spread,
+               "cls": r.get("cls"), "rc": r.get("rc"), "ok": r.get("ok"), "is_auto": cfg == auto}
         results.append(rec)
         tag = " <AUTO" if cfg == cfg and cfg == auto else ""
         print(f"  [{i+1}/{len(feas)}] cfg={cfg} W{g['W']} c{g['cores']} wall={None if w is None else round(w,2)}us "

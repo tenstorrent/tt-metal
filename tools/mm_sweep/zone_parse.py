@@ -69,7 +69,51 @@ def print_summary(csv_path, freq_hz=1.0e9, title=""):
     return s
 
 
-if __name__ == "__main__":
-    import sys
+def parse_raw(csv_path):
+    """Per (core,zone) -> list of ABSOLUTE (start_cycle, end_cycle) per instance (all iters, warmup incl).
+    Absolute times let overlap + the critical path be reconstructed (whole-phase duration != exposed wall)."""
+    rows = list(csv.reader(open(csv_path)))
+    ev = defaultdict(list)
+    for row in rows[2:]:
+        if len(row) < 12 or not row[10].strip():
+            continue
+        ev[(row[1].strip(), row[2].strip(), row[3].strip(), row[10].strip())].append((row[11].strip(), int(row[5])))
+    raw = {}
+    for k, lst in ev.items():
+        pairs, st = [], None
+        for t, c in lst:
+            if t == "ZONE_START":
+                st = c
+            elif t == "ZONE_END" and st is not None:
+                pairs.append((st, c))
+                st = None
+        if pairs:
+            raw[k] = pairs
+    return raw
 
-    print_summary(sys.argv[1], float(sys.argv[2]) if len(sys.argv) > 2 else 1.0e9)
+
+def roles_and_timeline(csv_path, freq_hz=1.0e9):
+    """Infer per-core role from zone presence/magnitude and build a per-role timeline. Roles: reader (runs
+    Z_IN1READ), slave (no Z_IN1READ but has a KERNEL span), reduction root (high Z_PHASE2) vs leaf (low)."""
+    raw = parse_raw(csv_path)
+    us = lambda c: c / freq_hz * 1e6
+    # collect per-core (x,y): which zones, med duration, min start, max end
+    cores = defaultdict(dict)
+    for (x, y, r, zone), pairs in raw.items():
+        durs = sorted(e - s for s, e in pairs)[1:] or [pairs[-1][1] - pairs[-1][0]]  # drop warmup
+        med = durs[len(durs) // 2]
+        cores[(x, y)][zone] = {"med_us": round(us(med), 2), "risc": r,
+                               "start": min(s for s, _ in pairs), "end": max(e for _, e in pairs)}
+    return cores
+
+
+if __name__ == "__main__":
+    import sys, json
+
+    csv_path = sys.argv[1]
+    freq = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0e9
+    print_summary(csv_path, freq)
+    if len(sys.argv) > 3:  # dump raw absolute-timestamp artifact for auditability
+        raw = {f"{x},{y},{r},{z}": v for (x, y, r, z), v in parse_raw(csv_path).items()}
+        json.dump(raw, open(sys.argv[3], "w"))
+        print(f"wrote raw zone artifact -> {sys.argv[3]} ({len(raw)} core-zone series)")
