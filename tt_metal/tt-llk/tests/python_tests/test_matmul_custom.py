@@ -4,6 +4,7 @@
 from typing import List
 
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -20,10 +21,20 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     MATH_FIDELITY,
     NUM_FACES,
+    THROTTLE_LEVEL,
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+# Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
+# NOPs between MVMULs to cap compute throughput, so the numeric result is IDENTICAL
+# for every level -> the golden is the same MatmulGolden as the non-throttled path.
+# Blackhole implements run_throttled_sequence_no_mop<1..5>; Wormhole B0 static_asserts
+# THROTTLE_LEVEL == 0, so only level 0 is valid there.
+THROTTLE_LEVELS = (
+    [0, 1, 2, 3, 4, 5] if get_chip_architecture() == ChipArchitecture.BLACKHOLE else [0]
+)
 
 
 def generate_format_aware_matmul_combinations(
@@ -69,26 +80,16 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 
 
-@parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
-)
-def test_matmul_custom(
+def _run_matmul_custom(
     math_fidelity,
-    format_dest_acc_and_dims,
-    boot_mode=BootMode.DEFAULT,
+    formats,
+    dest_acc,
+    input_A_dimensions,
+    input_B_dimensions,
+    throttle_level: int,
+    boot_mode: BootMode,
 ):
-    torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
-
-    formats = format_dest_acc_and_dims[0]
-    dest_acc = format_dest_acc_and_dims[1]
-    input_A_dimensions = format_dest_acc_and_dims[2][0]
-    input_B_dimensions = format_dest_acc_and_dims[2][1]
+    torch_format = format_dict[formats.output_format]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -132,7 +133,7 @@ def test_matmul_custom(
     configuration = TestConfig(
         "sources/matmul_custom_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity)],
+        templates=[MATH_FIDELITY(math_fidelity), THROTTLE_LEVEL(throttle_level)],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
@@ -163,3 +164,64 @@ def test_matmul_custom(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@parametrize(
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+)
+def test_matmul_custom(
+    math_fidelity,
+    format_dest_acc_and_dims,
+    boot_mode=BootMode.DEFAULT,
+):
+    _run_matmul_custom(
+        math_fidelity,
+        format_dest_acc_and_dims[0],
+        format_dest_acc_and_dims[1],
+        format_dest_acc_and_dims[2][0],
+        format_dest_acc_and_dims[2][1],
+        throttle_level=0,
+        boot_mode=boot_mode,
+    )
+
+
+# Representative fidelity x format subset for the throttle sweep. Throttle inserts
+# NOPs between MVMULs without changing the numeric result, so it is orthogonal to
+# format/fidelity/dims; a small subset per throttle level keeps the sweep tractable
+# while still crossing LoFi (single-phase) and HiFi (multi-phase) code paths and
+# both 16-bit (Float16_b) and 32-bit (Float32) operands.
+THROTTLE_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+# Cap at 4 output tiles so the dimensions stay valid for dest_acc=Yes (32-bit dest
+# holds fewer tiles); use the largest such combination.
+THROTTLE_DIMS = generate_matmul_dimension_combinations(4)[-1]
+
+
+@parametrize(
+    throttle_level=THROTTLE_LEVELS,
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    formats=THROTTLE_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_matmul_custom_throttle(
+    throttle_level,
+    math_fidelity,
+    formats,
+    dest_acc,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=throttle_level,
+        boot_mode=boot_mode,
+    )
