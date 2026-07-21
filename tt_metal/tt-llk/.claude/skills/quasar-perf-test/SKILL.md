@@ -40,13 +40,13 @@ This skill covers two related workflows:
 5. Import the correctness test as a helper, normally:
 
    ```python
-   from quasar.test_[op]_quasar import test_[op]_quasar as run_[op]_quasar
+   from test_[op]_quasar import test_[op]_quasar as run_[op]_quasar
    ```
 
 6. Use a narrow perf-oriented sweep:
    - `run_types=PERF_RUN_TYPES_QUASAR` from `helpers.llk_params`
-   - `loop_factor=[32]`, unless the operation has an established value
-   - `is_perf=[True]`
+   - a fixed `loop_factor=32`, unless the operation has an established value
+   - a fixed `is_perf=True`
    - stable dimensions and exact destination fill when normalization depends
      on shape
 7. Pass `perf_report` and `is_perf=True` to the correctness helper.
@@ -166,7 +166,7 @@ Quasar CFG state can persist between run types. For independent pack
 execution, clear the wait mask during `INIT` when required:
 
 ```cpp
-auto cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+auto cfg = (volatile std::uint32_t*)TENSIX_CFG_BASE;
 cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
 ```
 
