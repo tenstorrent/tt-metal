@@ -19,10 +19,19 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
+
+// Auto-promote fp32 dest accumulation for fp32-input reduction ops when the caller didn't specify a
+// compute_kernel_config. Without this, JIT data-format selection can pick a narrow unpack-dst format for
+// all-fp32 CBs when fp32_dest_acc_en is false, silently truncating precision (see issue #37883). Returns
+// compute_kernel_config unchanged whenever it's already set or input_dtype isn't FLOAT32.
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType input_dtype);
 
 // Warn about ideal packet size
 void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
