@@ -1,0 +1,8176 @@
+{
+  "shape": [
+    64,
+    6144,
+    4608
+  ],
+  "auto": [
+    1,
+    6,
+    1,
+    4,
+    2
+  ],
+  "results": [
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 1470.6351851851853,
+      "gbps": 39.43830569557372,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        2
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 820.8088888888889,
+      "gbps": 70.66122307534032,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 612.7851851851851,
+      "gbps": 94.64876338756861,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        4
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 577.7151851851851,
+      "gbps": 100.39438375054736,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        6
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 406.12,
+      "gbps": 142.81335565842608,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        9
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 357.9148148148148,
+      "gbps": 162.04794436913397,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        1,
+        18
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 274.08222222222224,
+      "gbps": 211.6129952893292,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 840.9599999999999,
+      "gbps": 68.96803652968038,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        2
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 535.2062962962963,
+      "gbps": 108.36823184137373,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 412.31666666666666,
+      "gbps": 140.66702776991795,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        4
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 385.42370370370367,
+      "gbps": 150.4820784052952,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        6
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 307.33296296296294,
+      "gbps": 188.7183185325603,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        9
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 274.26037037037037,
+      "gbps": 211.47554027465117,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        2,
+        18
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 236.4548148148148,
+      "gbps": 245.2872868984443,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 535.2577777777777,
+      "gbps": 108.35780890619681,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        2
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 358.08074074074074,
+      "gbps": 161.9728552840348,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 307.33370370370375,
+      "gbps": 188.7178636805692,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        4
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 298.4881481481482,
+      "gbps": 194.31042860439896,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        6
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 266.7040740740741,
+      "gbps": 217.46709419928595,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        9
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 256.85592592592593,
+      "gbps": 225.80502976881402,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        4,
+        18
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 231.96555555555554,
+      "gbps": 250.0343633393847,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 366.42962962962963,
+      "gbps": 158.28239670089755,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        8,
+        2
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 280.2611111111111,
+      "gbps": 206.94758459373202,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 269.31888888888886,
+      "gbps": 215.35570802064467,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        8,
+        4
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 255.57999999999998,
+      "gbps": 226.93231082244307,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        8,
+        6
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 247.9040740740741,
+      "gbps": 233.9588819450773,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        1,
+        2,
+        8,
+        9
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 246.06074074074075,
+      "gbps": 235.71155571343417,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 749.16,
+      "gbps": 77.4191894922313,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        1,
+        2
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 465.10925925925926,
+      "gbps": 124.70050605393396,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 321.3762962962963,
+      "gbps": 180.47180413868134,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        1,
+        5
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 251.6974074074074,
+      "gbps": 230.43288604923902,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        1,
+        9
+      ],
+      "W": 24,
+      "cores": 16,
+      "wall_us": 181.5874074074074,
+      "gbps": 319.401883798436,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 435.8640740740741,
+      "gbps": 133.06753974438175,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        2,
+        2
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 291.57703703703703,
+      "gbps": 198.9160757972609,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 219.75074074074075,
+      "gbps": 263.9324891670192,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        2,
+        5
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 183.81666666666666,
+      "gbps": 315.52829812312996,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        2,
+        9
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 145.2637037037037,
+      "gbps": 399.2694563144422,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 278.5896296296296,
+      "gbps": 208.18922828214076,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        4,
+        2
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 205.5114814814815,
+      "gbps": 282.2195605904689,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 166.8848148148148,
+      "gbps": 347.5412670970663,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        4,
+        5
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 148.48555555555558,
+      "gbps": 390.60607466495054,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        4,
+        9
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 135.97555555555556,
+      "gbps": 426.54254849727886,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 202.51592592592593,
+      "gbps": 286.39406868778497,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        8,
+        2
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 166.10074074074075,
+      "gbps": 349.1818262901586,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 144.36962962962966,
+      "gbps": 401.7421125813882,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        1,
+        8,
+        5
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 140.4437037037037,
+      "gbps": 412.97230470624845,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 894.7177777777778,
+      "gbps": 64.82419533906409,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        1,
+        2
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 560.0692592592593,
+      "gbps": 103.55747801032544,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 390.67481481481485,
+      "gbps": 148.45942917383215,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        1,
+        5
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 313.17962962962963,
+      "gbps": 185.19518676419284,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        1,
+        9
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 231.43703703703704,
+      "gbps": 250.60535142747406,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 522.2362962962964,
+      "gbps": 111.05961115941555,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        2,
+        2
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 358.602962962963,
+      "gbps": 161.736979306527,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 270.6137037037037,
+      "gbps": 214.3252880626614,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        2,
+        5
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 232.56851851851852,
+      "gbps": 249.38611798991934,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        2,
+        9
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 189.18074074074076,
+      "gbps": 306.5817364542628,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 335.92037037037034,
+      "gbps": 172.6580615996957,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        4,
+        2
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 256.2659259259259,
+      "gbps": 226.3248997713602,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 208.72074074074075,
+      "gbps": 277.88019434083463,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        4,
+        5
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 193.61851851851853,
+      "gbps": 299.5548176062131,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        4,
+        9
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 169.01296296296297,
+      "gbps": 343.16515717619734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 245.79666666666665,
+      "gbps": 235.96479474904734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        8,
+        2
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 206.5048148148148,
+      "gbps": 280.86202276693393,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 180.89148148148146,
+      "gbps": 320.63068711136407,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        8,
+        5
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 174.34777777777776,
+      "gbps": 332.66475053054876,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        1,
+        2,
+        8,
+        9
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 164.91148148148147,
+      "gbps": 351.69995126453927,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 24,
+      "wall_us": 505.7433333333333,
+      "gbps": 114.68141283786902,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        1,
+        2
+      ],
+      "W": 24,
+      "cores": 24,
+      "wall_us": 293.1085185185185,
+      "gbps": 197.876746445824,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 24,
+      "wall_us": 225.47703703703704,
+      "gbps": 257.2295643146711,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        1,
+        6
+      ],
+      "W": 24,
+      "cores": 24,
+      "wall_us": 151.12148148148148,
+      "gbps": 383.7929553854147,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 24,
+      "wall_us": 299.5740740740741,
+      "gbps": 193.60607281943498,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        2,
+        2
+      ],
+      "W": 12,
+      "cores": 24,
+      "wall_us": 193.63703703703703,
+      "gbps": 299.52616961860673,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 24,
+      "wall_us": 153.7414814814815,
+      "gbps": 377.2525114309254,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        2,
+        6
+      ],
+      "W": 12,
+      "cores": 24,
+      "wall_us": 130.62370370370368,
+      "gbps": 444.01864558641734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 24,
+      "wall_us": 200.53333333333336,
+      "gbps": 289.2255319148936,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        4,
+        2
+      ],
+      "W": 6,
+      "cores": 24,
+      "wall_us": 142.93666666666667,
+      "gbps": 405.7696415661948,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 24,
+      "wall_us": 131.99703703703702,
+      "gbps": 439.39895396080726,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        4,
+        6
+      ],
+      "W": 6,
+      "cores": 24,
+      "wall_us": 122.20518518518517,
+      "gbps": 474.6063754341514,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 24,
+      "wall_us": 148.1037037037037,
+      "gbps": 391.61316394918475,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        8,
+        2
+      ],
+      "W": 3,
+      "cores": 24,
+      "wall_us": 126.90740740740739,
+      "gbps": 457.0210769006275,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 24,
+      "wall_us": 133.77296296296296,
+      "gbps": 433.5656377444371,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        1,
+        8,
+        6
+      ],
+      "W": 3,
+      "cores": 24,
+      "wall_us": 139.94629629629628,
+      "gbps": 414.44012121051725,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 48,
+      "wall_us": 604.0644444444445,
+      "gbps": 96.01518601768024,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        1,
+        2
+      ],
+      "W": 24,
+      "cores": 48,
+      "wall_us": 349.84777777777776,
+      "gbps": 165.78456026906943,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 48,
+      "wall_us": 268.58222222222224,
+      "gbps": 215.94638513345797,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        1,
+        6
+      ],
+      "W": 24,
+      "cores": 48,
+      "wall_us": 189.2948148148148,
+      "gbps": 306.39698217164687,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 357.3277777777778,
+      "gbps": 162.31416533217245,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        2,
+        2
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 229.25555555555556,
+      "gbps": 252.98998691416662,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 191.0803703703704,
+      "gbps": 303.5338474987256,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        2,
+        6
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 149.13777777777779,
+      "gbps": 388.89784241268325,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 237.59629629629632,
+      "gbps": 244.10885566865673,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        4,
+        2
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 166.98074074074074,
+      "gbps": 347.341614025126,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 147.72,
+      "gbps": 392.63038180341186,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        4,
+        6
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 128.20962962962963,
+      "gbps": 452.3791244662965,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 174.30555555555557,
+      "gbps": 332.7453322709163,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        8,
+        2
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 140.4322222222222,
+      "gbps": 413.0060685660936,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 133.5322222222222,
+      "gbps": 434.3472986129025,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        1,
+        2,
+        8,
+        6
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 130.11888888888888,
+      "gbps": 445.7412793428233,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 432.90000000000003,
+      "gbps": 133.97865557865558,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        1,
+        5
+      ],
+      "W": 24,
+      "cores": 32,
+      "wall_us": 158.3759259259259,
+      "gbps": 366.213233866913,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 262.1222222222222,
+      "gbps": 221.2683820100886,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        2,
+        5
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 140.50555555555556,
+      "gbps": 412.7905104582658,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 181.06851851851852,
+      "gbps": 320.31719525041683,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        4,
+        5
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 138.41814814814813,
+      "gbps": 419.0155754570826,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 152.7411111111111,
+      "gbps": 379.723308139408,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        1,
+        8,
+        5
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 143.55555555555554,
+      "gbps": 404.02030959752324,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 64,
+      "wall_us": 516.9681481481482,
+      "gbps": 112.19136074004129,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        1,
+        5
+      ],
+      "W": 24,
+      "cores": 64,
+      "wall_us": 181.91555555555556,
+      "gbps": 318.8257311084508,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 310.1455555555556,
+      "gbps": 187.00690356857532,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        2,
+        5
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 148.2425925925926,
+      "gbps": 391.24626050892556,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 213.25333333333333,
+      "gbps": 271.9739902463424,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        4,
+        5
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 138.4496296296296,
+      "gbps": 418.92029726013476,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 168.15370370370368,
+      "gbps": 344.9187185445415,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        1,
+        2,
+        8,
+        5
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 143.4185185185185,
+      "gbps": 404.4063528135734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 48,
+      "wall_us": 280.20296296296294,
+      "gbps": 206.99053067353293,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 48,
+      "wall_us": 144.25148148148148,
+      "gbps": 402.0711565963762,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 179.59074074074076,
+      "gbps": 322.95295270110023,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 131.27814814814815,
+      "gbps": 441.80513526552323,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 142.72444444444443,
+      "gbps": 406.3729953601346,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 128.32925925925926,
+      "gbps": 451.95741278943916,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 136.6125925925926,
+      "gbps": 424.55354150964877,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        1,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 137.33481481481482,
+      "gbps": 422.32088111239364,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        1,
+        1
+      ],
+      "W": 24,
+      "cores": 96,
+      "wall_us": 326.03814814814814,
+      "gbps": 177.89133059866887,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        1,
+        3
+      ],
+      "W": 24,
+      "cores": 96,
+      "wall_us": 161.27666666666667,
+      "gbps": 359.6264803753384,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        2,
+        1
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 207.39296296296297,
+      "gbps": 279.65924769760755,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        2,
+        3
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 136.82555555555555,
+      "gbps": 423.89274258382534,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        4,
+        1
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 152.31037037037038,
+      "gbps": 380.79718313969045,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        4,
+        3
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 134.33296296296294,
+      "gbps": 431.7582127328722,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        8,
+        1
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 140.21740740740742,
+      "gbps": 413.6387990078898,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        1,
+        2,
+        8,
+        3
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 141.43296296296296,
+      "gbps": 410.08375123406194,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 743.0622222222222,
+      "gbps": 78.05451315576983,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        2
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 420.70296296296294,
+      "gbps": 137.86297009062432,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 314.1911111111111,
+      "gbps": 184.59898434074097,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        4
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 277.4596296296296,
+      "gbps": 209.03711317362155,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        6
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 209.59407407407406,
+      "gbps": 276.72232746190167,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        9
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 172.61888888888888,
+      "gbps": 335.9966013761852,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        1,
+        18
+      ],
+      "W": 12,
+      "cores": 16,
+      "wall_us": 157.30962962962963,
+      "gbps": 368.6955473517667,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 428.31444444444446,
+      "gbps": 135.41303766962486,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        2
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 265.14666666666665,
+      "gbps": 218.7444433269637,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 210.2711111111111,
+      "gbps": 275.831328866437,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        4
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 192.36407407407407,
+      "gbps": 301.5082742407819,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        6
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 152.81037037037038,
+      "gbps": 379.5512036220151,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        9
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 138.02296296296296,
+      "gbps": 420.21529428812164,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        2,
+        18
+      ],
+      "W": 6,
+      "cores": 16,
+      "wall_us": 127.32629629629629,
+      "gbps": 455.51753005547135,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 272.7051851851852,
+      "gbps": 212.68154457941284,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        2
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 188.1862962962963,
+      "gbps": 308.2018252204769,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 156.09555555555556,
+      "gbps": 371.5631735546603,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        4
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 148.45000000000002,
+      "gbps": 390.6996295048837,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        6
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 129.68851851851852,
+      "gbps": 447.2204684157768,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        9
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 128.28148148148148,
+      "gbps": 452.12574200254073,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        1,
+        4,
+        18
+      ],
+      "W": 3,
+      "cores": 16,
+      "wall_us": 126.3774074074074,
+      "gbps": 458.9377262110258,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 889.1074074074074,
+      "gbps": 65.23324349430764,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        2
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 511.5240740740741,
+      "gbps": 113.38539658174734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 385.19814814814816,
+      "gbps": 150.57019427230813,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        4
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 349.83592592592595,
+      "gbps": 165.7901767706978,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        6
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 263.02074074074073,
+      "gbps": 220.51249584598312,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        9
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 226.99185185185183,
+      "gbps": 255.51296016499205,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        1,
+        18
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 184.02777777777777,
+      "gbps": 315.16633358490566,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 517.2244444444444,
+      "gbps": 112.13576740808848,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        2
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 327.05333333333334,
+      "gbps": 177.33914957805047,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 266.35703703703706,
+      "gbps": 217.75043244656294,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        4
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 249.21444444444444,
+      "gbps": 232.72872537261526,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        6
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 202.6448148148148,
+      "gbps": 286.2119124686324,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        9
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 184.30296296296297,
+      "gbps": 314.6957545747943,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        2,
+        18
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 168.13888888888889,
+      "gbps": 344.94910953246324,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 332.0892592592593,
+      "gbps": 174.6499122837345,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        2
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 238.14777777777778,
+      "gbps": 243.54357005220845,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 205.43925925925927,
+      "gbps": 282.31877494654634,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        4
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 198.55296296296297,
+      "gbps": 292.11027191177647,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        6
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 174.20148148148147,
+      "gbps": 332.94412600139475,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        9
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 168.20222222222222,
+      "gbps": 344.8192255354005,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        2,
+        2,
+        4,
+        18
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 162.2637037037037,
+      "gbps": 357.43890146811776,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 381.95888888888885,
+      "gbps": 151.84712723591542,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        1,
+        2
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 240.16407407407405,
+      "gbps": 241.4989012141391,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 170.6474074074074,
+      "gbps": 339.8783543281794,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        1,
+        5
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 139.9374074074074,
+      "gbps": 414.4664466388412,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        1,
+        9
+      ],
+      "W": 12,
+      "cores": 32,
+      "wall_us": 124.3785185185185,
+      "gbps": 466.31332074730074,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 224.95888888888888,
+      "gbps": 257.8220415582106,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        2,
+        2
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 157.7125925925926,
+      "gbps": 367.75351318854734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 130.51962962962963,
+      "gbps": 444.37269830279536,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        2,
+        5
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 123.47185185185185,
+      "gbps": 469.73750802402105,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        2,
+        9
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 120.84296296296297,
+      "gbps": 479.95645404504154,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 153.02888888888887,
+      "gbps": 379.0092212073247,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        2
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 129.02925925925925,
+      "gbps": 449.5054868404812,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 121.30703703703703,
+      "gbps": 478.12032522311006,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        5
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 120.4225925925926,
+      "gbps": 481.63188278316176,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        1,
+        4,
+        9
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 124.5848148148148,
+      "gbps": 465.54116636294185,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 454.28703703703707,
+      "gbps": 127.67117542751157,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        1,
+        2
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 288.1977777777778,
+      "gbps": 201.24846363222784,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 204.7374074074074,
+      "gbps": 283.28658028079326,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        1,
+        5
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 167.4025925925926,
+      "gbps": 346.46631872155615,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        1,
+        9
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 131.83851851851853,
+      "gbps": 439.92727354451574,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 271.3751851851852,
+      "gbps": 213.72388916260522,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 192.3337037037037,
+      "gbps": 301.5558837745354,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 147.74703703703705,
+      "gbps": 392.55853222600183,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        2,
+        5
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 136.53629629629629,
+      "gbps": 424.79078145005536,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        2,
+        9
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 122.52370370370372,
+      "gbps": 473.3725658527148,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 187.1862962962963,
+      "gbps": 309.8483230214304,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        4,
+        2
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 147.7888888888889,
+      "gbps": 392.44736485978495,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 127.46851851851851,
+      "gbps": 455.0092891491,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        4,
+        5
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 125.22074074074074,
+      "gbps": 463.17694382660545,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        2,
+        2,
+        4,
+        9
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 125.48518518518519,
+      "gbps": 462.2008559369558,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 264.74407407407404,
+      "gbps": 219.07708492758206,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        1,
+        2
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 159.43148148148148,
+      "gbps": 363.7886285760747,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 131.28740740740741,
+      "gbps": 441.7739762353446,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        1,
+        6
+      ],
+      "W": 12,
+      "cores": 48,
+      "wall_us": 121.45074074074074,
+      "gbps": 477.55460070688616,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 162.65851851851852,
+      "gbps": 356.57130366275175,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        2,
+        2
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 125.48925925925924,
+      "gbps": 462.1858503457578,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 122.41666666666667,
+      "gbps": 473.78646698434306,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        2,
+        6
+      ],
+      "W": 6,
+      "cores": 48,
+      "wall_us": 121.51962962962963,
+      "gbps": 477.2838773190126,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 129.1788888888889,
+      "gbps": 448.9848186408167,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        4,
+        2
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 122.37259259259261,
+      "gbps": 473.95710731645306,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 123.54666666666665,
+      "gbps": 469.45305417655953,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        1,
+        4,
+        6
+      ],
+      "W": 3,
+      "cores": 48,
+      "wall_us": 127.85740740740742,
+      "gbps": 453.6253407296902,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 313.7577777777778,
+      "gbps": 184.85393544914334,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        1,
+        2
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 189.08703703703705,
+      "gbps": 306.73366566445003,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 150.7962962962963,
+      "gbps": 384.6205870072455,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        1,
+        6
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 125.11925925925925,
+      "gbps": 463.55261646665997,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 193.75259259259258,
+      "gbps": 299.3475298777364,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        2,
+        2
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 136.06851851851852,
+      "gbps": 426.2511316466377,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 125.95962962962963,
+      "gbps": 460.45991219996995,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        2,
+        6
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 122.37407407407407,
+      "gbps": 473.95136951060806,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 142.98222222222222,
+      "gbps": 405.6403593298312,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        4,
+        2
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 124.87296296296297,
+      "gbps": 464.4669160064895,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 123.77407407407408,
+      "gbps": 468.59053831652653,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        2,
+        2,
+        4,
+        6
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 126.69999999999999,
+      "gbps": 457.76921862667723,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        2,
+        1,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 230.2288888888889,
+      "gbps": 251.92042701466175,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        2,
+        1,
+        1,
+        5
+      ],
+      "W": 12,
+      "cores": 64,
+      "wall_us": 131.63222222222223,
+      "gbps": 440.6167351796672,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        2,
+        1,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 152.08666666666667,
+      "gbps": 381.3572962784377,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        2,
+        1,
+        2,
+        5
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 132.38814814814816,
+      "gbps": 438.10084823526773,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        2,
+        1,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 135.97148148148148,
+      "gbps": 426.5553288679816,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        2,
+        1,
+        4,
+        5
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 140.88555555555556,
+      "gbps": 411.67712169846294,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        2,
+        1,
+        1,
+        1
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 159.36074074074074,
+      "gbps": 363.9501155077927,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        2,
+        1,
+        1,
+        3
+      ],
+      "W": 12,
+      "cores": 96,
+      "wall_us": 130.08555555555554,
+      "gbps": 445.8554968097919,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        2,
+        1,
+        2,
+        1
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 136.76407407407407,
+      "gbps": 424.08330106184485,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        2,
+        1,
+        2,
+        3
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 130.91407407407405,
+      "gbps": 443.03380221123274,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        2,
+        1,
+        4,
+        1
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 132.92999999999998,
+      "gbps": 436.3150530354322,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        6,
+        2,
+        1,
+        4,
+        3
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 147.90111111111113,
+      "gbps": 392.1495894403918,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        1
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 500.3081481481481,
+      "gbps": 115.92727445011667,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        2
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 286.5037037037037,
+      "gbps": 202.438430115311,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        3
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 219.1725925925926,
+      "gbps": 264.6287079690283,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        4
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 194.0262962962963,
+      "gbps": 298.92525449967644,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        6
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 145.6559259259259,
+      "gbps": 398.1943036735483,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        9
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 124.20407407407407,
+      "gbps": 466.96825713953444,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        1,
+        18
+      ],
+      "W": 8,
+      "cores": 24,
+      "wall_us": 125.16592592592593,
+      "gbps": 463.37978623930303,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        1
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 289.4511111111111,
+      "gbps": 200.37705081648792,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        2
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 183.87444444444444,
+      "gbps": 315.42915153456164,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        3
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 145.45370370370372,
+      "gbps": 398.74790756890957,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        4
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 133.98370370370372,
+      "gbps": 432.88368955870806,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        6
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 122.2874074074074,
+      "gbps": 474.2872649738322,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        9
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 119.42851851851853,
+      "gbps": 485.6407893145442,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        2,
+        18
+      ],
+      "W": 4,
+      "cores": 24,
+      "wall_us": 125.09,
+      "gbps": 463.6610440482852,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        1
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 187.73740740740743,
+      "gbps": 308.93875014549474,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        2
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 129.55407407407407,
+      "gbps": 447.6845704353395,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        3
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 121.45,
+      "gbps": 477.55751337999175,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        4
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 121.09851851851852,
+      "gbps": 478.9435965819076,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        6
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 119.55703703703703,
+      "gbps": 485.1187469795914,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        9
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 139.59185185185186,
+      "gbps": 415.492446232137,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        4,
+        18
+      ],
+      "W": 2,
+      "cores": 24,
+      "wall_us": 144.11555555555555,
+      "gbps": 402.45037932523286,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        8,
+        1
+      ],
+      "W": 1,
+      "cores": 24,
+      "wall_us": 131.38,
+      "gbps": 441.46262749276906,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        8,
+        2
+      ],
+      "W": 1,
+      "cores": 24,
+      "wall_us": 118.40333333333334,
+      "gbps": 489.8456687593255,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        8,
+        3
+      ],
+      "W": 1,
+      "cores": 24,
+      "wall_us": 131.83074074074074,
+      "gbps": 439.9532284663556,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        8,
+        4
+      ],
+      "W": 1,
+      "cores": 24,
+      "wall_us": 138.76296296296297,
+      "gbps": 417.9743554155768,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        8,
+        6
+      ],
+      "W": 1,
+      "cores": 24,
+      "wall_us": 139.67185185185184,
+      "gbps": 415.25446416733405,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        1,
+        8,
+        9
+      ],
+      "W": 1,
+      "cores": 24,
+      "wall_us": 152.9177777777778,
+      "gbps": 379.2846119192594,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        1
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 601.1548148148148,
+      "gbps": 96.4799059587781,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        2
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 343.5,
+      "gbps": 168.8482096069869,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        3
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 263.55925925925925,
+      "gbps": 220.0619328002698,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        4
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 237.04,
+      "gbps": 244.68174147823154,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        6
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 176.01518518518517,
+      "gbps": 329.51338794422196,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        9
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 151.99592592592592,
+      "gbps": 381.58496450928266,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        1,
+        18
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 128.08814814814815,
+      "gbps": 452.80817029938873,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        1
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 347.93740740740736,
+      "gbps": 166.6948099434658,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        2
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 220.0659259259259,
+      "gbps": 263.5544769412533,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        3
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 177.78629629629629,
+      "gbps": 326.23076810902813,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        4
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 168.71370370370371,
+      "gbps": 343.77385314152616,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        6
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 140.59444444444446,
+      "gbps": 412.52952937922316,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        9
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 127.23666666666666,
+      "gbps": 455.838411359409,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        2,
+        18
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 121.5788888888889,
+      "gbps": 477.0512424488901,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        1
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 226.70296296296297,
+      "gbps": 255.8385617989276,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        2
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 158.77444444444444,
+      "gbps": 365.2940509597822,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        3
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 136.7188888888889,
+      "gbps": 424.2234593285492,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        4
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 137.49592592592592,
+      "gbps": 421.8260258216405,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        6
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 122.77074074074073,
+      "gbps": 472.42005424141956,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        9
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 125.3714814814815,
+      "gbps": 462.62004177215556,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        4,
+        18
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 138.24,
+      "gbps": 419.55555555555554,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        8,
+        1
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 163.27037037037036,
+      "gbps": 355.2350611346778,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        8,
+        2
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 132.5737037037037,
+      "gbps": 437.4876644438174,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        8,
+        3
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 124.68592592592591,
+      "gbps": 465.16364673312506,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        8,
+        4
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 129.14,
+      "gbps": 449.1200247793094,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        8,
+        6
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 125.14370370370371,
+      "gbps": 463.46207027180606,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        3,
+        2,
+        8,
+        9
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 149.78074074074073,
+      "gbps": 387.2284227809539,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        1
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 262.61481481481485,
+      "gbps": 220.85334386370684,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        2
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 170.38407407407405,
+      "gbps": 340.40364579370794,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        3
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 129.67592592592592,
+      "gbps": 447.2638971795787,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        5
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 122.17925925925925,
+      "gbps": 474.7070849146973,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        1,
+        9
+      ],
+      "W": 8,
+      "cores": 48,
+      "wall_us": 120.99222222222222,
+      "gbps": 479.36436685553707,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        2,
+        1
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 159.04555555555555,
+      "gbps": 364.6713659957664,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        2,
+        2
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 127.50592592592592,
+      "gbps": 454.87579952710985,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        2,
+        3
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 120.02851851851852,
+      "gbps": 483.21316230402033,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        2,
+        5
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 119.54407407407408,
+      "gbps": 485.1713516477729,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        2,
+        9
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 127.12962962962962,
+      "gbps": 456.2222053896577,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        4,
+        1
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 124.30962962962963,
+      "gbps": 466.57173843091925,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        4,
+        2
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 119.97444444444444,
+      "gbps": 483.43095288811503,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        4,
+        3
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 121.67481481481481,
+      "gbps": 476.6751450435587,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        4,
+        5
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 123.22407407407407,
+      "gbps": 470.68205166739307,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        4,
+        9
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 128.40962962962965,
+      "gbps": 451.6745369275409,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        8,
+        1
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 122.96185185185185,
+      "gbps": 471.6858043897987,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        8,
+        2
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 127.36333333333334,
+      "gbps": 455.3850663456254,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        8,
+        3
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 128.64814814814815,
+      "gbps": 450.837115301569,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        8,
+        5
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 131.1,
+      "gbps": 442.4054919908467,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        1,
+        8,
+        9
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 131.47592592592594,
+      "gbps": 441.14053269856475,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        1,
+        1
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 310.04629629629625,
+      "gbps": 187.06677258473945,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        1,
+        2
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 203.63777777777779,
+      "gbps": 284.81630782325914,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        1,
+        3
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 149.49259259259262,
+      "gbps": 387.9748086118475,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        1,
+        5
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 131.96,
+      "gbps": 439.52227947862986,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        1,
+        9
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 121.7562962962963,
+      "gbps": 476.356145548789,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        2,
+        1
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 190.31185185185186,
+      "gbps": 304.7595797930103,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        2,
+        2
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 142.92296296296297,
+      "gbps": 405.80854746924007,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        2,
+        3
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 124.04555555555557,
+      "gbps": 467.5649985220483,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        2,
+        5
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 121.66222222222223,
+      "gbps": 476.72448308614014,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        2,
+        9
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 120.74814814814815,
+      "gbps": 480.3333292436047,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        4,
+        1
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 139.11962962962963,
+      "gbps": 416.90277751894854,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        4,
+        2
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 127.59222222222222,
+      "gbps": 454.5681467870734,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        4,
+        3
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 120.87851851851852,
+      "gbps": 479.81527827142037,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        4,
+        5
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 121.73296296296297,
+      "gbps": 476.4474517690512,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        4,
+        9
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 134.28925925925927,
+      "gbps": 431.89872607775914,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        8,
+        1
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 124.32629629629629,
+      "gbps": 466.5091917624173,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        8,
+        2
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 128.76925925925926,
+      "gbps": 450.4130903108345,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        8,
+        3
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 130.9248148148148,
+      "gbps": 442.99745683838904,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        8,
+        5
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 133.17962962962963,
+      "gbps": 435.4972315307924,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        3,
+        2,
+        8,
+        9
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 135.87333333333333,
+      "gbps": 426.86345125361856,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        1,
+        1
+      ],
+      "W": 8,
+      "cores": 72,
+      "wall_us": 187.13,
+      "gbps": 309.9415379682573,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        1,
+        2
+      ],
+      "W": 8,
+      "cores": 72,
+      "wall_us": 129.05555555555554,
+      "gbps": 449.4138958243651,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        1,
+        3
+      ],
+      "W": 8,
+      "cores": 72,
+      "wall_us": 124.36111111111111,
+      "gbps": 466.37859280768373,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        1,
+        6
+      ],
+      "W": 8,
+      "cores": 72,
+      "wall_us": 123.5414814814815,
+      "gbps": 469.47275768822584,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        2,
+        1
+      ],
+      "W": 4,
+      "cores": 72,
+      "wall_us": 129.26407407407407,
+      "gbps": 448.6889370883033,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        2,
+        2
+      ],
+      "W": 4,
+      "cores": 72,
+      "wall_us": 123.10777777777777,
+      "gbps": 471.1266911558978,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        2,
+        3
+      ],
+      "W": 4,
+      "cores": 72,
+      "wall_us": 122.23407407407409,
+      "gbps": 474.49420662238805,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        2,
+        6
+      ],
+      "W": 4,
+      "cores": 72,
+      "wall_us": 127.02333333333333,
+      "gbps": 456.6039835200882,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        4,
+        1
+      ],
+      "W": 2,
+      "cores": 72,
+      "wall_us": 125.69814814814815,
+      "gbps": 461.4177762717858,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        4,
+        2
+      ],
+      "W": 2,
+      "cores": 72,
+      "wall_us": 132.05518518518517,
+      "gbps": 439.2054724596059,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        4,
+        3
+      ],
+      "W": 2,
+      "cores": 72,
+      "wall_us": 135.07814814814813,
+      "gbps": 429.37633359015774,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        4,
+        6
+      ],
+      "W": 2,
+      "cores": 72,
+      "wall_us": 146.20037037037036,
+      "gbps": 396.7114437061263,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        8,
+        1
+      ],
+      "W": 1,
+      "cores": 72,
+      "wall_us": 137.6151851851852,
+      "gbps": 421.46046544174436,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        8,
+        2
+      ],
+      "W": 1,
+      "cores": 72,
+      "wall_us": 145.40444444444447,
+      "gbps": 398.8829930309329,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        8,
+        3
+      ],
+      "W": 1,
+      "cores": 72,
+      "wall_us": 150.80962962962965,
+      "gbps": 384.58658205341044,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        3,
+        1,
+        8,
+        6
+      ],
+      "W": 1,
+      "cores": 72,
+      "wall_us": 161.17296296296297,
+      "gbps": 359.85787525248924,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        1,
+        1
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 166.23888888888888,
+      "gbps": 348.8916485646493,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        1,
+        5
+      ],
+      "W": 8,
+      "cores": 96,
+      "wall_us": 133.67222222222222,
+      "gbps": 433.8923901749719,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        2,
+        1
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 140.18185185185186,
+      "gbps": 413.74371385316954,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        2,
+        5
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 134.71703703703702,
+      "gbps": 430.5272835243143,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        4,
+        1
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 137.5588888888889,
+      "gbps": 421.63294912078055,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        4,
+        5
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 142.35518518518518,
+      "gbps": 407.4270981035959,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        8,
+        1
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 136.8811111111111,
+      "gbps": 423.72069841630616,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        4,
+        3,
+        1,
+        8,
+        5
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 150.21296296296296,
+      "gbps": 386.1142131541638,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        1
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 381.2503703703704,
+      "gbps": 152.12932106441184,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        2
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 221.17666666666668,
+      "gbps": 262.2309164619535,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        3
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 167.81740740740742,
+      "gbps": 345.6099155387138,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        4
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 151.95592592592592,
+      "gbps": 381.68541073069434,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        6
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 125.89666666666666,
+      "gbps": 460.69019566311,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        9
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 121.33259259259259,
+      "gbps": 478.01962160941156,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        1,
+        18
+      ],
+      "W": 6,
+      "cores": 32,
+      "wall_us": 127.09037037037037,
+      "gbps": 456.36313617606606,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        1
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 225.1,
+      "gbps": 257.66041759218126,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        2
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 143.60851851851854,
+      "gbps": 403.8713065097242,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        3
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 125.54518518518519,
+      "gbps": 461.97996294679206,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        4
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 123.82592592592593,
+      "gbps": 468.39431699219335,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        6
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 119.3125925925926,
+      "gbps": 486.1126452766465,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        9
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 122.22777777777779,
+      "gbps": 474.51864915231124,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        1,
+        2,
+        18
+      ],
+      "W": 3,
+      "cores": 32,
+      "wall_us": 127.24666666666666,
+      "gbps": 455.80258814900196,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        1
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 451.25814814814817,
+      "gbps": 128.5281168617454,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        2
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 266.0562962962963,
+      "gbps": 217.99656992672115,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        3
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 204.7425925925926,
+      "gbps": 283.27940593880305,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        4
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 188.77962962962962,
+      "gbps": 307.23314858594676,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        6
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 144.2511111111111,
+      "gbps": 402.0721889297984,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        9
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 129.93851851851852,
+      "gbps": 446.3600221187228,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        1,
+        18
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 123.31148148148148,
+      "gbps": 470.34841608573294,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        1
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 273.3407407407407,
+      "gbps": 212.18703016178424,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        2
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 176.57222222222222,
+      "gbps": 328.47386338608686,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        3
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 146.60481481481483,
+      "gbps": 395.6170203090697,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        4
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 142.38518518518518,
+      "gbps": 407.3412548121944,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        6
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 124.56148148148148,
+      "gbps": 465.6283733155723,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        9
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 122.76296296296294,
+      "gbps": 472.4499849152236,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        4,
+        2,
+        2,
+        18
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 123.1362962962963,
+      "gbps": 471.0175776315315,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        1,
+        1
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 202.8874074074074,
+      "gbps": 285.8696887162374,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        1,
+        2
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 139.08592592592595,
+      "gbps": 417.0038026053705,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        1,
+        3
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 121.86444444444444,
+      "gbps": 475.9334050584438,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        1,
+        5
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 120.01444444444444,
+      "gbps": 483.26982863173885,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        1,
+        9
+      ],
+      "W": 6,
+      "cores": 64,
+      "wall_us": 121.93777777777778,
+      "gbps": 475.6471788890509,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        1
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 133.48074074074074,
+      "gbps": 434.51481972707944,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        2
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 121.57444444444445,
+      "gbps": 477.06868219746474,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        3
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 118.87703703703703,
+      "gbps": 487.8937214924852,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        5
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 120.3162962962963,
+      "gbps": 482.0573919360697,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        4,
+        1,
+        2,
+        9
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 129.53037037037038,
+      "gbps": 447.76649548797366,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        1,
+        1
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 148.61074074074074,
+      "gbps": 390.2770399427787,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        1,
+        2
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 122.74481481481482,
+      "gbps": 472.51983790519927,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        1,
+        3
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 120.72777777777779,
+      "gbps": 480.4143757765404,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        1,
+        6
+      ],
+      "W": 6,
+      "cores": 96,
+      "wall_us": 121.5511111111111,
+      "gbps": 477.16026180116285,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        1
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 123.62703703703703,
+      "gbps": 469.1478610995438,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        2
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 120.23370370370371,
+      "gbps": 482.3885334425856,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        3
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 121.9662962962963,
+      "gbps": 475.5359616651838,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        3,
+        4,
+        1,
+        2,
+        6
+      ],
+      "W": 3,
+      "cores": 96,
+      "wall_us": 131.03074074074075,
+      "gbps": 442.63933541182024,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        1
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 260.4574074074074,
+      "gbps": 222.68270492794016,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        2
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 154.93555555555557,
+      "gbps": 374.34506102895824,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        3
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 127.13222222222223,
+      "gbps": 456.2129017033884,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        4
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 126.11592592592594,
+      "gbps": 459.8892612029496,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        6
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 120.77037037037037,
+      "gbps": 480.2449460255152,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        9
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 122.7925925925926,
+      "gbps": 472.33598359172345,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        1,
+        18
+      ],
+      "W": 4,
+      "cores": 48,
+      "wall_us": 132.4348148148148,
+      "gbps": 437.94647261825526,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        1
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 155.75703703703704,
+      "gbps": 372.37071982955416,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        2
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 119.92407407407407,
+      "gbps": 483.6340029957226,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        3
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 118.90592592592593,
+      "gbps": 487.7751848644742,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        4
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 119.29703703703703,
+      "gbps": 486.17603119508726,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        6
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 121.03925925925927,
+      "gbps": 479.1780811857799,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        9
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 130.54777777777775,
+      "gbps": 444.27688458035806,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        2,
+        18
+      ],
+      "W": 2,
+      "cores": 48,
+      "wall_us": 133.0288888888889,
+      "gbps": 435.99071212602104,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        1
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 119.69074074074075,
+      "gbps": 484.57683226834587,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        2
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 118.60851851851851,
+      "gbps": 488.99826694104166,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": true
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        3
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 123.86518518518518,
+      "gbps": 468.2458586994223,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        4
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 125.9011111111111,
+      "gbps": 460.6739328044056,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        6
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 133.68037037037035,
+      "gbps": 433.8659433640774,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        9
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 139.58444444444444,
+      "gbps": 415.5144954070018,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        1,
+        4,
+        18
+      ],
+      "W": 1,
+      "cores": 48,
+      "wall_us": 139.99925925925928,
+      "gbps": 414.2833348324594,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        1
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 309.2862962962963,
+      "gbps": 187.52644619093184,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        2
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 185.57888888888888,
+      "gbps": 312.5321007537974,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        3
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 147.8159259259259,
+      "gbps": 392.37558224318036,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        4
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 140.95592592592592,
+      "gbps": 411.4715973734895,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        6
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 123.17370370370371,
+      "gbps": 470.87453130027154,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        9
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 120.75740740740741,
+      "gbps": 480.2964989495315,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        1,
+        18
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 124.37666666666665,
+      "gbps": 466.3202637150591,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        1
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 189.19962962962964,
+      "gbps": 306.55112863348336,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        2
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 133.04074074074074,
+      "gbps": 435.9518721639153,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        3
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 123.13888888888889,
+      "gbps": 471.00766072637043,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        4
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 125.06444444444445,
+      "gbps": 463.7557881270101,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        6
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 120.03666666666666,
+      "gbps": 483.1803615561912,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        9
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 124.11222222222221,
+      "gbps": 467.3138467874057,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        2,
+        18
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 131.79703703703703,
+      "gbps": 440.06573519328265,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        1
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 136.23925925925926,
+      "gbps": 425.7169358916503,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        2
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 119.18888888888888,
+      "gbps": 486.6171716230074,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        3
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 119.56592592592592,
+      "gbps": 485.08268179959606,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        4
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 122.82999999999998,
+      "gbps": 472.1921354717903,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        6
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 125.44185185185184,
+      "gbps": 462.3605211799476,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        9
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 141.4062962962963,
+      "gbps": 410.16108560308226,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        6,
+        2,
+        4,
+        18
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 136.11222222222224,
+      "gbps": 426.11426845495134,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        1,
+        1
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 145.7225925925926,
+      "gbps": 398.0121336583208,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        1,
+        2
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 123.97777777777777,
+      "gbps": 467.82061301308477,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        1,
+        3
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 120.45925925925927,
+      "gbps": 481.4852785635223,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        1,
+        5
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 122.5,
+      "gbps": 473.4641632653061,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        1,
+        9
+      ],
+      "W": 4,
+      "cores": 96,
+      "wall_us": 128.29074074074074,
+      "gbps": 452.0931102674769,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        2,
+        1
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 121.20962962962963,
+      "gbps": 478.50455592698296,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        2,
+        2
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 120.03555555555555,
+      "gbps": 483.1848341232228,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        2,
+        3
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 122.13185185185185,
+      "gbps": 474.89134996785504,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        2,
+        5
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 126.93407407407406,
+      "gbps": 456.92506462964155,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        2,
+        9
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 139.8637037037037,
+      "gbps": 414.6848572154903,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        4,
+        1
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 120.63185185185185,
+      "gbps": 480.79639920664647,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        4,
+        2
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 132.22296296296295,
+      "gbps": 438.6481644360536,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        4,
+        3
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 136.92185185185187,
+      "gbps": 423.5946214250356,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        4,
+        5
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 139.35037037037037,
+      "gbps": 416.2124567437262,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        2,
+        6,
+        1,
+        4,
+        9
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 151.43592592592591,
+      "gbps": 382.9960403740001,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        1
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 201.94185185185185,
+      "gbps": 287.2082209216808,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        2
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 129.78,
+      "gbps": 446.9052242256126,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        3
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 120.29555555555555,
+      "gbps": 482.1405057912918,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        4
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 121.76555555555555,
+      "gbps": 476.319922619971,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        6
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 122.86185185185185,
+      "gbps": 472.0697199805864,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        9
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 125.97222222222223,
+      "gbps": 460.41388313120177,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        8,
+        1,
+        1,
+        18
+      ],
+      "W": 3,
+      "cores": 64,
+      "wall_us": 138.9340740740741,
+      "gbps": 417.45957848379993,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        1
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 143.87074074074073,
+      "gbps": 403.1352010935742,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        2
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 119.99851851851851,
+      "gbps": 483.33396708601344,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        3
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 121.36444444444444,
+      "gbps": 477.89416633097744,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        4
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 122.23,
+      "gbps": 474.5100220895034,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        6
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 125.89259259259259,
+      "gbps": 460.7051042923126,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        9
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 143.52518518518517,
+      "gbps": 404.1058015369609,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        1,
+        18
+      ],
+      "W": 2,
+      "cores": 96,
+      "wall_us": 147.61037037037036,
+      "gbps": 392.92198681212807,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        1
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 118.66407407407408,
+      "gbps": 488.7693301663894,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        2
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 120.68925925925926,
+      "gbps": 480.5677021797638,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        3
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 125.48296296296296,
+      "gbps": 462.20904121557015,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        4
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 133.6011111111111,
+      "gbps": 434.1233356342679,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        6
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 139.16333333333333,
+      "gbps": 416.77185082277424,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        9
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 147.2537037037037,
+      "gbps": 393.87369241797353,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    },
+    {
+      "cfg": [
+        1,
+        12,
+        1,
+        2,
+        18
+      ],
+      "W": 1,
+      "cores": 96,
+      "wall_us": 148.94592592592593,
+      "gbps": 389.39876763627865,
+      "per_risc": null,
+      "spread": null,
+      "ok": true,
+      "is_auto": false
+    }
+  ]
+}

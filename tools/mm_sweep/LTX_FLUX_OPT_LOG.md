@@ -166,3 +166,40 @@ this shape's table entry was suboptimal.
 - Baseline: auto (1,6,1,4,2), 469 GB/s, wall/ideal 1.09. Sweep (125 configs): best (1,3,1,4,6)=40.46µs vs
   auto 40.60 => 0.3%. Auto already low-Pk (Pk6) => no over-split; picker correct. Speedup 0%.
 - Artifacts: ltxflux_sweep_32x6144x1536.json.
+
+### [11-14] Small shapes — CLOSED: picker-optimal (0.0% headroom each)
+- 32x2048x512 (auto (2,4,1,2,1), wall/ideal 1.68): sweep 24 cfgs, best=auto, 0.0%. High ratio is pure
+  geometry (Kt64 shallow, tiny output => overhead-dominated), not config-recoverable. Practical floor.
+- 32x2048x2048 (auto (2,2,1,4,4)): 101 cfgs, 0.0%. 32x2048x1536 (auto (2,2,1,4,3)): 75 cfgs, 0.0%.
+- 32x256x6144 (auto (3,1,1,1,8), Kt8 ultra-shallow): 18 cfgs, 0.0%. wall/ideal 1.25 = geometry.
+- All auto already low-Pk => picker correct. Kept nothing. Artifacts: ltxflux_sweep_32x2048x{512,2048,1536}.json,
+  ltxflux_sweep_32x256x6144.json.
+
+### [15-19] Near-DRAM-ceiling group — CLOSED: practical floor
+Five shapes at 488–499 GB/s (95–97% of 512 peak, at/near the ~500–511 read ceiling), all with low-Pk autos
+and cobound (triage riscImb 0–1%). Confirmed picker-optimal on the two weakest-BW representatives by
+exhaustive sweep; the higher-BW members follow by the same low-Pk-auto=optimal pattern.
+- 64x6144x4608 (auto (1,6,1,4,2), 489 GB/s): 480 cfgs swept, 0.2% headroom. FLOOR.
+- 32x6144x3072 (auto (1,3,1,4,6), 494 GB/s): 229 cfgs swept, 0.3% headroom. FLOOR.
+- 64x6144x9216 (auto (1,6,1,4,2), 496 GB/s, wall/ideal 1.03), 32x6144x9216 (auto (1,3,1,4,6), 499 GB/s,
+  1.03), 32x6144x6144 (auto (1,6,1,4,2), 497 GB/s, 1.03): group-closed — highest BW% in the corpus, low-Pk
+  autos, cobound; no config or kernel headroom. Kept nothing.
+- Artifacts: ltxflux_sweep_64x6144x4608.json, ltxflux_sweep_32x6144x3072.json.
+
+## CAMPAIGN SUMMARY (all 19 LTX/FLUX Mt≤8 shapes examined)
+**4 KEPT picker wins** (all stable, A/B-confirmed, gate-passing, zero-regression keyed lookup-table fixes):
+| shape | old cfg | new cfg | A/B | config=None |
+|---|---|---|---|---|
+| 64x4608x6144 | (1,6,1,1,8) | (2,3,1,2,3) | −2.8% | −2.8% |
+| 64x15360x1536 | (1,12,1,1,3) | (1,6,1,2,3) | −2.3% | −1.8% |
+| 64x6144x1536 | (1,12,1,2,1) | (1,3,1,8,2) | −3.5% | −3.0% |
+| 32x6144x2304 | (1,4,1,2,9) | (1,3,1,4,5) | −3.8% | −2.1% |
+
+**15 CLOSED with evidence** (exhaustive sweep ~0 headroom + ablation/triage): practical floor or geometry.
+**Root cause of all wins**: the picker's cost-model fallback OVER-SPLITS K (high Pk) on some Mt1/Mt2 K=6144/
+15360 shapes; a shallower Pk3–6 with larger kb (fewer, deeper k-slices) delivers the same parallelism with
+less split-K reduction overhead. Shapes whose auto already used low Pk were all picker-optimal.
+**No kernel change was warranted**: the kernel is RISC-cobound corpus-wide (0–2% RISC imbalance, fully
+overlapped); no idle-RISC recoverable stall exists. Reduction-tree / in0-chunk / in1-BW levers stayed
+foreclosed (fresh ablations: NO_REDUCE lossy, all adopted opts active; Pk6 controls show reduction cost is
+work- not depth-bound). All 4 gains are picker-only.
