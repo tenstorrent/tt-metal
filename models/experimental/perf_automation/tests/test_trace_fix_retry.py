@@ -19,19 +19,14 @@ def _att(kind, n=1, wedged=False):
     return [{"op_signature": "MatmulDeviceOperation", "kernel_kind": kind, "wedged": wedged} for _ in range(n)]
 
 
-def test_rung_state_clean_is_done():
-    done, wedged = perf_mcp._rung_state(_att("tt-lang", 1, wedged=False), "tt-lang", NT)
-    assert done and wedged == 0
+def test_rung_state_clean_true_when_measured():
+    clean, wedged = perf_mcp._rung_state(_att("tt-lang", 1, wedged=False), "tt-lang")
+    assert clean and wedged == 0
 
 
-def test_rung_state_wedged_below_budget_not_done():
-    done, wedged = perf_mcp._rung_state(_att("tt-lang", 1, wedged=True), "tt-lang", NT)
-    assert (not done) and wedged == 1
-
-
-def test_rung_state_wedged_at_budget_is_done():
-    done, wedged = perf_mcp._rung_state(_att("tt-lang", NT, wedged=True), "tt-lang", NT)
-    assert done and wedged == NT
+def test_rung_state_wedged_counts_and_not_clean():
+    clean, wedged = perf_mcp._rung_state(_att("tt-lang", 2, wedged=True), "tt-lang")
+    assert (not clean) and wedged == 2
 
 
 def test_wedged_ttlang_keeps_rung_open_with_fix_feedback(monkeypatch):
@@ -40,6 +35,7 @@ def test_wedged_ttlang_keeps_rung_open_with_fix_feedback(monkeypatch):
     assert (not done) and rung == "tt-lang"
     assert ("trace-fix 1/%d" % NT) in reason
     assert "override_runtime_args" in reason and "ISOLATION" in reason and "cache+reuse" in reason
+    assert "do NOT switch to cpp" in reason
 
 
 def test_author_reason_instructs_isolation_first(monkeypatch):
@@ -49,16 +45,18 @@ def test_author_reason_instructs_isolation_first(monkeypatch):
     assert "ISOLATION" in reason and "STANDALONE" in reason
 
 
-def test_wedged_ttlang_advances_after_budget(monkeypatch):
+def test_wedged_ttlang_NEVER_bounces_to_cpp(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
-    _, rung, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", NT, wedged=True))
-    assert rung != "tt-lang"
+    _, rung_hold, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", 1, wedged=True))
+    assert rung_hold == "tt-lang"
+    _, rung_exhausted, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", NT, wedged=True))
+    assert rung_exhausted != "cpp" and rung_exhausted != "tt-lang"
 
 
-def test_clean_ttlang_advances_immediately(monkeypatch):
+def test_clean_ttlang_advances_to_cpp(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
     _, rung, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", 1, wedged=False))
-    assert rung != "tt-lang"
+    assert rung == "cpp"
 
 
 def test_wedged_cpp_keeps_rung_open_with_fix_feedback(monkeypatch):

@@ -187,7 +187,7 @@ _KERNEL_LOG_PATH = Path(
 )
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
-_MAX_TRACE_FIX_RETRIES = int(os.environ.get("PERF_MCP_MAX_TRACE_FIX_RETRIES", "3"))
+_MAX_TRACE_FIX_RETRIES = int(os.environ.get("PERF_MCP_MAX_TRACE_FIX_RETRIES", "5"))
 _TRACE_SAFE_HINT = (
     "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY defect in the kernel's LIFECYCLE, NOT a "
     "math error (check_pcc validates math). The compute body is usually fine; the wedge is that the op "
@@ -526,10 +526,10 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
     return (open_op.get("bound_by") or "").lower() in ("memory", "dram", "both")
 
 
-def _rung_state(matches, kind, budget):
+def _rung_state(matches, kind):
     clean = any((a.get("kernel_kind") or "").lower() == kind and not a.get("wedged") for a in matches)
     wedged = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == kind and a.get("wedged"))
-    return (clean or wedged >= budget), wedged
+    return clean, wedged
 
 
 def _trace_compat_feedback(raw_reason: str) -> str:
@@ -589,36 +589,33 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
     if _is_kernel_able(op_code):
-        _tl_done, _tl_wedged = _rung_state(matches, "tt-lang", _MAX_TRACE_FIX_RETRIES)
-        if not _tl_done:
-            if _ttl_available():
-                if _tl_wedged:
-                    return (
-                        False,
-                        "tt-lang",
-                        "%s (trace-fix %d/%d)" % (_TRACE_SAFE_HINT, _tl_wedged, _MAX_TRACE_FIX_RETRIES),
-                    )
+        _tl_clean, _tl_wedged = _rung_state(matches, "tt-lang")
+        _cpp_clean, _cpp_wedged = _rung_state(matches, "cpp")
+        if not _tl_clean and _ttl_available() and _tl_wedged < _MAX_TRACE_FIX_RETRIES:
+            if _tl_wedged:
                 return (
                     False,
                     "tt-lang",
-                    "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _ISOLATE_FIRST,
+                    "HOLD the tt-lang rung (do NOT switch to cpp — it wedges identically): %s (trace-fix %d/%d)"
+                    % (_TRACE_SAFE_HINT, _tl_wedged, _MAX_TRACE_FIX_RETRIES),
                 )
-            # tt-lang toolchain unavailable (commonly a Python-version mismatch): DO NOT halt the run
-            # on an un-actionable 'install-required' target. Skip the tt-lang rung and fall through to
-            # the next lever so the run still completes on the levers that DO work. The end-of-run
-            # summary flags that tt-lang was not used this run.
-        _cpp_done, _cpp_wedged = _rung_state(matches, "cpp", _MAX_TRACE_FIX_RETRIES)
-        if not _cpp_done:
+            return (
+                False,
+                "tt-lang",
+                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _ISOLATE_FIRST,
+            )
+        if (_tl_clean or not _ttl_available()) and not _cpp_clean and _cpp_wedged < _MAX_TRACE_FIX_RETRIES:
             if _cpp_wedged:
                 return (
                     False,
                     "cpp",
-                    "%s (trace-fix %d/%d)" % (_TRACE_SAFE_HINT, _cpp_wedged, _MAX_TRACE_FIX_RETRIES),
+                    "HOLD the cpp rung (fix it in isolation, do NOT bounce rungs): %s (trace-fix %d/%d)"
+                    % (_TRACE_SAFE_HINT, _cpp_wedged, _MAX_TRACE_FIX_RETRIES),
                 )
             return (
                 False,
                 "cpp",
-                "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it." + _ISOLATE_FIRST,
+                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it." + _ISOLATE_FIRST,
             )
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (
