@@ -74,6 +74,9 @@ def chunk_kda_ttnn(q, k, v, g, beta, scale=None, initial_state=None, device=None
 
     eg = ttnn.exp(g)
     eng = ttnn.exp(ttnn.neg(g))
+    # hoist decay-weighted q/k out of the NT loop (batched over chunks): q*eg used twice/iter, k*eng once
+    qeg_all = ttnn.multiply(q, eg)
+    keng_all = ttnn.multiply(k, eng)
 
     # A = (k*eg) @ (k*eng)^T, row-scaled by beta, strict-lower, negated  -> L
     KK = _mm(ttnn.multiply(k, eg), ttnn.multiply(k, eng), transpose_b=True)  # [.,C,C]
@@ -98,12 +101,11 @@ def chunk_kda_ttnn(q, k, v, g, beta, scale=None, initial_state=None, device=None
         S = ttnn.zeros([B, HV, K, V], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     outs = []
     for n in range(NT):
-        qn = q[:, :, n]; kn = k[:, :, n]; un = u[:, :, n]; wn = w[:, :, n]  # [B,HV,C,*]
-        egn = eg[:, :, n]; gn = g[:, :, n]
-        Aqk = ttnn.multiply(_mm(ttnn.multiply(qn, egn), ttnn.multiply(kn, eng[:, :, n]), transpose_b=True),
-                            ttnn.reshape(linc, [1, 1, C, C]))
+        kn = k[:, :, n]; un = u[:, :, n]; wn = w[:, :, n]; gn = g[:, :, n]
+        qegn = qeg_all[:, :, n]                               # (q*eg) for this chunk, reused below
+        Aqk = ttnn.multiply(_mm(qegn, keng_all[:, :, n], transpose_b=True), ttnn.reshape(linc, [1, 1, C, C]))
         v_new = ttnn.subtract(un, _mm(wn, S))                # [.,C,V]
-        o_n = ttnn.add(_mm(ttnn.multiply(qn, egn), S), _mm(Aqk, v_new))  # [.,C,V]
+        o_n = ttnn.add(_mm(qegn, S), _mm(Aqk, v_new))        # [.,C,V]
         outs.append(ttnn.reshape(o_n, [B, HV, 1, C, V]))
         # state update: S = S*exp(g_last) + (exp(g_last - g)*k)^T @ v_new
         g_last = ttnn.reshape(gn[:, :, C - 1], [B, HV, 1, K])             # [.,1,K]

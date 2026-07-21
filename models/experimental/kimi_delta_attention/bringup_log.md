@@ -281,6 +281,28 @@ lever is a fused C++ diagonal-gate chunk kernel** (collapses hundreds of kernels
 micro-opts (hoist redundant ops, fewer reshapes) are ≤10–20% and hit the same floor. Documented as the
 major remaining perf item; SP sequence-sharding (task 15) is the other (Galaxy-relevant).
 
+### Phase 9 — perf loop iteration 5: hoist redundant NT-loop ops (composed floor confirmed)
+
+Hoisted `q*eg` (used 2×/iter) and `k*eng` out of the NT loop (batched over chunks). Kernels 371→**333**
+(T=640), time 5209→5132 µs (**~1.5%**), PCC 0.99998. **Confirms the composed floor:** even −38 kernels
+buys ~1.5%; composed micro-opts are ~1–2% each. The composed chunk op is done at ~333 kernels / ~5 ms.
+
+**Perf loop summary (T=640, per-chip device time):**
+| stage | total | note |
+|---|---|---|
+| token-loop TP=1 | 217 ms | launch-bound, ~14.7k kernels, 0.1% util |
+| + chunked op | 33 ms | 15× recurrence |
+| + TP=4 (all-gather+sum) | 43 ms | collective-bound |
+| + RS/AG collective | 10.9 ms | collective 55× → TP=4 a 3× win |
+| + HiFi2 / hoist | ~10.7 ms | ~no-op (launch-bound floor) |
+
+**~20× achieved.** Remaining gap to the ~93 µs (compute+CCL) roofline is **launch overhead** — the
+composed op's hundreds of small kernels. CCL util is now ~10% (target 40%, within 4×); compute is still
+launch-bound (~0.4% util). **The only lever left for device time is a fused C++ diagonal-gate chunk
+kernel** (collapse hundreds of kernels → O(1)); it's the major remaining perf item. Trace capture would
+cut *wall-clock* (host dispatch) but not the profiler device-time sum. SP sequence-sharding (task 15,
+Galaxy) is the other open item.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
