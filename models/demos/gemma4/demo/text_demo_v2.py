@@ -84,12 +84,24 @@ _MESH_DEVICE_SHAPES = {
 def _mesh_device_param():
     """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
 
-    Always returns a 2D shape tuple — never ``len(get_device_ids())``. An int
-    param opens ``MeshShape(1, N)`` in conftest, which is wrong for DP layouts
-    like ``2x4`` (same chip count as ``1x8``). Unset / unknown → ``(1, 4)``
-    (QB2), matching qwen36 / gemma3 defaults.
+    Named SKUs map explicitly (so ``2x4`` / ``BHGLX`` stay DP layouts). Unset /
+    unknown → ``(1, N)`` over all visible devices so a LoudBox opens full 1×8
+    TP instead of a 4-chip subset. Set ``MESH_DEVICE`` for non-line meshes.
     """
-    return _MESH_DEVICE_SHAPES.get(os.environ.get("MESH_DEVICE"), (1, 4))
+    env = os.environ.get("MESH_DEVICE")
+    if env in _MESH_DEVICE_SHAPES:
+        return _MESH_DEVICE_SHAPES[env]
+    if env and "x" in env.lower():
+        try:
+            rows, cols = env.lower().split("x", 1)
+            return (int(rows), int(cols))
+        except ValueError:
+            pass
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        n = 4
+    return (1, max(1, n))
 
 
 def _model_path():
@@ -390,8 +402,7 @@ def _device_params():
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        # Hardcoded MESH_DEVICE → (rows, cols). Do not fall back to device count:
-        # 8 chips may be 1x8 (TP) or 2x4 (DP).
+        # MESH_DEVICE → (rows, cols); unset → (1, N) over all visible devices.
         _mesh_device_param()
     ],
     indirect=True,
