@@ -35,7 +35,7 @@ subprocess executable or a filesystem ``open()``. The only string argument,
 
 Example (matches the runtime-perf pipeline invocation):
   ./tests/tt_metal/tt_metal/jit_build/compile_stress_ci.py \
-      --arch "$ARCH_NAME" --num-kernels 1000 --repetitions 5
+      --arch "$ARCH_NAME" --num-kernels 300 --repetitions 3
 """
 
 from __future__ import annotations
@@ -67,10 +67,14 @@ SIM_FORCING_ENV_VARS = (
 BASE_SEED = 0x5EED
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
+# tests/tt_metal/tt_metal/jit_build/ -> repo root is four levels up.
+REPO_ROOT = SCRIPT_DIR.parents[3]
 
 # Hardcoded, script-relative constants - never derived from command-line input -
-# so no external value reaches the subprocess executable or a file open().
-TEST_BINARY = Path("build/test/tt_metal/unit_tests_jit_build")
+# so no external value reaches the subprocess executable or a file open(). The
+# binary is anchored to REPO_ROOT (not the caller's CWD) and the gtest runs with
+# cwd=REPO_ROOT so its repo-relative kernel paths resolve regardless of caller.
+TEST_BINARY = REPO_ROOT / "build/test/tt_metal/unit_tests_jit_build"
 GOLDEN_BY_ARCH = {
     "wormhole_b0": SCRIPT_DIR / "compile_stress_golden.json",
     "blackhole": SCRIPT_DIR / "compile_stress_blackhole_golden.json",
@@ -126,8 +130,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--num-kernels",
         type=int,
-        default=1000,
-        help="Kernels compiled per repetition (TT_METAL_COMPILE_STRESS_NUM_KERNELS).",
+        default=300,
+        help="Kernels compiled per repetition (TT_METAL_COMPILE_STRESS_NUM_KERNELS). "
+        "Must match the golden's num_kernels (the shipped goldens use 300).",
     )
     p.add_argument(
         "--repetitions",
@@ -185,7 +190,9 @@ def run_repetition(test_binary: Path, args: argparse.Namespace, work_dir: Path, 
     cmd = [str(test_binary), *GTEST_ARGS]
     print(f"[jit-build-perf] rep {rep}: seed={seed} num_kernels={args.num_kernels} arch={args.arch}")
     with open(stdout_log, "w") as log:
-        rc = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT, shell=False).returncode
+        rc = subprocess.run(
+            cmd, env=env, cwd=str(REPO_ROOT), stdout=log, stderr=subprocess.STDOUT, shell=False
+        ).returncode
     if rc != 0:
         raise SystemExit(f"[jit-build-perf] rep {rep} failed (exit {rc}). See {stdout_log}.")
     if not result_file.exists():
@@ -235,6 +242,17 @@ def gate(reps: list[RepResult], golden_path: Path, args: argparse.Namespace) -> 
     with open(golden_path) as f:
         golden = json.load(f)
 
+    # The golden encodes the benchmark identity it was calibrated for. Refuse to
+    # gate a run whose arch/workload differs, else we'd compare non-equivalent
+    # configurations (e.g. a 1000-kernel run against the 300-kernel baseline).
+    if golden.get("arch") != args.arch:
+        raise SystemExit(f"[jit-build-perf] golden arch {golden.get('arch')!r} does not match --arch {args.arch!r}")
+    if golden.get("num_kernels") != args.num_kernels:
+        raise SystemExit(
+            f"[jit-build-perf] golden num_kernels {golden.get('num_kernels')!r} "
+            f"does not match --num-kernels {args.num_kernels}"
+        )
+
     tolerance_pct = float(golden.get("tolerance_pct", 15.0))
     metrics = golden.get("metrics", {})
 
@@ -248,11 +266,18 @@ def gate(reps: list[RepResult], golden_path: Path, args: argparse.Namespace) -> 
 
     exit_code = 0
     for name, meas in measured.items():
-        golden_val = metrics.get(name, None)
+        # Every measured metric must be represented in the golden. A missing key
+        # is a malformed golden (not the same as an explicit record-mode null),
+        # and only a finite positive number is a valid armed baseline.
+        if name not in metrics:
+            raise SystemExit(f"[jit-build-perf] golden is missing metric {name!r}")
+        golden_val = metrics[name]
         if golden_val is None:
             print(f"[record] {name}: measured {meas:.3f} (golden null -> not gated)")
             continue
         golden_val = float(golden_val)
+        if not 0.0 < golden_val < float("inf"):
+            raise SystemExit(f"[jit-build-perf] invalid golden value for {name!r}: {golden_val!r}")
         if lower_is_better[name]:
             diff_pct = (meas / golden_val - 1.0) * 100.0 if golden_val > 0 else 0.0
             regressed = diff_pct > tolerance_pct
@@ -293,16 +318,22 @@ def main(argv: list[str] | None = None) -> int:
 
     golden_path = resolve_golden(args.arch)
 
-    # All scratch lives under a process-created temp dir (untainted) and is
-    # removed on exit; there is no user-controlled output location.
+    # All scratch lives under a process-created temp dir (untainted) and there is
+    # no user-controlled output location. We only delete it on a clean run; on any
+    # failure the per-rep stdout.log / result.json are retained for debugging.
     work_dir = Path(tempfile.mkdtemp(prefix="jit_build_perf_")).resolve()
 
+    completed = False
     try:
         reps = [run_repetition(test_binary, args, work_dir, rep) for rep in range(args.repetitions)]
-        return gate(reps, golden_path, args)
+        result = gate(reps, golden_path, args)
+        completed = True
+        return result
     finally:
-        if work_dir.exists():
+        if completed:
             shutil.rmtree(work_dir, ignore_errors=True)
+        else:
+            print(f"[jit-build-perf] retained failure diagnostics at {work_dir}")
 
 
 if __name__ == "__main__":

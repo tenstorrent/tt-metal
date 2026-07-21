@@ -247,6 +247,9 @@ runtime:
     wh_galaxy: 15
     bh_galaxy: 15
   perf:
+    # +10 min/SKU over the prior 55/40 to cover the new runtime_perf_jit_build job
+    # (JIT-build compile-throughput microbenchmark: 300 kernels x 3 reps, ~2-3 min
+    # measured, budgeted at 10 min in runtime_perf_tests.yaml).
     wh_n300_civ2: 65
     bh_p150_perf: 50
 

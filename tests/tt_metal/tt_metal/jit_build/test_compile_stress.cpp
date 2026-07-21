@@ -213,14 +213,26 @@ protected:
 
 TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const auto target = MetalContext::instance().get_cluster().get_target_device_type();
+
+    IDevice* dev = devices_[0]->get_devices()[0];
+
     if (use_mock_mode()) {
         TT_FATAL(
             target == tt::TargetDevice::Mock,
             "CompileStressFixture expects mock device; got target_type={}.",
             target_device_type_to_string(target));
+    } else {
+        // Real mode compiles for the attached device (TT_METAL_COMPILE_STRESS_ARCH
+        // does not steer CompileProgram), so a runner/arch mismatch would gate
+        // e.g. Wormhole kernels against the Blackhole golden. Fail fast instead.
+        const tt::ARCH expected_arch = get_mock_arch_from_env();
+        const tt::ARCH actual_arch = dev->arch();
+        TT_FATAL(
+            actual_arch == expected_arch,
+            "CompileStressFixture requested arch '{}' but the attached device is '{}'.",
+            tt::get_string_lowercase(expected_arch),
+            tt::get_string_lowercase(actual_arch));
     }
-
-    IDevice* dev = devices_[0]->get_devices()[0];
 
     const uint32_t target_num_kernels = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_KERNELS", 1000);
     const uint32_t client_id = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_CLIENT_ID", 0);
