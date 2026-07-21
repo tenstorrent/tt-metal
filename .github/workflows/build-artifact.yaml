@@ -53,6 +53,11 @@ on:
         type: boolean
         default: false
         description: "Upload a lean artifact (build/lib *.so + runtime) so consumers can import ttnn in-place via TT_FROM_PRECOMPILED_DIR"
+      build-inplace-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Package the wheel from the compiled tree (no second compile) instead of the manylinux build-wheel job; in-family CI consumers only"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
         #        Fow now enabling an opt-out. But this should get removed.
@@ -184,10 +189,12 @@ on:
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
         value: >-
-          ${{ jobs.build-wheel.result == 'success' &&
-              jobs.build-wheel.outputs.artifact-name ||
+          ${{ (jobs.build-wheel.result == 'success' &&
+               jobs.build-wheel.outputs.artifact-name) ||
+              (jobs.build-artifact.result == 'success' &&
+               jobs.build-artifact.outputs.inplace_wheel_artifact_name) ||
               (jobs.download-artifacts.result == 'success' &&
-               jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
+               jobs.download-artifacts.outputs.wheel_artifact_name) || '' }}
       ttnn-import-artifact-id:
         description: "ID of the lean artifact (build/lib *.so + runtime) for importing ttnn in-place without a wheel"
         value: >-
@@ -210,6 +217,11 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
+      build-inplace-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Package the wheel from the compiled tree (no second compile) instead of the manylinux build-wheel job; in-family CI consumers only"
       architecture:
         required: false
         type: string
@@ -415,6 +427,7 @@ jobs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       ttnn_import_artifact_id: ${{ steps.upload_ttnn_import.outputs.artifact-id }}
+      inplace_wheel_artifact_name: ${{ steps.build_inplace_wheel.outputs.artifact_name }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
@@ -738,6 +751,36 @@ jobs:
           name: ttnn-import-${{ inputs.build-type }}
           path: /work/ttnn-import
           compression-level: 1
+          if-no-files-found: error
+
+      - name: 🐍 Package wheel
+        id: build_inplace_wheel
+        if: ${{ inputs.build-inplace-wheel }}
+        run: |
+          # Wheel from the precompiled tree (TT_FROM_PRECOMPILED_DIR) — no recompile.
+          # Build isolation pulls the pyproject build-system pins.
+          export TT_FROM_PRECOMPILED_DIR=/work
+          python3 -m build --wheel --outdir /work/wheelhouse-raw
+
+          # auditwheel bundles transitively-linked libs (libtracy etc.) so the wheel is
+          # self-contained; targets manylinux_2_35 (ubuntu 22.04 glibc) = in-family only.
+          uv pip install auditwheel patchelf
+          LD_LIBRARY_PATH=/work/build/lib auditwheel repair -w /work/wheelhouse /work/wheelhouse-raw/*.whl
+          echo "Repaired wheel(s):"; ls -1sh /work/wheelhouse/*.whl
+          # Name it like the build-wheel job so consumers treat it identically.
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
+          ARTIFACT_NAME="ttnn-dist-inplace-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: ☁️ Upload wheel package
+        if: ${{ inputs.build-inplace-wheel }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        timeout-minutes: 10
+        with:
+          name: ${{ steps.build_inplace_wheel.outputs.artifact_name }}
+          path: /work/wheelhouse/*.whl
           if-no-files-found: error
 
       - name: "Tar files"
