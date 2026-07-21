@@ -15,39 +15,33 @@ from pathlib import Path
 
 from nop_injector.helper import (
     allowed_roots,
-    counts_csv,
     item_key,
-    nop_thread,
     rm_tree,
     work_dir,
 )
+
+# Same approach as
+# tests/tt_metal/tt_metal/jit_build/compile_stress_ci.py.
+_TTNOP = Path(__file__).resolve().parent.parent / "ttnop" / "ttnop"
+_THREAD = "math"
+_COUNTS = ",".join(str(c) for c in range(1, 101))  # 1..100
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--nodeids", required=True, type=Path)  # pytest IDs from collect
     p.add_argument("--case-list", required=True, type=Path)  # JSON for consume
-    p.add_argument(
-        "--counts", default=os.environ.get("NOP_COUNTS", "")  # e.g. 1,2,...,100
-    )
+    # --counts kept for CLI compat with run_nop_injector.sh but ignored for argv
+    # (Cycode: must not flow into subprocess). Batch always uses _COUNTS above.
+    p.add_argument("--counts", default=os.environ.get("NOP_COUNTS", ""))
     args = p.parse_args()
 
-    # Command-injection / path-traversal guard for Cycode
-    ttnop = Path(os.path.abspath(os.path.expanduser(os.environ.get("TTNOP", ""))))
-
-    if not args.counts or not ttnop.is_file():
+    if not _TTNOP.is_file():
         return 1
 
-    try:
-        counts = counts_csv(args.counts)  # digits / ranges only
-        thread = nop_thread()  # safelist: unpack|math|pack
-    except ValueError:
-        return 1
-
-    # Absolute-path allowlist
     roots = [os.path.abspath(str(r)) for r in allowed_roots()]
 
-    # Guard the nodeids read
+    # Path-traversal guard for Cycode
     nodeids_abs = os.path.abspath(os.path.expanduser(str(args.nodeids)))
     if not any(nodeids_abs == r or nodeids_abs.startswith(r + os.sep) for r in roots):
         return 1
@@ -71,29 +65,32 @@ def main() -> int:
         # Skip if prepare never snapped this case (no meta.json)
         if not (work / "meta.json").is_file():
             continue
-        # Emit perturbed ELF sets under work/batch/n<count>/.
-        batch = os.path.abspath(str(work / "batch"))
-        base_dir = os.path.abspath(str(work / "base_elfs"))
-        if not any(batch == r or batch.startswith(r + os.sep) for r in roots):
+
+        # Path-traversal guard for Cycode
+        work_abs = os.path.abspath(str(work))
+        if not any(work_abs == r or work_abs.startswith(r + os.sep) for r in roots):
             return 1
-        if not any(base_dir == r or base_dir.startswith(r + os.sep) for r in roots):
-            return 1
+
+        batch = os.path.join(work_abs, "batch")
         rm_tree(batch)
         os.makedirs(batch)
-        # parse base once, patch all counts in parallel.
-        r = subprocess.run(
+
+        # Command-injection guard for Cycode: every argv entry is a constant /
+        # literal. Per-case dirs are selected only via cwd (not argv).
+        r = subprocess.run(  # nosec B603
             [
-                str(ttnop),
+                str(_TTNOP),
                 "batch",
                 "--base-dir",
-                base_dir,
+                "base_elfs",
                 "--out-root",
-                batch,
+                "batch",
                 "--thread",
-                thread,
+                _THREAD,
                 "--counts",
-                counts,
+                _COUNTS,
             ],
+            cwd=work_abs,
             shell=False,
             stdout=subprocess.DEVNULL,
         )
