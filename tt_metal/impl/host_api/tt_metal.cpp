@@ -26,6 +26,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <type_traits>
@@ -173,6 +174,14 @@ void ConfigureKernelGroup(
         program.impl().get_kernel(kernel_id)->configure(
             device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
     }
+}
+
+void ValidateLegacyRuntimeArgsAPI(const Program& program, std::string_view api_name) {
+    TT_FATAL(
+        !program.impl().has_metal2_registry(),
+        "{} cannot be used with a Program created from a Metal 2.0 ProgramSpec. "
+        "Use experimental::SetProgramRunArgs or experimental::UpdateProgramRunArgs instead.",
+        api_name);
 }
 
 inline void SetRuntimeArgsImpl(
@@ -1772,6 +1781,7 @@ void SetRuntimeArgs(
     ttsl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
+    ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
@@ -1783,6 +1793,7 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
+    ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
@@ -1794,6 +1805,7 @@ void SetRuntimeArgs(
     ZoneScoped;
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
+    ValidateLegacyRuntimeArgsAPI(program, "SetRuntimeArgs");
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mismatch between number of cores {} and number of runtime args {} getting updated",
@@ -1807,10 +1819,7 @@ void SetRuntimeArgs(
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
-    TT_FATAL(
-        !program.impl().has_metal2_registry(),
-        "SetCommonRuntimeArgs cannot be used with a Program created from a Metal 2.0 ProgramSpec. "
-        "Use experimental::SetProgramRunArgs or experimental::UpdateProgramRunArgs instead.");
+    ValidateLegacyRuntimeArgsAPI(program, "SetCommonRuntimeArgs");
     if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
@@ -1819,24 +1828,24 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::
 void SetCommonRuntimeArgs(
     const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args) {
     ZoneScoped;
-    TT_FATAL(
-        !program.impl().has_metal2_registry(),
-        "SetCommonRuntimeArgs cannot be used with a Program created from a Metal 2.0 ProgramSpec. "
-        "Use experimental::SetProgramRunArgs or experimental::UpdateProgramRunArgs instead.");
+    ValidateLegacyRuntimeArgsAPI(program, "SetCommonRuntimeArgs");
     if (runtime_args.size() != 0) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
 
 RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
+    ValidateLegacyRuntimeArgsAPI(program, "GetRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->runtime_args_data(logical_core);
 }
 
 std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id) {
+    ValidateLegacyRuntimeArgsAPI(program, "GetRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->runtime_args_data();
 }
 
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
+    ValidateLegacyRuntimeArgsAPI(program, "GetCommonRuntimeArgs");
     return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
 }
 

@@ -808,16 +808,30 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
     }
 }
 
-TEST_F(MeshDeviceFixture, Metal2RejectsLegacySetCommonRuntimeArgs) {
+TEST_F(MeshDeviceFixture, Metal2RejectsLegacyRuntimeArgsAPIs) {
     for (const auto& mesh_device : devices_) {
-        CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0)));
+        const CoreCoord core(0, 0);
+        CoreRangeSet core_range_set{CoreRange(core)};
         auto workload =
             unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 1, true);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         auto& program = workload.get_programs().at(device_range);
 
+        std::vector<uint32_t> runtime_args{0x12345678};
+        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core, runtime_args));
+        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core, {0x12345678}));
+
+        std::vector<CoreCoord> cores{core};
+        std::vector<std::vector<uint32_t>> runtime_args_per_core{runtime_args};
+        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, cores, runtime_args_per_core));
+
+        EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, runtime_args));
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, {0x12345678}));
+
+        EXPECT_ANY_THROW(GetRuntimeArgs(program, 0, core));
+        EXPECT_ANY_THROW(GetRuntimeArgs(program, 0));
+        EXPECT_ANY_THROW(GetCommonRuntimeArgs(program, 0));
     }
 }
 
