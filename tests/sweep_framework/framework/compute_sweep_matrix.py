@@ -454,9 +454,18 @@ def main():
 
     print("matrix=" + json.dumps(result, **compact))
 
+    active_hw = []
     for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():
         hw_entries = [e for e in include_entries if e.get("test_group_name", "") in group_names]
         print(f"{hw_key}-matrix=" + json.dumps({"include": hw_entries}, **compact))
+        if hw_entries:
+            active_hw.append(hw_key)
+
+    # Hardware groups that actually have at least one batch this run. The dispatcher
+    # fans out one reusable-workflow leg per active group (strategy.matrix over this
+    # list), so empty groups are never scheduled and no leg is ever handed an empty
+    # matrix — replacing the seven hand-maintained per-hardware caller jobs.
+    print("active-hw=" + json.dumps(active_hw, **compact))
 
 
 if __name__ == "__main__":

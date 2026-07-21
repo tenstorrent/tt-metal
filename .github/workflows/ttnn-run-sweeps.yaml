@@ -950,6 +950,7 @@ jobs:
       p300a-matrix: ${{ steps.set-matrix.outputs.p300a-matrix }}
       t3k-matrix: ${{ steps.set-matrix.outputs.t3k-matrix }}
       galaxy-matrix: ${{ steps.set-matrix.outputs.galaxy-matrix }}
+      active-hw: ${{ steps.set-matrix.outputs.active-hw }}
     steps:
       - name: Show run identifiers
         run: |
@@ -1140,19 +1141,31 @@ jobs:
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
 
-  ttnn-sweeps-n150:
-    name: ttnn sweeps N150
+  # One reusable-workflow leg per hardware group that actually has batches this run
+  # (strategy.matrix over compute-module-matrix's active-hw list). This replaces the
+  # seven hand-maintained per-hardware caller jobs (ttnn-sweeps-{n150,n300,p150b,
+  # p100a,p300a,t3k,galaxy}); each leg is still an independent impl invocation, so
+  # the impl's per-group `max-parallel: 20` fan-out and per-group isolation are
+  # preserved. Empty groups are absent from active-hw and never scheduled, so no leg
+  # is ever handed an empty matrix. fail-on-test-failure is now forwarded uniformly
+  # (the old p100a/p300a jobs silently dropped it).
+  ttnn-sweeps:
+    name: ttnn sweeps ${{ matrix.hw }}
     needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
       needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.n150-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.n150-matrix != '{"include":[]}'
+      needs.ttnn-compute-module-matrix.outputs.active-hw != '' &&
+      needs.ttnn-compute-module-matrix.outputs.active-hw != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        hw: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.active-hw) }}
     uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
     secrets: inherit
     with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n150-matrix }}
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs[format('{0}-matrix', matrix.hw)] }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1162,148 +1175,6 @@ jobs:
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
-      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-
-  ttnn-sweeps-n300:
-    name: ttnn sweeps N300
-    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
-    if: |
-      always() &&
-      !cancelled() &&
-      needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.n300-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.n300-matrix != '{"include":[]}'
-    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
-    secrets: inherit
-    with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n300-matrix }}
-      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
-      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
-      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
-      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
-      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
-      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-
-  ttnn-sweeps-p150b:
-    name: ttnn sweeps P150b
-    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
-    if: |
-      always() &&
-      !cancelled() &&
-      needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.p150b-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.p150b-matrix != '{"include":[]}'
-    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
-    secrets: inherit
-    with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
-      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
-      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
-      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
-      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
-      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
-      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-
-  ttnn-sweeps-p100a:
-    name: ttnn sweeps P100a
-    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
-    if: |
-      always() &&
-      !cancelled() &&
-      needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '{"include":[]}'
-    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
-    secrets: inherit
-    with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p100a-matrix }}
-      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
-      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
-      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
-      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
-      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-
-  ttnn-sweeps-p300a:
-    name: ttnn sweeps P300a
-    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
-    if: |
-      always() &&
-      !cancelled() &&
-      needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '{"include":[]}'
-    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
-    secrets: inherit
-    with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p300a-matrix }}
-      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
-      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
-      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
-      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
-      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-
-  ttnn-sweeps-t3k:
-    name: ttnn sweeps T3K
-    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
-    if: |
-      always() &&
-      !cancelled() &&
-      needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.t3k-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.t3k-matrix != '{"include":[]}'
-    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
-    secrets: inherit
-    with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.t3k-matrix }}
-      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
-      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
-      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
-      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
-      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
-      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-
-  ttnn-sweeps-galaxy:
-    name: ttnn sweeps Galaxy
-    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
-    if: |
-      always() &&
-      !cancelled() &&
-      needs.ttnn-compute-module-matrix.result == 'success' &&
-      needs.ttnn-compute-module-matrix.outputs.galaxy-matrix != '' &&
-      needs.ttnn-compute-module-matrix.outputs.galaxy-matrix != '{"include":[]}'
-    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
-    secrets: inherit
-    with:
-      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.galaxy-matrix }}
-      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
-      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
-      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
-      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
-      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-homogenize-run-result:
@@ -1311,17 +1182,11 @@ jobs:
     needs:
       - resolve-inputs
       - build-artifact
-      - ttnn-sweeps-n150
-      - ttnn-sweeps-n300
-      - ttnn-sweeps-p150b
-      - ttnn-sweeps-p100a
-      - ttnn-sweeps-p300a
-      - ttnn-sweeps-t3k
-      - ttnn-sweeps-galaxy
+      - ttnn-sweeps
     if: |
       always() &&
       !cancelled() &&
-      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'failure' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'failure' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'failure' || needs.ttnn-sweeps-p100a.result == 'success' || needs.ttnn-sweeps-p100a.result == 'failure' || needs.ttnn-sweeps-p300a.result == 'success' || needs.ttnn-sweeps-p300a.result == 'failure' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'failure' || needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'failure')
+      (needs.ttnn-sweeps.result == 'success' || needs.ttnn-sweeps.result == 'failure')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
