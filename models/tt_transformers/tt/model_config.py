@@ -93,6 +93,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    LI_LM_HEAD = "li_lm_head"  # final vocab projection (logits), runs every decode token
     ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
@@ -225,7 +226,18 @@ class ModelOptimizations:
         else:
             settings = {
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+                # EXPERIMENT (single P150): keep FF2 weights BFP8 but drop compute fidelity
+                # HiFi2_FP16 -> LoFi (fewer math cycles, mantissa bits preserved). Gated by PCC.
+                # exp6: also drop QKV-decode and O-decode fidelity HiFi2 -> LoFi.
+                # exp9: LM-head vocab matmul HiFi2 -> LoFi (config-driven, replaces the old
+                # hardcoded HiFi2 in lm_head.py).
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+                    OpGroup.LI_LM_HEAD: MathFidelitySetting.LOFI,
+                },
             }
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
@@ -313,6 +325,8 @@ class ModelOptimizations:
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                # LM head: default HiFi2 preserves prior hardcoded lm_head.py behavior
+                OpGroup.LI_LM_HEAD: MathFidelitySetting.HIFI2,
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
@@ -767,6 +781,12 @@ class ModelArgs:
             self.mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
                 if self.is_galaxy
+                # SWEEP-TUNED (single P150): FF1/FF3 K=4096. Default k_and_n heuristic picks
+                # 64c -> in0_block_w collapses to 2 tiles -> 187 GB/s. Forcing 32c (8x4) makes
+                # find_largest_divisor(128/32)=4 -> ~292 GB/s (1.56x) while fitting L1 (16c
+                # would give in0bw=8/306 GB/s but overflows L1 with full-model residents).
+                else ttnn.CoreGrid(x=8, y=4)
+                if self.num_devices == 1
                 else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             )
 
@@ -1072,7 +1092,8 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                # Single-chip only: argmax fast-path speeds up greedy decode on P150 (PR #48886)
+                "allow_force_argmax": self.num_devices == 1,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
