@@ -96,10 +96,10 @@ def test_e2e_generate_speech_pcc(mesh_device):
     """Forced-token audio parity vs reference: replay the reference token stream on TT
     (``forced_token_ids``) so the audio is frame-aligned, then gate on perceptual
     log-mel L1 (robust) with sample PCC reported for information."""
-    from vibevoice.modular.modeling_vibevoice_inference import (
+    from modular.modeling_vibevoice_inference import (
         VibeVoiceForConditionalGenerationInference,
     )
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from processor.vibevoice_processor import VibeVoiceProcessor
 
     script = _load_script()
     voice_path = _voice_path()

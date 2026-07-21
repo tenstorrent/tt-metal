@@ -12,8 +12,8 @@ import torch
 
 from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, MODEL_PATH, VOICES_DIR
 from models.experimental.vibevoice.common.resource_utils import load_script
-from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+from processor.vibevoice_processor import VibeVoiceProcessor
 
 
 @pytest.mark.timeout(600)
