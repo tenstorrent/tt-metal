@@ -972,6 +972,9 @@ jobs:
           MEASURE_DEVICE_PERF: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
+          # matrix_runner_config resolves each job's runs_on from
+          # .github/sku_config.yaml, which needs PyYAML in this hosted-runner env.
+          pip3 install PyYAML > /dev/null 2>&1
           # Compute combined + per-hardware matrices once.
           python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
             --write-to-file /tmp/sweep_matrix.pretty.json \

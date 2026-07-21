@@ -15,6 +15,9 @@ parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
 already-parsed routing hints to logical test groups and runner profiles.
 """
 
+import functools
+import os
+
 # ── Run type detection (workflow inputs vs cron schedule) ────────────────────
 # ``compute_sweep_matrix.main`` sets batching and which matrix builder to call
 # from these maps. Workflow ``SWEEP_NAME`` wins; else ``GITHUB_EVENT_SCHEDULE``
@@ -62,75 +65,121 @@ VECTOR_LOAD_FILTER_POLICIES = {
 
 MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy")
 
+# Each profile references an ``sku`` by name; the actual ``runs_on`` runner-label
+# set lives in the shared .github/sku_config.yaml (single source of truth for HW
+# representation — the pipeline-reorg convention). ``get_runner_config`` resolves
+# ``runs_on`` from there via ``_resolve_runs_on(profile["sku"])``. ``arch``,
+# ``runner_label``, ``tt_smi_cmd``, and ``matrix_output_key`` stay here as they are
+# sweep-routing concerns, not general SKU attributes.
 RUNNER_PROFILES = {
     "n150": {
         "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n150-stable",
+        "sku": "wh_n150_sweeps",
         "runner_label": "N150",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n150",
     },
     "n300": {
         "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n300-stable",
+        "sku": "wh_n300_sweeps",
         "runner_label": "N300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n300",
     },
     "n300-llmbox": {
         "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+        "sku": "wh_n300_llmbox_sweeps",
         "runner_label": "n300-llmbox",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "n300",
     },
     "p150b": {
         "arch": "blackhole",
-        "runs_on": "tt-ubuntu-2204-p150b-viommu-stable",
+        "sku": "bh_p150b_sweeps",
         "runner_label": "p150b",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p150b",
     },
     "p100a": {
         "arch": "blackhole",
-        "runs_on": "tt-ubuntu-2204-p100a-viommu-stable",
+        "sku": "bh_p100a_sweeps",
         "runner_label": "p100a",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p100a",
     },
     "p300a": {
         "arch": "blackhole",
-        # A bare "P300-viommu" label does not match a schedulable runner (no
-        # in-service qualifier), so jobs sit queued forever. Mirror the proven
-        # runs-on used by tm-fabric-tests-impl.yaml's P300 job (and our own
-        # t3k/galaxy profiles): the in-service + arch-blackhole + label triple.
-        "runs_on": ["in-service", "arch-blackhole", "P300-viommu"],
+        # sku bh_p300a_sweeps == [in-service, arch-blackhole, P300-viommu]. A bare
+        # "P300-viommu" label does not match a schedulable runner (no in-service
+        # qualifier), so jobs sit queued forever; the sku_config entry carries the
+        # proven in-service + arch-blackhole + label triple.
+        "sku": "bh_p300a_sweeps",
         "runner_label": "P300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p300a",
     },
     "t3k": {
         "arch": "wormhole_b0",
-        "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+        "sku": "wh_t3k_sweeps",
         "runner_label": "config-t3000",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "t3k",
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "bare-metal"],
+        "sku": "wh_galaxy_sweeps",
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
     },
     "galaxy-g04glx03": {
         "arch": "wormhole_b0",
-        "runs_on": "g04glx03",
+        "sku": "wh_galaxy_g04glx03_sweeps",
         "runner_label": "g04glx03",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "galaxy",
     },
 }
+
+
+# ── Runner-label resolution from the shared SKU config ───────────────────────
+# runs_on lives in .github/sku_config.yaml keyed by SKU name; RUNNER_PROFILES
+# only names the SKU. This centralizes HW representation (pipeline-reorg).
+def _sku_config_path():
+    """Locate .github/sku_config.yaml. Prefer $TT_METAL_HOME; else walk up from
+    this file (tests/sweep_framework/framework/ -> repo root)."""
+    home = os.environ.get("TT_METAL_HOME")
+    if home:
+        candidate = os.path.join(home, ".github", "sku_config.yaml")
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".github", "sku_config.yaml"))
+
+
+@functools.lru_cache(maxsize=1)
+def _sku_runs_on_map():
+    import yaml
+
+    with open(_sku_config_path()) as f:
+        cfg = yaml.safe_load(f) or {}
+    return {name: (entry or {}).get("runs_on", []) for name, entry in (cfg.get("skus") or {}).items()}
+
+
+def _resolve_runs_on(sku_name):
+    """Resolve a profile's SKU name to its runs_on labels from sku_config.yaml.
+
+    Preserves the historical single-label-as-string form (a 1-element list is
+    returned as the bare string) so the emitted matrix stays byte-identical to the
+    pre-migration output — GitHub treats a string and a 1-element array the same."""
+    labels = _sku_runs_on_map().get(sku_name)
+    if labels is None:
+        raise KeyError(
+            f"Sweep SKU '{sku_name}' not found in {_sku_config_path()}. "
+            "Every RUNNER_PROFILES[*]['sku'] must have a matching skus entry."
+        )
+    if isinstance(labels, list) and len(labels) == 1:
+        return labels[0]
+    return labels
 
 
 # ── Logical test groups ───────────────────────────────────────────────────────
@@ -297,7 +346,7 @@ def get_runner_config(test_group_name):
     return {
         "test_group_name": test_group_name,
         "arch": profile["arch"],
-        "runs_on": profile["runs_on"],
+        "runs_on": _resolve_runs_on(profile["sku"]),
         "runner_label": profile["runner_label"],
         "tt_smi_cmd": profile["tt_smi_cmd"],
     }
