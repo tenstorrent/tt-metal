@@ -102,7 +102,7 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    // TODO(nuked-op sdpa): restore real call (ring_attention_sdpa when CP enabled,
+    // TODO(sdpa): restore real call (ring_attention_sdpa when CP enabled,
     // otherwise scaled_dot_product_attention).
     autograd::TensorPtr attention = query_with_heads;
     static_cast<void>(key_with_heads);

@@ -22,7 +22,7 @@ LayerNormLayer::LayerNormLayer(uint32_t features, bool use_composite_op) : m_use
 }
 
 autograd::TensorPtr LayerNormLayer::operator()(const autograd::TensorPtr& tensor) {
-    // TODO(nuked-op layer_norm): restore real call (composite_layernorm / layernorm)
+    // TODO(layer_norm): restore real call (composite_layernorm / layernorm)
     static_cast<void>(m_use_composite_op);
     return tensor;
 }

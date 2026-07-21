@@ -178,7 +178,7 @@ TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMultipleOperations) {
     auto add_result = ttnn::add(tensor1, tensor2);           // (1, 1, 128, 32) + (1, 1, 128, 32) = (1, 1, 128, 32)
     auto mul_result = ttnn::multiply(tensor2, 2.0F);         // (1, 1, 128, 32) * 2.0 = (1, 1, 128, 32)
     auto matmul_result = ttnn::matmul(mul_result, tensor3);  // (1, 1, 128, 32) @ (1, 1, 32, 128) = (1, 1, 128, 128)
-    // TODO(nuked-op sdpa): restore real call
+    // TODO(sdpa): restore real call
     auto sdpa_result = q_tensor;
     static_cast<void>(k_tensor);
     static_cast<void>(v_tensor);

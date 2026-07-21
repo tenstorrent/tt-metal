@@ -2,6 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Placeholder TU: all conv operations were removed for agent evaluation.
-// Keeps the ttnn_op_conv library target non-empty until conv2d is reimplemented.
+// Placeholder TU: keeps the ttnn_op_conv library target non-empty while this
+// module has no source files.
 namespace ttnn::operations::conv {}  // namespace ttnn::operations::conv

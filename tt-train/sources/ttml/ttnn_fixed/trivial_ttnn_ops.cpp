@@ -60,7 +60,7 @@ ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim) {
 // Stable softmax implementation
 // ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim) {
-    // TODO(nuked-op softmax): restore real ttnn::softmax call
+    // TODO(softmax): restore real ttnn::softmax call
     static_cast<void>(dim);
     return t;
 }

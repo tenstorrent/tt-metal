@@ -104,7 +104,7 @@ TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     EXPECT_NEAR(tensor_data[1], -99.F, 1e-2);
     auto compute_kernel_config = ttml::core::ComputeKernelConfig::precise();
     static_cast<void>(compute_kernel_config);
-    // TODO(nuked-op softmax): restore real ttnn::softmax call
+    // TODO(softmax): restore real ttnn::softmax call
     auto res = tensor;
     auto res_vector = ttml::core::to_vector(res);
     EXPECT_NEAR(res_vector[0], 0.2689F, 2e-2);

@@ -43,7 +43,7 @@ ttml::autograd::TensorPtr DistributedMultiHeadAttention::operator()(
 
     auto [query_with_heads, key_with_heads, value_with_heads] = ops::heads_creation(qkv, m_local_num_heads);
 
-    // TODO(nuked-op sdpa): restore real call
+    // TODO(sdpa): restore real call
     auto attention = query_with_heads;
     static_cast<void>(key_with_heads);
     static_cast<void>(value_with_heads);
