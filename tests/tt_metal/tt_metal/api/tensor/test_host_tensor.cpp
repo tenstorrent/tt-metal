@@ -16,10 +16,11 @@
 #include <type_traits>
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
@@ -183,7 +184,7 @@ TEST(HostTensorTest, TensorTopologyAccess) {
     Shape shape{4, 32};
     auto tensor = create_simple_host_tensor(shape);
 
-    const auto& topology = tensor.tensor_topology();
+    const auto& topology = tensor_topology(tensor);
     // Default topology should have distribution shape of {1}
     EXPECT_EQ(topology.distribution_shape().dims(), 1);
 }
