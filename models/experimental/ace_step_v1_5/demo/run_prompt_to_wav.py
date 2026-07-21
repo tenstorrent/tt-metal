@@ -964,6 +964,7 @@ def main() -> None:
         ace_step_mesh_use_split_ttnn_preprocess,
         ace_step_needs_split_device,
         ace_step_preprocess_num_command_queues,
+        ace_step_preprocess_on_mesh,
         ace_step_resolve_vae_tiling,
         ace_step_synchronize_device,
         ace_step_ttnn_to_torch,
@@ -1845,6 +1846,9 @@ def main() -> None:
         _should_reexec_dit_mesh = (
             split_device
             and not dit_handoff_mode
+            # Phase-A-on-mesh: preprocess already ran on the full mesh, so keep DiT in-process on
+            # that same mesh (reuse dev) rather than re-execing into a separate DiT process.
+            and not ace_step_preprocess_on_mesh()
             and _preprocess_dev_for_handoff is not None
             and (payload_for_mesh_condition is not None or not condition_tensors_on_device)
         )

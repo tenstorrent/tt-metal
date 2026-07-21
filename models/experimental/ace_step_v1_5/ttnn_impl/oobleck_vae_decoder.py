@@ -27,6 +27,17 @@ from .vae.decoder import TtOobleckDecoder
 _DEFAULT_MIN_DECODER_LATENT_WINDOW = 32
 
 
+def _vae_time_parallel_enabled(device: Any) -> bool:
+    """Time-parallel VAE decode: on a multi-chip mesh AND ``ACE_STEP_VAE_TIME_PARALLEL`` set.
+    Default off → the validated sequential overlap-add path runs unchanged."""
+    if os.environ.get("ACE_STEP_VAE_TIME_PARALLEL", "").strip().lower() not in ("1", "on", "true", "yes"):
+        return False
+    try:
+        return int(device.get_num_devices()) > 1
+    except Exception:
+        return False
+
+
 def _merge_audio_cores(cores: list, ttnn: Any) -> Any:
     """Merge overlap-add audio tiles; default DRAM output so long clips do not exhaust L1."""
     if len(cores) == 1:
@@ -408,6 +419,24 @@ class TtOobleckVaeDecoder:
         # path above; run each overlap-add tile eagerly here.
         use_chunk_trace = False
 
+        # TIME-PARALLEL: on a multi-chip mesh with ACE_STEP_VAE_TIME_PARALLEL set, decode
+        # N=num_chips tiles at once by batch-sharding the tile batch across the mesh (each chip
+        # decodes one [1,win,C] tile at batch=1 — no batch>1 conv support needed). Default off →
+        # the validated sequential path below is unchanged.
+        if _vae_time_parallel_enabled(dec.device):
+            return self._decode_tiled_parallel(
+                latents_btc,
+                dec=dec,
+                num_steps=num_steps,
+                stride=stride,
+                overlap=overlap,
+                latent_frames=latent_frames,
+                c_lat=c_lat,
+                min_win=min_win,
+                audio_up=audio_up,
+                initial_pad_lat=initial_pad_lat,
+            )
+
         # Device ``ttnn.slice`` on ROW_MAJOR latents is safe for arbitrary ``[win_start, win_end)``;
         # TILE slices require 32-aligned bounds (see comment at top of this method).
         cores = []
@@ -464,3 +493,97 @@ class TtOobleckVaeDecoder:
 
         merged = _merge_audio_cores(cores, ttnn)
         return _crop_audio_tail(merged, initial_pad_lat)
+
+    def _decode_tiled_parallel(
+        self,
+        latents_btc,
+        *,
+        dec,
+        num_steps: int,
+        stride: int,
+        overlap: int,
+        latent_frames: int,
+        c_lat: int,
+        min_win: int,
+        audio_up: int,
+        initial_pad_lat: int,
+    ):
+        """Time-parallel overlap-add: decode ``N=num_chips`` tiles per round by batch-sharding the
+        tile batch across the mesh (each chip runs one ``[1, win, C]`` tile). Numerically identical
+        to the sequential path (each chip does the same batch-1 decode) — see PCC gate."""
+        import torch
+
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_replicate_mesh_mapper
+
+        ttnn = dec.ttnn
+        device = dec.device
+        n_chips = int(device.get_num_devices())
+
+        # Window metadata — identical formula to the sequential loop.
+        wins = []
+        for i in range(num_steps):
+            core_start = i * stride
+            core_end = min(core_start + stride, latent_frames)
+            win_start = max(0, core_start - overlap)
+            win_end = min(latent_frames, core_end + overlap)
+            win_len = win_end - win_start
+            if win_len < min_win:
+                deficit = min_win - win_len
+                win_start = max(0, win_start - deficit)
+                win_len = win_end - win_start
+                if win_len < min_win:
+                    win_end = min(latent_frames, win_start + min_win)
+            wins.append((win_start, win_end, core_start, core_end))
+        win_pad = max(we - ws for ws, we, _, _ in wins)  # uniform tile length → uniform audio length
+
+        # The latent is replicated across the mesh — read device-0's copy once, window on host.
+        lat = ttnn.to_torch(ttnn.get_device_tensors(latents_btc)[0]).float().reshape(1, latent_frames, c_lat)
+
+        cores: list = []  # host audio cores, in tile order
+        for r in range(0, num_steps, n_chips):
+            tiles, meta = [], []
+            for j in range(n_chips):
+                idx = r + j
+                if idx < num_steps:
+                    ws, we, cs, ce = wins[idx]
+                    w = lat[0, ws:we, :]
+                    pad = win_pad - (we - ws)
+                    if pad > 0:
+                        w = torch.cat([w, torch.zeros(pad, c_lat, dtype=w.dtype)], dim=0)
+                    tiles.append(w)
+                    meta.append((cs - ws, (ws + win_pad) - ce, True))  # added_start, added_end(+pad), real
+                else:
+                    tiles.append(torch.zeros(win_pad, c_lat, dtype=lat.dtype))
+                    meta.append((0, 0, False))
+            batch = torch.stack(tiles, dim=0)  # [n_chips, win_pad, c_lat]
+            x = ttnn.from_torch(
+                batch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
+            y = ttnn.to_layout(dec(x), ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.synchronize_device(device)
+            outs = ttnn.get_device_tensors(y)
+            for j in range(n_chips):
+                added_start, added_end, real = meta[j]
+                if not real:
+                    continue
+                wav = ttnn.to_torch(outs[j]).float().reshape(1, -1, int(self._decoder.audio_channels))
+                ta = int(wav.shape[1])
+                up = ta / float(win_pad)
+                ts = max(0, min(int(round(added_start * up)), ta))
+                te = ta - int(round(added_end * up)) if added_end > 0 else ta
+                te = max(ts, min(te, ta))
+                cores.append(wav[:, ts:te, :])
+        merged = torch.cat(cores, dim=1)
+        if initial_pad_lat > 0:
+            merged = merged[:, : max(0, int(merged.shape[1]) - initial_pad_lat * audio_up), :]
+        return ttnn.from_torch(
+            merged.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=ace_step_replicate_mesh_mapper(device),
+        )
