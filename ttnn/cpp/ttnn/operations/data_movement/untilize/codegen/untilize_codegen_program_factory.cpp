@@ -14,6 +14,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "untilize_codegen_device_operation.hpp"
 
@@ -62,9 +63,13 @@ struct CbPlan {
     uint32_t read_batch;
 };
 
-// Mirrors codegen_common.factory.cb_policy.plan_cb_depths: 4-tier asymmetric CB depth
-// selection (double-buffer both -> double-buffer input only -> single-buffer both ->
-// chunked fallback), budgeted against a fixed 1.4MB usable-L1 constant (matches source).
+// Mirrors codegen_common.factory.cb_policy.plan_cb_depths exactly: 3-tier asymmetric CB
+// depth selection (double-buffer both -> double-buffer input only -> single-buffer both),
+// budgeted against a fixed 1.4MB usable-L1 constant (matches source). The Python source has
+// no 4th "chunked" tier -- it raises when even the single-buffer plan overflows, because the
+// caller (ops/untilize/untilize.py's wide-tensor guard, transcribed into supported_by_codegen's
+// wide-chunk-threshold check) is expected to have already routed such shapes away from this
+// builder entirely. Fail the same way rather than inventing an untraceable fallback depth.
 CbPlan plan_cb_depths(uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
     uint64_t p = pages_per_unit;
     uint64_t ts = page_size;
@@ -80,7 +85,16 @@ CbPlan plan_cb_depths(uint32_t pages_per_unit, uint32_t page_size, uint32_t bloc
     if (single_both <= kUsableL1) {
         return CbPlan{pages_per_unit, pages_per_unit, block_units};
     }
-    return CbPlan{std::max(pages_per_unit, block_units), pages_per_unit, block_units};
+    TT_FATAL(
+        false,
+        "untilize codegen: single-buffer CB plan exceeds L1 and cannot be reduced without chunking "
+        "(pages_per_unit={}, page_size={}, minimum_bytes={}, budget={}); supported_by_codegen() should "
+        "have routed this shape to native",
+        pages_per_unit,
+        page_size,
+        single_both,
+        kUsableL1);
+    return CbPlan{};
 }
 
 // Mirrors spec.py's _choose_2d_ncol: largest divisor of wt (>=2) so that every tile-row x
