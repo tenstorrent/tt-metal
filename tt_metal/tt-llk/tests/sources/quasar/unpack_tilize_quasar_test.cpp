@@ -8,6 +8,8 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -47,29 +49,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false, false>();
     }
 
-    buffer_descriptor_u bd_val = {0};
+    const auto tensor_shape = tensor_shape_from_params(params);
 
     unsigned l1_addr_16B;
     if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_A || UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST)
     {
-        l1_addr_16B = params.buffer_A[0] / 16;
+        l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     }
     else if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
     {
-        l1_addr_16B = params.buffer_B[0] / 16;
+        l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
     }
 
-    bd_val.f.l1_addr_16B = l1_addr_16B;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params.num_faces;
-
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
-
-    constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
+    if (tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS)
+    {
+        td_val = ckernel::trisc::construct_tdma_desc<L1AccessMode::Strided>(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+    }
+    else
+    {
+        td_val = ckernel::trisc::construct_tdma_desc(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+    }
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -94,6 +93,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_tilize_block_(y * y_stride_external, y * BLOCK_CT_DIM);
         }
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+    }
+    else if (tensor_shape.face_r_dim < FACE_R_DIM)
+    {
+        _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, FULL_CT_DIM>(buf_desc_id, tensor_shape);
+        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+        {
+            _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL, FULL_CT_DIM>(tensor_shape, y * FULL_CT_DIM);
+        }
     }
     else
     {
@@ -162,23 +169,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_producer, dest_dvalid_client::PACK});
 
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = params.buffer_Res[0] / 16;
-    bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim             = params.num_faces;
+    const auto tensor_shape = tensor_shape_from_params(params);
 
-    tdma_descriptor_t tdma_desc;
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_descriptor_t tdma_desc =
+        ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
-    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
-    _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
+    _llk_pack_(0, 0, tensor_shape);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif
