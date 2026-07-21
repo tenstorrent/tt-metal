@@ -187,7 +187,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
-NOTE: for models that are not listed in [`get_supported_trace_region_size` function](demo/trace_region_config.py#L79), the default trace region size will be used as set in the [`demo/simple_text_demo.py` script](demo/simple_text_demo.py#L704). The default trace region size may not be sufficient for such a model and there will be a helpful error message that informs the required trace region size, which can be overridden by setting the `trace_region_size` argument in the demo.
+NOTE: trace region sizes are declared in [`models/model_trace_region_sizes.yaml`](../model_trace_region_sizes.yaml) and resolved at device-open time via [`get_supported_trace_region_size`](demo/trace_region_config.py) (which delegates to [`resolve_trace_region_size`](../demos/utils/trace_region_sizes.py)). A `(model, SKU)` pair without a YAML entry is not an error: resolution logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`, dynamic allocation). Add an explicit entry when a model needs a fixed reserved trace region.
 
 ## Details
 
@@ -293,7 +293,7 @@ To apply the same settings across all decoders, the `optimizations` argument can
 pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and batch-1" --optimizations 'precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}'
 ```
 
-Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Also, please refer to the [PERF.md](PERF.md) file for performance and accuracy across a select range of configurations for an example Pareto front analysis.
+Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Centralized performance and accuracy targets are defined in [models/model_targets.yaml](../model_targets.yaml). The `lt` utility can still export markdown snapshots for local Pareto analysis.
 
 To apply non-uniform settings across the decoders, the user can provide a JSON file using the `decoder_config_file` argument to specify the configuration for each decoder. For example
 
@@ -307,7 +307,7 @@ When a component is not specified (e.g., FF2 is missing for decoder 2 in `models
 
 ### Expected performance and accuracy
 
-See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+See [models/model_targets.yaml](../model_targets.yaml) for expected performance and accuracy targets across supported configurations.
 Accuracy of the network architectures is measured by exact token matching using teacher forcing method. During inference the previous token is replaced by the ground truth token while the network generates the next token. This allows to avoid accumulating errors when comparisons on a finer level (tokens) assessed in comparison to other known metrics that compare quality and context of the answer. Token accuracy can be reported by passing the argument shown below:
 
 ```

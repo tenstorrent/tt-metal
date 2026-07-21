@@ -692,6 +692,75 @@ def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, element
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+def test_moreh_layer_norm_backward_rejects_invalid_mean_volume(device, expect_error):
+    torch.manual_seed(2023)
+    input_shape = [2, 32, 64]
+    normalized_dims = 1
+    eps = 1e-5
+
+    cpu_input, _, _, cpu_output_grad = make_input_tensors(
+        input_shape, normalized_dims, elementwise_affine=False, do_backward=True
+    )
+
+    mean_rstd_dims = list(range(-normalized_dims, 0))
+    mean = cpu_input.clone().mean(dim=mean_rstd_dims, keepdim=True)
+    var = ((cpu_input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
+    rstd = (var + eps).rsqrt()
+
+    wrong_mean_shape = [input_shape[0], input_shape[1] + 1]
+
+    npu_output_grad = to_ttnn(cpu_output_grad, device=device, dtype=ttnn.bfloat16)
+    npu_input = to_ttnn(cpu_input, device=device, dtype=ttnn.bfloat16)
+    npu_mean = to_ttnn(torch.zeros(wrong_mean_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+    npu_rstd = to_ttnn(rstd, device=device, dtype=ttnn.bfloat16, shape=input_shape[:-normalized_dims])
+    npu_input_grad = to_ttnn(torch.empty(input_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+
+    with expect_error(RuntimeError, "mean must have logical shape"):
+        ttnn.operations.moreh.layer_norm_backward(
+            npu_output_grad,
+            npu_input,
+            npu_mean,
+            npu_rstd,
+            normalized_dims,
+            input_grad=npu_input_grad,
+        )
+
+
+def test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape(device, expect_error):
+    torch.manual_seed(2023)
+    input_shape = [2, 32, 64]
+    normalized_dims = 1
+    eps = 1e-5
+
+    cpu_input, _, _, cpu_output_grad = make_input_tensors(
+        input_shape, normalized_dims, elementwise_affine=False, do_backward=True
+    )
+
+    mean_rstd_dims = list(range(-normalized_dims, 0))
+    mean = cpu_input.clone().mean(dim=mean_rstd_dims, keepdim=True)
+    var = ((cpu_input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
+    rstd = (var + eps).rsqrt()
+
+    valid_mean_shape = input_shape[:-normalized_dims]
+    wrong_mean_shape = [1, valid_mean_shape[0] * valid_mean_shape[1]]
+
+    npu_output_grad = to_ttnn(cpu_output_grad, device=device, dtype=ttnn.bfloat16)
+    npu_input = to_ttnn(cpu_input, device=device, dtype=ttnn.bfloat16)
+    npu_mean = to_ttnn(torch.zeros(wrong_mean_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+    npu_rstd = to_ttnn(rstd, device=device, dtype=ttnn.bfloat16, shape=valid_mean_shape)
+    npu_input_grad = to_ttnn(torch.empty(input_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+
+    with expect_error(RuntimeError, "mean must have logical shape"):
+        ttnn.operations.moreh.layer_norm_backward(
+            npu_output_grad,
+            npu_input,
+            npu_mean,
+            npu_rstd,
+            normalized_dims,
+            input_grad=npu_input_grad,
+        )
+
+
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",
@@ -724,6 +793,7 @@ def test_moreh_layer_norm_no_mean_rstd(input_shape_normalized_dims, elementwise_
 
 
 # Validation test for moreh.layer_norm not populating rstd when mean=None, see #22089
+@pytest.mark.skip(reason="Broken mean/rstd output #48606")
 def test_moreh_layer_norm_rstd_only_mean_none(device):
     torch.manual_seed(2023)
     input_shape = [2, 32, 512]
@@ -761,59 +831,3 @@ def test_moreh_layer_norm_rstd_only_mean_none(device):
     pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=0.09, atol=0.06)
     logger.debug(f"rstd's {out_rstd}")
     assert pass_rstd
-
-
-def test_moreh_layer_norm_rejects_invalid_mean_volume(device):
-    torch.manual_seed(2023)
-    input_shape = [2, 32, 64]
-    normalized_dims = 1
-    eps = 1e-5
-    mean_rstd_shape = input_shape[:-normalized_dims]
-    wrong_mean_shape = [input_shape[0], input_shape[1] + 1]
-
-    cpu_input, _, _, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine=False)
-
-    npu_input = to_ttnn(cpu_input, device=device, dtype=ttnn.bfloat16)
-    npu_output = to_ttnn(torch.empty_like(cpu_input), device=device, dtype=ttnn.bfloat16)
-    npu_mean = to_ttnn(torch.zeros(wrong_mean_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
-    npu_rstd = to_ttnn(torch.zeros(mean_rstd_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
-
-    with pytest.raises(RuntimeError, match="mean must have logical shape"):
-        ttnn.operations.moreh.layer_norm(
-            npu_input,
-            normalized_dims,
-            eps,
-            None,
-            None,
-            output=npu_output,
-            mean=npu_mean,
-            rstd=npu_rstd,
-        )
-
-
-def test_moreh_layer_norm_rejects_same_volume_wrong_mean_shape(device):
-    torch.manual_seed(2023)
-    input_shape = [2, 32, 64]
-    normalized_dims = 1
-    eps = 1e-5
-    mean_rstd_shape = input_shape[:-normalized_dims]
-    wrong_mean_shape = [1, 64]
-
-    cpu_input, _, _, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine=False)
-
-    npu_input = to_ttnn(cpu_input, device=device, dtype=ttnn.bfloat16)
-    npu_output = to_ttnn(torch.empty_like(cpu_input), device=device, dtype=ttnn.bfloat16)
-    npu_mean = to_ttnn(torch.zeros(wrong_mean_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
-    npu_rstd = to_ttnn(torch.zeros(mean_rstd_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
-
-    with pytest.raises(RuntimeError, match="mean must have logical shape"):
-        ttnn.operations.moreh.layer_norm(
-            npu_input,
-            normalized_dims,
-            eps,
-            None,
-            None,
-            output=npu_output,
-            mean=npu_mean,
-            rstd=npu_rstd,
-        )

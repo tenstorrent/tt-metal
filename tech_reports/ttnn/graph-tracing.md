@@ -221,7 +221,7 @@ The report file contains:
 - `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`); present only when `enable_detailed_buffer_tracing()` is active
 - `buffer_pages_by_address`: Compact per-address page data; present only when `enable_detailed_buffer_tracing()` is active
 - `cluster_descriptor`: Cluster configuration YAML (if available)
-- `mesh_coordinate_mapping`: Physical chip mesh coordinate mapping YAML (if available, saved as `physical_chip_mesh_coordinate_mapping_1_of_1.yaml`)
+- `mesh_coordinate_mapping`: Physical chip mesh coordinate mapping YAML (if available, saved as `physical_chip_mesh_coordinate_mapping.yaml` or `physical_chip_mesh_coordinate_mapping_<rank>_of_<world_size>.yaml`)
 
 ### Import into Visualizer Database
 
@@ -235,6 +235,8 @@ python -m ttnn.graph_report ./reports/ ./visualizer_db/
 # Generate SVG visualizations during import
 python -m ttnn.graph_report --svg my_report.json ./visualizer_db/
 ```
+
+When reports are generated automatically by the `ttnn_graph_report` fixture, the capture and config files use `graph_capture.json` / `config.json` for single-process runs, and `graph_capture_<rank>_of_<world_size>.json` / `config_<rank>_of_<world_size>.json` for distributed runs.
 
 The importer creates these database tables:
 - `operations`: Operations with names and durations (IDs start at 1)

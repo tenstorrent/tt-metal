@@ -1429,13 +1429,16 @@ FORCE_INLINE void noc_async_read_shard(
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::READ,
         dst_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, noc),
+        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.get_aligned_page_size() * shard_volume, noc);
+        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        dst_local_l1_addr,
+        s.get_aligned_page_size() * shard_volume,
+        noc);
 }
 
 // clang-format off
@@ -1463,13 +1466,16 @@ FORCE_INLINE void noc_async_write_shard(
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::WRITE_,
         src_local_l1_addr,
-        s.get_shard_noc_addr(shard_id, noc),
+        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
         s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.get_aligned_page_size() * shard_volume, noc);
+        src_local_l1_addr,
+        s.get_shard_noc_addr(shard_id, /*offset=*/0, noc),
+        s.get_aligned_page_size() * shard_volume,
+        noc);
 }
 
 // clang-format off

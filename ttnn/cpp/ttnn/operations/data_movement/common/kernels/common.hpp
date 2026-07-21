@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,10 @@
 #include <cstring>
 #include <type_traits>
 
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+
 constexpr uint64_t ALIGN_REQ_64 = 64;
 constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
 constexpr uint64_t OFFSET_64 = 0x000000000000003F;
@@ -23,109 +27,130 @@ namespace tt::data_movement::common {
 
 template <uint32_t max_transfer_size, bool only_reads>
 FORCE_INLINE void enhanced_noc_async_read(
+    Noc noc, const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
+    constexpr uint32_t page_size = (only_reads && max_transfer_size <= NOC_MAX_BURST_SIZE)
+                                       ? NOC_MAX_BURST_SIZE
+                                       : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
+    noc.async_read<NocOptions::DEFAULT, page_size>(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(dst_l1_addr),
+        bytes,
+        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(src_noc_addr),
+         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(src_noc_addr),
+         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(src_noc_addr)},
+        {.offset_bytes = 0});
+}
+
+template <uint32_t max_transfer_size, bool only_reads>
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
+FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
-    // If you do not know the max_transfer_size at compile time write 0 to it.
-    // only reads is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as True
-    if constexpr (only_reads && max_transfer_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes);
-    } else {
-        noc_async_read<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
-            src_noc_addr, dst_l1_addr, bytes);
-    }
+    Noc noc;
+    return enhanced_noc_async_read<max_transfer_size, only_reads>(noc, src_noc_addr, dst_l1_addr, bytes);
 }
 
 template <uint32_t max_transfer_size, bool only_writes>
 FORCE_INLINE void enhanced_noc_async_write(
+    Noc noc, const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
+    constexpr uint32_t page_size = (only_writes && max_transfer_size <= NOC_MAX_BURST_SIZE)
+                                       ? NOC_MAX_BURST_SIZE
+                                       : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
+    noc.async_write<NocOptions::DEFAULT, page_size>(
+        CoreLocalMem<uint32_t>(src_l1_addr),
+        UnicastEndpoint{},
+        bytes,
+        {.offset_bytes = 0},
+        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(dst_noc_addr),
+         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(dst_noc_addr),
+         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(dst_noc_addr)});
+}
+
+template <uint32_t max_transfer_size, bool only_writes>
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
+FORCE_INLINE void enhanced_noc_async_write(
     const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
-    // If you do not know the max_transfer_size at compile time write 0 to it.
-    // only writes is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as False
-    if constexpr (only_writes && max_transfer_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_l1_addr, dst_noc_addr, bytes);
+    Noc noc;
+    return enhanced_noc_async_write<max_transfer_size, only_writes>(noc, src_l1_addr, dst_noc_addr, bytes);
+}
+
+// Self-NOC src/dst args for a local L1 address on the executing core, expressed in the
+// caller's noc coordinate space (NOC 0 and NOC 1 have different coordinate spaces, so the
+// noc id must match what the read/write will use).
+FORCE_INLINE noc_traits_t<UnicastEndpoint>::src_args_type self_l1_src_args(Noc noc, uint32_t addr) {
+    const uint8_t id = noc.get_noc_id();
+    return {.noc_x = my_x[id], .noc_y = my_y[id], .addr = addr};
+}
+FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc noc, uint32_t addr) {
+    const uint8_t id = noc.get_noc_id();
+    return {.noc_x = my_x[id], .noc_y = my_y[id], .addr = addr};
+}
+
+template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
+FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
+    constexpr uint32_t page_size = max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size;
+    if constexpr (use_read_datamover) {
+        if constexpr (guaranteed_16B_aligned) {
+            noc.async_read<NocOptions::DEFAULT, page_size>(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(dst_l1_addr),
+                bytes,
+                self_l1_src_args(noc, src_l1_addr),
+                {.offset_bytes = 0});
+            if constexpr (!copy_async) {
+                noc.async_read_barrier();
+            }
+        } else {
+            if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
+                noc.async_read<NocOptions::DEFAULT, page_size>(
+                    UnicastEndpoint{},
+                    CoreLocalMem<uint32_t>(dst_l1_addr),
+                    bytes,
+                    self_l1_src_args(noc, src_l1_addr),
+                    {.offset_bytes = 0});
+                if constexpr (!copy_async) {
+                    noc.async_read_barrier();
+                }
+            } else {
+                invalidate_l1_cache();
+                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+            }
+        }
     } else {
-        noc_async_write<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
-            src_l1_addr, dst_noc_addr, bytes);
+        if constexpr (guaranteed_16B_aligned) {
+            noc.async_write<NocOptions::DEFAULT, page_size>(
+                CoreLocalMem<uint32_t>(src_l1_addr),
+                UnicastEndpoint{},
+                bytes,
+                {.offset_bytes = 0},
+                self_l1_dst_args(noc, dst_l1_addr));
+            if constexpr (!copy_async) {
+                noc.async_write_barrier();
+            }
+        } else {
+            if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
+                noc.async_write<NocOptions::DEFAULT, page_size>(
+                    CoreLocalMem<uint32_t>(src_l1_addr),
+                    UnicastEndpoint{},
+                    bytes,
+                    {.offset_bytes = 0},
+                    self_l1_dst_args(noc, dst_l1_addr));
+                if constexpr (!copy_async) {
+                    noc.async_write_barrier();
+                }
+            } else {
+                invalidate_l1_cache();
+                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+            }
+        }
     }
 }
 
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
 FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
-    // Function performs a memory copy between two l1 addresses in the local core
-    // Uses noc_async_read when possible to copy the data over
-    // Set guaranteed 16B aligned to true if the source and destination are externally guaranteed to be 16B aligned
-    // (dangerous) Set copy_async to true if you wish to perform the operation asynchronously, in this case you can add
-    // a noc_async_read_barrier to synchronize later
-    if constexpr (use_read_datamover) {
-        if constexpr (guaranteed_16B_aligned) {
-            enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
-            if constexpr (!copy_async) {
-                noc_async_read_barrier();
-            }
-        } else {
-            if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
-                enhanced_noc_async_read<max_transfer_size, false>(get_noc_addr(src_l1_addr), dst_l1_addr, bytes);
-                if constexpr (!copy_async) {
-                    noc_async_read_barrier();
-                }
-            } else {
-                invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
-            }
-        }
-    } else {
-        if constexpr (guaranteed_16B_aligned) {
-            enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
-            if constexpr (!copy_async) {
-                noc_async_write_barrier();
-            }
-        } else {
-            if ((dst_l1_addr & OFFSET_16) == (src_l1_addr & OFFSET_16)) {
-                enhanced_noc_async_write<max_transfer_size, false>(src_l1_addr, get_noc_addr(dst_l1_addr), bytes);
-                if constexpr (!copy_async) {
-                    noc_async_write_barrier();
-                }
-            } else {
-                invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
-            }
-        }
-    }
-}
-
-// this function is useful for converting bfloat16 values to float32
-FORCE_INLINE float bfloat16_to_float32(uint16_t bfloat16_data) {
-    uint32_t bits = static_cast<uint32_t>(bfloat16_data) << 16;
-
-    // Extract the sign bit
-    uint32_t sign = bits & 0x80000000;
-
-    // Extract the exponent
-    uint32_t exponent = bits & 0x7F800000;
-
-    // Extract the mantissa
-    uint32_t mantissa = bits & 0x007FFFFF;
-
-    // Handle special cases
-    if (exponent == 0 && mantissa == 0) {
-        // Zero
-        return sign ? -0.0f : 0.0f;
-    } else if (exponent == 0x7F800000) {
-        if (mantissa == 0) {
-            // Infinity
-            return sign ? -__builtin_huge_valf() : __builtin_huge_valf();
-        } else {
-            // NaN
-            return __builtin_nanf("");
-        }
-    }
-
-    // Assemble the float
-    union {
-        uint32_t u;
-        float f;
-    } ieee_float;
-
-    ieee_float.u = sign | exponent | mantissa;
-    return ieee_float.f;
+    Noc noc;
+    return tt_memmove<guaranteed_16B_aligned, copy_async, use_read_datamover, max_transfer_size>(
+        noc, dst_l1_addr, src_l1_addr, bytes);
 }
 
 template <typename T = uint32_t>
@@ -200,6 +225,7 @@ FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask)
 // This is a blocking wait, so it should only be used for debugging purposes
 // It is not recommended to use this in production code
 inline void spin(uint32_t cycles) {
+#if defined(RISCV_DEBUG_REG_WALL_CLOCK_L) && defined(RISCV_DEBUG_REG_WALL_CLOCK_H)
     volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
     uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
@@ -207,6 +233,9 @@ inline void spin(uint32_t cycles) {
     do {
         wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
     } while (wall_clock < (wall_clock_timestamp + cycles));
+#else
+    (void)cycles;  // wall-clock debug register not on Quasar yet. Once present, need update. Issue #48543
+#endif
 }
 
 template <uint32_t Size, class Enable = void>
@@ -235,17 +264,17 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 // which assumed a fully-squeezed 2D dspec and so misread the C dim for 4D NCHW inputs.
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
-    uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
+    Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
     if constexpr (AddrGenType::DSpec::is_interleaved) {
-        // Interleaved TensorAccessor lacks dspec() — keep this branch inside `if constexpr`
-        // so the sharded path below is never instantiated for the interleaved specialization.
-        noc_async_write(l1_addr, tensor.get_noc_addr(dest_id, offset), size);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
         const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
         if (pages_per_row <= 1) {
-            noc_async_write(l1_addr, tensor.get_noc_addr(dest_id, offset), size);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
             return;
         }
         const uint32_t page_size = tensor.get_aligned_page_size();
@@ -253,9 +282,13 @@ FORCE_INLINE void noc_async_write_sharded(
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         for (uint32_t i = 0; i < num_pages; i++) {
-            uint64_t dst_noc_addr = tensor.get_noc_addr(sharded_dest_id, sharded_offset);
             uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
-            noc_async_write(l1_addr, dst_noc_addr, write_size);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_addr),
+                tensor,
+                write_size,
+                {},
+                {.page_id = sharded_dest_id, .offset_bytes = sharded_offset});
             sharded_dest_id++;
             sharded_offset = 0;
             l1_addr += write_size;
@@ -264,16 +297,29 @@ FORCE_INLINE void noc_async_write_sharded(
 }
 
 template <typename AddrGenType>
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
+FORCE_INLINE void noc_async_write_sharded(
+    const uint32_t l1_addr,
+    const AddrGenType tensor,
+    const uint32_t dest_id,
+    const uint32_t offset,
+    const uint32_t size) {
+    Noc noc;
+    return noc_async_write_sharded(noc, l1_addr, tensor, dest_id, offset, size);
+}
+
+template <typename AddrGenType>
 FORCE_INLINE void noc_async_read_sharded(
-    uint32_t l1_addr, AddrGenType tensor, uint32_t src_id, uint32_t offset, uint32_t size) {
+    Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t src_id, uint32_t offset, uint32_t size) {
     if constexpr (AddrGenType::DSpec::is_interleaved) {
-        noc_async_read(tensor.get_noc_addr(src_id, offset), l1_addr, size);
+        noc.async_read(tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
         const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
         if (pages_per_row <= 1) {
-            noc_async_read(tensor.get_noc_addr(src_id, offset), l1_addr, size);
+            noc.async_read(
+                tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
             return;
         }
         const uint32_t page_size = tensor.get_aligned_page_size();
@@ -281,14 +327,30 @@ FORCE_INLINE void noc_async_read_sharded(
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         for (uint32_t i = 0; i < num_pages; i++) {
-            uint64_t src_noc_addr = tensor.get_noc_addr(sharded_src_id, sharded_offset);
             uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
-            noc_async_read(src_noc_addr, l1_addr, read_size);
+            noc.async_read(
+                tensor,
+                CoreLocalMem<uint32_t>(l1_addr),
+                read_size,
+                {.page_id = sharded_src_id, .offset_bytes = sharded_offset},
+                {});
             sharded_src_id++;
             sharded_offset = 0;
             l1_addr += read_size;
         }
     }
+}
+
+template <typename AddrGenType>
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
+FORCE_INLINE void noc_async_read_sharded(
+    const uint32_t l1_addr,
+    const AddrGenType tensor,
+    const uint32_t src_id,
+    const uint32_t offset,
+    const uint32_t size) {
+    Noc noc;
+    return noc_async_read_sharded(noc, l1_addr, tensor, src_id, offset, size);
 }
 
 }  // namespace tt::data_movement::common

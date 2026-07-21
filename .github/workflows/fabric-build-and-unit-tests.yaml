@@ -3,16 +3,16 @@ name: "[internal] Fabric unit tests impl"
 on:
   workflow_call:
     inputs:
-      arch:
-        required: true
-        type: string
-      runner-label:
-        required: true
-        type: string
-      timeout:
+      enabled-skus:
         required: false
-        type: number
-        default: 10
+        type: string
+        default: ALL_SKUS_IN_TESTS
+        description: "Comma-separated SKUs, or ALL_SKUS_IN_TESTS to run every SKU defined in the tests yaml."
+      test-category:
+        required: false
+        type: string
+        default: merge_gate
+        description: "Time-budget workflow key passed to verify_time_budget.py (merge_gate for merge-gate and N300 fabric)."
       build-artifact-name:
         required: true
         type: string
@@ -36,25 +36,71 @@ on:
         required: false
         type: boolean
         default: false
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_merge_gate_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Verify test timeouts against budget
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+
   fabric-tests:
+    needs: load-test-matrix
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [{ name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh }]
-    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
+        ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib
@@ -72,6 +118,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -85,7 +132,7 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

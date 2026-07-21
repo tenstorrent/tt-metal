@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -13,8 +13,13 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/dataflow/circular_buffer.h"
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+// Renamed from copy_block to avoid an ambiguous overload with ckernel::copy_block (added to
+// api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,
+// uint32_t) signature and is in scope here via `using namespace ckernel`. See tt-metal#50386.
+void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    CircularBuffer cb_out(out_cb);
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
@@ -23,38 +28,77 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
             pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
+            tile_regs_commit();
+            tile_regs_release();
             tile_id++;
         }
-        cb_push_back(out_cb, N_block_tiles);
+        cb_out.push_back(N_block_tiles);
     }
 }
 
-// Split-K plan B: out = a + b, full elementwise (both M_block_tiles x N_block_tiles). Used by the
-// column reduction to add this band's matmul partial (a) to the running sum forwarded up from the band
-// below (b). Pushes out_cb one M-row at a time, matching copy_block/add_bias_block.
-void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    add_tiles_init(a_cb, b_cb);
-    reconfig_data_format(a_cb, b_cb);
+#ifdef FUSE_SWIGLU
+// Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in
+// `in_cb` (the intermediate accumulator): within each M row, column tile 2p is the
+// gate projection and 2p+1 is the up projection (the weight was tile-pair interleaved
+// on the host). For each pair we emit one output tile = silu(gate) * up, so the block
+// shrinks from N_block_tiles to N_block_tiles/2 along N. No extra CB / no extra DRAM
+// round-trip: silu runs on the gate DST reg and the multiply is an SFPU dst*dst op.
+//
+// With FUSE_BIAS: bias is interleaved identically (tile 2p = gate bias, 2p+1 = up bias)
+// and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
+//
+// N_block_tiles must be even (enforced host-side).
+void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+#ifdef FUSE_BIAS
+    reconfig_data_format(in_cb, bias_cb);
+#else
+    reconfig_data_format_srca(in_cb);
+#endif
     pack_reconfig_data_format(out_cb);
-    uint32_t tile_id = 0;
+
+    constexpr uint32_t GATE_DST = 0;
+    constexpr uint32_t UP_DST = 1;
+    const uint32_t out_N_block_tiles = N_block_tiles >> 1;
+
     for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
-            add_tiles(a_cb, b_cb, tile_id, tile_id, 0 /*dst*/);
-            pack_tile(0, out_cb);
-            release_dst();
-            tile_id++;
+        const uint32_t row_base = m * N_block_tiles;
+        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
+            const uint32_t gate_n = p << 1;
+            const uint32_t up_n = gate_n + 1;
+            const uint32_t gate_tile_id = row_base + gate_n;
+            const uint32_t up_tile_id = gate_tile_id + 1;
+
+            tile_regs_acquire();
+#ifdef FUSE_BIAS
+            add_bcast_rows_init_short(in_cb, bias_cb);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
+#else
+            copy_tile_to_dst_init_short(in_cb);
+            copy_tile(in_cb, gate_tile_id, GATE_DST);
+            copy_tile(in_cb, up_tile_id, UP_DST);
+#endif
+            silu_tile_init();
+            silu_tile(GATE_DST);
+            mul_binary_tile_init();
+            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(GATE_DST, out_cb);
+            tile_regs_release();
         }
-        cb_push_back(out_cb, N_block_tiles);
+        cb_push_back(out_cb, out_N_block_tiles);
     }
 }
+#endif  // FUSE_SWIGLU
 
 // For caller: if FUSE_TERNARY defined then out_cb == in_cb
 /**
@@ -66,6 +110,7 @@ void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_
  *   - false: Pushes all tiles at end (for final output)
  */
 void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    CircularBuffer cb_out(out_cb);
     add_bcast_rows_init_short(in_cb, bias_cb);
     reconfig_data_format(in_cb, bias_cb);
     pack_reconfig_data_format(out_cb);
@@ -74,16 +119,18 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
             pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
+            tile_regs_commit();
+            tile_regs_release();
             tile_id++;
         }
-        cb_push_back(out_cb, N_block_tiles);
+        cb_out.push_back(N_block_tiles);
     }
 }
 
@@ -102,6 +149,12 @@ void add_bias_and_addcmul_block(
 
     const uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
+    CircularBuffer cb_intermediate(intermediate_cb);
+    CircularBuffer cb_bias(bias_cb);
+    CircularBuffer cb_ternary_a(ternary_a_cb);
+    CircularBuffer cb_ternary_b(ternary_b_cb);
+    CircularBuffer cb_out(out_cb);
+
     constexpr uint32_t DST_ID = 0;
 #ifdef FUSE_BIAS
     // ============================================
@@ -114,10 +167,10 @@ void add_bias_and_addcmul_block(
     pack_reconfig_data_format(intermediate_cb);
 
     // Wait for ALL input data ONCE at the beginning
-    cb_wait_front(bias_cb, N_block_tiles);
+    cb_bias.wait_front(N_block_tiles);
 
     // Unpacker waits for intermediate_cb to be ready
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.wait_front(out_block_num_tiles);
 
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
@@ -127,7 +180,6 @@ void add_bias_and_addcmul_block(
             add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
-
             tile_regs_wait();
             pack_tile(DST_ID, intermediate_cb);
             tile_regs_release();
@@ -137,13 +189,13 @@ void add_bias_and_addcmul_block(
     // Pop input and push output ONCE at the end
     // cb_wait_front(intermediate_cb, out_block_num_tiles); // Unpacker-Packer sync
     // cb_pop_front(intermediate_cb, out_block_num_tiles);
-    cb_pop_front(bias_cb, N_block_tiles);
+    cb_bias.pop_front(N_block_tiles);
 
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.pop_front(out_block_num_tiles);
 
     // Restore intermediate_cb to ready (+ sync packer/unpacker)
-    cb_reserve_back(intermediate_cb, out_block_num_tiles);
-    cb_push_back(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.reserve_back(out_block_num_tiles);
+    cb_intermediate.push_back(out_block_num_tiles);
 #endif  // FUSE_BIAS
 
     // ============================================
@@ -152,13 +204,13 @@ void add_bias_and_addcmul_block(
     // broadcast_ternary_b: 1 = single row broadcast, 0 = row-by-row streaming
     // ============================================
 
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.wait_front(out_block_num_tiles);
 
     uint32_t tile_id = 0;
 
     if (broadcast_ternary_b) {
         // === BROADCAST: single row, wait/pop once ===
-        cb_wait_front(ternary_b_cb, N_block_tiles);
+        cb_ternary_b.wait_front(N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
@@ -199,7 +251,7 @@ void add_bias_and_addcmul_block(
             }
         }
 
-        cb_pop_front(ternary_b_cb, N_block_tiles);
+        cb_ternary_b.pop_front(N_block_tiles);
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
@@ -211,7 +263,7 @@ void add_bias_and_addcmul_block(
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
-            cb_wait_front(ternary_b_cb, N_block_tiles);
+            cb_ternary_b.wait_front(N_block_tiles);
             for (uint32_t n = 0; n < N_block_tiles; n++) {
                 tile_regs_acquire();
 
@@ -237,17 +289,17 @@ void add_bias_and_addcmul_block(
                 tile_regs_release();
                 tile_id++;
             }
-            cb_pop_front(ternary_b_cb, N_block_tiles);
+            cb_ternary_b.pop_front(N_block_tiles);
         }
     }
 
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.pop_front(out_block_num_tiles);
 
     // 'refill' intermediate_cb (also synchronize packer/unpacker)
-    cb_reserve_back(intermediate_cb, out_block_num_tiles);
-    cb_push_back(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.reserve_back(out_block_num_tiles);
+    cb_intermediate.push_back(out_block_num_tiles);
 
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.wait_front(out_block_num_tiles);
 
     add_tiles_init(intermediate_cb, ternary_a_cb);
     reconfig_data_format(intermediate_cb, ternary_a_cb);
@@ -256,7 +308,7 @@ void add_bias_and_addcmul_block(
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         // Wait for one row of ternary_a tiles
-        cb_wait_front(ternary_a_cb, N_block_tiles);
+        cb_ternary_a.wait_front(N_block_tiles);
 
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
@@ -265,18 +317,17 @@ void add_bias_and_addcmul_block(
             add_tiles(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
-
             tile_regs_wait();
             pack_tile(DST_ID, out_cb);
             tile_regs_release();
             tile_id++;
         }
 
-        cb_pop_front(ternary_a_cb, N_block_tiles);
-        cb_push_back(out_cb, N_block_tiles);
+        cb_ternary_a.pop_front(N_block_tiles);
+        cb_out.push_back(N_block_tiles);
     }
 
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
+    cb_intermediate.pop_front(out_block_num_tiles);
 }
 
 // Slightly modified from compute_common.hpp
@@ -316,7 +367,6 @@ void matmul_blocks(
                 in1_index += full_N_block_tiles;
             }
             tile_regs_commit();
-
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
@@ -352,8 +402,6 @@ void kernel_main() {
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
-    // split-K plan B: 1 if this is the bottom K-band (no incoming running sum), else 0. Always present.
-    const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
@@ -372,13 +420,21 @@ void kernel_main() {
     constexpr uint32_t in2_cb = tt::CBIndex::c_4;
     constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
     constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_7;  // split-K B: running sum forwarded up from the band below
+
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
+    CircularBuffer cb_intermediate(intermediate_cb);
+    CircularBuffer cb_in2(in2_cb);
+
+    // compute_kernel_hw_startup must be the first compute API call (before SFPU/op inits).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermediate_cb);
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    matmul_init(in0_cb, in1_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -406,7 +462,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            mm_block_init_short(
+            matmul_block_init(
                 in0_cb,
                 in1_cb,
                 false /*transpose*/,
@@ -416,10 +472,10 @@ void kernel_main() {
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
-            cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            cb_intermediate.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                cb_in0.wait_front(in0_block_num_tiles);
+                cb_in1.wait_front(in1_block_num_tiles);
 
                 matmul_blocks(
                     in0_cb,
@@ -443,44 +499,45 @@ void kernel_main() {
                     }
                 }
                 if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb, in0_block_num_tiles);
+                    cb_in0.pop_front(in0_block_num_tiles);
                 }
-                cb_pop_front(in1_cb, in1_block_num_tiles);
+                cb_in1.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
             }
 
-            cb_push_back(intermediate_cb, out_block_num_tiles);
+            cb_intermediate.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-            cb_reserve_back(out_cb, out_block_num_tiles);
-#ifdef REDUCE_K
-            // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
-            // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
-            // (non-top bands) or writes it to DRAM (top band). K-par never fuses bias/ternary.
-            cb_wait_front(intermediate_cb, out_block_num_tiles);
-            if (is_reduce_bottom) {
-                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-            } else {
-                cb_wait_front(cb_reduce, out_block_num_tiles);
-                reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
-                cb_pop_front(cb_reduce, out_block_num_tiles);
-            }
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
+#ifdef FUSE_SWIGLU
+            // SwiGLU collapses the interleaved gate/up block to half its N width.
+            cb_out.reserve_back(out_block_num_tiles >> 1);
+            cb_intermediate.wait_front(out_block_num_tiles);
+#ifdef FUSE_BIAS
+            cb_in2.wait_front(N_block_tiles);
+#endif
+            swiglu_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
+#ifdef FUSE_BIAS
+            cb_in2.pop_front(N_block_tiles);
+#endif
+            cb_intermediate.pop_front(out_block_num_tiles);
+
 #elif !defined(FUSE_TERNARY)
-            cb_wait_front(intermediate_cb, out_block_num_tiles);
+            cb_out.reserve_back(out_block_num_tiles);
+            cb_intermediate.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
-            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
-            cb_wait_front(in2_cb, N_block_tiles);
+            cb_in2.wait_front(N_block_tiles);
             add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(in2_cb, N_block_tiles);
+            cb_in2.pop_front(N_block_tiles);
 #endif  // FUSE_BIAS
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
+            cb_intermediate.pop_front(out_block_num_tiles);
 
 #else   // FUSE_TERNARY is set
+            cb_out.reserve_back(out_block_num_tiles);
             add_bias_and_addcmul_block(
                 intermediate_cb,
                 in2_cb,

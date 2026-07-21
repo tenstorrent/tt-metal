@@ -27,7 +27,6 @@ void kernel_main() {
 
     // Constants
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_in0 = get_tile_size(cb_id_in0);
 
     // DRAM tensor accessor configuration
     constexpr auto s_args = TensorAccessorArgs<5>();
@@ -36,13 +35,14 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
     CircularBuffer cb_in1(cb_id_in1);
+    const uint32_t tile_bytes_in0 = cb_in0.get_tile_size();
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
     constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(4);
     const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
-    const uint32_t tile_bytes_in1 = get_tile_size(cb_id_in1);
+    const uint32_t tile_bytes_in1 = cb_in1.get_tile_size();
 #endif  // not GENERATE_INDICES
 
     for (uint32_t i = start_ht; i < Ht; ++i) {

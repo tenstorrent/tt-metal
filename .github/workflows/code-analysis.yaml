@@ -2,8 +2,8 @@ name: "Code analysis"
 
 on:
   schedule:
-    # Run hourly to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
-    - cron: "0 * * * *"
+    # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
+    - cron: "0 */2 * * *"
   workflow_call:
     inputs:
       platform:
@@ -41,6 +41,16 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
+      post-pr-suggestions:
+        required: false
+        type: boolean
+        default: false
+        description: "Post inline clang-tidy fix suggestions on PR diffs"
+      check-harbor-runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-light"
+        description: "Runner label for the Harbor health check job"
   workflow_dispatch:
     inputs:
       architecture:
@@ -89,6 +99,7 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -97,7 +108,7 @@ jobs:
         run: git config --global --add safe.directory ${{ github.workspace }}
 
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
       - id: compute-outputs
         shell: bash
@@ -113,8 +124,7 @@ jobs:
 
           # Skip scan entirely if no code/cmake changes and not a full scan
           if [[ "$do_full_scan" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"
@@ -128,6 +138,8 @@ jobs:
   # Check Harbor availability first
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ inputs.check-harbor-runs-on }}
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
@@ -159,6 +171,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -167,6 +182,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: ''
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -176,6 +192,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -184,6 +203,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -192,6 +212,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -200,6 +223,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -208,6 +232,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -216,6 +243,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -224,6 +252,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -232,3 +263,4 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}

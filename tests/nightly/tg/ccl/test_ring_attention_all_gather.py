@@ -138,7 +138,7 @@ def test_ring_attention_all_gather(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 3),
     ],
     ids=["check"],
 )
@@ -172,7 +172,7 @@ def test_ring_attention_all_gather_program_cache(
     submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
     dummy_tensors = []
-    for i in range(3):
+    for i in range(num_iters):
         dummy_tensors.append(
             ttnn.from_torch(
                 torch.rand(ag_output_shape),
@@ -184,23 +184,23 @@ def test_ring_attention_all_gather_program_cache(
                 ),
             )
         )
-        run_ring_attention_all_gather_impl(
-            submesh_device,
-            ag_output_shape,
-            ag_num_inputs,
-            rp_axis,
-            rp_factor,
-            up_factor,
-            num_links,
-            ag_input_dtype,
-            layout,
-            mem_config_input,
-            mem_config_ag,
-            all_gather_topology=all_gather_topology,
-            enable_trace=enable_trace,
-            num_iters=num_iters,
-            pcc_threshold=pcc_threshold,
-        )
-        ttnn.synchronize_device(submesh_device)
+    run_ring_attention_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        ag_num_inputs,
+        rp_axis,
+        rp_factor,
+        up_factor,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
+    )
+    ttnn.synchronize_device(submesh_device)
 
     assert submesh_device.cache_entries_counter.total == 1

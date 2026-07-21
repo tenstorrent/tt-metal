@@ -29,6 +29,12 @@ COPY _tt-metal/build/ ./build/
 COPY _tt-metal/runtime/ ./runtime/
 COPY ttnn-*.whl ./
 
+# UMD api_tests embed UMD_TESTS_ROOT_PATH=/work/tt_metal/third_party/umd/tests at compile time.
+# The metal build runs at /work, but this image keeps sources under /home/user/tt-metal.
+# Point the baked-in path at the cloned soc_descs and cluster_descriptor_examples.
+RUN sudo mkdir -p /work/tt_metal/third_party/umd && \
+    sudo ln -sfn /home/user/tt-metal/tt_metal/third_party/umd/tests /work/tt_metal/third_party/umd/tests
+
 RUN uv pip install $(ls -1 *.whl)
 
 RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests

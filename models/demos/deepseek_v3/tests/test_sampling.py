@@ -47,7 +47,7 @@ def _extract_all_tokens(tt_out_tok, mesh_device, batch_size_per_row):
 def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
     batch_size = USERS_PER_ROW * int(mesh_device.shape[0])
     tt_input = _make_lm_head_sharded_logits(torch_input, mesh_device)
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl)
     params = format_sampling_params(user_params, max_batch_size=batch_size)
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
@@ -222,7 +222,7 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     )
 
     tt_input = _make_lm_head_sharded_logits(torch_input, mesh_device)
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl, enable_internal_trace=use_tracing)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl)
     params = format_sampling_params(user_params, max_batch_size=batch_size)
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))

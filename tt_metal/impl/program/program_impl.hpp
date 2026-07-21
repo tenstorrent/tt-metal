@@ -49,12 +49,8 @@ class EnqueueProgramCommand;
 
 class Kernel;
 
-// Metal 2.0 type aliases
-using KernelSpecName = std::string;
-using DFBSpecName = std::string;
-using SemaphoreSpecName = std::string;
-
 namespace distributed {
+class MeshDevice;
 class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
@@ -68,7 +64,7 @@ namespace program_dispatch {
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache);
 }
@@ -225,11 +221,15 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
+    void allocate_scratchpads(const IDevice* device);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -249,7 +249,7 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
-    void generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
@@ -276,7 +276,7 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        tt::stl::Span<ProgramImpl*> programs);
+        ttsl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -299,6 +299,16 @@ public:
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
+
+    // A single DFB size override request, resolved to a DFB id. Overrides are applied as a batch
+    // so an alias group can be validated for agreement before any mutation.
+    struct DfbSizeOverride {
+        uint32_t dfb_id;
+        std::optional<uint32_t> entry_size;
+        std::optional<uint32_t> num_entries;
+    };
+
+    void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
@@ -334,22 +344,26 @@ public:
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
 
-    void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+    void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
 
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
-    void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
-    void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
-    void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+    void register_kernel_spec_name(const std::string& name, KernelHandle handle);
+    void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
+    void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only);
+        const std::string& name,
+        const TensorSpec& spec,
+        bool dynamic_tensor_shape,
+        bool match_padded_shape_only,
+        bool enqueue_invariant);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
-    KernelHandle get_kernel_handle(const KernelSpecName& name) const;
-    uint32_t get_dfb_handle(const DFBSpecName& name) const;
-    uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+    KernelHandle get_kernel_handle(const std::string& name) const;
+    uint32_t get_dfb_handle(const std::string& name) const;
+    uint32_t get_semaphore_handle(const std::string& name) const;
     // Returns nullptr if name is not registered (caller validates).
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
     // Returns false if the parameter was not registered with dynamic_tensor_shape=true,
@@ -358,6 +372,9 @@ public:
     // Returns false if the parameter was not registered with match_padded_shape_only=true,
     // or if the name is unknown. (The caller validates known-ness separately.)
     bool get_tensor_parameter_match_padded_shape_only(const std::string& name) const;
+    // Returns false if the parameter was not registered enqueue-invariant, or if the name is
+    // unknown. (The caller validates known-ness separately.)
+    bool get_tensor_parameter_enqueue_invariant(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -366,7 +383,7 @@ public:
     const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
-    std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
+    std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
         return get_kernel(get_kernel_handle(name));
     }
 
@@ -378,19 +395,41 @@ public:
         std::vector<std::string> runtime_arg_names;
         std::vector<std::string> common_runtime_arg_names;
 
+        // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
+        // position within its dispatch-buffer section). Built once at Program construction so the
+        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
+        // that path is not bypassable via skip_validation, so per-call construction would be pure
+        // host overhead on the inner re-enqueue loop.
+        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
         // broadcast count.
         std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
         size_t num_common_runtime_varargs = 0;
+
+        // Names (each a subset of runtime_arg_names / common_runtime_arg_names) declared
+        // enqueue-loop invariant via KernelAdvancedOptions. These named args may be omitted
+        // from a partial UpdateProgramRunArgs call, in which case the value installed by the
+        // most recent SetProgramRunArgs is retained. (Varargs cannot be marked invariant.)
+        std::unordered_set<std::string> enqueue_invariant_runtime_arg_names;
+        std::unordered_set<std::string> enqueue_invariant_common_runtime_arg_names;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
-    const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
+    void register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema);
+    const KernelRTASchema* get_kernel_rta_schema(const std::string& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
-    std::vector<KernelSpecName> get_registered_kernel_names() const;
+    std::vector<std::string> get_registered_kernel_names() const;
+
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -403,6 +442,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -468,10 +508,10 @@ private:
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.
     struct Metal2NameRegistry {
-        std::unordered_map<KernelSpecName, KernelHandle> kernel_handles;
-        std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
-        std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
-        std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
+        std::unordered_map<std::string, KernelHandle> kernel_handles;
+        std::unordered_map<std::string, uint32_t> dfb_handles;
+        std::unordered_map<std::string, uint32_t> semaphore_handles;
+        std::unordered_map<std::string, KernelRTASchema> kernel_rta_schemas;
         // TensorParameter name -> the parameter's declared layout + loosening opt-ins.
         // Used by ValidateProgramRunArgs to check that the supplied MeshTensor's spec matches
         // the parameter's declared layout (with relaxations applied per the opt-in flags), and as
@@ -480,6 +520,9 @@ private:
             TensorSpec spec;
             bool dynamic_tensor_shape = false;
             bool match_padded_shape_only = false;
+            // Declared enqueue-loop invariant: the TensorArgument may be omitted from a partial
+            // UpdateProgramRunArgs call (the previously-bound MeshTensor is retained).
+            bool enqueue_invariant = false;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
@@ -494,6 +537,12 @@ private:
     std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
+
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
+    bool scratchpads_allocated_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
@@ -540,7 +589,7 @@ private:
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
-        IDevice* device,
+        distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         bool use_prefetcher_cache);
 

@@ -15,6 +15,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/debug/dprint_pages.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -27,6 +28,10 @@ void kernel_main() {
 
     uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
     constexpr uint32_t onetile = 1;
+
+    CircularBuffer cb_input(input_cb);
+    CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
+    CircularBuffer cb_intermediate(intermediate_cb);
 
     binary_op_init_common(input_cb, input_cb, intermediate_cb);
 
@@ -41,9 +46,9 @@ void kernel_main() {
         PACK((llk_pack_reconfig_l1_acc(0)));
 
         mul_tiles_init(input_cb, input_cb);
-        cb_reserve_back(intermediate_cb, onetile);
+        cb_intermediate.reserve_back(onetile);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_wait_front(input_cb, block_size);
+            cb_input.wait_front(block_size);
 
             tile_regs_acquire();
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -63,9 +68,9 @@ void kernel_main() {
             }
             tile_regs_release();
 
-            cb_pop_front(input_cb, block_size);
+            cb_input.pop_front(block_size);
         }
-        cb_push_back(intermediate_cb, onetile);
+        cb_intermediate.push_back(onetile);
 
         // Disable L1 accumulation
         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -73,8 +78,8 @@ void kernel_main() {
         /*
          * sum(x**2)
          */
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            intermediate_cb, reduce_scalar_cb, output_cb, compute_kernel_lib::ReduceInputBlockShape::single());
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, intermediate_cb, reduce_scalar_cb, output_cb>(
+            compute_kernel_lib::ReduceInputBlockShape::single());
     }
-    cb_pop_front(reduce_scalar_cb, onetile);
+    cb_reduce_scalar.pop_front(onetile);
 }

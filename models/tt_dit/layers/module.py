@@ -37,6 +37,7 @@ class Module(ABC):
         self._parameters = {}
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
+        self._coresident_peers: list[Module] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -133,6 +134,12 @@ class Module(ABC):
         for name in state_dict:
             unexpected_keys.append(f"{module_key_prefix}{name}")
 
+    def _mark_loaded(self) -> None:
+        """Recursively mark this module and all descendants as loaded."""
+        self._is_loaded = True
+        for _, child in self.named_children():
+            child._mark_loaded()  # noqa: SLF001
+
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
 
@@ -158,7 +165,7 @@ class Module(ABC):
                 parts.append("unexpected Torch state keys: " + ", ".join(unexpected_keys))
             raise ValueError("; ".join(parts))
 
-        self._is_loaded = True
+        self._mark_loaded()
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
     @deprecated("Use load_torch_state_dict instead")
@@ -394,7 +401,7 @@ class Parameter:
         )
 
     def save(self, path: str | Path, /) -> None:
-        ttnn.dump_tensor(path, self.data)
+        ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
         try:

@@ -81,6 +81,8 @@ void kernel_main() {
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
     const auto gs_addrgen = TensorAccessor(gs_args, gs_addr);
 
+    Noc noc;
+
     // ---------------------------------------------------------------
     // L1 scratch layout in cb_scratch (BRISC):
     //   [zero_buf    (h*2 bytes)]
@@ -118,7 +120,7 @@ void kernel_main() {
     // DRAM. With pre-zero, every expert iteration can do the same RMW path
     // (the first to touch a row reads zero and effectively writes), and tokens
     // with no local experts stay zero.
-    fill_zeros_async(zero_buf_addr, h * 2U);
+    fill_zeros_async(noc, cb_scratch, h * 2U);
     noc_async_read_barrier();
     auto zero_slice = ttml::metal::moe_ungroup::slice_for_core(total_rows, num_total_cores, my_core_idx);
     for (uint32_t row = zero_slice.start; row < zero_slice.start + zero_slice.count; ++row) {
@@ -190,7 +192,7 @@ void kernel_main() {
                 cb_reserve_back(cb_w, 1U);
                 {
                     uint32_t w_tile_addr = get_write_ptr(cb_w);
-                    fill_zeros_async(w_tile_addr, TILE_BYTES);
+                    fill_zeros_async(noc, cb_w, TILE_BYTES);
                     noc_async_read_barrier();
                     volatile tt_l1_ptr uint16_t* w_tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_tile_addr);
                     for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
@@ -215,7 +217,7 @@ void kernel_main() {
                     uint32_t row_buf = existing_l1 + r * hidden_chunk_bytes;
                     if (flat == SENTINEL) {
                         // Skipped row — fill via NOC DMA so tilize sees zeros.
-                        fill_zeros_async(row_buf, hidden_chunk_bytes);
+                        fill_zeros_async(noc, cb_existing_rm, hidden_chunk_bytes, r * hidden_chunk_bytes);
                         continue;
                     }
                     uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(flat, chunk * hidden_chunk_bytes);
@@ -232,7 +234,7 @@ void kernel_main() {
                         if (flat == SENTINEL) {
                             continue;
                         }
-                        fill_zeros_async(existing_l1 + r * hidden_chunk_bytes + chunk_bytes, pad_bytes);
+                        fill_zeros_async(noc, cb_existing_rm, pad_bytes, r * hidden_chunk_bytes + chunk_bytes);
                     }
                     noc_async_read_barrier();
                 }

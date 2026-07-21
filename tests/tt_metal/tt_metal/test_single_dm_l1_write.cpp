@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
+#include "context/metal_context.hpp"
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -28,7 +29,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
 
-    const uint32_t address = 100 * 1024;
+    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t value = 0x12345678;
     std::vector<uint32_t> outputs(1);
     outputs[0] = 0;
@@ -48,7 +50,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    constexpr const char* DM_KERNEL = "dm_kernel";
+    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
 
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
@@ -61,9 +63,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
                 .runtime_arg_names = {"address"},
                 .common_runtime_arg_names = {"value"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -80,9 +80,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = DM_KERNEL,
-        .runtime_arg_values = {{.node = node, .args = {{"address", address}}}},
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
     experimental::SetProgramRunArgs(program, params);

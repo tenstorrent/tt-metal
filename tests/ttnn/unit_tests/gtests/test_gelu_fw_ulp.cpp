@@ -184,12 +184,18 @@ inline double gelu_exact(double x) {
 
 /**
  * Compute the expected BF16 GELU value with DAZ+FTZ applied.
+ *
+ * Uses float32 erff (matching torch.gelu's arithmetic model) rather than fp64
+ * erfc. This ensures the reference saturates at the same points as the kernel
+ * and produces the same float32 staircase values in the deep-tail region,
+ * keeping ULP ≤ 2 vs the kernel everywhere.
  */
 inline float gelu_expected_bf16_daz(float x) {
     float x_daz = bf16_daz_normalize(x);
-    double result = gelu_exact(x_daz);
-    float result_f32 = static_cast<float>(result);
-    return bf16_daz_normalize(result_f32);
+    constexpr float SQRT2F = std::numbers::sqrt2_v<float>;
+    float cdf = 0.5f * (1.0f + std::erff(x_daz / SQRT2F));
+    float result = x_daz * cdf;
+    return bf16_daz_normalize(result);
 }
 
 }  // namespace bf16_ulp_fw
@@ -296,8 +302,8 @@ TEST_F(GeluFwUlpTest, NearZeroRegion) {
 
 // Precision guard: sweeps ALL ~65K BF16 values, enforces per-region ULP caps.
 // Regions match the kernel's piecewise implementation:
-//   x <= -13.1875: saturation to 0
-//   (-13.1875, -3.125): exp-based asymptotic with 3-term Mills ratio
+//   x <= -5.54259443: saturation to 0 (first x where fp32 erff(x/sqrt(2)) == -1)
+//   (-5.54259443, -3.125): Moroz exp_21f + H-form correction + grid rounding
 //   [-3.125, 2.78125): core CDF polynomial (degree-15)
 //   x >= 2.78125: identity (return x)
 //   2.78125 (BF16 0x4032) is the exact boundary where GELU rounds to x with RNE
@@ -363,8 +369,8 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     };
 
     std::vector<RegionStats> regions = {
-        {"Saturation to 0 (x <= -13.1875)"},
-        {"Exp-based (-13.1875, -3.125)"},
+        {"Saturation to 0 (x <= -5.54259443)"},
+        {"Exp-based (-5.54259443, -3.125)"},
         {"Core CDF poly [-3.125, 2.78125)"},
         {"Identity (x >= 2.78125)"},
     };
@@ -385,7 +391,7 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
 
         // Categorize by kernel region (3 active regions + zero default)
         int region_idx;
-        if (x <= -13.1875f) {
+        if (x <= -5.54259443f) {
             region_idx = 0;  // Zero saturation
         } else if (x < -3.125f) {
             region_idx = 1;  // Exp-based
@@ -581,7 +587,7 @@ TEST_F(GeluFwUlpTest, ReferenceImplementationVerification) {
 //
 // The golden's boundaries are where GELU(x) naturally rounds to 0 (negative
 // tail) or to x (positive tail) in BF16 with RNE rounding. These may differ
-// from the kernel's hardcoded thresholds (-13.1875 and 3.0).
+// from the kernel's hardcoded thresholds (-5.54259443 and 3.0).
 TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
     // Collect all valid BF16 values, sorted
     std::vector<float> all_values;
@@ -653,7 +659,7 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
     log_debug(tt::LogTest, "Golden reference saturation boundaries (BF16 RNE model):");
     log_info(
         tt::LogTest,
-        "  Neg zero tail: last_zero={:.4f} (0x{:04x}), first_nonzero={:.4f} (0x{:04x}), kernel=-13.1875",
+        "  Neg zero tail: last_zero={:.4f} (0x{:04x}), first_nonzero={:.4f} (0x{:04x}), kernel=-5.54259443",
         neg_sat_boundary_zero,
         bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_zero),
         neg_sat_boundary_nonzero,
@@ -857,7 +863,7 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
 
         // Determine region (3 active regions + zero default)
         std::string region;
-        if (x <= -13.1875f) {
+        if (x <= -5.54259443f) {
             region = "saturation";
         } else if (x < -3.125f) {
             region = "exp-based";
@@ -976,7 +982,7 @@ TEST_F(GeluFwUlpTest, SummaryStatistics) {
         {"Large positive (identity)", 6.0f, 0},
         {"Moderate negative", -4.0f, 2},
         {"Deep negative (exp)", -8.0f, 2},
-        {"Saturation boundary", -13.1875f, 0},
+        {"Saturation boundary", -5.5625f, 0},  // nearest BF16 ≤ -5.54259443; kernel and erff both give 0
     };
 
     for (const auto& kp : key_points) {

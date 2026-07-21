@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -15,8 +16,11 @@ namespace ttnn::prim {
 
 RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    bool is_last_dim = operation_attributes.m_is_last_dim;
-    if (is_last_dim) {
+    // m_tile_page_size_bytes > 0 -> higher-dim tile factory; else last-dim or higher-dim RM.
+    if (operation_attributes.m_tile_page_size_bytes > 0) {
+        return RepeatProgramFactoryHigherDim{};
+    }
+    if (operation_attributes.m_is_last_dim) {
         return RepeatProgramFactoryLastDim{};
     }
     return RepeatProgramFactoryHigherDim{};
@@ -24,37 +28,61 @@ RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_f
 
 void RepeatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Validate the input tensor
     const Tensor& input_tensor_a = tensor_args.input;
     TT_FATAL(
-        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
-        "Operands to reshape need to be on device!");
+        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to repeat need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
-    TT_FATAL(
-        input_tensor_a.dtype() == tt::tt_metal::DataType::UINT16 or
-            input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
-            input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32 or
-            input_tensor_a.dtype() == tt::tt_metal::DataType::INT32 or
-            input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "Can only work with UINT16, BFLOAT16, UINT32, INT32, FLOAT32 data types");
-    // is this relevant?
-    TT_FATAL(
-        operation_attributes.m_output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
-        "Output tensor must have the same memory layout as input tensor");
+
+    if (operation_attributes.m_tile_page_size_bytes > 0) {
+        TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::TILE, "Tile-native repeat requires TILE layout");
+    } else {
+        TT_FATAL(
+            input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "ROW_MAJOR repeat requires ROW_MAJOR layout");
+        TT_FATAL(
+            input_tensor_a.dtype() == tt::tt_metal::DataType::UINT16 or
+                input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
+                input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32 or
+                input_tensor_a.dtype() == tt::tt_metal::DataType::INT32 or
+                input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32,
+            "Can only work with UINT16, BFLOAT16, UINT32, INT32, FLOAT32 data types");
+    }
+
+    // Dropped memory_layout equality check; predicate + compute_output_specs handle sharded I/O.
 }
 
 RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) {
     const auto& input_tensor_a = input_tensors.input;
-    auto output_shape = input_tensor_a.logical_shape();
-    output_shape[operation_attributes.m_is_last_dim ? -1 : 1] *= operation_attributes.m_num_repeats;
+    const auto& input_shape = input_tensor_a.logical_shape();
+    auto output_shape = input_shape;
+    // Fallback dim 1 = rep_dim slot in the higher-dim factory's collapsed (higher, rep_dim, lower, W) view.
+    const int32_t effective_repeat_dim =
+        operation_attributes.m_repeat_dim >= 0
+            ? operation_attributes.m_repeat_dim
+            : (operation_attributes.m_is_last_dim ? static_cast<int32_t>(input_shape.rank()) - 1 : 1);
+    output_shape[effective_repeat_dim] *= operation_attributes.m_num_repeats;
 
     auto mem_config = operation_attributes.m_output_mem_config;
-    if (input_tensor_a.memory_config().is_sharded()) {
-        auto shard_spec = input_tensor_a.shard_spec().value();
-        shard_spec.shape[0] = output_shape[0];
-        mem_config = mem_config.with_shard_spec(shard_spec);
+    if (mem_config.is_sharded()) {
+        // Derive output shard_spec: user spec, scale input spec, or synthesise fresh.
+        if (!mem_config.shard_spec().has_value()) {
+            std::optional<tt::tt_metal::ShardSpec> derived;
+            if (input_tensor_a.memory_config().is_sharded() && input_tensor_a.shard_spec().has_value()) {
+                derived = operations::data_movement::repeat::adjust_repeat_shard_spec_to_shape(
+                    *input_tensor_a.shard_spec(),
+                    input_shape,
+                    output_shape,
+                    effective_repeat_dim,
+                    operation_attributes.m_num_repeats);
+            }
+            if (!derived.has_value()) {
+                derived = operations::data_movement::repeat::generate_repeat_shard_spec(
+                    input_tensor_a, output_shape, mem_config.memory_layout());
+            }
+            if (derived.has_value()) {
+                mem_config = MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), derived);
+            }
+        }
     }
     return TensorSpec(
         output_shape,
@@ -88,6 +116,29 @@ RepeatDeviceOperation::tensor_return_value_t repeat(
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
+        OperationType::tensor_args_t{.input = input});
+}
+
+RepeatDeviceOperation::tensor_return_value_t repeat_tile(
+    const Tensor& input,
+    uint32_t num_repeats,
+    int32_t repeat_dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint32_t tile_higher_pages,
+    uint32_t tile_rep_dim_pages,
+    uint32_t tile_lower_pages,
+    uint32_t tile_page_size_bytes) {
+    using OperationType = RepeatDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .m_num_repeats = num_repeats,
+            .m_is_last_dim = false,
+            .m_output_mem_config = output_mem_config,
+            .m_tile_higher_pages = tile_higher_pages,
+            .m_tile_rep_dim_pages = tile_rep_dim_pages,
+            .m_tile_lower_pages = tile_lower_pages,
+            .m_tile_page_size_bytes = tile_page_size_bytes,
+            .m_repeat_dim = repeat_dim},
         OperationType::tensor_args_t{.input = input});
 }
 }  // namespace ttnn::prim

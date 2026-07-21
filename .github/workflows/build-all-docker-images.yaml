@@ -16,9 +16,6 @@ name: "Build all Docker images"
 # =============================================================================
 
 env:
-  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
-  # Acceptable for tool/venv images (built infrequently). For ci-test/dev images (built on every
-  # Dockerfile change), monitor push duration and lower to level 3 if it becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
@@ -34,17 +31,41 @@ on:
         type: boolean
         default: false
         description: "Prewarm built images into Harbor from GHCR"
+      runs-on-large:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for large CPU jobs (e.g. LLK CI image build)"
+      runs-on-medium:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-medium-stable"
+        description: "Runner label for medium CPU jobs (e.g. Harbor prewarm)"
+      check-harbor-runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-light"
+        description: "Runner label for the Harbor health check job"
     outputs:
       # Ubuntu 22.04 images (from build-docker-artifact platform=Ubuntu 22.04)
+      ubuntu-2204-ci-build-light-tag:
+        description: "Docker tag for Ubuntu 22.04 CI Build Light image"
+        value: ${{ jobs.build-2204.outputs.ci-build-light-tag }}
       ubuntu-2204-ci-build-tag:
         description: "Docker tag for Ubuntu 22.04 CI Build image"
         value: ${{ jobs.build-2204.outputs.ci-build-tag }}
+      ubuntu-2204-ci-test-light-tag:
+        description: "Docker tag for Ubuntu 22.04 CI Test Light image"
+        value: ${{ jobs.build-2204.outputs.ci-test-light-tag }}
       ubuntu-2204-ci-test-tag:
         description: "Docker tag for Ubuntu 22.04 CI Test image"
         value: ${{ jobs.build-2204.outputs.ci-test-tag }}
       ubuntu-2204-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Dev image"
         value: ${{ jobs.build-2204.outputs.dev-tag }}
+      ubuntu-2204-dev-light-tag:
+        description: "Docker tag for Ubuntu 22.04 Dev Light image"
+        value: ${{ jobs.build-2204.outputs.dev-light-tag }}
       ubuntu-2204-basic-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Basic Dev image"
         value: ${{ jobs.build-2204.outputs.basic-dev-tag }}
@@ -58,15 +79,24 @@ on:
         description: "Docker tag for Ubuntu 22.04 Python CI Test venv image"
         value: ${{ jobs.build-2204.outputs.python-ci-test-venv-tag }}
       # Ubuntu 24.04 images (from build-docker-artifact platform=Ubuntu 24.04)
+      ubuntu-2404-ci-build-light-tag:
+        description: "Docker tag for Ubuntu 24.04 CI Build Light image"
+        value: ${{ jobs.build-2404.outputs.ci-build-light-tag }}
       ubuntu-2404-ci-build-tag:
         description: "Docker tag for Ubuntu 24.04 CI Build image"
         value: ${{ jobs.build-2404.outputs.ci-build-tag }}
+      ubuntu-2404-ci-test-light-tag:
+        description: "Docker tag for Ubuntu 24.04 CI Test Light image"
+        value: ${{ jobs.build-2404.outputs.ci-test-light-tag }}
       ubuntu-2404-ci-test-tag:
         description: "Docker tag for Ubuntu 24.04 CI Test image"
         value: ${{ jobs.build-2404.outputs.ci-test-tag }}
       ubuntu-2404-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Dev image"
         value: ${{ jobs.build-2404.outputs.dev-tag }}
+      ubuntu-2404-dev-light-tag:
+        description: "Docker tag for Ubuntu 24.04 Dev Light image"
+        value: ${{ jobs.build-2404.outputs.dev-light-tag }}
       ubuntu-2404-basic-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Basic Dev image"
         value: ${{ jobs.build-2404.outputs.basic-dev-tag }}
@@ -107,6 +137,8 @@ jobs:
   # Check Harbor availability via reusable workflow
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ inputs.check-harbor-runs-on || 'tt-ubuntu-light' }}
 
   # Preflight: compute tool and platform data on a single runner
   # Outputs raw JSON blobs that downstream workflows parse with fromJson()
@@ -124,24 +156,10 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
           submodules: recursive
-
-      - name: Compute tool data
-        id: tool-data
-        env:
-          FORCE_REBUILD: ${{ inputs.force-rebuild }}
-        run: |
-          set -euo pipefail
-          ARGS="${{ github.repository }}"
-          [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
-          DATA=$(.github/scripts/compute-tool-data.sh $ARGS)
-          {
-            echo "data<<EOJSON"
-            echo "$DATA"
-            echo "EOJSON"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Compute Ubuntu 22.04 platform data
         id: platform-2204
@@ -167,6 +185,57 @@ jobs:
           ARGS="24.04 ${{ github.repository }}"
           [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
           DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
+          {
+            echo "data<<EOJSON"
+            echo "$DATA"
+            echo "EOJSON"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute tool data
+        id: tool-data
+        env:
+          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+          PLATFORM_2204_DATA: ${{ steps.platform-2204.outputs.data }}
+          PLATFORM_2404_DATA: ${{ steps.platform-2404.outputs.data }}
+        run: |
+          set -euo pipefail
+
+          FINAL_IMAGES_MISSING=$(jq -nr \
+            --argjson p2204 "$PLATFORM_2204_DATA" \
+            --argjson p2404 "$PLATFORM_2404_DATA" '
+              [
+                $p2204.ci_build_light_exists,
+                $p2204.ci_build_exists,
+                $p2204.ci_test_light_exists,
+                $p2204.ci_test_exists,
+                $p2204.dev_light_exists,
+                $p2204.dev_exists,
+                $p2204.basic_dev_exists,
+                $p2204.basic_ttnn_exists,
+                $p2204.manylinux_exists,
+                $p2404.ci_build_light_exists,
+                $p2404.ci_build_exists,
+                $p2404.ci_test_light_exists,
+                $p2404.ci_test_exists,
+                $p2404.dev_light_exists,
+                $p2404.dev_exists,
+                $p2404.basic_dev_exists,
+                $p2404.basic_ttnn_exists
+              ] | any(. != "true")
+            ')
+
+          ARGS="${{ github.repository }}"
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            ARGS+=" --force-rebuild"
+            DATA=$(.github/scripts/compute-tool-data.sh $ARGS)
+          elif [ "$FINAL_IMAGES_MISSING" = "true" ]; then
+            DATA=$(.github/scripts/compute-tool-data.sh $ARGS)
+          else
+            TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}" | jq -ce '.')
+            DATA=$(jq -cn --argjson tool_tags "$TOOL_TAGS" \
+              '{tool_tags: $tool_tags, any_missing: "false"}')
+          fi
+
           {
             echo "data<<EOJSON"
             echo "$DATA"
@@ -216,10 +285,11 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.llk-needs-build == 'true'
     timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ${{ inputs.runs-on-large || 'tt-ubuntu-2204-large-stable' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
           submodules: recursive
@@ -272,14 +342,15 @@ jobs:
       platform-data: ${{ needs.preflight.outputs.platform-2404-data }}
     secrets: inherit
 
-  # Prewarm Harbor cache after all image-producing jobs complete
+  # Prewarm Harbor cache after image-producing jobs complete
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
-    needs: [preflight, build-tools, build-llk, build-2204, build-2404]
+    needs: [preflight, build-2204, build-2404, build-llk]
     if: always() && !failure() && !cancelled() && inputs.prewarm-harbor && needs.preflight.outputs.harbor-prefix != ''
-    runs-on: tt-ubuntu-2204-medium-stable
+    runs-on: ${{ inputs.runs-on-medium || 'tt-ubuntu-2204-medium-stable' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions/prewarm-images
           sparse-checkout-cone-mode: false
@@ -298,27 +369,35 @@ jobs:
           username: ${{ secrets.HARBOR_PUSH_USER }}
           password: ${{ secrets.HARBOR_PUSH_PASSWORD }}
 
-      - name: Prewarm tool images cache
+      - name: Build LLK CI image list
+        id: images-llk
+        run: |
+          IMAGES=$(jq -n --arg llk '${{ needs.preflight.outputs.llk-ci-tag }}' '[ $llk ] | map(select(. != ""))')
+          {
+            echo "list<<EOF"
+            echo "$IMAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prewarm LLK CI image
         uses: ./.github/actions/prewarm-images
         with:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
-          images: ${{ needs.build-tools.outputs.tool-tags }}
-          title: "tool images"
-          json-keys: "ccache-tag mold-tag doxygen-tag clangbuildanalyzer-tag gdb-tag cmake-tag yq-tag zstd-tag sfpi-tag openmpi-tag"
+          images: ${{ steps.images-llk.outputs.list }}
+          title: "LLK CI image"
 
       - name: Build Ubuntu 22.04 image list
         id: images-2204
         run: |
           IMAGES=$(jq -n \
+            --arg ci_build_light '${{ needs.build-2204.outputs.ci-build-light-tag }}' \
             --arg ci_build '${{ needs.build-2204.outputs.ci-build-tag }}' \
+            --arg ci_test_light '${{ needs.build-2204.outputs.ci-test-light-tag }}' \
             --arg ci_test '${{ needs.build-2204.outputs.ci-test-tag }}' \
+            --arg dev_light '${{ needs.build-2204.outputs.dev-light-tag }}' \
             --arg dev '${{ needs.build-2204.outputs.dev-tag }}' \
-            --arg basic_dev '${{ needs.build-2204.outputs.basic-dev-tag }}' \
-            --arg basic_ttnn '${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}' \
             --arg manylinux '${{ needs.build-2204.outputs.manylinux-tag }}' \
-            --arg venv_build '${{ needs.build-2204.outputs.python-ci-build-venv-tag }}' \
-            --arg venv_test '${{ needs.build-2204.outputs.python-ci-test-venv-tag }}' \
-            '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $manylinux, $venv_build, $venv_test ] | map(select(. != ""))')
+            '[ $ci_build_light, $ci_build, $ci_test_light, $ci_test, $dev_light, $dev, $manylinux ] | map(select(. != ""))')
           {
             echo "list<<EOF"
             echo "$IMAGES"
@@ -336,14 +415,13 @@ jobs:
         id: images-2404
         run: |
           IMAGES=$(jq -n \
+            --arg ci_build_light '${{ needs.build-2404.outputs.ci-build-light-tag }}' \
             --arg ci_build '${{ needs.build-2404.outputs.ci-build-tag }}' \
+            --arg ci_test_light '${{ needs.build-2404.outputs.ci-test-light-tag }}' \
             --arg ci_test '${{ needs.build-2404.outputs.ci-test-tag }}' \
+            --arg dev_light '${{ needs.build-2404.outputs.dev-light-tag }}' \
             --arg dev '${{ needs.build-2404.outputs.dev-tag }}' \
-            --arg basic_dev '${{ needs.build-2404.outputs.basic-dev-tag }}' \
-            --arg basic_ttnn '${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}' \
-            --arg venv_build '${{ needs.build-2404.outputs.python-ci-build-venv-tag }}' \
-            --arg venv_test '${{ needs.build-2404.outputs.python-ci-test-venv-tag }}' \
-            '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $venv_build, $venv_test ] | map(select(. != ""))')
+            '[ $ci_build_light, $ci_build, $ci_test_light, $ci_test, $dev_light, $dev ] | map(select(. != ""))')
           {
             echo "list<<EOF"
             echo "$IMAGES"
@@ -356,20 +434,3 @@ jobs:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ steps.images-2404.outputs.list }}
           title: "Ubuntu 24.04 images"
-
-      - name: Build LLK CI image list
-        id: images-llk
-        run: |
-          IMAGES=$(jq -n --arg llk '${{ needs.preflight.outputs.llk-ci-tag }}' '[ $llk ] | map(select(. != ""))')
-          {
-            echo "list<<EOF"
-            echo "$IMAGES"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Prewarm LLK CI image
-        uses: ./.github/actions/prewarm-images
-        with:
-          harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
-          images: ${{ steps.images-llk.outputs.list }}
-          title: "LLK CI image"

@@ -57,7 +57,7 @@ on:
 
 jobs:
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-t3k: ${{ steps.logic.outputs.run-t3k }}
@@ -72,7 +72,7 @@ jobs:
           # Schedule events don't carry workflow_dispatch inputs, so
           # the run-* booleans evaluate as empty. Run every sub-pipeline.
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            galaxy=false
+            galaxy=true
             t3k=true
             bh=true
             n300=true
@@ -112,6 +112,7 @@ jobs:
     if: ${{ needs.determine-tests.outputs.any-selected == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

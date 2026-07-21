@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -33,9 +33,9 @@ void kernel_main() {
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_id_in = tt::CBIndex::c_2;
     Noc noc;
-    CircularBuffer cb_in(cb_id_in);
+    DataflowBuffer dfb_in(dfb_id_in);
 
     // Precompute bytes-per-block along X
     constexpr uint32_t x_block_size_bytes = x_block_size * element_size;
@@ -139,8 +139,8 @@ void kernel_main() {
         }
 
         // Wait for the transposed block data to be ready in the input CB
-        cb_in.wait_front(w_block_size);
-        uint32_t transposed_buffer_read_addr = cb_in.get_read_ptr();
+        dfb_in.wait_front(w_block_size);
+        uint32_t transposed_buffer_read_addr = dfb_in.get_read_ptr();
 
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
@@ -154,23 +154,15 @@ void kernel_main() {
                 dest_linear_idx += dest_multi_idx[x_dim_in_dest] * dest_strides[x_dim_in_dest];
             }
 
-            // Compute the L1 address from which to write (offset by W-block pages)
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;
-
-            // Perform an asynchronous write of the X-block to the destination
-            CoreLocalMem<uint32_t> src(l1_addr);
-            noc.async_write(
-                src,
-                s0,
-                x_read_size_bytes,
-                {.offset_bytes = 0},
-                {.page_id = dest_linear_idx, .offset_bytes = x_offset});
+            tt::data_movement::common::noc_async_write_sharded(
+                noc, l1_addr, s0, dest_linear_idx, x_offset, x_read_size_bytes);
         }
 
         // Wait until all writes are completed before proceeding to the next block
         noc.async_write_barrier();
 
         // Pop the block from the input circular buffer, as we're done writing it
-        cb_in.pop_front(w_block_size);
+        dfb_in.pop_front(w_block_size);
     }
 }

@@ -42,10 +42,7 @@ inline void llk_pack_rows(
         (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
-    // Pack rows uses pack_reads_per_xy_plane=1 (set in _llk_pack_rows_init_) for row packing,
-    // which differs from standard tile face_r_dim. Use ProgramByTile to skip face_r_dim check.
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
-        pack_src_format[output_id], pack_dst_format[output_id]));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
     _llk_pack_rows_(dst_index, pack_addr);
 }

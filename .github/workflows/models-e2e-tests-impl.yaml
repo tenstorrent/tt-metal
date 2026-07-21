@@ -35,7 +35,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -43,6 +43,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -57,24 +58,26 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "e2e"
+            "e2e" \
+            "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            ./.github/blackhole_demo_systems.yaml
+            ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
           FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive)
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
           if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
           if [ "$FILTERED" = "[]" ]; then
             echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
@@ -108,6 +111,7 @@ jobs:
         # crashing with `OSError [Errno 30] Read-only file system`.
         HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
@@ -117,7 +121,7 @@ jobs:
         # Mount the HF / tt_cache root so it always appears inside the container
         # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
         # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
-        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        # (populated from the weights-cache-mode field in .github/sku_config.yaml by prepare_test_matrix.py):
         #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
         #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
         #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
@@ -126,7 +130,7 @@ jobs:
         # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
         # shared NFS honors mlperf-read-only.
         - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -134,6 +138,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -145,20 +150,15 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports generated/test_logs
-
-          # Mirror the matrix command's combined stdout+stderr to a per-leg
-          # log file so ai-summary can read it later. The brace group lets
-          # the cmd be multiple statements; PIPESTATUS forwards the real
-          # exit code that piping through tee would otherwise mask.
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            # Perf/accuracy are enforced by the "Report and Validate Perf and Accuracy targets"
+            # step below; the in-test checks are warning-only, so the tests write
+            # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit "${PIPESTATUS[0]}"
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}
@@ -180,7 +180,7 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      - name: Validate perf and accuracy targets
+      - name: Report and Validate Perf and Accuracy targets
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         shell: bash
         run: |

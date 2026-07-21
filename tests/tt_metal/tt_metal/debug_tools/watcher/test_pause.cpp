@@ -78,7 +78,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // gen1 requires one KernelSpec per processor, so BRISC and NCRISC are split.
     std::vector<experimental::KernelSpec> kernel_specs;
     std::vector<experimental::KernelSpecName> kernel_names;
-    std::vector<experimental::ProgramRunArgs::KernelRunArgs> kernel_run_args;
+    experimental::ProgramRunArgs params;
     auto add_dm_kernel =
         [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
@@ -87,21 +87,22 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::DataMovementHardwareConfig dm_cfg{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_proc, .noc = gen1_noc},
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-            };
+            experimental::DataMovementHardwareConfig dm_cfg;
+            if (is_quasar) {
+                dm_cfg = experimental::DataMovementGen2Config{};
+            } else {
+                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+            }
             kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = name,
+                .unique_id = experimental::KernelSpecName{name},
                 .source = path_metal2,
                 .num_threads = num_threads,
                 .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
                 .hw_config = dm_cfg,
             });
             kernel_names.emplace_back(name);
-            kernel_run_args.push_back({
-                .kernel_spec_name = name,
+            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = experimental::KernelSpecName{name},
                 .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
             });
         };
@@ -115,7 +116,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         add_dm_kernel("pause_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("pause_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-        constexpr const char* COMPUTE_KERNEL_NAME = "pause_compute";
+        const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"pause_compute"};
         kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_KERNEL_NAME,
             .source = path_metal2,
@@ -124,8 +125,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
-        kernel_run_args.push_back({
-            .kernel_spec_name = COMPUTE_KERNEL_NAME,
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = COMPUTE_KERNEL_NAME,
             .common_runtime_arg_values = {{"wait_cycles", delay_cycles}},
         });
     }
@@ -142,8 +143,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     };
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = std::move(kernel_run_args);
     experimental::SetProgramRunArgs(program, params);
 
     // ETH cores: invoke the original (legacy) kernel via the legacy host API.

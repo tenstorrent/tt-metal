@@ -4,8 +4,9 @@
 
 """Concrete TTMLDataloader and SFT collate function for HuggingFace datasets."""
 
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Optional
 
+import ml_dtypes
 import numpy as np
 import ttnn
 
@@ -19,8 +20,8 @@ class InMemoryDataloader(TTMLDataloader):
     Iterates the dataset by index, groups examples into batches, and calls the
     injected ``collate_fn`` to produce :class:`Batch` objects with ttml tensors.
 
-    Yields a single pass over the dataset.  When ``shuffle=True`` the indices
-    are randomly permuted before iteration.  The caller (e.g. ``SFTTrainer``)
+    Each pass is one epoch. When ``shuffle=True`` the order is a pure function of ``(seed, epoch)``
+    via a local generator. The caller (e.g. ``SFTTrainer``)
     is responsible for re-iterating when another epoch is needed.
 
     Example::
@@ -31,7 +32,7 @@ class InMemoryDataloader(TTMLDataloader):
 
         dataset = load_dataset("trl-lib/Capybara", split="train")
         collate = partial(sft_collate_fn, max_seq_len=2048, pad_token_id=tokenizer.pad_token_id)
-        loader = InMemoryDataloader(dataset, collate, batch_size=8, shuffle=True)
+        loader = InMemoryDataloader(dataset, collate, batch_size=8, shuffle=True, seed=42)
     """
 
     def __init__(
@@ -41,23 +42,44 @@ class InMemoryDataloader(TTMLDataloader):
         batch_size: int,
         shuffle: bool = False,
         drop_last: bool = True,
+        seed: int = 0,
     ) -> None:
         super().__init__(dataset, collate_fn, batch_size)
         self.shuffle = shuffle
         self.drop_last = drop_last
+        self.seed = seed
+        self._epoch = 0
+        self._position = 0  # batches yielded so far in the current epoch (the mid-epoch resume offset)
+
+    def _epoch_indices(self, epoch: int) -> np.ndarray:
+        """Index order for ``epoch`` — a pure function of ``(seed, epoch)``, off a local generator."""
+        n = len(self.dataset)
+        if not self.shuffle:
+            return np.arange(n)
+        return np.random.default_rng([self.seed, epoch]).permutation(n)
 
     def __iter__(self) -> Iterator[Batch]:
         n = len(self.dataset)
-        indices = list(range(n))
-        if self.shuffle:
-            np.random.shuffle(indices)
+        indices = self._epoch_indices(self._epoch)
         end = (n // self.batch_size) * self.batch_size if self.drop_last else n
-        for i in range(0, end, self.batch_size):
+        for i in range(self._position * self.batch_size, end, self.batch_size):  # resume offset
             batch_indices = indices[i : i + self.batch_size]
             if self.drop_last and len(batch_indices) < self.batch_size:
                 break
-            examples = [self.dataset[j] for j in batch_indices]
+            examples = [self.dataset[int(j)] for j in batch_indices]
+            self._position += 1
             yield self.collate_fn(examples)
+        # Reached only on full exhaustion: advance to the next epoch's order, reset the offset.
+        self._epoch += 1
+        self._position = 0
+
+    def get_state_dict(self) -> dict:
+        return {"seed": self.seed, "epoch": self._epoch, "position": self._position}
+
+    def set_state_dict(self, state: dict) -> None:
+        self.seed = state["seed"]
+        self._epoch = state["epoch"]
+        self._position = state["position"]
 
     def __len__(self) -> int:
         n = len(self.dataset)
@@ -136,5 +158,62 @@ def sft_collate_fn(
             loss_mask_np,
             ttnn.Layout.TILE,
             ttnn.DataType.BFLOAT16,
+        ),
+    )
+
+
+def causal_lm_collate_fn(
+    examples: list,
+    seq_len: int,
+    mapper: Optional[Any] = None,
+) -> Batch:
+    """Collate causal-LM examples — every position contributes to the loss.
+
+    Each example is a dict with ``"input_ids"`` and ``"labels"`` (already
+    shifted by one for next-token prediction).  Shorter sequences are
+    zero-padded and the padded tail is masked out.  The ``loss_mask`` is
+    renormalised so ``mean(loss * loss_mask)`` equals the per-completion-token
+    loss regardless of batch composition (see :class:`Batch` docstring).
+
+    When ``mapper`` is given (typically ``mesh.axis_mapper("dp", tdim=0)``)
+    all three tensors are sharded across the dp axis.
+    """
+    batch_size = len(examples)
+
+    input_ids_np = np.zeros((batch_size, 1, 1, seq_len), dtype=np.uint32)
+    labels_np = np.zeros((batch_size, seq_len), dtype=np.uint32)
+    loss_mask_np = np.ones((batch_size, 1, seq_len, 1), dtype=np.float32)
+
+    for i, ex in enumerate(examples):
+        ids = ex["input_ids"][:seq_len]
+        lbs = ex["labels"][:seq_len]
+        n = len(ids)
+        input_ids_np[i, 0, 0, :n] = ids
+        labels_np[i, :n] = lbs
+        if n < seq_len:
+            loss_mask_np[i, 0, n:, 0] = 0.0
+
+    total = loss_mask_np.sum()
+    if total > 0:
+        loss_mask_np *= (batch_size * seq_len) / total
+
+    return Batch(
+        input_ids=ttml.autograd.Tensor.from_numpy(
+            input_ids_np,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
+            mapper,
+        ),
+        labels=ttml.autograd.Tensor.from_numpy(
+            labels_np,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
+            mapper,
+        ),
+        loss_mask=ttml.autograd.Tensor.from_numpy(
+            loss_mask_np.astype(ml_dtypes.bfloat16),
+            ttnn.Layout.TILE,
+            ttnn.DataType.BFLOAT16,
+            mapper,
         ),
     )

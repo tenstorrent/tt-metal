@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
@@ -56,11 +57,11 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
     // Computed first so that 1/|x| can be derived as rsqrt_y² without a
     // separate sfpu_reciprocal call.
-    const sfpi::vInt rsqrt_i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(abs_x) >> 1);
-    sfpi::vFloat rsqrt_y = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
+    const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
+    sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
     sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
-    c0 = sfpi::vConst1 + (-rsqrt_y) * (abs_x * rsqrt_y);
+    c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
 
     // 1/|x| = (1/√|x|)² — reuses the refined rsqrt instead of a fresh reciprocal.
@@ -91,12 +92,9 @@ inline void calculate_i1() {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
-        sfpi::vFloat lo = -I1_MAX_INPUT;
-        sfpi::vec_min_max(lo, x);
-        sfpi::vFloat hi = I1_MAX_INPUT;
-        sfpi::vec_min_max(x, hi);
+        x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
 
-        const sfpi::vFloat abs_x = sfpi::setsgn(x, 0);
+        const sfpi::vFloat abs_x = sfpi::abs(x);
 
         sfpi::vFloat val;
         // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────
@@ -116,7 +114,7 @@ inline void calculate_i1() {
                 1.2293555930e-12f);
             sfpi::vFloat denom = PolynomialEvaluator::eval(
                 t,
-                sfpi::vConst1,
+                1.0f,
                 -1.1361218989e-02f,
                 6.1268139689e-05f,
                 -1.9771712800e-07f,
@@ -128,7 +126,7 @@ inline void calculate_i1() {
             sfpi::vFloat numer = PolynomialEvaluator::eval(
                 t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
             sfpi::vFloat denom =
-                PolynomialEvaluator::eval(t, sfpi::vConst1, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
+                PolynomialEvaluator::eval(t, 1.0f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
             val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }
@@ -137,7 +135,7 @@ inline void calculate_i1() {
         v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
         v_endif;
 #ifndef INP_FLOAT32
-        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::NearestEven);
+        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
 #endif
         sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
@@ -146,6 +144,7 @@ inline void calculate_i1() {
 
 template <bool APPROXIMATION_MODE>
 void i1_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 

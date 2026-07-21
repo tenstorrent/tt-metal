@@ -9,11 +9,12 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
-    tt::CBIndex cb_in0,
-    tt::CBIndex cb_in1,
-    tt::CBIndex cb_out,
+    tt::CBIndex cb_in0_id,
+    tt::CBIndex cb_in1_id,
+    tt::CBIndex cb_out_id,
     const uint32_t scalar_value,
     const float* scalar_val,
     uint32_t freq,
@@ -21,30 +22,34 @@ ALWI void process_tile(
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
 
+    DataflowBuffer dfb_in0(cb_in0_id);
+    DataflowBuffer dfb_in1(cb_in1_id);
+    DataflowBuffer dfb_out(cb_out_id);
+
 #if BCAST_INPUT  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
-#define CB_BCAST cb_in1
-#define CB_OTHER cb_in0
+    DataflowBuffer& dfb_bcast = dfb_in1;
+    DataflowBuffer& dfb_other = dfb_in0;
 #else  // BCAST_INPUT == 0 : input A (condition tensor)  is broadcasted
-#define CB_BCAST cb_in0
-#define CB_OTHER cb_in1
+    DataflowBuffer& dfb_bcast = dfb_in0;
+    DataflowBuffer& dfb_other = dfb_in1;
 #endif
 
-    cb_wait_front(CB_BCAST, num_tiles_per_cycle);
+    dfb_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        cb_wait_front(CB_OTHER, num_tiles_per_cycle);
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        dfb_other.wait_front(num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_in0);
+        copy_tile_to_dst_init_short(dfb_in0.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_in0, i, i * 3);
+            copy_tile(dfb_in0.get_id(), i, i * 3);
         }
-        copy_tile_to_dst_init_short(cb_in1);
+        copy_tile_to_dst_init_short(dfb_in1.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
-            copy_tile(cb_in1, i, i * 3 + 1);  // Copy true tensor to dst_reg 1
+            copy_tile(dfb_in1.get_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
             fill_tile_init();
 // TTS: scalar is false value, goes to dst_reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
@@ -57,7 +62,7 @@ ALWI void process_tile(
 
 // TST: tensor is false value, goes to dst_reg 2
 #if WHERE_TST
-            copy_tile(cb_in1, i, i * 3 + 2);  // Copy false tensor to dst_reg 2
+            copy_tile(dfb_in1.get_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
             fill_tile_init();
 // TST: scalar is true value, goes to dst_reg 1
 #ifdef FILL_WITH_VALUE_FLOAT
@@ -74,14 +79,14 @@ ALWI void process_tile(
 
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 3, cb_out);
+            pack_tile(i * 3, dfb_out.get_id());
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(CB_OTHER, num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
+        dfb_other.pop_front(num_tiles_per_cycle);
     }
-    cb_pop_front(CB_BCAST, num_tiles_per_cycle);
+    dfb_bcast.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {
@@ -97,11 +102,11 @@ void kernel_main() {
         return;
     }
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_in0_id = tt::CBIndex::c_0;
+    constexpr auto cb_in1_id = tt::CBIndex::c_1;
+    constexpr auto cb_out_id = tt::CBIndex::c_2;
 
-    unary_op_init_common(cb_in0, cb_out);
+    unary_op_init_common(cb_in0_id, cb_out_id);
     BINARY_SFPU_INIT
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
@@ -109,14 +114,21 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_in0, cb_in1, cb_out, scalar_value, scalar_value_ptr, tile_freq, tile_start, num_tiles_per_cycle);
+            cb_in0_id,
+            cb_in1_id,
+            cb_out_id,
+            scalar_value,
+            scalar_value_ptr,
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_in0,
-            cb_in1,
-            cb_out,
+            cb_in0_id,
+            cb_in1_id,
+            cb_out_id,
             scalar_value,
             scalar_value_ptr,
             remaining_iterations,

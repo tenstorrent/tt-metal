@@ -22,6 +22,7 @@
 #   dockerfile-hash.sh dockerfile/Dockerfile .github/workflows/build-docker-artifact.yaml
 
 set -euo pipefail
+export LC_ALL=C
 
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <dockerfile> [extra-files...]" >&2

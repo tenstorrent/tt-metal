@@ -9,21 +9,9 @@ Orchestrates prefill (token-by-token prompt processing) and autoregressive decod
 via injectable write/read callables. Caller provides write_fn(token_tensor) and
 read_fn(output_tensor); e.g. Pipeline.write_token / Pipeline.read_output.
 
-Algorithm (prefill-by-decode then generation):
-  - Prefill: for i = 0..S-1, call with input_ids = x[i] (B, 1); device uses/updates
-    cache; ignore outputs for i < S-1. prefill() returns the last output token.
-  - Start generation: y0 = prefill(prompt_tokens).
-  - Generation loop: for t = 0,1,..., feed y[t] (B, 1) via decode_step(), get y[t+1],
-    repeat.
-
-Input tensor shape (H2D):
-  - Only (B, 1) is supported: one token per batch element per step. The embedding layer
-    runs on device; the host sends token IDs (int32). Payload size is B * TOKEN_ID_BYTES.
-
-Interface vs real decoder:
-  - One write and one read per step. The real decoder will also need per-step
-    position (cur_pos_tensor / kv_cache_write_index); the engine tracks position for
-    when the protocol is extended.
+The on-device metadata struct (DeepseekMetadata, 512 bytes) carries input fields,
+output tokens, and sampling results. See metadata.hpp / metadata.py for the
+authoritative layout.
 """
 
 from __future__ import annotations
@@ -35,122 +23,160 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.metadata.metadata import (
+    MAX_MTP_LEVELS,
+    METADATA_P_INDICES_CAPACITY,
+    METADATA_P_SCORES_CAPACITY,
+    METADATA_Q_INDICES_CAPACITY,
+    METADATA_Q_SCORES_CAPACITY,
+    NUM_OUTPUT_TOKENS,
+    DeepseekMetadata,
+)
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
-# Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
-
-# Each H2D page carries the full DeepseekMetadata struct (header + reserved
-# p_indices/p_scores tail) so the on-device fused embedding kernel can copy the
-# entire struct downstream in one shot. The host only fills the header fields
-# (token id, position id, etc.); the trailing bytes stay zero.
 PCIE_PAGE_ALIGNMENT_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 
 
 # ---------------------------------------------------------------------------
-# Speculative-decode page layout (DeepseekMetadata struct, PCIE_PAGE_ALIGNMENT_BYTES total)
+# Field indices into the 128-word (512 B) DeepseekMetadata struct.
+# Must stay in sync with metadata.hpp.
 # ---------------------------------------------------------------------------
 
 
-class OutputField:
-    """uint32 indices within the 16-word output page."""
+class Field:
+    """uint32 word indices into the DeepseekMetadata struct."""
 
-    TOKEN_0 = 0
-    TOKEN_0_TYPE = 1
-    TOKEN_0_POS = 2
-    TOKEN_1 = 3
-    TOKEN_1_TYPE = 4
-    TOKEN_1_POS = 5
+    LANE_ID = 0
+    SLOT_ID = 1
+    TOKEN_ID = 2
+    POSITION_ID = 3
+    OUTPUT_TOKENS = 4  # words 4..8  (5 slots: base + 4 spec)
+    PREFILL_TOKENS = 9  # words 9..12 (4 slots, one per MTP level)
+    TEMPERATURE = 13  # float stored as uint32 bits
+    TOP_K = 14
+    TOP_P = 15  # float stored as uint32 bits
 
-
-class InputField:
-    """uint32 indices within the 16-word input page."""
-
-    TOKEN_TYPE = 1
-    USER_ID = 6
-    TOKEN_ID = 7
-    POSITION_ID = 8
-    PREFILL_TOKEN_ID = 9
-    TOKEN0_POSITION_ID = 2
-    TEMPERATURE = 10
-    TOP_K = 11
-    PROBABILITY_MASS_THRESHOLD = 12
+    P_INDICES = 16  # words 16..47  (32 uint32)
+    P_SCORES = 48  # words 48..63  (32 bf16 packed two-per-uint32)
+    Q_INDICES = 64  # words 64..95  (32 uint32)
+    Q_SCORES = 96  # words 96..111 (32 bf16 packed two-per-uint32)
 
 
-class TokenType:
-    BASE = 0
-    SPEC = 1
+# ---------------------------------------------------------------------------
+# Decode result
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class DecodeResult:
-    """Parsed output page from the pipeline (256-byte DeepseekMetadata struct)."""
+    """Parsed output page from the pipeline (512-byte DeepseekMetadata struct).
 
-    token_0: int
-    token_0_type: int
-    token_0_pos: int
-    token_1: int | None = None
-    token_1_type: int | None = None
-    token_1_pos: int | None = None
-    slot_id: int | None = None
+    ``output_tokens[0]`` is the base prediction; ``output_tokens[1..N]`` are
+    speculative MTP predictions.  Positions are derived from ``position_id``:
+    base is at ``position_id``, spec level *i* is at ``position_id + 1 + i``.
+    """
+
+    output_tokens: list[int]
+    position_id: int
+    lane_id: int = 0
+    slot_id: int = 0
     p_indices: list[int] | None = None
     p_scores: list[float] | None = None
+    q_indices: list[int] | None = None
+    q_scores: list[float] | None = None
+
+    @property
+    def base_token(self) -> int:
+        return self.output_tokens[0]
+
+    def spec_token(self, level: int) -> int:
+        """Return the speculative token at MTP *level* (0-indexed)."""
+        return self.output_tokens[1 + level]
+
+    def spec_position(self, level: int) -> int:
+        """Return the position for the speculative token at MTP *level*."""
+        return self.position_id + 1 + level
+
+
+# ---------------------------------------------------------------------------
+# Output parsing
+# ---------------------------------------------------------------------------
+
+
+def _unpack_bf16_scores(raw: torch.Tensor, start_word: int, count: int) -> list[float]:
+    """Unpack *count* bf16 values packed two-per-uint32 starting at *start_word*."""
+    num_words = (count + 1) // 2
+    packed = raw[start_word : start_word + num_words].contiguous().view(torch.bfloat16)
+    return packed[:count].float().tolist()
 
 
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
-    """Parse a DeepseekMetadata output page into a structured DecodeResult.
-
-    The output buffer is 64 uint32 words (256 bytes) laid out as:
-      words  0-15 : header (tok0_id … _pad2)
-      words 16-47 : p_indices[32]  (uint32)
-      words 48-63 : p_scores[32]   (bf16 packed as uint16)
-    """
+    """Parse a 512-byte DeepseekMetadata output page into a :class:`DecodeResult`."""
     raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
 
-    p_indices = None
-    p_scores = None
-    if raw.numel() >= 64:
-        p_indices = raw[16:48].tolist()
-        scores_bf16 = raw[48:64].contiguous().view(torch.bfloat16)
-        p_scores = scores_bf16.float().tolist()
+    output_tokens = [int(raw[Field.OUTPUT_TOKENS + i].item()) for i in range(NUM_OUTPUT_TOKENS)]
+
+    p_indices = raw[Field.P_INDICES : Field.P_INDICES + METADATA_P_INDICES_CAPACITY].tolist()
+    p_scores = _unpack_bf16_scores(raw, Field.P_SCORES, METADATA_P_SCORES_CAPACITY)
+    q_indices = raw[Field.Q_INDICES : Field.Q_INDICES + METADATA_Q_INDICES_CAPACITY].tolist()
+    q_scores = _unpack_bf16_scores(raw, Field.Q_SCORES, METADATA_Q_SCORES_CAPACITY)
 
     return DecodeResult(
-        token_0=int(raw[OutputField.TOKEN_0].item()),
-        token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
-        token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
-        token_1=int(raw[OutputField.TOKEN_1].item()),
-        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
-        token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
-        slot_id=int(raw[InputField.USER_ID].item()),
+        output_tokens=output_tokens,
+        position_id=int(raw[Field.POSITION_ID].item()),
+        lane_id=int(raw[Field.LANE_ID].item()),
+        slot_id=int(raw[Field.SLOT_ID].item()),
         p_indices=p_indices,
         p_scores=p_scores,
+        q_indices=q_indices,
+        q_scores=q_scores,
     )
+
+
+# ---------------------------------------------------------------------------
+# Input building
+# ---------------------------------------------------------------------------
 
 
 def to_spec_input(
     token_id: int,
-    prefill_token_id: int,
-    user_id: int,
-    position_id: int,
+    *,
+    slot_id: int = 0,
+    position_id: int = 0,
     page_size_datums: int,
-    token_type: TokenType,
-    temperature: float,
-    top_k: int,
-    probability_mass_threshold: float,
+    lane_id: int = 0,
+    temperature: float = 0.0,
+    top_k: int = 0,
+    top_p: float = 0.0,
+    prefill_token_ids: list[int] | None = None,
 ) -> ttnn.Tensor:
-    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
-    torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
-    torch_padded[0, InputField.TOKEN_ID] = token_id
-    torch_padded[0, InputField.PREFILL_TOKEN_ID] = prefill_token_id
-    torch_padded[0, InputField.TOKEN_TYPE] = token_type
-    torch_padded[0, InputField.USER_ID] = user_id
-    torch_padded[0, InputField.POSITION_ID] = position_id
-    torch_padded[0, InputField.TOKEN0_POSITION_ID] = position_id
-    torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
-    torch_padded[0, InputField.TOP_K] = top_k
-    torch_padded[0, InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
-    return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    """Build a PCIe-aligned input page matching the DeepseekMetadata struct.
+
+    ``prefill_token_ids`` supplies ground-truth next tokens for each MTP level
+    during prefill (up to :data:`MAX_MTP_LEVELS` entries).  Set to ``None`` or
+    pass ``-1`` entries for decode mode; the kernel uses ``(uint32_t)-1`` as
+    the "no ground truth" sentinel and falls back to the just-sampled argmax.
+    """
+    page = torch.zeros(1, page_size_datums, dtype=torch.int32)
+    page[0, Field.LANE_ID] = lane_id
+    page[0, Field.SLOT_ID] = slot_id
+    page[0, Field.TOKEN_ID] = token_id
+    page[0, Field.POSITION_ID] = position_id
+    for i in range(MAX_MTP_LEVELS):
+        page[0, Field.PREFILL_TOKENS + i] = -1
+    if prefill_token_ids:
+        for i, ptid in enumerate(prefill_token_ids[:MAX_MTP_LEVELS]):
+            page[0, Field.PREFILL_TOKENS + i] = ptid
+    page[0, Field.TEMPERATURE] = float_to_uint32(temperature)
+    page[0, Field.TOP_K] = top_k
+    page[0, Field.TOP_P] = float_to_uint32(top_p)
+    return ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -159,14 +185,17 @@ def align_up(value: int, alignment: int) -> int:
 
 
 def page_size_bytes(batch_size: int) -> int:
-    """PCIe-aligned page (and FIFO) size in bytes for (B, 1) token IDs. Use for socket creation."""
+    """PCIe-aligned page (and FIFO) size in bytes for (B, 1) token IDs."""
     return align_up(batch_size * TOKEN_ID_BYTES, PCIE_PAGE_ALIGNMENT_BYTES)
 
 
 def create_output_buffer(page_size_datums: int) -> ttnn.Tensor:
-    """Allocate a host output tensor (1, page_size_datums) int32 for socket read_tensor."""
-    torch_output = torch.zeros(1, page_size_datums, dtype=torch.int32)
-    return ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    """Allocate a host output tensor (1, page_size_datums) uint32 for socket read_tensor."""
+    return ttnn.from_torch(
+        torch.zeros(1, page_size_datums, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
 
 
 def to_padded_input(
@@ -182,12 +211,13 @@ def to_padded_input(
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
+# ---------------------------------------------------------------------------
+# Model class
+# ---------------------------------------------------------------------------
+
+
 class DeepSeekV3:
-    """
-    Host-side model interface for prefill and decode via injectable write/read.
-    Tracks position for compatibility with the real decoder (position_ids, kv_cache_write_index).
-    Caller manages I/O lifecycle (e.g. Pipeline.setup_and_run() or HostInterface.run/terminate).
-    """
+    """Host-side model interface for prefill and decode via injectable write/read."""
 
     def __init__(
         self,
@@ -196,16 +226,6 @@ class DeepSeekV3:
         batch_size: int = 1,
         pipeline_depth: int = 1,
     ) -> None:
-        """
-        Args:
-            write_fn: Called with a token tensor (PCIe-aligned, page_size_bytes(batch_size)).
-            read_fn: Called with an output tensor; implementation fills it (e.g. Pipeline.read_output).
-            batch_size: Batch size B. Current implementation supports only B=1;
-                payload size is B * TOKEN_ID_BYTES (int32).
-            pipeline_depth: Number of pipeline stages between host write and readable
-                output. Prefill queues this many tokens before overlapping writes with
-                readback. Use 1 for direct loopback/no pipeline.
-        """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
         if pipeline_depth <= 0:
@@ -222,23 +242,9 @@ class DeepSeekV3:
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
-        """
-        Prefill-by-decode with overlapped I/O: enqueue tokens until the pipeline is
-        saturated, then overlap readback per additional write, and finally drain
-        the remaining in-flight outputs.
+        """Prefill-by-decode with overlapped I/O.
 
-        Each write produces READS_PER_WRITE output pages (base + spec).
-        All outputs are discarded except the last READS_PER_WRITE (from the final
-        prompt token), which are parsed and returned so the decode state machine
-        can process both the base and speculative results.
-
-        Args:
-            prompt_tokens: List of ttnn.Tensor, each already padded for the socket
-                (PCIe-aligned, size in bytes equal to page_size_bytes(batch_size)).
-                Caller is responsible for padding; use to_spec_input() if needed.
-
-        Returns:
-            List of READS_PER_WRITE DecodeResults from the last prompt token's outputs.
+        Returns the DecodeResult(s) from the final prompt token.
         """
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
@@ -249,19 +255,16 @@ class DeepSeekV3:
         write_idx = 0
         read_count = 0
 
-        # Phase 1: saturate the pipeline (no reads yet)
         while write_idx < num_writes_before_readback:
             self._write_fn(prompt_tokens[write_idx])
             write_idx += 1
 
-        # Phase 2: overlap — drain outputs and issue remaining writes in steady state
         while write_idx < len(prompt_tokens):
             self._read_fn(self._output_buffer)
             read_count += 1
             self._write_fn(prompt_tokens[write_idx])
             write_idx += 1
 
-        # Phase 3: drain remaining outputs; save the last output
         last_results: list[DecodeResult] = []
         while read_count < total_reads:
             self._read_fn(self._output_buffer)
@@ -272,49 +275,29 @@ class DeepSeekV3:
         self._position += len(prompt_tokens)
         return last_results
 
-    def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Single decode step: send input via write_fn, receive output via read_fn.
-        Returns the output tensor. Increments position.
-
-        Args:
-            input_tensor: Token IDs (B, 1), torch or ttnn.
-
-        Returns:
-            Output tensor; valid data is first batch_size elements.
-        """
-        assert len(input_tensor.shape) == 2, f"Input tensor shape must be (B, 1), got {input_tensor.shape}"
-        assert (
-            input_tensor.shape[0] == self.batch_size
-        ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
-        padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
-        self._write_fn(padded_input)
-        self._read_fn(self._output_buffer)
-        self._position += 1
-        return self._output_buffer
-
     def write_input(
         self,
         token_id: int,
-        prefill_token_id: int,
-        user_id: int,
-        position_id: int,
-        token_type: TokenType,
-        temperature: float,
-        top_k: int,
-        probability_mass_threshold: float,
+        *,
+        slot_id: int = 0,
+        position_id: int = 0,
+        lane_id: int = 0,
+        temperature: float = 0.0,
+        top_k: int = 0,
+        top_p: float = 0.0,
+        prefill_token_ids: list[int] | None = None,
     ) -> None:
-        """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
+        """Write a single input page to the pipeline."""
         input_tensor = to_spec_input(
             token_id,
-            prefill_token_id,
-            user_id,
-            position_id,
-            self._page_size_datums,
-            token_type,
-            temperature,
-            top_k,
-            probability_mass_threshold,
+            slot_id=slot_id,
+            position_id=position_id,
+            page_size_datums=self._page_size_datums,
+            lane_id=lane_id,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            prefill_token_ids=prefill_token_ids,
         )
         self._write_fn(input_tensor)
 

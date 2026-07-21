@@ -5,6 +5,8 @@
 #include "binary_ng_device_operation.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -67,10 +69,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         default: return false;
     }
     return false;
-}
-
-bool is_quant_op(const BinaryOpType val) {
-    return (val == BinaryOpType::QUANT) || (val == BinaryOpType::DEQUANT) || (val == BinaryOpType::REQUANT);
 }
 
 ShardSpec generate_shard_spec_all_cores(
@@ -233,7 +231,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+        (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
@@ -282,6 +280,36 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
     }
 
+    TT_FATAL(
+        ttnn::operations::binary::dtype_policy::is_supported(attributes.binary_op_type, input_tensor_a.dtype()),
+        "Input tensor A dtype {} is not supported for binary operation {}",
+        input_tensor_a.dtype(),
+        attributes.binary_op_type);
+
+    if (input_tensor_b.has_value()) {
+        const auto dtype_b = input_tensor_b->dtype();
+        if (ttnn::operations::binary::utils::is_quant_op(attributes.binary_op_type)) {
+            TT_FATAL(
+                dtype_b == DataType::FLOAT32,
+                "Scale tensor B must be float32 for binary operation {}, got {}",
+                attributes.binary_op_type,
+                dtype_b);
+        } else {
+            TT_FATAL(
+                ttnn::operations::binary::dtype_policy::is_supported(attributes.binary_op_type, dtype_b),
+                "Input tensor B dtype {} is not supported for binary operation {}",
+                dtype_b,
+                attributes.binary_op_type);
+        }
+
+        TT_FATAL(
+            ttnn::operations::binary::utils::is_dtype_combination_supported(
+                attributes.binary_op_type, input_tensor_a.dtype(), dtype_b),
+            "Mixed dtype is not supported for binary operation {}, dtype A: {}, dtype B: {}",
+            attributes.binary_op_type,
+            input_tensor_a.dtype(),
+            dtype_b);
+    }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
@@ -551,6 +579,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         "Input tensor B must be on device, got storage type: {}",
         input_tensor_b.storage_type());
 
+    // Valid input is allocated
+    TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor A is not allocated");
+    TT_FATAL(input_tensor_b.is_allocated(), "Input Tensor B is not allocated");
+
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -570,7 +602,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     DataType dtype_b = input_tensor_b.dtype();
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
-    bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
+    bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
@@ -670,7 +702,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a,
-    float scalar,
+    ttnn::operations::unary::ScalarVariant scalar,
     ttnn::operations::binary_ng::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -690,6 +722,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         "Input tensor A must be on device, got storage type: {}",
         input_tensor_a.storage_type());
 
+    // Valid input is allocated
+    TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor is not allocated");
+
     // Resolve sub_device_id to sub_core_grids if provided (after device validation)
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -702,7 +737,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
-    bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
+    bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
     MemoryConfig mem_config_actual = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
 

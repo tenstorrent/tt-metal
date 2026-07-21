@@ -4,12 +4,17 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include <vector>
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
     We want to read for a particular batch cur_batch, and sequence length up to padded layer length.
@@ -72,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     // #44366: cur_pos is consumed by both the writer (c_8) and compute (c_15).
     // Using one shared CB races — whichever consumer pops first drains the
-    // count and the other hangs in cb_wait_front. Each consumer gets its own CB.
+    // count and the other hangs waiting for tiles. Each consumer gets its own CB.
     constexpr uint32_t cb_writer_cur_pos = tt::CBIndex::c_8;
     constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
@@ -117,20 +122,31 @@ void kernel_main() {
             // Reader fills cb_writer_cur_pos (c_8) first (from DRAM, or via the
             // aliased sharded buffer) then copies the same stick into
             // cb_compute_cur_pos (c_15) via an L1->L1 read.
-            cb_reserve_back(cb_writer_cur_pos, 1);
-            uint32_t index_cb_wr_ptr = get_write_ptr(cb_writer_cur_pos);
+            CircularBuffer cb_writer(cb_writer_cur_pos);
+            cb_writer.reserve_back(1);
+            uint32_t index_cb_wr_ptr = cb_writer.get_write_ptr();
             if constexpr (!is_cur_pos_tensor_sharded) {
                 const auto addrg = TensorAccessor(pos_args, pos_addr);
-                uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
-                noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-                noc_async_read_barrier();
+                // index_tensor has one page to read
+                noc.async_read(addrg, CoreLocalMem<uint32_t>(index_cb_wr_ptr), index_stick_size_B, {.page_id = 0}, {});
+                noc.async_read_barrier();
             }
-            cb_reserve_back(cb_compute_cur_pos, 1);
-            uint32_t index_cb_compute_wr_ptr = get_write_ptr(cb_compute_cur_pos);
-            noc_async_read(get_noc_addr(index_cb_wr_ptr), index_cb_compute_wr_ptr, index_stick_size_B);
-            noc_async_read_barrier();
-            cb_push_back(cb_writer_cur_pos, 1);
-            cb_push_back(cb_compute_cur_pos, 1);
+            CircularBuffer cb_compute(cb_compute_cur_pos);
+            cb_compute.reserve_back(1);
+            uint32_t index_cb_compute_wr_ptr = cb_compute.get_write_ptr();
+            const uint8_t noc_id = noc.get_noc_id();
+            const uint32_t my_noc_x = my_x[noc_id];
+            const uint32_t my_noc_y = my_y[noc_id];
+            UnicastEndpoint pos_src;
+            noc.async_read(
+                pos_src,
+                CoreLocalMem<uint32_t>(index_cb_compute_wr_ptr),
+                index_stick_size_B,
+                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = index_cb_wr_ptr},
+                {});
+            noc.async_read_barrier();
+            cb_writer.push_back(1);
+            cb_compute.push_back(1);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
             cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
         }
@@ -189,8 +205,6 @@ void kernel_main() {
     // Read Q entirely - always read into cb_q_in
     // When tilize_q is true, compute will tilize back to cb_q_in
     // When tilize_q is false, Q is already tilized
-    uint32_t k_mcast_sem_addr = get_semaphore(k_mcast_semaphore_id);
-    volatile tt_l1_ptr uint32_t* k_mcast_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(k_mcast_sem_addr);
     const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     // Read Q
@@ -215,19 +229,24 @@ void kernel_main() {
     if constexpr (use_attention_sink) {
         const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
 
-        cb_reserve_back(cb_attention_sink, PNHt);
-        uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
+        CircularBuffer cb_sink(cb_attention_sink);
+        cb_sink.reserve_back(PNHt);
+        uint32_t attention_sink_write_ptr = cb_sink.get_write_ptr();
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
-            uint64_t sink_noc_addr = attention_sink_reader.get_noc_addr(tile);
-            // Use noc_async_read with explicit size instead of noc_async_read_page because
+            // Use noc.async_read with explicit size instead of noc.async_read_page because
             // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
-            // noc_async_read_page would read buffer->aligned_page_size() bytes, overflowing the CB.
-            noc_async_read(sink_noc_addr, attention_sink_write_ptr, attention_sink_tile_bytes);
+            // noc.async_read_page would read buffer->aligned_page_size() bytes, overflowing the CB.
+            noc.async_read(
+                attention_sink_reader,
+                CoreLocalMem<uint32_t>(attention_sink_write_ptr),
+                attention_sink_tile_bytes,
+                {.page_id = tile},
+                {});
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_attention_sink, PNHt);
+        noc.async_read_barrier();
+        cb_sink.push_back(PNHt);
     }
 
     // Read page table
@@ -236,11 +255,13 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
     if constexpr (is_paged_attention) {
+        CircularBuffer cb_page_table(cb_id_page_table);
         uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
-        cb_reserve_back(cb_id_page_table, num_pages_to_read);
+        cb_page_table.reserve_back(num_pages_to_read);
         // Read page table from DRAM
         if constexpr (!is_page_table_sharded) {
             page_table_ptr = read_page_table_for_batch(
+                noc,
                 cb_id_page_table,
                 cur_batch / q_heads_parallel_factor,
                 page_table_args,
@@ -249,10 +270,10 @@ void kernel_main() {
             page_table_ptr_u32 = page_table_ptr;
         } else {  // Read page table from dynamically allocated L1 buffer
             page_table_cb_wr_ptr =
-                get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
+                cb_page_table.get_write_ptr() + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
             page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
         }
-        cb_push_back(cb_id_page_table, num_pages_to_read);
+        cb_page_table.push_back(num_pages_to_read);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
@@ -268,8 +289,7 @@ void kernel_main() {
             .mcast_y0 = mcast_y0,
             .mcast_y1 = mcast_y1,
             .num_dests = num_dests,
-            .mcast_sem_addr = k_mcast_sem_addr,
-            .mcast_sem_ptr = k_mcast_sem_ptr};
+            .mcast_sem_id = k_mcast_semaphore_id};
 
         if constexpr (is_paged_attention) {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {

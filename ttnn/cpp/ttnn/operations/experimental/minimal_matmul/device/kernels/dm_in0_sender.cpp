@@ -4,10 +4,17 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
+    Noc noc;
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
@@ -25,6 +32,9 @@ void kernel_main() {
     uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    Semaphore<> in0_sender_sem(get_compile_time_arg_val(14));
+    Semaphore<> in0_receiver_sem(get_compile_time_arg_val(15));
+    Semaphore<> in0_valid_sem(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
@@ -46,40 +56,6 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    // Split-K (plan A2): absolute first K-block this band reduces. The next two args (out M-stripe
-    // offset + total) are consumed only by the in1 output-writer; read here to keep arg layout aligned.
-    // Always read (the factory always pushes them) so the arg contract is identical with/without K-par.
-    const uint32_t k_block_start_arg = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_m_tile_offset_arg = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_M_tiles_total_arg = get_arg_val<uint32_t>(argidx++);
-#ifdef MM_KPAR
-    const uint32_t k_block_start = k_block_start_arg;
-    const uint32_t out_m_tile_offset = out_m_tile_offset_arg;
-#else
-    // BASE PATH (no K-parallelism): force these to COMPILE-TIME zero. Passing them as opaque runtime
-    // values (even when == 0) makes the inner-loop K-block index `k_block_start + f(loop)` and the output
-    // `m_tile + out_m_tile_offset` no longer provably-affine in the loop counter, defeating the DRAM
-    // address strength-reduction in read_in0/in1_block_sync and costing ~10% on big shapes. Bisected to
-    // de95e3a (split-K A2); recovered to main-level by this constexpr-0 gate.
-    (void)k_block_start_arg;
-    (void)out_m_tile_offset_arg;
-    constexpr uint32_t k_block_start = 0;
-    constexpr uint32_t out_m_tile_offset = 0;
-#endif
-
-#ifdef REDUCE_K
-    // Split-K plan B: vertical running-sum reduction. up = band above (where we forward our running sum),
-    // down = band below (which forwards into our cb_reduce). Read before ternary/output args (factory
-    // pushes them in this same order under REDUCE_K).
-    const uint32_t reduce_up_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reduce_up_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reduce_down_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reduce_down_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_reduce_top = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reduce_ready_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    const uint32_t reduce_recv_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-#endif
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -131,11 +107,11 @@ void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
 #endif
 #endif
-    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+    constexpr uint32_t cb_ternary_a_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_ternary_b_id = tt::CBIndex::c_6;
 
-    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
-    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_ternary_a_id);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_ternary_b_id);
 
     constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
     constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
@@ -145,41 +121,35 @@ void kernel_main() {
 
 #endif  // FUSE_TERNARY
 
-    // padded_d1 (K) = the in0 DRAM tensor's actual K extent (K_tiles); NOT padded_K_tiles, which under
-    // K-par is the PER-BAND compute count (< K_tiles) and would make logical_d1 (full K_tiles, needed for
-    // the absolute-K read guard) exceed padded_d1 and trip the TensorShape2D assert on watcher/--dev builds.
-    const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, K_tiles);
-    // out_shape spans the full [num_k_slices * M, N] partial buffer when this kernel is the output
-    // writer (non-transpose), so its band's M-stripe passes the write_block_sync logical_d0 guard.
-    // Base path uses the original (M_tiles, padded_M_tiles) constexpr form so codegen matches main.
-#ifdef MM_KPAR
-    const TensorShape2D out_shape(out_M_tiles_total_arg, N_tiles, out_M_tiles_total_arg, padded_N_tiles);
-#else
+    const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
-#endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
-#ifdef FUSE_BIAS
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+#ifdef FUSE_SWIGLU
+    // SwiGLU emits one output tile per interleaved gate/up pair, so the output along N
+    // is half the matmul (weight) N. The weight-space n ranges are halved at each write.
+    constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
+    constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
+    const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
+    // Split (chunks>1): each output chunk is half the weight per-chunk width.
+    constexpr uint32_t out_N_tiles_per_chunk = N_tiles_per_chunk / 2;
+    const TensorShape2D out0_shape_swiglu(M_tiles, out_N_tiles_per_chunk, padded_M_tiles, out_N_tiles_per_chunk);
 #endif
-#ifdef REDUCE_K
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_7;  // running sum forwarded up from the band below
-    constexpr uint32_t reduce_block_bytes = out_block_num_tiles * out_tile_size;
-    volatile tt_l1_ptr uint32_t* reduce_ready_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_ready_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* reduce_recv_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_recv_semaphore_addr);
-    // Band below increments OUR reduce_ready (we are its receiver) -> signal "cb_reduce slot free".
-    const uint64_t reduce_down_ready_noc_addr =
-        get_noc_addr(reduce_down_noc_x, reduce_down_noc_y, reduce_ready_semaphore_addr);
-    // We set the band-above's reduce_recv VALID after writing its cb_reduce (we are its sender).
-    const uint64_t reduce_up_recv_noc_addr = get_noc_addr(reduce_up_noc_x, reduce_up_noc_y, reduce_recv_semaphore_addr);
+
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_2;
+#ifdef FUSE_BIAS
+    constexpr uint32_t cb_in2_id = tt::CBIndex::c_4;
+#endif
+
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_out(cb_out_id);
+#ifdef FUSE_BIAS
+    CircularBuffer cb_in2(cb_in2_id);
 #endif
 
 #ifdef FUSE_AG
@@ -229,35 +199,13 @@ void kernel_main() {
     }
 #endif
 
-    volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
-    *(in0_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_semaphore_addr);
+    in0_valid_sem.set(VALID);
 
-    volatile tt_l1_ptr uint32_t* in0_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
     const uint64_t in0_sender_semaphore_noc_addr =
         get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
 
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
-
-#ifdef MCAST_BROADCAST
-    // Multicast-broadcast prototype args, appended after the output addresses (mcast is incompatible
-    // with fused ops, so N_chunks output addresses are the only thing between the fixed args and these).
-    const uint32_t mc_base = out_addr_rt_arg_idx + N_chunks;
-    const uint32_t in0_mc_start_x = get_arg_val<uint32_t>(mc_base + 0);
-    const uint32_t in0_mc_start_y = get_arg_val<uint32_t>(mc_base + 1);
-    const uint32_t in0_mc_end_x = get_arg_val<uint32_t>(mc_base + 2);
-    const uint32_t in0_mc_end_y = get_arg_val<uint32_t>(mc_base + 3);
-    const uint32_t in0_num_recv = get_arg_val<uint32_t>(mc_base + 4);
-    const uint32_t in0_inj_noc_x = get_arg_val<uint32_t>(mc_base + 5);
-    const uint32_t in0_inj_noc_y = get_arg_val<uint32_t>(mc_base + 6);
-    // Receivers signal readiness to the injector's sender semaphore (same L1 offset on every core).
-    const uint64_t in0_injector_sender_sem_noc_addr =
-        get_noc_addr(in0_inj_noc_x, in0_inj_noc_y, in0_sender_semaphore_addr);
-#endif
 
     /**
      * This is a Row-Major output block ordering.
@@ -293,119 +241,76 @@ void kernel_main() {
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
-#ifdef MCAST_PREFETCH
-            // Software-pipelined injector k-loop: issue block (k+1)'s DRAM read BEFORE block k's
-            // multicast, overlapping read latency with the mcast handshake+transit on the single DM
-            // RISC. Receivers are unchanged (same per-block valid sequence). Simple regime only
-            // (mcast => no FUSE_AG/BIAS/TERNARY, injectors never defer-write); reuse handled via k_start.
-            if constexpr (is_injector_core) {
-                uint32_t k_start = reuse_block ? 1 : 0;
-                reuse_block = false;
-                if (k_start < K_num_blocks) {
-                    // Prologue: reserve a slot and ISSUE the first block's read (no barrier yet).
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                    uint32_t wp = get_write_ptr(cb_id_in0);
-                    {
-                        uint32_t kb = k_block_start + (k_forward ? k_start : (K_num_blocks - 1) - k_start);
-                        read_in0_block_sync<M_block_tiles, K_block_tiles, /*issue_only=*/true>(
-                            in0_reader,
-                            in0_shape,
-                            wp,
-                            in0_tile_size,
-                            m_tile,
-                            m_tile_end,
-                            kb * K_block_tiles,
-                            (kb + 1) * K_block_tiles);
-                    }
-                    for (uint32_t k_block_iter = k_start; k_block_iter < K_num_blocks; k_block_iter++) {
-                        noc_async_read_barrier();                      // current block's read completes
-                        uint32_t mcast_wp = get_write_ptr(cb_id_in0);  // slot of current block (pre-push)
-                        cb_push_back(cb_id_in0, in0_block_num_tiles);  // hand current block to compute
-
-                        // Prefetch: reserve the next slot and ISSUE the next block's read so it flies
-                        // during the mcast below. CB depth >= 2 => next slot is distinct from mcast_wp.
-                        if (k_block_iter + 1 < K_num_blocks) {
-                            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                            wp = get_write_ptr(cb_id_in0);
-                            uint32_t kn = k_block_iter + 1;
-                            uint32_t kb = k_block_start + (k_forward ? kn : (K_num_blocks - 1) - kn);
-                            read_in0_block_sync<M_block_tiles, K_block_tiles, /*issue_only=*/true>(
-                                in0_reader,
-                                in0_shape,
-                                wp,
-                                in0_tile_size,
-                                m_tile,
-                                m_tile_end,
-                                kb * K_block_tiles,
-                                (kb + 1) * K_block_tiles);
+            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if (defer_write && k_block_iter == defer_write_k_block) {
+                    if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                        cb_out.wait_front(out_block_num_tiles_swiglu);
+                        uint32_t out_read_ptr_swiglu = get_read_ptr(cb_out_id);
+                        if constexpr (N_chunks == 1) {
+                            write_block_sync<M_block_tiles, out_N_block_tiles>(
+                                std::get<0>(outputs_tuple),
+                                out_shape_swiglu,
+                                out_read_ptr_swiglu,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile / 2,
+                                defer_write_n_tile_end / 2);
+                        } else {
+                            write_block_sync_split<M_block_tiles, out_N_block_tiles, N_chunks, out_N_tiles_per_chunk>(
+                                outputs_tuple,
+                                out0_shape_swiglu,
+                                out_read_ptr_swiglu,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile / 2,
+                                defer_write_n_tile_end / 2);
                         }
+                        cb_out.pop_front(out_block_num_tiles_swiglu);
+#else
+                        cb_out.wait_front(out_block_num_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_out_id);
 
-                        // Multicast the current block (non-pipelined broadcast handshake). The flush
-                        // guarantees the source slot is read before it can be reused (block k+2 = same slot).
-                        // num_recv == 0 (single-row slice group) => no receivers, skip the mcast entirely.
-                        if (in0_num_recv > 0) {
-                            noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
-                            noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-                            uint64_t mcast_data_addr = get_noc_multicast_addr(
-                                in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, mcast_wp);
-                            noc_async_write_multicast(mcast_wp, mcast_data_addr, current_block_bytes, in0_num_recv);
-                            noc_async_writes_flushed();
-                            uint64_t mcast_valid_addr = get_noc_multicast_addr(
-                                in0_mc_start_x,
-                                in0_mc_start_y,
-                                in0_mc_end_x,
-                                in0_mc_end_y,
-                                in0_receiver_semaphore_addr);
-                            noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                        // write_block_sync_split is more generic (support multiple output tensors)
+                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                        if constexpr (N_chunks == 1) {
+                            write_block_sync<M_block_tiles, N_block_tiles>(
+                                std::get<0>(outputs_tuple),
+                                out_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        } else {
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                outputs_tuple,
+                                out0_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
                         }
+                        cb_out.pop_front(out_block_num_tiles);
+#endif  // FUSE_SWIGLU
                     }
                 }
-            } else
-#endif
-                for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                    if (defer_write && k_block_iter == defer_write_k_block) {
-                        if constexpr (is_output_writer) {
-                            cb_wait_front(cb_id_out, out_block_num_tiles);
-                            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
-                            // write_block_sync_split is more generic (support multiple output tensors)
-                            // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
-                            if constexpr (N_chunks == 1) {
-                                write_block_sync<M_block_tiles, N_block_tiles>(
-                                    std::get<0>(outputs_tuple),
-                                    out_shape,
-                                    out_read_ptr,
-                                    out_tile_size,
-                                    defer_write_m_tile + out_m_tile_offset,
-                                    defer_write_m_tile_end + out_m_tile_offset,
-                                    defer_write_n_tile,
-                                    defer_write_n_tile_end);
-                            } else {
-                                write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
-                                    outputs_tuple,
-                                    out0_shape,
-                                    out_read_ptr,
-                                    out_tile_size,
-                                    defer_write_m_tile,
-                                    defer_write_m_tile_end,
-                                    defer_write_n_tile,
-                                    defer_write_n_tile_end);
-                            }
-                            cb_pop_front(cb_id_out, out_block_num_tiles);
-                        }
-                    }
+                if (reuse_block && k_block_iter == 0) {
+                    // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
+                    reuse_block = false;
+                    continue;
+                }
+                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                cb_in0.reserve_back(in0_block_num_tiles);
 
-                    if (reuse_block && k_block_iter == 0) {
-                        // We strided an N block and this is the first k block, so we get reuse and do not need to read
-                        // in0
-                        reuse_block = false;
-                        continue;
-                    }
-                    uint32_t k_block = k_block_start + (k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter);
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-
-                    uint32_t in0_start_address = get_write_ptr(cb_id_in0);
-                    if constexpr (is_injector_core) {
+                uint32_t in0_start_address = get_write_ptr(cb_in0_id);
+                if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
                         k_block =
@@ -415,7 +320,7 @@ void kernel_main() {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
-                        in0_start_address,
+                        cb_in0_id,
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
@@ -427,84 +332,64 @@ void kernel_main() {
                         m_tile_end,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
-                    } else {
-                    // Get from previous core.
-#ifdef MCAST_BROADCAST
-                        // Signal readiness (slot free) to the injector, then wait for its broadcast.
-                        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                        noc_semaphore_inc(in0_injector_sender_sem_noc_addr, 1);
-                        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
-#else
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                } else {
+                    // Get from previous device
+                    in0_receiver_sem.set(INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
-#endif
-                    }
+                    in0_receiver_sem.wait(VALID);
+                }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.push_back(in0_block_num_tiles);
 
-#ifdef MCAST_BROADCAST
-                // Only the injector broadcasts: wait until all receivers signaled a free slot, then
-                // one multicast write of the block + one multicast set of their valid semaphores.
-                if constexpr (is_injector_core) {
-                    if (in0_num_recv > 0) {  // single-row slice group => no receivers, skip mcast
-                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
-                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-
-                        uint64_t mcast_data_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
-                        noc_async_write_multicast(
-                            in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
-                        // Ensure the source L1 read completed before the buffer can be reused next block.
-                        noc_async_writes_flushed();
-
-                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
-                        noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
-                    }
-                }
-#else
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    in0_sender_sem.wait(1);
+                    in0_sender_sem.set(0);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(in0_start_address),
+                        UnicastEndpoint{},
+                        current_block_bytes,
+                        {},
+                        {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = in0_start_address});
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
 #endif
+
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
-#endif
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
                         srs_fuse_signaler.synchronize_workers_and_signal_op(0);
                     }
                 }
 #endif
-                }
+            }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
-                cb_reserve_back(cb_id_in2, N_block_tiles);
+                cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+                uint32_t l1_write_addr_in2 = get_write_ptr(cb_in2_id);
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
+                    noc.async_read(
+                        in2_reader,
+                        CoreLocalMem<uint32_t>(l1_write_addr_in2),
+                        in2_tile_size,
+                        {.page_id = n_tile_id},
+                        {});
                     l1_write_addr_in2 += in2_tile_size;
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
-                cb_push_back(cb_id_in2, N_block_tiles);
+                cb_in2.push_back(N_block_tiles);
             }
 #endif
 
@@ -514,8 +399,8 @@ void kernel_main() {
                     ternary_a_reader,
                     ternary_b_reader,
                     out_shape,
-                    cb_id_ternary_a,
-                    cb_id_ternary_b,
+                    cb_ternary_a_id,
+                    cb_ternary_b_id,
                     ternary_a_tile_size,
                     ternary_b_tile_size,
                     broadcast_ternary_b,
@@ -541,85 +426,69 @@ void kernel_main() {
             defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
 
-#ifdef REDUCE_K
-            // Split-K plan B: fused L1 column reduction. The output write is replaced by a per-block
-            // running-sum handshake UP the K-band column; the deferred-write path above is disabled
-            // (defer_write forced false) so out_cb is handled exactly once, here.
-            defer_write = false;
-            if constexpr (is_output_writer) {
-                // (1) RECEIVE the running sum from the band below into cb_reduce (skip on the bottom
-                // band, which has no incoming sum and emits its own partial via copy). cb_reserve_back
-                // blocks until compute popped the previous block => single-slot cb_reduce is safe.
-                if (!is_reduce_bottom) {
-                    cb_reserve_back(cb_reduce, out_block_num_tiles);
-                    noc_semaphore_set(reduce_recv_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(reduce_down_ready_noc_addr, 1);  // tell band below: slot free
-                    noc_semaphore_wait(reduce_recv_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_reduce, out_block_num_tiles);  // unblock compute's cb_wait_front
-                }
-                // (2) compute now produces out_cb (reduce_add of our partial + cb_reduce, or copy on the
-                // bottom band). EMIT it: the top band writes the final [M, N] to DRAM; every other band
-                // forwards the running sum up into the band-above's cb_reduce.
-                if (is_reduce_top) {
-                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                        std::get<0>(outputs_tuple),
-                        out_shape,
-                        cb_id_out,
-                        out_tile_size,
-                        m_tile,  // out_m_tile_offset == 0 for plan B (single [M, N] target)
-                        m_tile_end,
-                        n_tile,
-                        n_tile_end);
-                } else {
-                    cb_wait_front(cb_id_out, out_block_num_tiles);
-                    uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                    noc_semaphore_wait(reduce_ready_semaphore_addr_ptr, 1);  // band above: slot free
-                    noc_semaphore_set(reduce_ready_semaphore_addr_ptr, 0);
-                    uint64_t reduce_dst_noc_addr =
-                        get_noc_addr(reduce_up_noc_x, reduce_up_noc_y, get_write_ptr(cb_reduce));
-                    noc_async_write(out_read_ptr, reduce_dst_noc_addr, reduce_block_bytes);
-                    noc_async_writes_flushed();
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, reduce_up_recv_noc_addr);
-                    cb_pop_front(cb_id_out, out_block_num_tiles);
-                }
-            }
-#else
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                    if constexpr (N_chunks == 1) {
+                        write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
+                            std::get<0>(outputs_tuple),
+                            out_shape_swiglu,
+                            cb_out_id,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile / 2,
+                            n_tile_end / 2);
+                    } else {
+                        write_block_sync_granular_split<
+                            M_block_tiles,
+                            out_N_block_tiles,
+                            N_chunks,
+                            out_N_tiles_per_chunk>(
+                            outputs_tuple,
+                            out0_shape_swiglu,
+                            cb_out_id,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile / 2,
+                            n_tile_end / 2);
+                    }
+#else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),
                             out_shape,
-                            cb_id_out,
+                            cb_out_id,
                             out_tile_size,
-                            m_tile + out_m_tile_offset,
-                            m_tile_end + out_m_tile_offset,
+                            m_tile,
+                            m_tile_end,
                             n_tile,
                             n_tile_end);
                     } else {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,
                             out0_shape,
-                            cb_id_out,
+                            cb_out_id,
                             out_tile_size,
                             m_tile,
                             m_tile_end,
                             n_tile,
                             n_tile_end);
                     }
+#endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER
                     if (is_last_block) {
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
                         srs_fuse_signaler.synchronize_workers_and_signal_op(0);
                     }
 #endif
                 }
             }
-#endif  // REDUCE_K
         }
     }
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

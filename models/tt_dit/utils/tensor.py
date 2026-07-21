@@ -8,12 +8,50 @@ import math
 from typing import TYPE_CHECKING
 
 import torch
+from loguru import logger
 
 import ttnn
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from types import EllipsisType
+
+
+def prepare_for_fused_swiglu(
+    tensor: torch.Tensor, ndev: int, tile_width: int = 32, *, gate_is_first: bool = False
+) -> torch.Tensor:
+    """Reorder a packed [.., 2N] SwiGLU weight/bias for the fused matmul kernel.
+
+    The fused kernel emits ``silu(even_tile) * odd_tile`` per pair, so gate (the silu'd half)
+    must occupy the even tile slot and up (the multiplicand) the odd tile slot within each
+    device block.
+
+    ``gate_is_first`` specifies the input column ordering:
+
+    - ``gate_is_first=False`` (default): input is ``[up (N) | gate (N)]``, i.e.
+      ``up, gate = chunk(., 2, -1); up * silu(gate)`` — torch/HuggingFace convention.
+    - ``gate_is_first=True``: input is ``[gate (N) | up (N)]``, i.e.
+      ``gate, up = chunk(., 2, -1); silu(gate) * up``.
+
+    In both cases the output is laid out as ``ndev`` contiguous device blocks, each containing
+    interleaved gate/up tile pairs ``[gate_t0, up_t0, gate_t1, up_t1, ...]`` for that device's shard.
+    Splitting the output evenly across ``ndev`` devices along the last dimension gives each device
+    a correctly interleaved local block.
+    """
+    rows = tensor.shape[0]
+    two_N = tensor.shape[-1]
+    N = two_N // 2
+    assert (
+        N % (ndev * tile_width) == 0
+    ), f"SwiGLU half-width N={N} must be divisible by ndev*tile_width={ndev * tile_width}"
+    tiles_per_dev = N // ndev // tile_width
+    # [rows, half=2, d=ndev, t=tiles_per_dev, c=tile_width] -> [rows, d, t, half, c]
+    t = tensor.reshape(rows, 2, ndev, tiles_per_dev, tile_width)
+    t = t.permute(0, 2, 3, 1, 4)
+
+    if not gate_is_first:
+        t = t.flip(3)
+    return t.reshape(rows, two_N)
 
 
 def typed_tensor(
@@ -804,3 +842,27 @@ def triu(
         _triu_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
+
+
+def print_tensor_mem_info(tt: ttnn.Tensor):
+    logger.info("storage_type:", tt.storage_type())
+    logger.info("global shape:", tt.shape)
+    logger.info("global padded:", tt.padded_shape)
+    logger.info("global layout:", tt.layout)
+    logger.info("global dtype:", tt.dtype)
+    logger.info("global memory_config:", tt.memory_config())
+
+    topo = tt.tensor_topology()
+    logger.info("distribution_shape:", list(topo.distribution_shape()))
+    logger.info("placements:", [str(p) for p in topo.placements()])  # Replicate vs Shard(dim)
+    logger.info("mesh_coords:", list(topo.mesh_coords()))
+
+    # Per-device shard view
+    shards = ttnn.get_device_tensors(tt)
+    for i, s in enumerate(shards):
+        logger.info(f"\nshard[{i}]")
+        logger.info("  shape:", s.shape)
+        logger.info("  padded_shape:", s.padded_shape)
+        logger.info("  layout:", s.layout)
+        logger.info("  dtype:", s.dtype)
+        logger.info("  memory_config:", s.memory_config())

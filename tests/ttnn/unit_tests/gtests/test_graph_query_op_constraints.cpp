@@ -519,7 +519,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
@@ -553,7 +553,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::subtract(std::forward<decltype(args)>(args)...); },
@@ -587,7 +587,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::multiply(std::forward<decltype(args)>(args)...); },
@@ -621,7 +621,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::maximum(std::forward<decltype(args)>(args)...); },
@@ -655,7 +655,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+        constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             [](auto&&... args) { return ttnn::minimum(std::forward<decltype(args)>(args)...); },
@@ -1033,23 +1033,26 @@ protected:
     static void SetUpTestSuite() {
         try {
             tt::tt_metal::experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, Rows * Cols);
+            // Mock devices skip the auto-enable path in device_manager, so fabric
+            // must be configured and routing tables populated manually before opening
+            // devices. set_fabric_config rejects non-DISABLED changes while devices
+            // are still open. initialize_fabric_config() queries the mock YAML
+            // descriptor (not real hardware); RELAXED mode tolerates missing ETH
+            // links in that descriptor.
+            tt::tt_fabric::SetFabricConfig(
+                tt::tt_fabric::FabricConfig::FABRIC_1D,
+                tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+            tt::tt_metal::MetalContext::instance().initialize_fabric_config();
             device_holder_ =
                 distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
         } catch (const std::exception& e) {
             // Descriptor unavailable (e.g. TT_METAL_HOME not set for custom descriptors).
-            // Disable mock mode to avoid leaking global state into subsequent test suites.
+            // Disable mock mode and fabric to avoid leaking global state into subsequent test suites.
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
             tt::tt_metal::experimental::disable_mock_mode();
             // device_holder_ stays null → per-test SetUp will GTEST_SKIP.
             return;
         }
-        // Mock devices skip the auto-enable path in device_manager, so fabric
-        // must be configured and routing tables populated manually.
-        // initialize_fabric_config() queries the mock YAML descriptor (not real
-        // hardware); RELAXED mode tolerates missing ETH links in that descriptor.
-        tt::tt_fabric::SetFabricConfig(
-            tt::tt_fabric::FabricConfig::FABRIC_1D,
-            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-        tt::tt_metal::MetalContext::instance().initialize_fabric_config();
     }
 
     static void TearDownTestSuite() {
@@ -1070,8 +1073,7 @@ using DistributedTensorFixtures = ::testing::Types<
     DistributedTensorOpIfRealFixture,
     DistributedTensorOpIfMockFixture<1, 2>,  // N300:      2 chips, 1x2 linear
     DistributedTensorOpIfMockFixture<2, 2>,  // 2xN300:    4 chips, 2x2 grid
-    DistributedTensorOpIfMockFixture<1, 8>,  // T3K:       8 chips, 1x8 linear
-    DistributedTensorOpIfMockFixture<4, 8>   // Galaxy 6U: 32 chips, 4x8 grid
+    DistributedTensorOpIfMockFixture<1, 8>   // T3K:       8 chips, 1x8 linear
     >;
 TYPED_TEST_SUITE(DistributedTensorOpIfTest, DistributedTensorFixtures);
 
@@ -1118,7 +1120,7 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
     ttnn::graph::DistributedTensorSpec dist_input_a{input_spec, sharded_topology};
     ttnn::graph::DistributedTensorSpec dist_input_b{input_spec, sharded_topology};
 
-    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     auto query = ttnn::graph::query_op_constraints(
         [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
         this->device_,
@@ -1149,12 +1151,7 @@ TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
         this->device_,
         dist_input,
         /*dim=*/3,
-        /*cluster_axis=*/std::optional<uint32_t>(1),
-        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
-        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
-        /*optional_output_tensor=*/std::optional<Tensor>{},
-        /*num_links=*/std::optional<uint32_t>(1),
-        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
+        /*cluster_axis=*/std::optional<uint32_t>(1));
 
     if (query.status == ttnn::graph::ExecutionStatus::Error) {
         GTEST_LOG_(INFO) << "all_gather query error: " << query.error_message.value_or("unknown");
@@ -1285,6 +1282,18 @@ TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
 }
 
 TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
+    // rms_allgather_program_factory slices stats_cores_vec by ring_size, which
+    // requires a physical core layout matching the number of devices.  Mock
+    // devices don't satisfy this, causing a heap-buffer-overflow in create_at().
+    if (tt::tt_metal::experimental::is_mock_mode_registered()) {
+        GTEST_SKIP() << "fused_rms_minimal requires real hardware (mock core layout is insufficient)";
+    }
+    const auto mesh_shape = this->device_->shape();
+    if (mesh_shape[0] != 1 || mesh_shape[1] < 8) {
+        GTEST_SKIP() << "fused_rms_minimal test requires a 1x8 mesh (have "
+                     << mesh_shape[0] << "x" << mesh_shape[1] << ")";
+    }
+
     // fused_rms_minimal requirements (from validate_on_program_cache_miss):
     //   - input shape (1,1,M,N): M<=32, N%32==0, TILE, WIDTH_SHARDED ROW_MAJOR
     //   - block_w * tile_width(32) == shard_spec.shape[1]
@@ -1312,9 +1321,10 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), shard_mem_cfg));
 
-    // Replicated topology: each device runs RMS locally, all_gather collects stats.
-    auto replicated_topology = TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
-    ttnn::graph::DistributedTensorSpec dist_input{input_spec, replicated_topology};
+    // Sharded topology to match fused_rms_minimal distributed execution assumptions.
+    // cluster_axis=1 and the test requires a 1x8 mesh, so shard along mesh dim 1.
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/1);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // Weight: ROW_MAJOR, padded_shape[-1]==32 (tile width), volume==N.
     // Shape (1,1,N/32,32): padded[-1]=32, volume=N

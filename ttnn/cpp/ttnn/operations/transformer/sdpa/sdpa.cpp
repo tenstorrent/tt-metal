@@ -19,6 +19,19 @@
 
 namespace ttnn::transformer {
 
+namespace {
+// Empty joint (0 elements) == "no joint". Normalize to nullopt so self-attention callers passing
+// zero-length dummy joints don't create duplicate input Buffer*s -> resolve_bindings() bails and the
+// WorkloadDescriptor cache-hit path freezes stale addresses (#45452 / #45391). L=0 either way, so
+// numerically identical.
+std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) {
+    if (t.has_value() && t->logical_shape().volume() == 0) {
+        return std::nullopt;
+    }
+    return t;
+}
+}  // namespace
+
 ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -30,7 +43,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -49,6 +63,9 @@ ttnn::Tensor scaled_dot_product_attention(
     // Pre-multiply the mask by 1/scale so the kernel's subsequent *scale
     // restores the original mask magnitude inside softmax. QK remains scaled
     // exactly once.
+    //
+    // Windowed mode synthesizes a {0, -inf} block-diagonal mask on-device from cu_window_seqlens;
+    // pre-scaling is unnecessary (0/-inf are scale-invariant), so attn_mask is left empty.
     std::optional<ttnn::Tensor> effective_mask = attn_mask;
     if (attn_mask.has_value()) {
         const float effective_scale =
@@ -74,7 +91,8 @@ ttnn::Tensor scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        cu_window_seqlens);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -87,7 +105,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<uint32_t> block_size,
+    std::optional<uint32_t> num_kv_heads) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -110,7 +130,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        block_size,
+        num_kv_heads);
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
@@ -123,7 +146,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<uint32_t> block_size,
+    std::optional<uint32_t> num_kv_heads) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -146,7 +171,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        block_size,
+        num_kv_heads);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
@@ -196,19 +224,25 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const CoreCoord ccl_core_grid_offset,
     bool is_causal,
     bool is_balanced,
+    bool is_cross,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl) {
+    // Normalize empty joints to nullopt (see drop_if_empty).
+    const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
+    const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
+    const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
+
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
         input_tensor_v,  // AllGather input
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
+        joint_q,
+        joint_k,
+        joint_v,
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
         joint_strategy,
@@ -224,6 +258,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         subdevice_id,
         is_causal,
         is_balanced,
+        is_cross,
         scale,
         compute_kernel_config,
         core_allocation_strategy,
@@ -278,6 +313,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         subdevice_id,
         /*is_causal=*/true,
         is_balanced,
+        /*is_cross=*/false,
         scale,
         compute_kernel_config,
         core_allocation_strategy,
@@ -291,9 +327,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
@@ -310,13 +346,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
+    // Normalize empty joints to nullopt (see drop_if_empty).
+    const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
+    const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
+    const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
+
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
         input_tensor_v,  // AllGather input
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
+        joint_q,
+        joint_k,
+        joint_v,
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
         joint_strategy,

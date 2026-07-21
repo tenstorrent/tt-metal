@@ -201,6 +201,8 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        *,
+        activation: "ttnn.RoutedExpertActivation",
     ):
         """
         Initialize TtRoutedExpert module.
@@ -223,6 +225,11 @@ class TtRoutedExpert(LightweightModule):
                           Produced by sharding ExpertMapping.create_global_expert_idx_table via
                           get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
                           global ids. Required.
+            activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
+                          activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
+                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
+                          without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -237,6 +244,17 @@ class TtRoutedExpert(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self.global_expert_idx_table = global_expert_idx_table
+        # Activation variant for the fused unified_routed_expert_moe kernel.
+        # Required RoutedExpertActivation, chosen explicitly by the caller (no
+        # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
+        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
+        if activation is None:
+            raise ValueError(
+                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+            )
+        self.activation = activation
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -394,12 +412,16 @@ class TtRoutedExpert(LightweightModule):
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
         if is_blackhole():
+            # Fused path. The composite op selects its strategy from the input
+            # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
+            # bf8-packed internally, fresh output); a TILE buffer takes the
+            # non-fused read path and is written in place. TILE mode requires x to
+            # be bf8, so cast a mismatched TILE input; the ROW_MAJOR fast path is
+            # left untouched.
+            if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
@@ -411,11 +433,22 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs,
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
+                activation=self.activation,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
-        # Wormhole fallback: per-expert Python loop with extract → FFN → insert.
+        # Wormhole fallback: the per-expert extract → FFN → insert loop needs a
+        # TILE activations_dtype buffer. A ROW_MAJOR input is tilized and cast in
+        # one to_layout; an already-TILE input only needs the dtype cast (to_layout
+        # would not cast a TILE→TILE tensor). expert_outputs aliases this buffer;
+        # the insert writes each expert's result back in place.
+        if dispatched_buffer.layout == ttnn.TILE_LAYOUT:
+            if dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
+        else:
+            dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")

@@ -28,7 +28,15 @@ struct TopologySatSolver {
 
     int declare_one_more_variable();
     void add(int lit);
+    // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
+    // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
+    void assume(int lit);
     int solve();
+    // Solve capped at `max_conflicts` conflicts. Returns kSat / kUnsat, or 0 (IPASIR "unknown") when the budget
+    // is exhausted before a verdict. Lets a caller try an optional/expensive constraint (a tight host-budget
+    // minimization) without paying an unbounded proof when it is intractable -- on 0/kUnsat the caller falls back.
+    // The limit is cleared afterwards so subsequent solve() calls are unbounded.
+    int solve_limited(int max_conflicts);
     int val(int lit) const;
 
     /**

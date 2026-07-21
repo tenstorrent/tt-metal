@@ -42,8 +42,12 @@ public:
     std::vector<CoreCoord> get_claimable_cores(IDevice* device) const;
     void claim(IDevice* device, const std::vector<CoreCoord>& cores);
     void release(IDevice* device, const std::vector<CoreCoord>& cores);
+    void wait_done(IDevice* device, CoreCoord core) const;
     std::unordered_set<CoreCoord> claimed_cores(ChipId device_id) const;
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
+    // Reserve [addr, L1_top) so a later allocate_l1() won't overlap externally-owned L1 at the top
+    // of this core. Must be called before any allocate_l1() on the core. See the facade declaration.
+    void reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 

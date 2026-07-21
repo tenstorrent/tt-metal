@@ -3,15 +3,14 @@ name: "[internal] Build Docker Python venv images"
 # Reusable workflow that builds missing Python venv images (ci-build-venv, ci-test-venv).
 # Venv images are pushed to GHCR.
 #
-# Expects platform-data JSON from preflight containing venv tags, exists flags, and version.
+# Expects platform-data JSON from preflight containing venv tags, required flags,
+# exists flags, and version.
 # Uses manual docker buildx bake (dockerfile/docker-bake.hcl) for builds.
 permissions:
   contents: read
   packages: write
 
 env:
-  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
-  # Venv images are built infrequently; monitor push duration if this becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
@@ -20,7 +19,7 @@ on:
       platform-data:
         required: true
         type: string
-        description: "JSON from preflight containing ci_build_venv_tag, ci_test_venv_tag, *_exists, version"
+        description: "JSON from preflight containing ci_build_venv_tag, ci_test_venv_tag, *_required, *_exists, version"
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
@@ -32,7 +31,7 @@ on:
 jobs:
   metadata:
     name: "Venv metadata"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
       ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
@@ -50,15 +49,21 @@ jobs:
   build:
     name: "🐍 Build missing venvs"
     if: |
-      fromJson(inputs.platform-data).ci_build_venv_exists != 'true' ||
-      fromJson(inputs.platform-data).ci_test_venv_exists != 'true'
+      (fromJson(inputs.platform-data).ci_build_venv_required == 'true' &&
+       fromJson(inputs.platform-data).ci_build_venv_exists != 'true') ||
+      (fromJson(inputs.platform-data).ci_test_venv_required == 'true' &&
+       fromJson(inputs.platform-data).ci_test_venv_exists != 'true')
     timeout-minutes: 45
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -76,6 +81,8 @@ jobs:
 
           CI_BUILD_VENV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_exists')
           CI_TEST_VENV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_exists')
+          CI_BUILD_VENV_REQUIRED=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_required')
+          CI_TEST_VENV_REQUIRED=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_required')
           CI_BUILD_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')
           CI_TEST_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')
           UBUNTU_VERSION=$(echo "$PLATFORM_DATA" | jq -r '.version')
@@ -89,13 +96,13 @@ jobs:
           TARGETS=""
           SET=""
 
-          if [ "$CI_BUILD_VENV_EXISTS" != "true" ]; then
+          if [ "$CI_BUILD_VENV_REQUIRED" = "true" ] && [ "$CI_BUILD_VENV_EXISTS" != "true" ]; then
             TARGETS+="ci-build-venv,"
             SET+="ci-build-venv.tags=${CI_BUILD_VENV_TAG}"$'\n'
             SET+="ci-build-venv.output=${BAKE_OUTPUT}"$'\n'
           fi
 
-          if [ "$CI_TEST_VENV_EXISTS" != "true" ]; then
+          if [ "$CI_TEST_VENV_REQUIRED" = "true" ] && [ "$CI_TEST_VENV_EXISTS" != "true" ]; then
             TARGETS+="ci-test-venv,"
             SET+="ci-test-venv.tags=${CI_TEST_VENV_TAG}"$'\n'
             SET+="ci-test-venv.output=${BAKE_OUTPUT}"$'\n'

@@ -8,7 +8,7 @@
 #include "api/debug/dprint.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -19,8 +19,8 @@ void kernel_main() {
     uint32_t batch_size_in_pages = get_arg_val<uint32_t>(4);
     uint32_t my_batch_id = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t batch_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t batch_dfb_id = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
 
     // Mode encoding (compile-time arg 3):
@@ -49,17 +49,17 @@ void kernel_main() {
     const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr, batch_id_size << 2);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer batch_cb(batch_cb_id);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer batch_dfb(batch_dfb_id);
 
     volatile tt_l1_ptr int* addr_ptr = nullptr;
 
     if (batch_id_size > 0) {
-        batch_cb.reserve_back(1);
-        uint32_t l1_write_addr = batch_cb.get_write_ptr();
-        noc.async_read(batchAddr, batch_cb, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
+        batch_dfb.reserve_back(1);
+        uint32_t l1_write_addr = batch_dfb.get_write_ptr();
+        noc.async_read(batchAddr, batch_dfb, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        batch_cb.push_back(1);
+        batch_dfb.push_back(1);
         addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
     }
 
@@ -99,13 +99,13 @@ void kernel_main() {
             uint32_t p_row = 0;
             uint32_t p_col = 0;
             for (uint32_t p = 0; p < shard_ppb; ++p) {
-                cb_in0.reserve_back(1);
+                dfb_in0.reserve_back(1);
                 if (replace_b) {
                     if constexpr (IS_B_SAME_SHARDED) {
                         const uint32_t b_offset = (replace_src * shard_ppb + p) * shard_page_stride;
                         noc.async_read(
                             UnicastEndpoint{},
-                            cb_in0,
+                            dfb_in0,
                             page_size,
                             {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                              .noc_y = (uint32_t)my_y[noc.get_noc_id()],
@@ -120,7 +120,7 @@ void kernel_main() {
                             replace_src * b_full_ppb + p_row * full_tile_w + col_page_offset + p_col;
                         noc.async_read(
                             s1,
-                            cb_in0,
+                            dfb_in0,
                             page_size,
                             {.page_id = src_page, .offset_bytes = col_byte_offset},
                             {.offset_bytes = 0});
@@ -130,7 +130,7 @@ void kernel_main() {
                     const uint32_t a_offset = (b_local * shard_ppb + p) * shard_page_stride;
                     noc.async_read(
                         UnicastEndpoint{},
-                        cb_in0,
+                        dfb_in0,
                         page_size,
                         {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                          .noc_y = (uint32_t)my_y[noc.get_noc_id()],
@@ -138,7 +138,7 @@ void kernel_main() {
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
                 }
-                cb_in0.push_back(1);
+                dfb_in0.push_back(1);
                 if (++p_col == shard_tile_w) {
                     p_col = 0;
                     ++p_row;
@@ -172,16 +172,17 @@ void kernel_main() {
                 const uint32_t b_start = batch_to_replace_id * batch_size_in_pages;
                 const uint32_t b_end = b_start + batch_size_in_pages;
                 for (uint32_t i = b_start; i < b_end; ++i) {
-                    cb_in0.reserve_back(1);
-                    noc.async_read(s1, cb_in0, page_size, {.page_id = i}, {.offset_bytes = 0});
+                    dfb_in0.reserve_back(1);
+                    noc.async_read(s1, dfb_in0, page_size, {.page_id = i}, {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    cb_in0.push_back(1);
+                    dfb_in0.push_back(1);
                 }
             } else {
-                cb_in0.reserve_back(batch_size_in_pages);
-                noc.async_read(s0, cb_in0, page_size * batch_size_in_pages, {.page_id = start_id}, {.offset_bytes = 0});
+                dfb_in0.reserve_back(batch_size_in_pages);
+                noc.async_read(
+                    s0, dfb_in0, page_size * batch_size_in_pages, {.page_id = start_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_in0.push_back(batch_size_in_pages);
+                dfb_in0.push_back(batch_size_in_pages);
             }
         } else {
             // Generic fallback path. Runtime args:
@@ -218,16 +219,16 @@ void kernel_main() {
 
                 for (uint32_t outer = 0; outer < outer_count; ++outer) {
                     for (uint32_t inner = 0; inner < inner_count; ++inner) {
-                        cb_in0.reserve_back(1);
+                        dfb_in0.reserve_back(1);
                         if (replace_batch) {
                             const uint32_t pid = outer * outer_stride_b + batch_to_replace_id * inner_count + inner;
-                            noc.async_read(s1, cb_in0, page_size, {.page_id = pid}, {.offset_bytes = 0});
+                            noc.async_read(s1, dfb_in0, page_size, {.page_id = pid}, {.offset_bytes = 0});
                         } else {
                             const uint32_t pid = outer * outer_stride_a + my_slice * inner_count + inner;
-                            noc.async_read(s0, cb_in0, page_size, {.page_id = pid}, {.offset_bytes = 0});
+                            noc.async_read(s0, dfb_in0, page_size, {.page_id = pid}, {.offset_bytes = 0});
                         }
                         noc.async_read_barrier();
-                        cb_in0.push_back(1);
+                        dfb_in0.push_back(1);
                     }
                 }
             }

@@ -10,6 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_gate_weights,
@@ -147,6 +148,9 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         gate_fallback_mode=gate_mode,
         weight_cache_path=None,
         layer_idx=0,
+        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale=DeepSeekV3Config.ROUTE_SCALE,
     )
     output1_tt, _ = moe_from_weights(create_input(), return_intermediates=False)
     output1 = to_torch_tp(output1_tt)
@@ -212,6 +216,9 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         gate_fallback_mode=gate_mode,
         weight_cache_path=CACHE_DIR,
         layer_idx=0,
+        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale=DeepSeekV3Config.ROUTE_SCALE,
     )
     profiler.end("cold_load")
     output2_tt, _ = moe_cold(create_input(), return_intermediates=False)
@@ -250,6 +257,9 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         gate_fallback_mode=gate_mode,
         weight_cache_path=CACHE_DIR,
         layer_idx=0,
+        n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
+        n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
+        route_scale=DeepSeekV3Config.ROUTE_SCALE,
     )
     profiler.end("warm_load")
     output3_tt, _ = moe_warm(create_input(), return_intermediates=False)

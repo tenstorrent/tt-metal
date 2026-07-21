@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_binary_api.h"
@@ -59,6 +60,12 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    // 32bit formats require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
+    // implemented for Quasar yet; only the B2D path is supported here.
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    LLK_ASSERT(!enable_unpack_to_dest, "32-bit unary broadcast (unpack-to-dest) not supported on Quasar");
     UNPACK((llk_unpack_A_init<
             bcast_type,
             false /*acc_to_dest*/,
@@ -71,6 +78,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -97,6 +105,12 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
 #else
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     // Broadcast mode and B2D vs A2D are fixed in unary_bcast_init; pass logical operand ids through to LLK.
+    // 32bit formats would require the A2D unpack-to-dest path (SrcB is only 19 bits wide), which is not
+    // implemented for Quasar yet; only the B2D path is supported here.
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
+    LLK_ASSERT(!enable_unpack_to_dest, "32-bit unary broadcast (unpack-to-dest) not supported on Quasar");
     UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, false, bcast_type, false>(dst_tile_index, icb)));
 #endif
@@ -112,7 +126,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+    UNPACK((llk_unpack_A_uninit<bcast_type>()));
 
     if (enable_unpack_to_dest) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
@@ -121,16 +135,16 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     }
 #endif
 #else
-    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+    UNPACK((llk_unpack_A_uninit<bcast_type>()));
     // Quasar's llk_math_eltwise_unary_datacopy_uninit is a no-op for both unpack_to_dest values,
     // so no runtime dispatch on dst format is needed here.
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type>()));
 #endif
 }
 
+#ifndef ARCH_QUASAR
 template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
 void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
-#ifndef ARCH_QUASAR
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     // Pass through uses A2D and potentially direct unpack to dest.
     constexpr DataCopyType data_copy_type =
@@ -162,8 +176,8 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 #endif
 
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
-#endif
 }
+#endif
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
@@ -209,6 +223,9 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void mul_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+#ifdef ARCH_QUASAR
+    LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
+#endif
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::ROW,
@@ -223,6 +240,9 @@ ALWI void mul_tiles_bcast_rows(
  */
 ALWI void add_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+#ifdef ARCH_QUASAR
+    LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
+#endif
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::ROW,
@@ -237,6 +257,9 @@ ALWI void add_tiles_bcast_rows(
  */
 ALWI void sub_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+#ifdef ARCH_QUASAR
+    LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
+#endif
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::ROW,
@@ -306,6 +329,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line =
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
@@ -318,6 +342,12 @@ Internal helper function for all broadcast ops
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+#ifdef ARCH_QUASAR
+    // bcast_row_idx is only consumed by the ROW broadcast path; it is ignored by the Quasar LLK.
+    if constexpr (tBcastDim == BroadcastType::ROW) {
+        LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
+    }
+#endif
     MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));

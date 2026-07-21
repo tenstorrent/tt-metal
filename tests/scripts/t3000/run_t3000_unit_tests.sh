@@ -72,15 +72,16 @@ run_t3000_ttfabric_tests() {
   TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
 
   # Code profiling test
-  TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
+  TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
 
   # Record the end time
   end_time=$(date +%s)
@@ -100,6 +101,8 @@ run_t3000_ttnn_tests() {
   # Disabled by issue #45305: DistributedTensorOpIfTest and MatmulOpIfTest failing deterministically
   ./build/test/ttnn/unit_tests_ttnn --gtest_filter="-DistributedTensorOpIfTest/*:QueryOpConstraints/MatmulOpIfTest.Matmul/2"
   ./build/test/ttnn/unit_tests_ttnn_tensor
+  # Runtime tensor (HostTensor/MeshTensor) tests migrated out of unit_tests_ttnn_tensor into the dedicated tt_metal unit_tests_tensor binary
+  ./build/test/tt_metal/unit_tests_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
@@ -144,7 +147,7 @@ run_t3000_ttnn_udm_tests() {
 run_t3000_tt_metal_multiprocess_tests() {
   local mpi_args="--allow-run-as-root"
   # Disabled by issue #45305: test_tt_fabric crashes with TT_FATAL (Physical chip id not found for eth coord) on T3K 2x2 config
-  # tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
+  # tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_t3k_2x2.yaml
   # Disabled by issue #45491: IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_* hang/fail with TT_FATAL on T3K 2x2 config (RandomizedInterMeshUnicast re-enabled as of 2026-05-29: now passing on main)
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="-IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_0:IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_1"
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="-IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_0:IntermeshSplit2x2FabricFixture.MultiMeshEastMulticast_1"
@@ -169,7 +172,7 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperation*"
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_data_parallel_example.py
-  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_2x4
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
@@ -205,20 +208,6 @@ run_t3000_grok_tests() {
   fi
 }
 
-run_t3000_qwen3_vl_unit_tests() {
-  # install qwen3_vl requirements
-  uv pip install -r models/demos/qwen3_vl/requirements.txt
-
-  # export PYTEST_ADDOPTS for concise pytest output
-  export PYTEST_ADDOPTS="--tb=short"
-
-  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
-  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
-
-  # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
-}
-
 run_t3000_deepseek_tests() {
   uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
@@ -236,13 +225,13 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
-  # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-Layout.TILE-DataType.BFLOAT16-mesh_device0]
+  # 10 iteration trace test with fabric ring (dit_shape now in test_all_gather, no barrier parameters)
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
-  # pytest tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
+  # pytest tests/nightly/t3000/2d_ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_2d_linear-perf-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0]
   # training shapes - Re-enable this test when we have more T3K availability
-  # pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0-1link]
+  # pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0]
 
   # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # sharded intermediate case with cluster axis 1

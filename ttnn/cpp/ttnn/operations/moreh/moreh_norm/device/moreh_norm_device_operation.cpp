@@ -30,72 +30,6 @@ inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tensor& output, int64_t dim, bool keepdim) {
-    const auto& input_shape = input.padded_shape();
-    const auto& input_shape_wo_padding = input.logical_shape();
-    const auto input_rank = input_shape.rank();
-
-    const auto& output_shape = output.padded_shape();
-    const auto& output_shape_wo_padding = output.logical_shape();
-    const auto output_rank = output_shape.rank();
-
-    const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
-
-    if (keepdim) {
-        TT_FATAL(input_rank == output_rank, "Input and output ranks must be equal when keepdim is true.");
-
-        auto adjusted_input_shape = input_shape;
-        auto adjusted_input_shape_wo_padding = input_shape_wo_padding;
-        adjusted_input_shape[dim] = (is_tile_dim) ? tt::constants::TILE_HEIGHT : 1;
-        adjusted_input_shape_wo_padding[dim] = 1;
-
-        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-
-        expand_to_max_dim(input_dim, adjusted_input_shape);
-        expand_to_max_dim(output_dim, output_shape);
-        expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
-        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
-
-        for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i], "Input and output dimensions do not match at index {}.", i);
-            TT_FATAL(
-                input_dim_wo_padding[i] == output_dim_wo_padding[i],
-                "Input and output dimensions without padding do not match at index {}.",
-                i);
-        }
-    } else {
-        TT_FATAL(!is_tile_dim, "Dimension {} should not be a tile dimension when keepdim is false.", dim);
-
-        ttnn::SmallVector<uint32_t> expected_output_shape;
-        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
-        for (int i = 0; i < output_rank; ++i) {
-            if (i == dim && !is_tile_dim) {
-                expected_output_shape.push_back(1);
-                expected_output_shape_wo_padding.push_back(1);
-            }
-            expected_output_shape.push_back(output_shape[i]);
-            expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
-        }
-
-        for (int i = 0; i < input_rank; ++i) {
-            if (i == dim) {
-                continue;
-            }
-            TT_FATAL(
-                input_shape[i] == expected_output_shape[i],
-                "Input and expected output shapes do not match at index {}.",
-                i);
-            TT_FATAL(
-                input_shape_wo_padding[i] == expected_output_shape_wo_padding[i],
-                "Input and expected output shapes without padding do not match at index {}.",
-                i);
-        }
-    }
-}
-
 void MorehNormOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -105,7 +39,7 @@ void MorehNormOperation::validate_inputs(
     check_tensor(output, "moreh_norm", "output");
     validate_input_tensor_with_dim(input, dim);
     if (output.has_value()) {
-        validate_output_tensor_with_keepdim(input, output.value(), dim, operation_attributes.keepdim);
+        validate_output_with_keepdim(input, output.value(), dim, operation_attributes.keepdim);
     }
 }
 
@@ -146,13 +80,13 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
             TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
-    ttnn::SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     for (int i = 0; i < input_rank; ++i) {
         bool is_reduced_dim = (i == dim);
         if (is_reduced_dim && !is_tile_dim) {
             continue;
         }
-        shape.push_back(input_shape[i]);
+        shape.push_back((is_reduced_dim && is_tile_dim) ? 1 : input_shape[i]);
     }
     return TensorSpec(
         ttnn::Shape(shape),

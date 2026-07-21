@@ -699,7 +699,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelStreamRegInc) {
     }
 
     auto mesh_device = this->devices_[0];
-    run_local_noc_stream_reg_inc(this, mesh_device, CoreCoord{0, 0}, HalProgrammableCoreType::DRAM);
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+    run_local_noc_stream_reg_inc(this, mesh_device, CoreCoord{0, 1}, HalProgrammableCoreType::DRAM);
 }
 
 // Tensix to DRISC stream register round trip DRISC test:
@@ -719,7 +720,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
     auto* device = mesh_device->get_devices()[0];
     auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
 
-    CoreCoord logical_core_drisc{0, 0};
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+    CoreCoord logical_core_drisc{0, 1};
     CoreCoord logical_core_tensix{0, 0};
     CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
     uint32_t tensix_l1_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
@@ -764,7 +766,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
     auto* device = mesh_device->get_devices()[0];
     auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
 
-    CoreCoord logical_core_drisc{0, 0};
+    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+    CoreCoord logical_core_drisc{0, 1};
     CoreCoord logical_core_tensix{0, 0};
     CoreCoord tensix_virtual = device->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
     CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);

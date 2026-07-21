@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -53,6 +54,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         bd_val.f.y_dim = unpack_tile_face_r_dim[i];
         bd_val.f.z_dim = unpack_tile_num_faces[i];
 
+        ckernel::trisc::validate_buffer_desc<ckernel::trisc::L1AccessMode::Continuous>(bd_val);
         ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
     }
 
@@ -150,3 +152,9 @@ inline void llk_unpack_reconfig_data_format(
     llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
 }
+
+/**
+ * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD
+ * stall in transpose-dest. Used by the transpose_wh_dest compute API.
+ */
+inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcB_dummy_valid_(); }

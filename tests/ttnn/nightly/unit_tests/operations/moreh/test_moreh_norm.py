@@ -59,6 +59,16 @@ def torch_norm(
     """
     if is_linalg_vector_norm:
         torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=keepdim)
+    elif not keepdim and dim is not None and dim != []:
+        # The deprecated torch.norm mishandles keepdim=False for some orders (e.g. p=0)
+        # when the reduction collapses to a scalar, raising
+        # "output with shape [] doesn't match the broadcast shape [1]". keepdim=True is
+        # unaffected, so reduce with keepdim and squeeze the reduced dims ourselves.
+        torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=True)
+        reduce_dims = [dim] if isinstance(dim, int) else list(dim)
+        rank = torch_input.dim()
+        for d in sorted((d % rank for d in reduce_dims), reverse=True):
+            torch_output = torch_output.squeeze(d)
     else:
         torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=keepdim)
     torch_input_grad = None
@@ -195,6 +205,79 @@ def run_moreh_norm(
     passing, out = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
     logger.info(f"output's {out}")
     assert passing
+
+
+def run_moreh_norm_output_mode(
+    input_shape,
+    p,
+    dim,
+    rtol,
+    atol,
+    device,
+    *,
+    keepdim=False,
+    compute_kernel_options=None,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+    is_linalg_vector_norm=False,
+    use_provided_output=True,
+):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b is not supported in the kernel")
+
+    torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim, dtype=torch_dtype)
+    expected_output, _ = torch_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=dim,
+        keepdim=keepdim,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        do_backward=False,
+    )
+
+    ttnn_input = create_ttnn_tilized_tensor(torch_input, device, ttnn_dtype)
+    kwargs = {
+        "p": p,
+        "dim": dim,
+        "keepdim": keepdim,
+        "compute_kernel_config": get_compute_kernel_options(compute_kernel_options),
+    }
+
+    if use_provided_output:
+        _, ttnn_output_shape = compute_output_shape(torch_input.shape, dim, keepdim=keepdim)
+        kwargs["output"] = create_ttnn_tilized_tensor(torch.empty(ttnn_output_shape), device, ttnn_dtype)
+
+    actual_output = ttnn.operations.moreh.norm(ttnn_input, **kwargs)
+    actual_output = ttnn.to_torch(actual_output)
+
+    # For a rank-1 input reduced with keepdim=False the torch reference is rank-0 ([]) while
+    # the ttnn output keeps a trailing dim ([1]); they are the same scalar. Match shapes so the
+    # comparison doesn't trip torch's "shape [] doesn't match broadcast shape [1]" error.
+    expected_output = expected_output.reshape(actual_output.shape)
+
+    passing, out = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
+    logger.info(f"output's {out}")
+    assert passing
+
+
+@pytest.mark.parametrize("p", [0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("use_provided_output", [True, False], ids=["provide-output", "allocate-output"])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_dim_0_keepdim_false_output_modes(p, use_provided_output, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    run_moreh_norm_output_mode(
+        [5],
+        p,
+        0,
+        0.06,
+        0.06,
+        device,
+        keepdim=False,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        use_provided_output=use_provided_output,
+    )
 
 
 def run_moreh_norm_backward(
@@ -360,6 +443,52 @@ def test_moreh_norm_rank_1_dim_0(p, keepdim, device, is_linalg_vector_norm):
         [5],
         p,
         0,
+        0.06,
+        0.06,
+        device,
+        keepdim=keepdim,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+
+
+@pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("dim", [[], None], ids=["global_norm(dim=[])", "global_norm(dim=None)"])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_global_dim(p, dim, keepdim, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    if not keepdim:
+        torch_input, torch_output_grad = make_torch_tensors([5], dim, keepdim=keepdim)
+        expected_output, _ = torch_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=dim,
+            keepdim=keepdim,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+            do_backward=False,
+        )
+        actual_output, _ = ttnn_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=dim,
+            keepdim=keepdim,
+            device=device,
+            do_backward=False,
+            dtype=ttnn.bfloat16,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+        )
+        passing, out = comp_allclose(expected_output.reshape(-1), actual_output.reshape(-1), rtol=0.06, atol=0.06)
+        logger.info(f"output's {out}")
+        assert passing
+        return
+
+    run_moreh_norm(
+        [5],
+        p,
+        dim,
         0.06,
         0.06,
         device,

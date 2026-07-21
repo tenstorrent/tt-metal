@@ -15,11 +15,27 @@
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+/**
+ * @brief Program the unpacker MOP/replay buffer for a matmul operand unpack.
+ *
+ * Builds a replay buffer that unpacks the streamed (non-reused) operand and advances its L1 base
+ * address by one tile each step. Which operand is reused versus streamed is chosen by comparing
+ * ct_dim and rt_dim (reuse_a = ct_dim >= rt_dim); operand A maps to SrcB and operand B to SrcA.
+ * The address bump is suppressed under kernel broadcast.
+ *
+ * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
+ * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
+ * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
@@ -152,6 +168,29 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     tmp.program();
 }
 
+/**
+ * @brief Initialize the unpacker for a matmul (A x B) operation.
+ *
+ * Re-enables within-face transpose if needed, programs per-unpacker datum counts (full-tile or
+ * face-by-face for partial faces), stashes kt_dim into a GPR for tile-size scaling, and programs
+ * the matmul MOP.
+ *
+ * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
+ * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
+ * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param kt_dim: Number of tiles along the contraction (K) dimension.
+ * @param unpA_face_r_dim: Rows per face for operand A.
+ * @param unpB_face_r_dim: Rows per face for operand B.
+ * @param unpA_num_faces: Number of faces for operand A, valid values = <1, 2, 4>.
+ * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
+ * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
+ * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ * @note Call @ref _llk_unpack_AB_matmul_uninit_ after this function to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_matmul_ is the matching execute call.
+ * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
+ */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
@@ -169,6 +208,20 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
+
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces);
+    llk::san::operation_init<llk::san::Operation::UnpackABMatmul>(
+        kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
+
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -208,11 +261,42 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
 }
 
-inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t face_r_dim)
+/**
+ * @brief No-op after a matmul operation.
+ *
+ * x-start/x-end is transient and reprogrammed by each operation's init (see tt-llk#1036), so there
+ * is nothing to restore here.
+ *
+ * @note Call @ref _llk_unpack_AB_matmul_init_ before this function.
+ */
+inline void _llk_unpack_AB_matmul_uninit_()
 {
-    TT_SETADCXX(p_setadc::UNP_AB, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
+/**
+ * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
+ *
+ * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
+ * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
+ * for each step while synchronizing through the unpack semaphore and config-context switching.
+ *
+ * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
+ * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
+ * @param base_address_a: L1 base address of operand A's tile buffer.
+ * @param base_address_b: L1 base address of operand B's tile buffer.
+ * @param tile_index_a: Starting tile index into operand A.
+ * @param tile_index_b: Starting tile index into operand B.
+ * @param tile_size_a: Size of one operand A tile, used to compute per-tile offsets.
+ * @param tile_size_b: Size of one operand B tile, used to compute per-tile offsets.
+ * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
+ * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param kt_dim: Number of tiles along the contraction (K) dimension.
+ * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
+ * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
+ */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
@@ -227,6 +311,9 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t rt_dim   = 1,
     const std::uint32_t kt_dim   = 1)
 {
+    llk::san::operation_check<llk::san::Operation::UnpackABMatmul>(
+        kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
+
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 

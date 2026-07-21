@@ -30,7 +30,6 @@ SWEEP_TYPES = {
 SCHEDULE_TYPES = {
     "0 2 * * *": "lead_models",
     "0 3 * * *": "model_traced",
-    "0 4 * * 3,6": "comprehensive",
 }
 
 
@@ -61,7 +60,7 @@ VECTOR_LOAD_FILTER_POLICIES = {
 # Multiple logical test groups may point at the same profile, which avoids
 # repeating ``runs_on``, ``runner_label``, ``tt_smi_cmd``, and ``arch``.
 
-MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "t3k", "galaxy")
+MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy")
 
 RUNNER_PROFILES = {
     "n150": {
@@ -93,13 +92,22 @@ RUNNER_PROFILES = {
         "matrix_output_key": "p150b",
     },
     "p100a": {
-        # Shares the "p150b" matrix bucket so the ttnn-sweeps-p150b job picks
-        # up p100a-tagged matrix entries; runs_on dispatches to the p100a runner.
         "arch": "blackhole",
         "runs_on": "tt-ubuntu-2204-p100a-viommu-stable",
         "runner_label": "p100a",
         "tt_smi_cmd": "tt-smi -r",
-        "matrix_output_key": "p150b",
+        "matrix_output_key": "p100a",
+    },
+    "p300a": {
+        "arch": "blackhole",
+        # A bare "P300-viommu" label does not match a schedulable runner (no
+        # in-service qualifier), so jobs sit queued forever. Mirror the proven
+        # runs-on used by tm-fabric-tests-impl.yaml's P300 job (and our own
+        # t3k/galaxy profiles): the in-service + arch-blackhole + label triple.
+        "runs_on": ["in-service", "arch-blackhole", "P300-viommu"],
+        "runner_label": "P300",
+        "tt_smi_cmd": "tt-smi -r",
+        "matrix_output_key": "p300a",
     },
     "t3k": {
         "arch": "wormhole_b0",
@@ -135,6 +143,7 @@ TEST_GROUPS = {
     "n300-llmbox-ccl": {"runner_profile": "n300-llmbox"},
     "blackhole-p150b-sweeps": {"runner_profile": "p150b"},
     "blackhole-p100a-sweeps": {"runner_profile": "p100a"},
+    "blackhole-p300a-sweeps": {"runner_profile": "p300a"},
     "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
     "lead-models-single-chip": {"runner_profile": "n150"},
@@ -168,14 +177,29 @@ LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
 LEAD_MODELS_SUITE_NAME = "model_traced"
 
 # Absent entries use the caller-provided fixed ``batch_size``.
-LEAD_MODELS_BATCH_POLICY = {}
+# ``solo_modules`` — modules that must run in their own dedicated batch (one
+# module per CI job).  Used for ops like all_gather_async that need exclusive
+# device access or have long/unpredictable runtimes that would starve other
+# ops sharing the same batch.
+LEAD_MODELS_BATCH_POLICY = {
+    "solo_modules": [
+        "model_traced.all_gather_async_model_traced",
+        # conv2d runs in its own batch (own process): its heavy 1024x1024 convs
+        # intermittently deadlock the dispatch hang-detector once device state
+        # accumulates from OTHER modules in a shared batch (CI run 28150416165:
+        # 1df14794 stalled >300s twice, even on a clean-device retry). conv2d run
+        # ALONE passes (verified T3K 1x8), so isolating it avoids the cross-module
+        # accumulation that triggers the hang.
+        "model_traced.conv2d_model_traced",
+    ],
+}
 
 
 # ── Model-traced sweep: per-group batching policy ─────────────────────────────
 # Controls how many parallel CI jobs each test group gets for model-traced runs.
 # Absent entries use the caller-provided fixed ``batch_size``.
 MODEL_TRACED_BATCH_POLICY = {
-    "wormhole-t3k-sweeps": {"parallel_jobs": 5},
+    "wormhole-t3k-sweeps": {"parallel_jobs": 5, "batch_size": 5},
 }
 
 
@@ -211,6 +235,7 @@ TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
     "wormhole-n300-sweeps": ({"board_type": "wormhole", "device_series": "n300", "card_count": 1},),
     "blackhole-p150b-sweeps": ({"board_type": "blackhole", "device_series": "p150b", "card_count": 1},),
     "blackhole-p100a-sweeps": ({"board_type": "blackhole", "device_series": "p100a", "card_count": 1},),
+    "blackhole-p300a-sweeps": ({"board_type": "blackhole", "device_series": "p300a", "card_count": 2},),
     "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
     "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
     "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
@@ -243,7 +268,7 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
     },
     {
         "match": {"device_series": "tt_galaxy_wh"},
-        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2", "1x32", "32x1"),
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x4", "4x8", "8x4", "2x16", "16x2", "1x32", "32x1"),
     },
     {
         "match": {"board_type": "blackhole", "device_series": "p150b", "card_count": 1},
@@ -252,6 +277,10 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
     {
         "match": {"board_type": "blackhole", "device_series": "p100a", "card_count": 1},
         "allowed_mesh_shapes": ("1x1",),
+    },
+    {
+        "match": {"board_type": "blackhole", "device_series": "p300a", "card_count": 2},
+        "allowed_mesh_shapes": ("1x1", "1x2"),
     },
 )
 
@@ -288,6 +317,8 @@ def get_test_group_name_for_hardware_group(hardware_group):
 
     board_type, device_series, card_count = hardware_group
 
+    if device_series == "p300a":
+        return "blackhole-p300a-sweeps"
     if device_series == "p100a":
         return "blackhole-p100a-sweeps"
     if board_type == "blackhole" or device_series == "p150b":
@@ -306,7 +337,9 @@ def get_lead_models_test_group_name_for_hardware_group(hardware_group):
     if hardware_group is None:
         return LEAD_MODELS_DEFAULT_TEST_GROUP
 
-    _, device_series, card_count = hardware_group
+    board_type, device_series, card_count = hardware_group
+    if board_type == "blackhole":
+        return LEAD_MODELS_DEFAULT_TEST_GROUP
     wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
     return "lead-models-galaxy" if wants_galaxy else LEAD_MODELS_DEFAULT_TEST_GROUP
 

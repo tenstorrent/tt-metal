@@ -13,6 +13,9 @@
 
 namespace ttnn::operations::normalization {
 
+// Returns the size (width x height) of a shard grid's bounding box as a CoreGrid.
+ttnn::CoreGrid core_grid_from_shard_bounding_box(const tt::tt_metal::CoreRange& bbox);
+
 struct GroupNormShardedConfigAndGridSize {
     ttnn::MemoryConfig memory_config;
     ttnn::CoreGrid core_grid;

@@ -38,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
 #include "params.h"
 

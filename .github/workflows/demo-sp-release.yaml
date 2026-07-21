@@ -33,7 +33,7 @@ on:
         default: true
         description: "Set to false to allow write access to MLPerf mount"
       test-group:
-        description: "Select which test group to run (SP1/4 tests can be run between 12 and 4 PM UTC)"
+        description: "Select which test group to run"
         required: false
         default: "all"
         type: choice
@@ -44,12 +44,12 @@ on:
           - deepseek_unit_tests
           - wan22
           - single_galaxy_deepseek
-          - sp1_deepseek
-          - sp4_deepseek
+          - sc4_deepseek
+          # - sc16_deepseek
 
   schedule:
-    # Run daily at 11 AM UTC
-    - cron: "0 11 * * 1-5"
+    # Run daily at 5 AM UTC
+    - cron: "0 5 * * *"
 
 permissions:
   contents: write
@@ -75,36 +75,29 @@ jobs:
       build-wheel: true
       tracy: true  # required for device-perf tests (e.g. galaxy DeepSeek Prefill PERF)
 
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
-    needs: [resolve-docker-pull-refs, build-artifact]
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
+      enabled-skus: bh_galaxy,bh_loudbox
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Prefill] "
 
   deepseek-decode-tests:
     name: "DeepSeek Decode Tests (B1 Decoder Block)"
-    needs: [resolve-docker-pull-refs, build-artifact]
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: bh_p300,bh_galaxy
@@ -129,12 +122,12 @@ jobs:
 
   wan22-tests:
     name: "Wan 2.2 Tests"
-    needs: [resolve-docker-pull-refs, build-artifact]
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: wh_galaxy_perf,wh_llmbox_perf
@@ -142,32 +135,33 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  deepseek-sp4-tests:
-    name: "SP4 DeepSeek Tests"
-    needs: [resolve-docker-pull-refs, build-artifact]
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp4
+  # todo)) disabled until we get more machines with SC16 SKUs
+  # deepseek-sc16-tests:
+  #   name: "SC16 DeepSeek Tests"
+  #   needs: [build-artifact]
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc16_deepseek' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     sp-config: sc16
 
-  deepseek-sp1-tests:
-    name: "SP1 DeepSeek Tests"
+  deepseek-sc4-tests:
+    name: "SC4 DeepSeek Tests"
     needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp1
+      sp-config: sc4-blitz
 
-  # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
-  # deepseek-single-galaxy-tests:
+  # todo)) proven to work by itself but mess up SC4 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+  # deepseek-single-galaxy-tests:w
   #   name: "Single Galaxy DeepSeek Tests"
   #   needs: build-artifact
   #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
@@ -177,4 +171,4 @@ jobs:
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: spsg
+  #     sp-config: sc1

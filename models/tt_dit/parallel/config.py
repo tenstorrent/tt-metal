@@ -30,6 +30,7 @@ class DiTParallelConfig(NamedTuple):
 
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
+    sequence_parallel: ParallelFactor | None = None
 
     @classmethod
     def from_tuple(cls, tp: tuple[int, int]) -> EncoderParallelConfig:
@@ -54,6 +55,28 @@ class VaeHWParallelConfig(NamedTuple):
             height_parallel=ParallelFactor(*height),
             width_parallel=ParallelFactor(*width),
         )
+
+
+class AudioTParallelConfig(NamedTuple):
+    axis0: ParallelFactor
+    axis1: ParallelFactor
+
+    @property
+    def factor(self) -> int:
+        return self.axis0.factor * self.axis1.factor
+
+
+class AudioTCParallelConfig(NamedTuple):
+    time_parallel: ParallelFactor
+    channel_parallel: ParallelFactor
+
+    @property
+    def factor(self) -> int:
+        return self.time_parallel.factor
+
+    @property
+    def mesh_axis(self) -> int:
+        return self.time_parallel.mesh_axis
 
 
 class MochiVAEParallelConfig(NamedTuple):

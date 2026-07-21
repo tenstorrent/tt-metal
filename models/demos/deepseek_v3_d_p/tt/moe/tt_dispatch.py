@@ -11,8 +11,9 @@ and TtRoutedExpert (which processes the tokens after they arrive).
 
 For each token and each of its top-k experts, the dispatch kernel:
   1. Looks up which destination device hosts that expert via the expert_dispatch_table.
-  2. Reads the write position (global_dispatch_offset) for this source device and expert
-     from tt_expert_offsets (produced by TtMoERoutingSetup).
+  2. Reads the starting write position for this source device and expert from
+     tt_expert_offsets (global_dispatch_offsets, produced by TtMoERoutingSetup), then
+     advances a running per-expert counter from it as tokens are packed.
   3. Writes the token embedding into the destination device's local dispatch buffer at that
      position: locally via NOC if the expert is on the same device, or remotely via fabric
      if it is on a different device in the dispatch group.
@@ -28,7 +29,7 @@ devices. The buffer is flat: all experts_per_chip experts share a single token
 dimension of total capacity max_dispatch_buffer_token_size, packed dynamically with
 each expert's region starting at a TILE_HEIGHT-aligned offset. The per-device shape is:
   dispatched_buffer: (1, 1, max_dispatch_buffer_token_size, emb_dim)
-  metadata:          (1, 1, max_dispatch_buffer_token_size, metadata_len=5)
+  metadata:          (1, 1, max_dispatch_buffer_token_size, metadata_len=3)
 
 TtCombineModule reads from these buffers using the same offsets to reconstruct the
 original token ordering after expert processing.
@@ -66,6 +67,7 @@ class TtDispatchModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
         subdevice_id=None,
+        num_workers_per_sender: int = 2,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -76,8 +78,7 @@ class TtDispatchModule(LightweightModule):
             experts_per_chip: Number of experts hosted on each destination device.
             num_routed_experts: Total number of routed experts across all devices.
             num_experts_per_tok: Number of experts each token is routed to (top-k).
-            metadata_len: Number of fields in per-token metadata (5: chip, token, topk_idx,
-                routed_expert, weight).
+            metadata_len: Number of fields in per-token metadata (3: chip, token, topk_idx).
             max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
                 buffer per chip. Tokens that would push the total past this cap are
                 silently dropped by the kernel (prevents out-of-bounds DRAM writes).
@@ -87,6 +88,7 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
+            num_workers_per_sender: Number of worker cores per sender (any N >= 1).
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -104,6 +106,9 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
+        # num_workers_per_sender >= 1 is validated on the device op side
+        # (DispatchDeviceOperation::validate_on_program_cache_miss).
+        self.num_workers_per_sender = num_workers_per_sender
 
     @staticmethod
     def shard_expert_offsets(
@@ -196,6 +201,8 @@ class TtDispatchModule(LightweightModule):
         indices: ttnn.Tensor,
         tt_expert_offsets: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
+        padding_config: ttnn.Tensor = None,
+        scales: ttnn.Tensor = None,
     ):
         """
         Route input tokens to destination device dispatch buffers based on top-k expert indices.
@@ -209,7 +216,9 @@ class TtDispatchModule(LightweightModule):
         Args:
             x: Input token embeddings.
                 Shape per device: (1, seq_len_per_chip, emb_dim)
-            weights: Router weights for each token's top-k experts.
+            weights: Router weights for each token's top-k experts. Retained for call-site
+                compatibility; the dispatch op no longer consumes it (gate weighting is applied
+                downstream by the reduce op from its own weights tensor).
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
             indices: Top-k expert indices for each token.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
@@ -221,16 +230,27 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, num_routed_experts)
                 Values >= 0 are destination chip IDs; -1 means the expert is not present in
                 this dispatch group.
+            padding_config: Optional per-device [local_real_tokens, pad_side] tensor (uint32,
+                ROW_MAJOR). When provided, the dispatch kernels bound their token loop to the
+                real (unpadded) tokens. Must match the tensor the gate used to sentinel-mark
+                padded tokens. None means process the full token range.
+            scales: Optional per-token fp8 scales (ROW_MAJOR, shape
+                (1, seq_len_per_chip, emb_dim/128)) produced by per_token_cast_to_fp8 alongside
+                the fp8 input x. When provided, each token's scales are copied into the metadata
+                tail (fields 3..) so the routed buffer can be dequantized downstream. Requires
+                metadata_len == 3 + emb_dim/128 and fp8 ROW_MAJOR input. None for the bf16 path.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim)
                 Token at index i belongs to the expert whose region covers index i; regions are
                 TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
-            metadata: Per-token metadata written alongside dispatched_buffer.
-                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
+            metadata: Per-token routing metadata written alongside dispatched_buffer.
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=3),
                 int32, ROW_MAJOR.
-                Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                Fields per token: [linearized_mesh_coord, token_idx, topk_idx].
+                Metadata length is 3 by default, and grows to 3 + emb_dim/128 when scales
+                are dispatched, with fields 3.. holding the per-128-block fp32 scale tail.
                 Used by TtCombineModule to route processed tokens back to their origin.
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
@@ -252,10 +272,12 @@ class TtDispatchModule(LightweightModule):
             tt_dispatch_metadata,
         ) = ttnn.experimental.deepseek_prefill.dispatch(
             input_tensor=x,
-            weights_tensor=weights,
             indices_tensor=indices,
             expert_offsets_tensor=tt_expert_offsets,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
+            padding_config=padding_config,
+            scales_tensor=scales,
+            fp8_scaled_input=scales is not None,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,
@@ -265,17 +287,10 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
-            use_fp8_dispatch=self.fp8_output,
+            fp8_output=self.fp8_output,
             subdevice_id=self.subdevice_id,
+            num_workers_per_sender=self.num_workers_per_sender,
         )
-
-        if tt_dispatched_buffer.dtype == ttnn.uint8:
-            logger.warning(
-                """tt_dispatched_buffer dtype is uint8 but the actual content is fp8_e4m3fn. \
-                Workaround until fp8_e4m3fn is supported as a data type. \
-                Use custom kernels to typecast. See test_fp8_typecast.py
-                """
-            )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape

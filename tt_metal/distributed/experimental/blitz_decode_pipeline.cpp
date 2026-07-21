@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -23,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 
@@ -247,36 +249,39 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     // When selecting a pair for each hop, skip any pair that would reuse an already-claimed node.
     std::set<tt::tt_fabric::FabricNodeId> used_nodes;
 
-    // Select one inter-mesh pair per hop, avoiding collisions.
+    // Select one inter-mesh pair per hop such that NO FabricNodeId is reused across hops.
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
+    //
+    // Greedy first-fit can strand a mid-chain hop on rings with few cable pairs per boundary, so
+    // tt_fabric::assign_non_colliding_hops() (topology_mapper_utils) does a backtracking global
+    // assignment (distinct representatives, most-constrained-hop-first) that succeeds whenever a valid
+    // layout exists.
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
-    std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>> hops;
-    hops.reserve(num_hops);
+    using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
+
+    // Gather candidate exit/peer pairs for every hop, indexed by ring position.
+    std::vector<std::vector<HopPair>> candidates(num_hops);
     for (std::size_t i = 0; i < num_hops; i++) {
         const auto next = initialize_loopback ? (i + 1) % num_meshes : i + 1;
-        auto pairs =
+        candidates[i] =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[i], mesh_ids[next]);
-        TT_FATAL(!pairs.empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
-
-        bool found = false;
-        for (const auto& pair : pairs) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
-                continue;
-            }
-            hops.push_back(pair);
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
-            found = true;
-            break;
-        }
         TT_FATAL(
-            found,
-            "No non-colliding inter-mesh pair from mesh {} to mesh {} "
-            "(all {} candidate pairs overlap with already-claimed nodes)",
-            *mesh_ids[i],
-            *mesh_ids[next],
-            pairs.size());
+            !candidates[i].empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
+    }
+
+    auto assignment = ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops(candidates);
+    TT_FATAL(
+        assignment.has_value(),
+        "Could not assign non-colliding inter-mesh pairs for all {} hops of the blitz decode pipeline ring "
+        "(each hop needs a distinct exit/peer chip pair; the inter-mesh cabling is overconstrained for this MGD).",
+        num_hops);
+    std::vector<HopPair>& hops = *assignment;
+
+    // Mark all chosen nodes used; the downstream mesh_0 entry/loopback search relies on `used_nodes`.
+    for (const auto& [exit_node, peer_node] : hops) {
+        used_nodes.insert(exit_node);
+        used_nodes.insert(peer_node);
     }
 
     // Pipeline data flow (with loopback):
@@ -416,32 +421,6 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
             coord_str(s.entry_node_coord));
     }
 
-    // 1b. Entry and exit on different mesh columns (coord[1]) when coordinates are 2D: coord[1] is the LINE axis
-    // (second MGD dim, e.g. width 2 in blitz decode 4x2). Skip for 1D meshes (no coord[1]). Skip when an adjacent
-    // hop in the ring is intra-mesh (same stage_index as previous or next stage): LINE-axis separation may be
-    // infeasible for those legs while still satisfying hop and unclaimed-node constraints.
-    const std::size_t n = stages.size();
-    for (std::size_t i = 0; i < check_distinct_until; i++) {
-        const auto& s = stages[i];
-        if (s.entry_node_coord.dims() < 2) {
-            continue;
-        }
-        const std::size_t prev_i = (i + n - 1) % n;
-        const std::size_t next_i = (i + 1) % n;
-        const bool incoming_intra_mesh = stages[prev_i].stage_index == s.stage_index;
-        const bool outgoing_intra_mesh = s.stage_index == stages[next_i].stage_index;
-        if (incoming_intra_mesh || outgoing_intra_mesh) {
-            continue;
-        }
-        TT_FATAL(
-            s.entry_node_coord[1] != s.exit_node_coord[1],
-            "Stage [{}] (stage_index={}) entry and exit must use different mesh columns (coord[1]): entry {} exit {}",
-            i,
-            s.stage_index,
-            coord_str(s.entry_node_coord),
-            coord_str(s.exit_node_coord));
-    }
-
     // 2. No coord is reused across stages (no overlapping nodes).
     // Skip the last stage's exit when !initialize_loopback — it has no downstream exit.
     std::set<std::pair<std::size_t, std::pair<uint32_t, uint32_t>>> used_coords;
@@ -467,23 +446,28 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
     }
 
     // 2b. Entry/exit fabric nodes chosen for the pipeline are not reused across stages.
+    // Skip the last stage's exit when !initialize_loopback — it has no downstream exit
+    // (exit_node_coord is a placeholder == entry_node_coord), matching checks 1 and 2.
     std::unordered_set<FabricNodeId> used_fabric_nodes;
     used_fabric_nodes.reserve(stages.size() * 2);
     for (std::size_t i = 0; i < stages.size(); i++) {
         const auto& s = stages[i];
+        const bool skip_exit = !initialize_loopback && (i == stages.size() - 1);
         auto mesh_id = MeshId{static_cast<uint32_t>(s.stage_index)};
         FabricNodeId entry_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.entry_node_coord));
-        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
         TT_FATAL(
             used_fabric_nodes.insert(entry_fn).second,
             "Stage [{}] entry fabric node {} is reused across stages",
             i,
             entry_fn);
-        TT_FATAL(
-            used_fabric_nodes.insert(exit_fn).second,
-            "Stage [{}] exit fabric node {} is reused across stages",
-            i,
-            exit_fn);
+        if (!skip_exit) {
+            FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
+            TT_FATAL(
+                used_fabric_nodes.insert(exit_fn).second,
+                "Stage [{}] exit fabric node {} is reused across stages",
+                i,
+                exit_fn);
+        }
     }
 
     // 3a. Each stage entry and exit must have at least one active fabric ethernet channel (none empty).
@@ -561,6 +545,11 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         const auto& stage = stages[i];
         const std::size_t next_i = (i + 1) % stages.size();
         const auto& next_stage = stages[next_i];
+
+        // Linear (host-loopback) pipeline has no last-stage -> stage 0 fabric hop.
+        if (!initialize_loopback && i == stages.size() - 1) {
+            continue;
+        }
 
         auto mesh_id = MeshId{static_cast<uint32_t>(stage.stage_index)};
         auto next_mesh_id = MeshId{static_cast<uint32_t>(next_stage.stage_index)};
@@ -642,6 +631,11 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         const auto& stage = stages[i];
         const std::size_t next_i = (i + 1) % stages.size();
         const auto& next_stage = stages[next_i];
+
+        // Linear (host-loopback) pipeline has no last-stage -> stage 0 fabric hop.
+        if (!initialize_loopback && i == stages.size() - 1) {
+            continue;
+        }
 
         auto curr_mesh_id = MeshId{static_cast<uint32_t>(stage.stage_index)};
         auto next_mesh_id = MeshId{static_cast<uint32_t>(next_stage.stage_index)};

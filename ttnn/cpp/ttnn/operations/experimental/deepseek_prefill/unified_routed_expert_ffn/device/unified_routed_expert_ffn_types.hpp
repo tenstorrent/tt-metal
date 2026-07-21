@@ -8,11 +8,37 @@
 #include <optional>
 #include <tuple>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
+
+// Maximum number of global experts the op supports.
+//
+// The reader fetches the per-global-expert `counts` vector (and the
+// local->global `global_expert_idx_table`) into an L1 scratch CB with a
+// single noc_async_read_page, then indexes counts[global_expert_id] for
+// global_expert_id in [0, num_global_experts). The L1 scratch is sized to
+// hold this many UINT32 entries — 1024 entries = 4 KB ("4 tiles" of 1 KB) —
+// which covers DeepSeek V3 (256 experts), Kimi (384 experts) and any model up
+// to 1024 routed experts with headroom. A single ROW_MAJOR DRAM page already
+// holds the whole vector, so the read stays a single page fetch; bumping this
+// past TILE_HW would additionally require widening the device-op validation
+// below and re-checking the per-core L1 budget.
+inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
+
+// Per-expert FFN activation variant. Selected at the op boundary and baked into
+// the compute kernel via a compile-time define, so each variant caches as a
+// distinct program. For SwiGluOai the alpha/limit are baked to the M3/gpt-oss
+// values (1.702 / 7.0, SwiGLUConfigGPTOSS) in the kernel — no extra params.
+enum class RoutedExpertActivation : uint8_t {
+    Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
+    SwiGluOai =
+        1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+};
 
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
@@ -21,15 +47,43 @@ struct UnifiedRoutedExpertFfnParams {
     // keeps DeepSeek V3 routed-expert dims inside Blackhole L1.
     uint32_t chunk_M_tiles = 64;
 
+    // This expert's M dimension in tiles — the row count the matmul grid,
+    // chunk loop, and CB sizes are built for. Decoupled from x's shape so x
+    // may be a shared buffer larger than one expert's region: the reader/writer
+    // index into it at the region offset while the op still sizes its work to a
+    // single expert. When x IS the per-expert tensor this equals x_padded[-2]/TILE.
+    uint32_t m_tiles = 0;
+
     // Local expert id used to index `global_expert_idx_table` at runtime
     // (kernel reads global_id = idx_table[local_expert_id], then count =
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // When true, x is a shared buffer and the reader offsets its x reads by this
+    // expert's region start (expert_region_offsets[global_id]) — fusing what
+    // ttnn::extract did. Requires expert_region_offsets. False => x is per-expert.
+    bool read_x_at_offset = false;
+
+    // When true, x is a ROW_MAJOR bf16 buffer: the reader streams row-major
+    // sticks and the compute kernel tilizes them (bf16 -> bf8_b) before the
+    // gate/up matmul, fusing the standalone to_layout. False => x is already
+    // TILE bf8_b (the reader reads tile pages directly). Off preserves the
+    // pre-fusion path for standalone / Wormhole callers.
+    bool x_is_row_major = false;
+
+    // Per-expert FFN activation variant. Baked into the compute kernel as a
+    // compile-time define, so each variant caches as a distinct program — hence
+    // it is part of the program-cache key below.
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset", "x_is_row_major", "activation");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation);
+    }
 };
 
 // Tensors fed into the op.
@@ -54,6 +108,12 @@ struct UnifiedRoutedExpertFfnInputs {
     Tensor counts;
     Tensor global_expert_idx_table;
     std::optional<Tensor> optional_output;
+    // Direct-write mode: per-global-expert region start offsets (UINT32, the
+    // same `start` tensor ttnn::insert consumes). When present, the writer
+    // places this expert's output directly into `optional_output` (the shared
+    // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
+    // Requires optional_output to also be set.
+    std::optional<Tensor> expert_region_offsets;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

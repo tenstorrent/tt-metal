@@ -135,8 +135,8 @@ ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_t
 
     auto transformed_buffer = conv_weight_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(
-        tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, conv_weight_tensor.tensor_topology()));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+        std::move(transformed_buffer), output_spec, conv_weight_tensor.tensor_topology()));
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -173,6 +173,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
@@ -213,9 +214,14 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     // so we can decide the execution path based on the auto-determined value
     std::optional<Conv2dSliceConfig> actual_slice_config = dram_slice_config_;
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices == 0) {
-        // Need to auto-determine - create temporary structures
+        // Need to auto-determine - create temporary structures.
+        // output_padding must match the value the conv op will use so that the auto-determined
+        // slice count agrees between weight preparation and the actual conv. A mismatch (e.g.
+        // assuming 0 here while the op uses a non-zero output_padding) changes the output image
+        // size, which can tip the auto-slicer to a different num_slices and lay the weights out
+        // for the wrong blocking, producing near-zero PCC.
         auto [output_height, output_width] = calculate_ct2d_output_image_size(
-            {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
+            {input_height, input_width}, kernel_size, stride, padding_n4, output_padding, dilation);
 
         auto temp_slice_attr = get_conv_transpose2d_slice_attr(
             batch_size,
@@ -226,7 +232,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             kernel_size,
             stride,
             padding_n4,
-            {0, 0},
+            output_padding,
             dilation,
             groups,
             input_layout,
@@ -273,16 +279,14 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     if (path == ConvT2dExecutionPath::L1) {
         // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
         // "full_input" dimensions (after halo/padding expansion), not the original input dimensions.
-        // Note: prepare_conv_transpose2d_weights is called from Python and doesn't receive output_padding,
-        // so we assume output_padding = 0 for weight preparation (the actual conv op handles output_padding)
         auto dims = compute_conv_transpose2d_dimensions(
-            input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
+            input_height, input_width, kernel_size, stride, padding, output_padding, dilation);
 
         return prepare_conv_weights(
             mirrored_weight_tensor,
             input_memory_config,
             input_layout,
-            weights_format,
+            "OIHW",  // transform_weights_for_conv_transpose2d already converted IOHW -> OIHW
             in_channels,
             out_channels,
             batch_size,
@@ -304,7 +308,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
 
     // DRAM path continues - need to set up slice configuration
     auto [output_height, output_width] = calculate_ct2d_output_image_size(
-        {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
+        {input_height, input_width}, kernel_size, stride, padding_n4, output_padding, dilation);
     auto convt2d_slice_attr = get_conv_transpose2d_slice_attr(
         batch_size,
         input_height,
@@ -314,7 +318,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         kernel_size,
         stride,
         padding_n4,
-        {0, 0},  // output_padding assumed to be 0 for weight preparation
+        output_padding,
         dilation,
         groups,
         input_layout,
@@ -388,7 +392,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         mirrored_weight_tensor,
         input_memory_config,
         dram_slice_config.num_slices > 1 ? Layout::ROW_MAJOR : input_layout,
-        weights_format,
+        "OIHW",  // transform_weights_for_conv_transpose2d already converted IOHW -> OIHW
         in_channels,
         out_channels,
         batch_size,

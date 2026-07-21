@@ -22,13 +22,14 @@ from typing import Callable
 
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
+from inspector_capnp import BuildEnvData
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
-from ttexalens.memory_access import MemoryAccess
+from ttexalens.memory_access import create_l1_memory_access
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -58,7 +59,7 @@ class DispatcherCoreData:
     watcher_previous_kernel_id: int = triage_field("Previous Kernel ID", verbose=1)
     previous_kernel_name: str | None = triage_field("Previous Kernel Name", verbose=1)
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
-    kernel_path: str = triage_field("Kernel Path", verbose=1)
+    kernel_path: str | None = triage_field("Kernel Path", verbose=1)
     firmware_path: str = triage_field("Firmware Path", verbose=1)
     # New watcher/mailbox fields (verbose=1)
     dispatch_mode: str | None = triage_field("Dispatch Mode", verbose=1)
@@ -81,7 +82,10 @@ class DispatcherCoreData:
     # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
     # active-vs-idle ETH without re-consulting the cluster descriptor.
     block_type: BlockType | None = None
-    # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
+    # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
+    # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
+    risc_enabled_by_kernel: bool | None = None
+    # Hint surfaced when find_kernel fails - explains the most likely cause (program cache off,
     # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
 
@@ -109,17 +113,17 @@ class DispatcherData:
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
         # Cache is keyed by unique_id for consistency
-        self._build_env_cache = {}
+        self._build_env_cache: dict[int, BuildEnvData] = {}
 
         # Get the firmware paths from Inspector RPC build environment instead of relative paths
         # This ensures correct firmware paths for all devices and build configs
         # Prefill cache from no-arg RPC (ok if this fails - we'll fall back)
         try:
             all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
-            for build_env in all_build_envs:
-                # build_env.metalDeviceId is logical - remap to unique_id for cache key
-                unique_id = metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
-                self._build_env_cache[unique_id] = build_env.buildInfo
+            for build_env_per_device in all_build_envs:
+                # build_env_per_device.metalDeviceId is logical - remap to unique_id for cache key
+                unique_id = metal_device_id_mapping.get_unique_id(build_env_per_device.metalDeviceId)
+                self._build_env_cache[unique_id] = build_env_per_device.buildInfo
         except Exception:
             pass
 
@@ -258,7 +262,7 @@ class DispatcherData:
             "ERISC1": 0,
         }
 
-    def _get_build_env_for_device(self, device_unique_id: int):
+    def _get_build_env_for_device(self, device_unique_id: int) -> BuildEnvData:
         """Get build_env for a specific device, with caching"""
         if device_unique_id not in self._build_env_cache:
             raise TTTriageError(
@@ -278,7 +282,7 @@ class DispatcherData:
                 f"Enable program cache to see the callstack."
             )
         return (
-            "No host-side live program owns the kernel on this device —"
+            "No host-side live program owns the kernel on this device -"
             " the program should remain alive on host while its kernel is running."
         )
 
@@ -295,13 +299,31 @@ class DispatcherData:
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
+    @staticmethod
+    def _inspector_kernel_elf_path(kernel, proc_type: int) -> str | None:
+        """Per-processor ELF path resolved by Inspector at compile time, indexed by processor index.
+
+        Returns None when unavailable (older RPC/serialized data without the field, processor index out of
+        range, or an empty entry for a processor this kernel doesn't use), so callers can fall back.
+        """
+        elf_paths = getattr(kernel, "processorElfPaths", None)
+        if elf_paths is None or proc_type < 0 or proc_type >= len(elf_paths):
+            return None
+        return elf_paths[proc_type] or None
+
     def drisc_enabled(self) -> bool:
-        return self._drisc_enabled_flag
+        # Casting to bool to avoid using ternary operator
+        return bool(self._drisc_enabled_flag)
 
     def risc_enabled(self, risc_name: str) -> bool:
         if risc_name == "drisc":
             return self.drisc_enabled()
         return True
+
+    def is_idle_in_default_view(self, location: OnChipCoordinate, risc_name: str) -> bool:
+        """Risc hidden unless --all-cores: finished (Go=DONE) or never enabled by the program."""
+        d = self.get_cached_core_data(location, risc_name)
+        return d.go_message == "DONE" or d.risc_enabled_by_kernel is False
 
     def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         key = (location, risc_name)
@@ -321,7 +343,7 @@ class DispatcherData:
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_memory_access(location)
         match block_type:
             case "tensix":
                 fw_elf = self._brisc_elf
@@ -360,15 +382,17 @@ class DispatcherData:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
-        device_unique_id = location._device.unique_id
+        device_unique_id = location.device.unique_id
         build_env = self._get_build_env_for_device(device_unique_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
+        if proc_type is None:
+            raise TTTriageError(f"Processor type for '{proc_name}' not found in firmware ELF enums.")
         if mailboxes is None:
             mailboxes = self.read_mailboxes(location)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
-        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr
+        launch_msg_rd_ptr = int(mailboxes.launch_msg_rd_ptr)
 
         log_check_location(
             location,
@@ -392,31 +416,31 @@ class DispatcherData:
         previous_host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-            kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
-                programmable_core_type
-            ]
+            kernel_config_base = int(
+                mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[programmable_core_type]
+            )
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
-            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
+            kernel_text_offset = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type])
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
             pass
         try:
             # enum dispatch_core_processor_classes
-            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
+            watcher_kernel_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type])
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
             pass
         try:
-            watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
-                proc_type
-            ]
+            watcher_previous_kernel_id = int(
+                mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
+            )
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
@@ -425,16 +449,16 @@ class DispatcherData:
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location._device.unique_id):
-                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
+            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location.device.unique_id):
+                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location.device.unique_id)
                 kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
         except Exception:
             pass
         try:
-            go_message_index = mailboxes.go_message_index
-            go_data = mailboxes.go_messages[go_message_index].signal
+            go_message_index = int(mailboxes.go_message_index)
+            go_data = int(mailboxes.go_messages[go_message_index].signal)
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
@@ -469,6 +493,7 @@ class DispatcherData:
         dispatch_mode = None
         brisc_noc_id = None
         enables = None
+        risc_enabled_by_kernel = None
         subordinate_sync = None
         watcher_enabled = None
 
@@ -520,6 +545,8 @@ class DispatcherData:
             enables = ""
             for i, sym in enumerate(symbols):
                 enables += sym if (enables_val & (1 << i)) else sym.lower()
+            # bit i set => processor i enabled; proc_type is this risc's processor index.
+            risc_enabled_by_kernel = bool(enables_val & (1 << proc_type))
         except Exception:
             log_check_location(
                 location,
@@ -581,7 +608,8 @@ class DispatcherData:
                     if self._is_2_erisc_mode
                     else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
                 )
-
+            else:
+                raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for firmware path.")
         else:
             if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
                 firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -593,29 +621,38 @@ class DispatcherData:
                 firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
         firmware_path = os.path.realpath(firmware_path)
 
+        kernel_path: str | None
         if kernel:
-            if is_active_eth:
-                if proc_name.lower() == "erisc":
-                    kernel_path = kernel.path + "/erisc/erisc.elf"
-                elif proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = (
-                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
-                        if self._is_2_erisc_mode
-                        else kernel.path + "/active_erisc/active_erisc.elf"
-                    )
-            else:
-                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            # Prefer the per-processor ELF path resolved by Inspector at compile time. It is indexed by
+            # processor index.
+            kernel_path = self._inspector_kernel_elf_path(kernel, proc_type)
+            if not kernel_path:
+                if is_active_eth:
+                    if proc_name.lower() == "erisc":
+                        kernel_path = kernel.path + "/erisc/erisc.elf"
+                    elif proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = (
+                            kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                            if self._is_2_erisc_mode
+                            else kernel.path + "/active_erisc/active_erisc.elf"
+                        )
+                    else:
+                        raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for kernel path.")
                 else:
-                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
-            kernel_path = os.path.realpath(kernel_path)
+                    if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                    else:
+                        kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+            kernel_path = os.path.realpath(kernel_path) if kernel_path else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
-                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+                kernel_path + ".xip.elf"
+                if kernel_path and not (proc_name == "NCRISC" and location.device.is_wormhole())
+                else None
             )
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
@@ -662,6 +699,7 @@ class DispatcherData:
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
             block_type=block_type,
+            risc_enabled_by_kernel=risc_enabled_by_kernel,
             kernel_lookup_warning=kernel_lookup_warning,
         )
 

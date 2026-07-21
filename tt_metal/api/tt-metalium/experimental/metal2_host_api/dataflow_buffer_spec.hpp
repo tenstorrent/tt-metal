@@ -13,10 +13,12 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
+#include <tt_stl/strong_type.hpp>
 
 // ============================================================================
 //  DataflowBufferSpec API
@@ -39,8 +41,10 @@
 // INVARIANT: At the node level, a DFB instance has exactly one producer kernel
 //   instance and exactly one consumer kernel instance. You must respect this
 //   invariant across the DataflowBufferSpec's endpoint bindings.
-//   It is legal to bind more than one KernelSpec producer (or consumer) to a
-//   DFB endpoint, provided that they have:
+//   This is a per-node rule, not a per-spec one: you MAY bind more than one
+//   KernelSpec to a producer (or consumer) endpoint, because their non-overlapping
+//   node sets each still contribute exactly one instance per node. Such multiple
+//   bindings on one endpoint are legal provided they have:
 //     - non-overlapping node coverage, AND
 //     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
@@ -65,8 +69,8 @@
 
 namespace tt::tt_metal::experimental {
 
-// A name identifying a DataflowBufferSpec within a ProgramSpec.
-using DFBSpecName = std::string;
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 //------------------------------------------------
 // DataflowBufferSpec
@@ -122,8 +126,8 @@ struct DataflowBufferSpec {
     // The bound memory object must have L1-based storage and be large enough to hold the DFB's
     // total size (entry_size * num_entries).
     //
-    // (TODO: this should become std::variant<TensorParameterName, BufferParameterName>.)
-    std::optional<TensorParameterName> borrowed_from = std::nullopt;
+    // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
+    std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
@@ -132,44 +136,48 @@ struct DataflowBufferSpec {
 };
 
 //------------------------------------------------
-// RemoteDataflowBufferSpec
+// CrossNodeDataflowBufferSpec
 //------------------------------------------------
 
-// NOTE: Remote DataflowBuffer is not yet supported!
+// NOTE: Cross-Node DataflowBuffer is not yet supported!
 //       A sketch is included in the experimental Metal 2.0 APIs for visibility.
+//       See also Global DataflowBuffer (which has a user-managed lifetime).
 //
-// RemoteDataflowBufferSpec is the descriptor for a "remote" DFB:
+// CrossNodeDataflowBufferSpec is the descriptor for a "cross-node" DFB:
 // A DFB whose producer and consumer kernels run on different nodes, with data
 // flowing over the NoC. Its semantics should be as close as possible to that of
 // a local DFB.
 //
-// A RemoteDataflowBufferSpec has all of the properties of a DataflowBufferSpec,
-// but must specify additional remote-DFB specific properties, such as the
+// A CrossNodeDataflowBufferSpec has all of the properties of a DataflowBufferSpec,
+// but must specify additional cross-node DFB specific properties, such as the
 // producer-consumer node mapping.
 //
-// TBD: Much about remote DFBs is still TBD! Everything below this line is expected
+// TBD: Much about cross-node DFBs is still TBD! Everything below this line is expected
 //   to change with the implementation.
 //
-// Invariant: Every remote DFB instance has exactly one producer kernel instance and
+// Invariant: Every cross-node DFB instance has exactly one producer kernel instance and
 //   one consumer kernel instance. The instances must not be on the same node.
 //
-// Instancing: At runtime, one remote DFB instance is allocated per entry in the
+// Instancing: At runtime, one cross-node DFB instance is allocated per entry in the
 //   producer_consumer_map. The runtime infrastructure allocates SRAM ("L1") at both
 //   endpoints.
 //
 // Placement: Specified directly via producer_consumer_map (rather than derived as
 //   for local DFBs).
 //
-struct RemoteDataflowBufferSpec {
-    // A remote DFB has all of the same properties as a local DFB
+struct CrossNodeDataflowBufferSpec {
+    // A cross-node DFB has all of the same properties as a local DFB
     DataflowBufferSpec dfb_spec;
 
-    // Plus, some remote-DFB-specific properties.
+    // Plus, some cross-node DFB-specific properties.
     // (These are TBD...)
 
     // Producer-consumer node mapping: each entry pairs a producer node with the
     // consumer node it feeds.
-    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
+    // (What about multi-casting? TBD.)
+    using ProducerNode = NodeCoord;
+    using ConsumerNode = NodeCoord;
+    using ProducerConsumerMap = Table<ProducerNode, ConsumerNode>;
     ProducerConsumerMap producer_consumer_map;
 };
 

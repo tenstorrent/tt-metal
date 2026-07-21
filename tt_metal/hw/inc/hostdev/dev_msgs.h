@@ -29,7 +29,6 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdev/device_print_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -50,6 +49,7 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #include "dev_mem_map.h"
 // Deprecated in favor of dev_mem_map.h. Keep to avoid breaking changes.
 #include "eth_l1_address_map.h"
+#include "device_print_mem.h"
 
 #if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -112,6 +112,14 @@ constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 constexpr uint8_t SHARED_GLOBALS_READY_WAIT = 0;
 constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
 
+// Packing of RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr (part of the
+// host<->device remote-CB config contract): L1 addresses fit in 24 bits (< 2 MB) and
+// num_receivers fits in 8 bits, so the two share a single 32-bit slot. The device pack/unpack
+// helpers live in circular_buffer_interface.h; host code packs the same field in
+// global_circular_buffer.cpp.
+constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
+constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
+
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
     volatile uint32_t stack_save;
@@ -154,6 +162,8 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2[3];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
+    volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -187,6 +197,7 @@ static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) 
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
@@ -283,8 +294,10 @@ enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, Trans
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[MaxProcessorsPerCoreType];
-    uint8_t pad[3];  // CODEGEN:skip
+    uint8_t pad[(4 - (MaxProcessorsPerCoreType % 4)) % 4];  // CODEGEN:skip
 };
+// Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
+static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
 constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
@@ -398,12 +411,14 @@ struct mailboxes_t {
     struct subordinate_sync_msg_t subordinate_sync;
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
-    struct launch_msg_t launch[launch_msg_buffer_num_entries];
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
-    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
-                                                           // the compute kernel.
+    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
+                                                           // the 4 TRISCs per engine.
+    volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
+                                                              // for the 4 TRISCs per engine.
     struct watcher_msg_t watcher;
     struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
@@ -411,6 +426,13 @@ struct mailboxes_t {
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
 };
+
+// DevicePrintMemoryLayout asserts
+static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
+#endif
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);

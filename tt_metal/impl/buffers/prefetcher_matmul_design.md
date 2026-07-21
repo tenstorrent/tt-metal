@@ -2,14 +2,14 @@
 
 This document describes the contract between the gather-in0 matmul receiver
 and the two DRAM prefetcher implementations that feed it: the worker-core
-prefetcher (`ttnn.dram_prefetcher`) and the DRAM-core prefetcher
-(`ttnn.experimental.start_dram_core_prefetcher`). It exists so that a future maintainer
+prefetcher (`ttnn.dram_prefetcher`) and the Tensor prefetcher
+(`ttnn.experimental.start_tensor_prefetcher`). It exists so that a future maintainer
 touching either side can read one file and learn what is invariant across the
 two paths, without having to reverse-engineer the kernels.
 
 If you change the kernel structure or the per-tensor RTA layout in either
 prefetcher — or the receiver matmul's wait/pop contract — update this doc in
-the same commit. The DRAM-core prefetcher includes a sync-check pass
+the same commit. The Tensor prefetcher includes a sync-check pass
 specifically to catch such drift.
 
 ## 1. Overview
@@ -27,7 +27,7 @@ Two prefetcher variants exist:
   to each DRAM bank, with a triple-buffered local CB sitting in worker L1.
   Most flexible (handles heterogeneous shapes/dtypes per launch), and has
   ~1.5 MB of worker L1 to play with for the local CB.
-- **DRAM-core** (`ttnn.experimental.start_dram_core_prefetcher`, `tt_metal/distributed/`):
+- **DRAM-core** (`ttnn.experimental.start_tensor_prefetcher`, `tt_metal/distributed/`):
   runs a single kernel on a DRISC core (i.e. on the DRAM core itself), doing
   GDDR DMA and NoC push from the same RISC. Closer to the GDDR controller and
   can run at higher throughput on production shapes, but its DRISC L1 working
@@ -227,13 +227,13 @@ single compile-time arg.
 Worker L1 has ~1.5 MB of CB space, so even a `3 * max_block_size` reader CB
 fits comfortably for production shapes.
 
-## 6. DRAM-core prefetcher
+## 6. Tensor prefetcher
 
 ### Architecture
 
 ```
 For each DRAM bank b in [0, num_senders):
-  one DRISC core, one kernel: dram_core_prefetcher.cpp
+  one DRISC core, one kernel: tensor_prefetcher.cpp
     do GDDR DMA into a ping-pong stage in DRISC L1
     NoC push from stage to GCB remote
   no local reader_cb; stage IS the working buffer.
@@ -289,15 +289,19 @@ DRISC L1 total: 128 KB. The relevant slice for the prefetcher kernel:
 
   kernel_working_region:
     +--- noc_xy table   (2 * 4 * num_receivers bytes)
-    +--- config struct  (16 B)
+    +--- config struct  (20 B)
     +--- alignment slack
-    +--- stage ring     (the rest; split into two halves for ping-pong)
+    +--- stage ring     (the rest; split into rotating slots: two halves
+                         for the K-row-major path, three thirds for the
+                         receiver-contiguous path)
 ```
 
 See `tt_metal/impl/buffers/drisc_l1_arena.hpp` (specifically
 `kernel_working_region_base()` / `kernel_working_region_size()`). On
 Blackhole the kernel-region-minus-overhead works out to ~70 KB of stage
-budget; `ring_half = stage_budget / 2 ≈ 35 KB`.
+budget; the K-row-major path uses `ring_half = stage_budget / 2 ≈ 35 KB`
+and the receiver-contiguous path uses `stage_third = stage_budget / 3 ≈
+23 KB`.
 
 This is why the DRAM-core path can't pre-allocate a full block (let alone 3
 for triple-buffering): on production Llama shapes a single block is 100+ KB.
@@ -325,7 +329,7 @@ collapses to `rows_per_sub = 1` before allowing `M > 1`.
 
 ### Per-tensor derivations
 
-Computed by `compute_tensor_geom` in `dram_core_prefetcher_manager.cpp` (the
+Computed by `compute_tensor_geom` in `tensor_prefetcher_manager.cpp` (the
 DRAM-core analogue of the worker-core's per-tensor derivations in §5):
 
 - `(coalesced_page_size[t], coalesced_num_pages[t])` — same `pick_page_size`
@@ -342,6 +346,75 @@ DRAM-core analogue of the worker-core's per-tensor derivations in §5):
   coalesced_page_size` — total bytes pushed per receiver per block (the
   `resize_remote_sender_cb_interface` page size, and the argument to
   `prefetcher_finalize_block`).
+
+### Layout modes (per-tensor)
+
+The DRAM-core path supports two buffer layouts, selected implicitly per
+tensor based on the buffer's `BufferDistributionSpec::num_shards()`:
+
+- **K-row-major** (`num_shards == num_senders`, or no BDS): the legacy
+  layout. Each DRAM bank holds a single `(K, n_per_bank)` shard,
+  K-row-major. This is what §6.1–§6.6 describe; the manager calls
+  `compute_tensor_geom_krow_major`.
+- **Receiver-contiguous** (`num_shards == ring_size > num_senders`): each
+  bank holds `num_receivers` slabs of shape `(K, n_per_recv)`, stacked
+  vertically (slab `s` at bank-local offset `s * K * n_per_recv * tile_bytes`).
+  Per `(receiver, block)`, the source bytes are a single contiguous DRAM
+  region. The manager calls `compute_tensor_geom_recv_contig`; the kernel
+  takes the receiver-contiguous branch in its per-tensor main loop.
+
+The caller selects receiver-contiguous mode by allocating the weight via
+`ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(Shape([K, n_per_recv]),
+dram_cores, ROUND_ROBIN_1D))`. BDS round-robin places shard m at bank
+`m % num_senders` slab `m // num_senders`; the caller pairs this with a
+strided GCB topology (bank b → ring positions
+`[b, b + num_senders, b + 2 * num_senders, ...]`) so that shard index ==
+ring position and no host permutation is needed.
+
+#### Per-bank slab layout (receiver-contiguous)
+
+```
+bank b (bank-local offset 0):
+  [ slab 0 : K x n_per_recv tiles, K-row-major ]    <- receiver at ring pos b
+  [ slab 1 : K x n_per_recv tiles, K-row-major ]    <- receiver at ring pos b+num_senders
+  ...
+  [ slab R-1 : K x n_per_recv tiles ]               <- receiver at ring pos b+(R-1)*num_senders
+```
+
+#### Address formula
+
+Per (receiver slab `r`, block `blk`, sub-band `sb`):
+
+```
+src = bank_local_base[t]
+    + r   * recv_stride_bytes        // recv_stride_bytes = K_tiles * n_per_recv * tile_bytes
+    + blk * block_stride_bytes       // block_stride_bytes = k_block_w * n_per_recv * tile_bytes
+    + sb  * sub_stride_bytes         // sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes
+```
+
+#### Fit ladder (receiver-contiguous)
+
+The receiver-contiguous path rotates through three stage slots
+(`stage_third = stage_budget / 3`), not the K-row-major path's two halves,
+so the fit constraint is tighter:
+
+```
+bytes_per_recv_per_block = k_block_w * n_per_recv * tile_bytes
+
+# Rung 1: full block fits in one stage third.
+if bytes_per_recv_per_block <= stage_third:
+    rows_per_sub = k_block_w
+    num_sub      = 1
+# Rung 2: single block exceeds stage_third — K-split within one slab.
+else:
+    pick rows_per_sub | k_block_w such that
+         rows_per_sub * n_per_recv * tile_bytes <= stage_third
+    num_sub = k_block_w / rows_per_sub
+```
+
+The manager additionally computes `target_per_visit_pages` (= `6 *
+stage_third / page_bytes_per_recv`, clamped to ≥ 1) as the static ceiling
+on the kernel's per-receiver visit batch size.
 
 ## 7. Llama-3.1-8B fit table
 
@@ -362,6 +435,24 @@ Notes:
 - For O the full block just fits (34 816 ≤ 35 008), so we use the fast path.
 - FF2 isn't fed by this prefetcher in production, but if it were, the ladder
   would pick `(rows_per_sub = 2, M = 1)`.
+
+Under the **receiver-contiguous** layout (`num_shards = ring_size`) the
+per-receiver per-block bytes shrink to
+`k_block_w * n_per_recv * tile_bytes`, and the rung/`target_per_visit`
+math uses `stage_third = stage_budget / 3 ≈ 23 KB` (not `ring_half`):
+
+| Op  | n_per_recv | bytes_per_recv_per_block | rung | (rows_per_sub, num_sub) | target_per_visit |
+|-----|-----------:|-------------------------:|------|-------------------------|------------------:|
+| FF1 |          7 |                   15 232 | 1    | (2, 1)                  | 9                 |
+| QKV |          6 |                   13 056 | 1    | (2, 1)                  | 10                |
+| O   |          2 |                    4 352 | 1    | (2, 1)                  | 32                |
+
+All three Llama production shapes land on rung 1 with `num_sub = 1` — no
+K-row splitting needed (each fits in one `stage_third`). The N-chunking
+sub-row path required for FF1/QKV under K-row-major (`M = 2`) is
+unnecessary here. `target_per_visit` (= `floor(6 * stage_third /
+bytes_per_recv_per_block)`) is the upper bound on B for that tensor; the
+kernel further clamps by downstream free space and fifo-wrap distance.
 
 ## 8. Cross-component invariants
 
@@ -384,6 +475,11 @@ Whoever changes prefetcher or receiver code must preserve these:
 5. **The pair `(rows_per_sub > 1, M > 1)` never occurs** in the DRAM-core
    fit ladder. The kernel uses this invariant to assume DMAs are linear
    reads (no row-strided DMA support).
+6. **`page_bytes_per_recv` is layout-mode-invariant.** Both K-row-major
+   and receiver-contiguous push the same
+   `k_block_w * coalesced_num_pages * coalesced_page_size` bytes per
+   receiver per block. Only the GDDR source layout and the per-chunk NoC
+   write granularity differ.
 
 ## 9. Where to look in the code
 
@@ -394,9 +490,9 @@ Whoever changes prefetcher or receiver code must preserve these:
 - Worker-core prefetcher:
   `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_program_factory.cpp`,
   `kernels/reader_dram.cpp`, `kernels/writer_l1.cpp`.
-- DRAM-core prefetcher:
-  `tt_metal/impl/buffers/dram_core_prefetcher_manager.cpp`,
-  `tt_metal/impl/buffers/kernels/dram_core_prefetcher.cpp`.
+- Tensor prefetcher:
+  `tt_metal/impl/buffers/tensor_prefetcher_manager.cpp`,
+  `tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp`.
 - GCB / remote CB API:
   `tt_metal/hw/inc/api/remote_circular_buffer.h`,
   `tt_metal/impl/buffers/global_circular_buffer.cpp`.

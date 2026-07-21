@@ -8,6 +8,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime args
@@ -21,12 +23,20 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(output_tensor_args, output_addr);
 
+    Noc noc;
+    CircularBuffer cb(cb_out0);
+    const uint32_t tile_bytes = get_tile_size(cb_out0);
+
     for (uint32_t out_i = 0; out_i < num_output_tiles; ++out_i) {
         const uint32_t write_tile_id = start_id + out_i;
-        cb_wait_front(cb_out0, onetile);
-        const uint32_t read_ptr = get_read_ptr(cb_out0);
-        noc_async_write_tile(write_tile_id, s0, read_ptr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_out0, onetile);
+        cb.wait_front(onetile);
+        noc.async_write(
+            use<CircularBuffer::AddrSelector::READ_PTR>(cb),
+            s0,
+            tile_bytes,
+            {.offset_bytes = 0},
+            {.page_id = write_tile_id});
+        noc.async_write_barrier();
+        cb.pop_front(onetile);
     }
 }

@@ -45,12 +45,13 @@ jobs:
   # release-docs jobs use the parsed distro/version values to construct image tags.
   # This is different from workflows that just pass platform to build-artifact.yaml.
   parse-platform:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: false
@@ -112,7 +113,7 @@ jobs:
       enable-lto: false
 
   determine-test-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.select-skus.outputs.enabled-skus }}
     steps:
@@ -121,7 +122,7 @@ jobs:
         run: |
           if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
             # Main platform runs all tests including multi-card
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p100,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf,wh_galaxy,bh_p100,bh_p150,bh_p150_perf,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
           else
             # Other platforms run only single-card tests
             echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf" >> "$GITHUB_OUTPUT"
@@ -153,7 +154,7 @@ jobs:
   check-rtl-sim-status:
     needs: [build-artifact-tracy, determine-test-skus]
     if: ${{ github.ref == 'refs/heads/stable' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     continue-on-error: true
     steps:
       - name: Verify RTL Sim CI test check is green on stable HEAD
@@ -188,6 +189,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Push dev docker image to GHCR with release tag
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
@@ -201,6 +203,7 @@ jobs:
         image: [release, release-models]
     needs:
       - build-artifact-release
+      - check-harbor
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
@@ -212,9 +215,10 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   resolve-docs-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       docs-version: ${{ steps.set-version.outputs.docs-version }}
     steps:
@@ -254,7 +258,7 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
 

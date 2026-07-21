@@ -25,8 +25,6 @@ void kernel_main() {
 
     // Memory transfer configuration
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_val = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_idx = get_tile_size(output_ind_cb_index);
 
     // Initialize DRAM tensor accessors for interleaved output format
     const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0);
@@ -35,6 +33,8 @@ void kernel_main() {
     Noc noc;
     CircularBuffer values_cb(values_cb_index);
     CircularBuffer indices_cb(output_ind_cb_index);
+    const uint32_t tile_bytes_val = values_cb.get_tile_size();
+    const uint32_t tile_bytes_idx = indices_cb.get_tile_size();
 
     // Process each height row sequentially, writing Kt tiles of TopK results
     for (uint32_t j = 0; j < Ht; ++j) {

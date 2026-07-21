@@ -741,23 +741,10 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_same_rank_groups_feasi
 
     const size_t nt = target_indices.size();
     const size_t ng = global_indices.size();
-    if (nt > ng) {
-        if (!quiet_mode_) {
-            log_info(
-                tt::LogFabric,
-                "Constraint validation failed: more same-rank target groups than global host partitions (cannot "
-                "assign each group to a distinct partition).");
-        } else {
-            log_debug(
-                tt::LogFabric,
-                "Constraint validation failed: same-rank groups infeasible (too many target groups).");
-        }
-        return false;
-    }
 
-    // can_assign[ti][gj]: target group target_indices[ti] can use global partition global_indices[gj]
-    // (every member has some allowed candidate in that partition). Matching is injective: groups are not
-    // tied by index — any bijection between target groups and distinct global partitions is allowed.
+    // can_assign[ti][gj]: logical target group ti can be carved inside physical global partition gj
+    // (every member has some allowed candidate in that partition). Multiple target groups may share
+    // the same global partition (e.g. N mesh_host_ranks on one galaxy host).
     std::vector<std::vector<bool>> can_assign(nt, std::vector<bool>(ng, false));
     for (size_t ti = 0; ti < nt; ++ti) {
         const auto& tset = target_groups[target_indices[ti]];
@@ -791,38 +778,29 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_same_rank_groups_feasi
         }
     }
 
-    std::vector<bool> used_gj(ng, false);
-    std::function<bool(size_t)> try_match;
-    try_match = [&](size_t ti) -> bool {
-        if (ti == nt) {
-            return true;
-        }
+    for (size_t ti = 0; ti < nt; ++ti) {
+        bool has_partition = false;
         for (size_t gj = 0; gj < ng; ++gj) {
-            if (!can_assign[ti][gj] || used_gj[gj]) {
-                continue;
+            if (can_assign[ti][gj]) {
+                has_partition = true;
+                break;
             }
-            used_gj[gj] = true;
-            if (try_match(ti + 1)) {
-                return true;
+        }
+        if (!has_partition) {
+            if (!quiet_mode_) {
+                log_info(
+                    tt::LogFabric,
+                    "Constraint validation failed: same-rank target group has no physical host partition "
+                    "where every member still allows at least one mapping (check required, forbidden, "
+                    "and reserved constraints).");
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "Constraint validation failed: same-rank groups infeasible (no host partition for a target "
+                    "group).");
             }
-            used_gj[gj] = false;
+            return false;
         }
-        return false;
-    };
-
-    if (!try_match(0)) {
-        if (!quiet_mode_) {
-            log_info(
-                tt::LogFabric,
-                "Constraint validation failed: no injective assignment of same-rank target groups to distinct "
-                "global partitions where every member still allows at least one mapping (check required, "
-                "forbidden, and reserved constraints).");
-        } else {
-            log_debug(
-                tt::LogFabric,
-                "Constraint validation failed: same-rank groups infeasible (no matching to global partitions).");
-        }
-        return false;
     }
     return true;
 }
@@ -1007,9 +985,9 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         return false;
     }
 
-    // Warn if some pairs were filtered but constraint is still satisfiable
+    // Informational: some pairs were filtered but the constraint is still satisfiable (not an error).
     if (!invalid_pairs.empty() && valid_pairs.size() >= min_count) {
-        log_warning(
+        log_debug(
             tt::LogFabric,
             "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
             "but constraint is still satisfiable with {} remaining valid pair(s) (min_count: {})",
@@ -2075,6 +2053,8 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
         }
         same_rank_groups.push_back(std::move(group_indices));
     }
+
+    minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2382,6 +2362,28 @@ int SearchHeuristic::compute_candidate_cost(
         }
     }
 
+    // Host-affinity (packing) score: prefer a global whose same-rank group (host partition) is already the
+    // fullest among hosts that still have room — a best-fit bin-packing bias that consolidates targets onto the
+    // fewest hosts. We score by how many already-mapped globals share the candidate's host (occupancy), with an
+    // extra bump per already-mapped target NEIGHBOR on that host so connected targets (e.g. a pipeline chain)
+    // prefer to grow within the current host. This is pure value-ordering — it never changes which mappings are
+    // valid, so it cannot introduce UNSAT or alter correctness. Inert when no same-rank global groups were
+    // provided (global_to_same_rank_group empty / unlabeled).
+    int host_affinity_score = 0;
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    if (!global_to_host.empty() && global_idx < global_to_host.size()) {
+        const int candidate_host = global_to_host[global_idx];
+        if (candidate_host >= 0) {
+            for (size_t t = 0; t < mapping.size(); ++t) {
+                const int mapped_global = mapping[t];
+                if (mapped_global >= 0 && static_cast<size_t>(mapped_global) < global_to_host.size() &&
+                    global_to_host[static_cast<size_t>(mapped_global)] == candidate_host) {
+                    ++host_affinity_score;
+                }
+            }
+        }
+    }
+
     // Compute degree gap (runtime optimization)
     size_t target_deg = graph_data.target_deg[target_idx];
     size_t global_deg = graph_data.global_deg[global_idx];
@@ -2395,17 +2397,19 @@ int SearchHeuristic::compute_candidate_cost(
         degree_gap_cost = INT_MAX;
     }
 
-    // Cost = -is_preferred * SOFT_WEIGHT
+    // Cost = -host_affinity * HOST_AFFINITY_WEIGHT
+    //      - is_preferred * SOFT_WEIGHT
     //      - channel_match_score
     //      + degree_gap * RUNTIME_WEIGHT
-    // Lower cost = better candidate
+    // Lower cost = better candidate. Host-affinity dominates so packing tightness wins over softer
+    // channel/preferred biases (connectivity remains a hard constraint, so packing can never be unsafe).
     int preferred_cost;
     if (is_preferred) {
         preferred_cost = SOFT_WEIGHT;
     } else {
         preferred_cost = 0;
     }
-    return static_cast<int>(-preferred_cost - channel_match_score +
+    return static_cast<int>(-host_affinity_score * HOST_AFFINITY_WEIGHT - preferred_cost - channel_match_score +
                             degree_gap_cost);
 }
 

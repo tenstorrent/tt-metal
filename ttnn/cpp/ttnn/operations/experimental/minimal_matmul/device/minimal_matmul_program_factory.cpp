@@ -8,9 +8,6 @@
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <cstdlib>
-#include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -22,144 +19,6 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-// Largest divisor of n that is <= cap (always >= 1). Used to snap a desired parallelism factor onto the
-// actual row count so num_slices / num_k_slices divide grid.y on any (incl. non-pow2) grid.
-uint32_t largest_divisor_leq(uint32_t n, uint32_t cap) {
-    if (n == 0) {
-        return 1;
-    }
-    cap = std::max(1u, std::min(cap, n));
-    for (uint32_t d = cap; d > 1; --d) {
-        if (n % d == 0) {
-            return d;
-        }
-    }
-    return 1;
-}
-
-// Joint (S, Pk) auto-partition heuristic: pick the number of N-slices (S = num_slices) and K-par bands
-// (Pk = num_k_slices) from the output tile shape, under the row budget S*Pk <= grid.y. Back-tested
-// against the joint sweep oracle (geomean regret 1.05 over 1224 shapes / 1.02 on FLUX-LTX, vs 1.21 for
-// the previous split sqrt(aspect)-S + D-score-Pk heuristics). Two orthogonal drivers:
-//   * S (slice the big output dim) <- skew = max/min(Mt,Nt) AND a row-underfilled small dim (min<grid.y);
-//     a balanced/large-small-dim shape fills the grid from output alone and is left at S=1.
-//   * Pk (split the K reduction) <- output-starvation x K-depth: shallow K can't K-par at all, deep K
-//     wants aggressive Pk (it also shortens the per-core K-loop, not just fills idle cores).
-// GRID-GENERIC: the ladder picks a "level" (8=max, 4=half, 2=quarter row budget) fit on WH 8x8, then
-// maps it onto grid.y's DIVISORS so S/Pk are valid on any grid (odd/non-pow2: 8x7, 12x9, 12x10, 11x10).
-// On grid.y==8 the levels map back to {8,4,2,1} exactly => identical to the back-tested 8x8 heuristic.
-// Output-starvation thresholds scale with cores=grid.x*grid.y (cores/4, cores, 4*cores, 8*cores reduce
-// to 16/64/256/512 on 8x8); row-underfill scales with grid.y. The per-grid threshold VALUES are not
-// re-fit here (a per-grid sweep is a follow-up); this only makes the existing fit grid-portable.
-// NOTE: orientation-agnostic (uses max/min) — the factory's transpose canonicalization maps S onto the
-// big dim either way. Returned (S, Pk) already satisfy: S*Pk | grid.y, K_tiles % Pk == 0, K/Pk >= 2.
-std::pair<uint32_t, uint32_t> auto_pick_s_pk(
-    uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles, uint32_t grid_x, uint32_t grid_y) {
-    const uint32_t small = std::min(M_tiles, N_tiles);
-    const uint32_t big = std::max(M_tiles, N_tiles);
-
-    // WORMHOLE (8x8) specialization. Fit on the representative WH joint sweep (57 shapes): geomean
-    // regret 1.025 / max 1.15 vs the per-shape (S,Pk) oracle, vs 1.14 / 1.88 for the grid-generic
-    // ladder below. The driver is output-row occupancy via small = min(Mt,Nt):
-    //   * small >= 32: the output already fills the 64-core grid -> no split (S1,Pk1).
-    //   * else K-parallelism is the primary lever: fewer output rows -> more Pk, which both fills the
-    //     idle cores AND shortens the per-core K-loop. Levels small{1->8, 2..15->4, 16..31->2}.
-    //   * a single N-slice (S=2) is taken only for VERY skewed skinny shapes (big/small >= 32), where
-    //     K-par alone leaves the wide free dim under-parallelized; half the K-budget is traded for it.
-    // Pk is then reduced to keep the reduction valid (K_tiles % Pk == 0 and >= 2 K-tiles/band). S*Pk
-    // divides 8 by construction. This is intentionally minimal: a handful of integer thresholds, no
-    // skew/out ladder. The grid-generic path below is kept for non-8x8 grids.
-    if (grid_x == 8 && grid_y == 8) {
-        if (small >= 32) {
-            return {1u, 1u};
-        }
-        uint32_t Pk = (small >= 16) ? 2u : (small >= 2) ? 4u : 8u;
-        uint32_t S = 1u;
-        if (big / small >= 32) {  // extreme skew: trade half the K-par budget for one N-slice
-            S = 2u;
-            Pk = std::max(1u, Pk / 2u);
-        }
-        while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < 2)) {
-            Pk /= 2;  // shallow K: step the K-par down (power-of-2) until the reduction is valid
-        }
-        return {S, Pk};
-    }
-
-    const uint32_t out = M_tiles * N_tiles;
-    const uint32_t cores = grid_x * grid_y;
-    const double skew = small ? static_cast<double>(big) / static_cast<double>(small) : 1.0;
-    // Levels: 8 = max (grid.y), 4 = ~half, 2 = ~quarter, 1 = none. Mapped to grid.y divisors below.
-    uint32_t Slvl = 1, Pklvl = 1;
-    if (K_tiles <= 4) {  // shallow K: K-par useless; slice only when rows are underfilled and skewed
-        Slvl = (skew >= 6.0 && small < grid_y) ? 8u : 1u;
-    } else if (K_tiles >= 64) {  // deep K: K-par primary, scaled by the output deficit (vs cores)
-        if (out < cores / 4) {
-            Pklvl = 8;
-        } else if (out <= cores) {
-            Pklvl = (skew >= 2.5) ? 8u : (small >= grid_y ? 1u : 4u);
-        } else if (out < 4 * cores) {
-            Pklvl = (skew >= 6.0) ? 4u : 2u;
-        } else {
-            Pklvl = (out < 8 * cores) ? 2u : 1u;
-        }
-        if (skew >= 12.0 && small < grid_y) {  // very skewed + starved: trade some Pk for a slice
-            Slvl = 2;
-            Pklvl = std::min(Pklvl, 4u);
-        }
-    } else {  // medium K (8..32)
-        if (out >= 4 * cores) {
-            Slvl = (skew >= 24.0 && small < grid_y) ? 8u : (skew >= 2.5 ? 2u : 1u);
-        } else if (out >= cores) {
-            if (skew >= 24.0) {
-                Slvl = 8;
-            } else if (skew >= 12.0) {
-                Slvl = 4;
-                Pklvl = 2;
-            } else if (skew >= 6.0) {
-                Slvl = 2;
-            }
-        } else if (out >= cores / 4) {
-            if (skew >= 12.0) {
-                Slvl = 4;
-                Pklvl = 2;
-            } else if (skew >= 6.0) {
-                Slvl = 2;
-                Pklvl = 4;
-            } else if (skew >= 2.5) {
-                Slvl = 2;
-            }
-        } else {  // very starved
-            if (skew >= 6.0) {
-                Slvl = 4;
-                Pklvl = 2;
-            } else {
-                Pklvl = 4;
-            }
-        }
-    }
-    // Map a level to a row-count target, snapped to a divisor of grid.y (8=max, 4=half, 2=quarter).
-    auto level_to_count = [grid_y](uint32_t lvl) -> uint32_t {
-        if (lvl >= 8) {
-            return grid_y;  // max parallelism
-        }
-        if (lvl >= 4) {
-            return largest_divisor_leq(grid_y, (grid_y + 1) / 2);  // ~half
-        }
-        if (lvl >= 2) {
-            return largest_divisor_leq(grid_y, (grid_y + 3) / 4);  // ~quarter
-        }
-        return 1;
-    };
-    // Pk first (snap to divisor, then step down to a divisor with K_tiles % Pk == 0 and >= 2 K-tiles/band).
-    uint32_t Pk = level_to_count(Pklvl);
-    while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < 2)) {
-        Pk = largest_divisor_leq(grid_y, Pk - 1);
-    }
-    // S in the remaining row budget: a divisor of grid.y/Pk => S*Pk divides grid.y by construction.
-    uint32_t S = largest_divisor_leq(grid_y / std::max(1u, Pk), level_to_count(Slvl));
-    return {S, Pk};
-}
-
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
     (void)K;  // K not used for determining defaults currently
@@ -167,11 +26,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_b
     uint32_t K_block_tiles = 8;
     uint32_t N_block_tiles = 8;
 
-    // 8-tile subblocks (2x4 / 4x2) halve the per-subblock acquire/commit/pack overhead vs 2x2, but
-    // they only FIT in half-sync DST for bf16 acc (half-sync DST = 8 tiles). With fp32_dest_acc the
-    // half-sync DST is only 4 tiles, so an 8-tile subblock OVERFLOWS and silently corrupts the output
-    // (verified PCC 0.28-0.79); keep fp32 at 2x2 (<=4 tiles). Orient the longer subblock dim along
-    // the larger output dim for the bf16 win.
     uint32_t subblock_h = 2;
     uint32_t subblock_w = 2;
     if (!fp32_dest_acc_en) {
@@ -194,11 +48,7 @@ std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
     uint32_t axis_length,
     tt::tt_metal::NOC noc,
     bool axis_is_x_when_not_transposed,
-    const CoreCoord& initial_endpoint,
-    uint32_t axis_base = 0) {
-    // The forwarding chain covers axis positions [axis_base, axis_base + axis_length). axis_base != 0
-    // is used by core-grid slicing to bound the big-input (down-rows) chain to a single row-group;
-    // initial_endpoint must sit at axis_base. At axis_base == 0 this is the original full-axis chain.
+    const CoreCoord& initial_endpoint) {
     std::vector<CoreCoord> order;
     order.reserve(axis_length);
     order.push_back(initial_endpoint);
@@ -216,7 +66,7 @@ std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
         size_t& coord_to_modify = transpose_core_grid ? (axis_is_x_when_not_transposed ? worker_core.y : worker_core.x)
                                                       : (axis_is_x_when_not_transposed ? worker_core.x : worker_core.y);
 
-        coord_to_modify = axis_base + (increasing ? worker_idx : (axis_length - worker_idx));
+        coord_to_modify = increasing ? worker_idx : (axis_length - worker_idx);
         if (coord_to_modify == current_axis_value) {
             index_of_current = worker_idx;
         }
@@ -279,7 +129,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler,
+    bool fuse_swiglu) {
     (void)fused_ternary_scalar;  // Scalar not needed in dataflow kernel, only in compute kernel
     auto* device = input_tensor.device();
 
@@ -389,118 +240,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const bool fuse_srs = srs_fused_op_signaler.has_value();
     bool transpose_core_grid = M > N && !fuse_srs;
 
-    // Core-grid SLICING (see minimal-matmul-nslicing-plan): split the physical rows (grid.y) into
-    // `num_slices` groups, each an independent sub-matmul on the FULL smaller output dim x a slice of
-    // the bigger dim, to fill cores that idle on skewed shapes. Canonical frame: the smaller dim is
-    // always parallelized over the rows (grid.y) and the bigger over the cols (grid.x) — transpose
-    // canonicalizes this — so slicing always groups grid.y and slices grid.x, regardless of transpose.
-    // Effective parallelism: small dim over (grid.y / S) rows-per-group; big dim over (S * grid.x).
-    // S=1 reduces exactly to the un-sliced partition. (Step 1: partition only; S>1 also needs the
-    // per-group forwarding change before it is correct. Auto-derivation of S is deferred to step 5.)
-    uint32_t num_slices = 1;
-    uint32_t num_k_slices = 1;
-    bool num_k_fused = false;
-
-    const bool num_slices_pinned = std::getenv("TT_MM_NUM_SLICES") != nullptr;
-    const bool k_slices_pinned = std::getenv("TT_MM_K_SLICES") != nullptr;
-    // The fused reduction reuses the store-and-forward semaphore protocol, so it's incompatible only with
-    // fused ops. EXPLICIT env slicing/K-par works with OR without a pinned blocking config (so blocking
-    // and S/Pk can be swept jointly); the AUTO heuristic stays on the no-config path (it co-owns the auto
-    // block sizer that a pinned config replaces).
-    const bool no_fuse_ops = !fuse_op && !fuse_srs;
-
-    // AUTO: jointly pick (S = num_slices, Pk = num_k_slices) from the output tile shape. auto_pick_s_pk
-    // returns grid.y-feasible divisors (S*Pk | grid.y, K_tiles % Pk == 0, K/Pk >= 2), so it works on odd /
-    // non-square grids with NO power-of-2 gate. Auto K-par always uses the fused reduction (plan B ->
-    // single [M,N], output shape unchanged); the output writer's logical_d0 guard drops any M-pad rows, so
-    // M not dividing the column axis (S*grid.x, transpose) is supported — no M-padding back-off here.
-    // Replaces the previous split sqrt(aspect)-S + D-score-Pk heuristics (back-test geomean regret 1.21 ->
-    // 1.05; 1.14 -> 1.02 on FLUX/LTX).
-    if (no_fuse_ops && !config.has_value() && !num_slices_pinned && !k_slices_pinned &&
-        std::getenv("TT_MM_NO_AUTO_KPAR") == nullptr) {
-        auto [S, Pk] = auto_pick_s_pk(M_tiles, N_tiles, K_tiles, grid_size.x, grid_size.y);
-        num_slices = S;
-        num_k_slices = Pk;
-        num_k_fused = (Pk > 1);
-        if (num_k_fused) {
-            log_debug(tt::LogOp, "minimal_matmul auto (S,Pk)=({},{}) fused", num_slices, num_k_slices);
-        }
-    }
-
-    // EXPLICIT env overrides (apply even with a pinned config, for joint blocking x S/Pk sweeps).
-    if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && no_fuse_ops) {
-        num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
-    }
-    TT_FATAL(num_slices >= 1, "TT_MM_NUM_SLICES ({}) must be >= 1", num_slices);
-    if (k_slices_pinned && no_fuse_ops) {
-        num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(std::getenv("TT_MM_K_SLICES"))));
-        const char* kf = std::getenv("TT_MM_K_FUSED");
-        num_k_fused = (kf != nullptr && std::atoi(kf) != 0);
-    }
-    // Step-1 sub-grid round-down: (S,Pk) no longer need to DIVIDE grid.y. We run on the largest sub-grid
-    // whose row count is a multiple of (num_slices*num_k_slices) and idle the leftover rows (applied just
-    // below, before rows_per_group). This unlocks arbitrary K/N partitionings on unfriendly grids (e.g.
-    // Pk=2 on grid.y=9 -> two grid.x*4 bands, the 9th row idle). The only hard requirement is that at
-    // least one row per group fits. Divisor (S,Pk) are unchanged (active_rows == grid.y, nothing idled).
-    TT_FATAL(
-        num_k_slices >= 1 && num_slices * num_k_slices <= grid_size.y,
-        "num_slices*num_k_slices ({}) must be <= grid.y ({})",
-        num_slices * num_k_slices,
-        grid_size.y);
-    TT_FATAL(K_tiles % num_k_slices == 0, "num_k_slices ({}) must divide K_tiles ({})", num_k_slices, K_tiles);
-    // Plan B (fused on-device column reduction) needs >1 K-band; A2 (host-summed) is the explicit-env
-    // alternative. The reduction reuses the store-and-forward semaphore pattern, so it stays on the
-    // plain unicast path (incompatible with the mcast prototypes / N-chunk split outputs).
-    TT_FATAL(
-        !(num_k_fused && num_k_slices == 1),
-        "fused split-K (plan B) requires num_k_slices > 1 (the fused reduction needs >1 K-band).");
-    // Sub-grid K_block refinement: a sliced OR K-parallel sub-grid has small per-core M/N (and, for
-    // K-par, a short per-band K reduced cooperatively across cores), so the default K_block=8 makes the
-    // per-k-block work too coarse — finer K (4) pipelines read/forward/compute better. Measured ~+8%/
-    // +6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048; the WH joint sweep shows EVERY
-    // K-par optimum uses K_block=4 (leaving the default 8 on output-starved K-par shapes like 32xKx32
-    // costs up to ~3.8x). Only on the auto path (no pinned config); a caller's K_block is respected.
-    if ((num_slices > 1 || num_k_fused) && !config.has_value()) {
-        K_block_tiles = std::min(K_block_tiles, 4u);
-    }
-    // Small-K: never let K_block exceed K_tiles — otherwise round_up pads K (e.g. K=128 -> 4 tiles
-    // padded to K_block=8 = 2x wasted K work). Pure win; only reduces K_block when K is tiny.
-    if (!config.has_value()) {
-        K_block_tiles = std::min(K_block_tiles, std::max(1u, K_tiles));
-    }
-    // Apply the round-down: shrink the active grid to grid.x x active_rows (largest multiple of S*Pk
-    // that fits in grid.y) and idle the leftover rows -- idled rows are excluded from core_grid, so they
-    // get no CB/semaphore/kernel (no work, no deadlock). Equivalent to the caller passing a smaller
-    // compute_with_storage_grid_size, but derived automatically per (S,Pk). Bands remain equal contiguous
-    // row-strips, so the fused column-reduction's 1:1 vertical correspondence is preserved.
-    const uint32_t spk_rows = num_slices * num_k_slices;
-    const uint32_t active_rows = (grid_size.y / spk_rows) * spk_rows;
-    if (active_rows != grid_size.y) {
-        log_debug(
-            tt::LogOp,
-            "minimal_matmul sub-grid round-down: grid.y {} -> {} (S*Pk={}, {} row(s) idle)",
-            grid_size.y,
-            active_rows,
-            spk_rows,
-            grid_size.y - active_rows);
-        grid_size = CoreCoord{grid_size.x, active_rows};
-        core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-        num_cores = core_grid.size();
-    }
-    // Rows are partitioned as num_k_slices (K-bands, outer) x num_slices (N-slice groups) x
-    // rows_per_group (small-dim parallelism, innermost). K-bands do NOT add output parallelism (they
-    // reduce K and are summed), so x_axis_parallel keeps only the N-slice factor.
-    const uint32_t rows_per_group = grid_size.y / (num_slices * num_k_slices);  // small-dim parallelism (innermost)
-    const uint32_t y_axis_parallel = rows_per_group;            // dim on grid.y is grouped
-    const uint32_t x_axis_parallel = num_slices * grid_size.x;  // dim on grid.x is sliced (cols x slices)
-
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
-    uint32_t in0_parallel_axis_cores = transpose_core_grid ? x_axis_parallel : y_axis_parallel;
+    uint32_t in0_parallel_axis_cores = transpose_core_grid ? grid_size.x : grid_size.y;
 
     auto in1_noc = transpose_core_grid ? small_input_noc : large_input_noc;
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
-    uint32_t in1_parallel_axis_cores = transpose_core_grid ? y_axis_parallel : x_axis_parallel;
+    uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
     /**
      * We pad the input dimensions to the nearest multiple of the parallelization factor.
@@ -510,162 +256,40 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
-    // Split-K (A2) writes each band's full M x N partial into an M-stripe of the [num_k_slices * M, N]
-    // output, stacked by the LOGICAL M tiles. That is only correct without M-padding (otherwise a band
-    // writes padded_M_tiles rows and stripes would overlap). Require it for now; for the starved shapes
-    // K-par targets, choose num_k_slices so grid.y/(num_slices*num_k_slices) divides M_tiles (e.g. M=1
-    // tile with num_k_slices=grid.y). Padded-M support is a follow-up.
-    // A2 (host-summed [Pk*M,N]) stacks bands by LOGICAL M, so M-padding would overlap stripes — forbid
-    // it there. Fused B (single [M,N], offset 0) tolerates M-padding: padded rows are computed/summed
-    // then dropped by the writer's logical_d0 guard (PCC-verified), which lets output-starved transpose
-    // shapes engage K-par on their otherwise-idle columns.
-    TT_FATAL(
-        num_k_slices == 1 || padded_M_tiles == M_tiles || num_k_fused,
-        "TT_MM_K_SLICES ({}): M is padded ({} -> {} tiles by {}-way M parallelism); split-K stacking "
-        "requires no M-padding. Pick num_slices*num_k_slices so grid.y/(that) divides M_tiles.",
-        num_k_slices,
-        M_tiles,
-        padded_M_tiles,
-        in0_parallel_axis_cores);
-    // Per-K-band reduction depth: each band reduces K_tiles/num_k_slices. This drives the kernels'
-    // K-block COUNT (K_num_blocks) and the compute accumulation depth; in0/in1 STRIDING still uses the
-    // full K_tiles (passed separately), and each band's absolute K-block start is a per-core runtime arg.
-    const uint32_t K_tiles_per_band = K_tiles / num_k_slices;
-    uint32_t padded_K_tiles = tt::round_up(K_tiles_per_band, K_block_tiles);
+    uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+
+    uint32_t padded_N_tiles;
+    uint32_t N_tiles_per_core;
+    if (fuse_swiglu) {
+        // Partition on gate/up PAIRS (= output tiles), so every core's weight-tile range is
+        // 2 * (pairs per core): even, and never splitting a pair across cores.
+        uint32_t out_N_tiles = N_tiles / 2;
+        uint32_t padded_out_N_tiles = tt::round_up(out_N_tiles, in1_parallel_axis_cores);
+        padded_N_tiles = 2 * padded_out_N_tiles;
+        N_tiles_per_core = 2 * (padded_out_N_tiles / in1_parallel_axis_cores);
+    } else {
+        padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
+        N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
+    }
 
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
-    uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
-
-    // Default subblock selection (only when the caller did not pin a config). Maximize DST utilization:
-    // among power-of-2 (subblock_h, subblock_w) pairs where each dim divides its per-core tile count (so
-    // it also divides the default-8 block and any block the sizer below picks) and the product fits the
-    // HALF-SYNC DST depth (4 fp32 / 8 bf16 tiles), pick the largest area, tie-broken toward a balanced
-    // (squarer) subblock. The kernel always runs half-sync (the factory never wires dst_full_sync_en to
-    // ComputeConfig), so exceeding the DST depth silently corrupts the output — the product cap enforces
-    // safety. The earlier heuristic capped one dim at 2, which UNDER-filled the DST when the other dim
-    // was odd (e.g. M_pc=4, N_pc=9 -> 2x1 = 2 tiles instead of 4x1 = 4) and cost ~5% on those shapes; the
-    // balanced tiebreak keeps the well-utilized cases unchanged (e.g. M_pc=N_pc=16 stays 2x2, not 1x4).
-    if (!config.has_value()) {
-        const uint32_t max_dst = fp32_dest_acc_en ? 4u : 8u;
-        uint32_t best_h = 1, best_w = 1;
-        for (uint32_t sh = 1; sh <= max_dst; sh <<= 1) {
-            if (M_tiles_per_core == 0 || M_tiles_per_core % sh != 0) {
-                continue;
-            }
-            for (uint32_t sw = 1; sh * sw <= max_dst; sw <<= 1) {
-                if (N_tiles_per_core == 0 || N_tiles_per_core % sw != 0) {
-                    continue;
-                }
-                const uint32_t area = sh * sw;
-                const uint32_t best_area = best_h * best_w;
-                if (area > best_area || (area == best_area && std::max(sh, sw) < std::max(best_h, best_w))) {
-                    best_h = sh;
-                    best_w = sw;
-                }
-            }
-        }
-        subblock_h = best_h;
-        subblock_w = best_w;
-    }
-
-    // Auto-gate (productization): mcast+prefetch beats the unicast baseline when the skinny output
-    // dimension is delivery-bound, i.e. has a small per-core tile count. Measured win for
-    // min(M,N) tiles-per-core <= 2 (+1.6% to +30%, larger for smaller shapes); a loss above that. When
-    // it fires we ALSO clamp the compile-time block to the per-core tiles — the win requires
-    // M_block == M_tiles_per_core; leaving the default 8 makes the kernel reserve/pipeline 8x-too-large
-    // CB blocks (~+50% slower even though runtime byte counts are clamped). Fires only when the caller
-    // didn't pin a config and there are no fused ops (mcast prototype).
-    //
-    // DEFAULT OFF: the mcast/prefetch lever is near-neutral on aggregate (geomean ~0.99x over an 81-shape
-    // A/B; 62/81 within +-2%, biggest win +8%) and conflicts with the (S,Pk) partition schemes, so it is
-    // disabled by default to keep it out of sweeps as a confounder. Opt the auto-gate back in with
-    // TT_MM_AUTO_PREFETCH=1; TT_MM_MCAST_PREFETCH / TT_MM_MCAST_BROADCAST still force the dataflow on
-    // regardless (handled at the mcast-flags block below). TT_MM_NO_AUTO_PREFETCH is retained as an
-    // explicit kill (wins over the opt-in) but is a no-op now that the default is off.
-    const uint32_t min_tiles_per_core = std::min(M_tiles_per_core, N_tiles_per_core);
-    const char* auto_prefetch = std::getenv("TT_MM_AUTO_PREFETCH");
-    const char* no_auto_prefetch = std::getenv("TT_MM_NO_AUTO_PREFETCH");
-    const bool auto_prefetch_opt_in = auto_prefetch != nullptr && std::string(auto_prefetch) != "0" &&
-                                      !(no_auto_prefetch != nullptr && std::string(no_auto_prefetch) != "0");
-    // Gate is computed on the SUB-GRID per-core counts (M/N_tiles_per_core already reflect slicing),
-    // so it composes with slicing: each sub-grid is squarer, min_tiles_per_core is the sub-grid value.
-    const bool prefetch_gate =
-        auto_prefetch_opt_in && !config.has_value() && !fuse_op && !fuse_srs && min_tiles_per_core <= 2;
-    if (prefetch_gate) {
-        M_block_tiles = std::min(M_block_tiles, M_tiles_per_core);
-        N_block_tiles = std::min(N_block_tiles, N_tiles_per_core);
-    }
-
-    // Default block sizer (no pinned config / no fused ops). The fixed default block (8) fragments
-    // large per-core dims — e.g. N_tiles_per_core=18 split as 8+8+2 — which costs ~10-30% on large
-    // shapes vs a per-core-sized block (measured: 1024x6144x4608 956->830us). Clamp each block to its
-    // per-core count (never useful to exceed it), then re-pick N (the free dim, most fragmentation-
-    // sensitive) and M via choose() below, bounded by an L1 circular-buffer budget. K is fixed
-    // (K_block_tiles already = min(default, K_tiles)). Reproduces the swept-best blocks on the large
-    // non-gated shapes (e.g. 4096x6144x4608 -> 4/8/18, matching the hand-tuned optimum); geomean over a
-    // 65-shape sweep improved 1.25x -> 1.35x vs main, losses (vs swept-best) cut from 20 to 3.
-    if (!config.has_value() && !fuse_op && !fuse_srs) {
-        M_block_tiles = std::min(M_block_tiles, std::max(1u, M_tiles_per_core));
-        N_block_tiles = std::min(N_block_tiles, std::max(1u, N_tiles_per_core));
-        if (!prefetch_gate) {
-            // CB footprint in bytes: in0/in1/out double-buffered, intermediate (fp32 partials) single.
-            auto footprint = [&](uint32_t mb, uint32_t nb) -> uint64_t {
-                return (uint64_t)mb * K_block_tiles * 2 * in0_tile_size +
-                       (uint64_t)K_block_tiles * nb * 2 * in1_tile_size + (uint64_t)mb * nb * 2 * out_tile_size +
-                       (uint64_t)mb * nb * intermediate_tile_size;
-            };
-            // ~1.25 MiB. The default 8/8/8 fp32 block uses 1.0 MiB; the largest block this admits
-            // (e.g. 4/8/18 = 1.31 MiB) is proven safe on-device with headroom for kernels/args/sems.
-            const uint64_t L1_CB_BUDGET = 1310720;
-            // Pick the block that best amortizes the fixed default-8 fragmentation. CONSTRAINT (hard, for
-            // correctness): the block must be a multiple of its subblock — the kernel requires
-            // block % subblock == 0 (the host validator asserts this for explicit configs; the auto path
-            // skips that check, so a non-multiple silently corrupts the output). Among multiples of the
-            // subblock that are <= the per-core count and fit the L1 budget, choose the one with the
-            // FEWEST blocks (ceil(per_core/block)), tie-broken toward an even split (block divides
-            // per_core, avoiding a tiny tail like 24=10+10+4) and then a larger block. Removes the
-            // default-8 fragmentation (e.g. N_pc=18 -> 10+8 instead of 8+8+2; M_pc=9 -> one block of 9
-            // instead of 8+1) while staying within the subblock and L1 constraints.
-            auto choose = [&](uint32_t per_core, uint32_t sb, uint32_t cur, auto fits) -> uint32_t {
-                // If the default block already tiles the per-core count evenly, leave it: there is no
-                // partial tail to remove, and merging into fewer-but-larger blocks only inflates the L1
-                // footprint without a throughput gain (measured: M_pc=64 grown 8->16 regressed ~12%).
-                if (per_core % cur == 0) {
-                    return cur;
-                }
-                uint32_t best = cur;
-                uint32_t best_blocks = (per_core + cur - 1) / cur;
-                for (uint32_t b = (per_core / sb) * sb; b > cur; b -= sb) {
-                    if (!fits(b)) {
-                        continue;
-                    }
-                    uint32_t blocks = (per_core + b - 1) / b;
-                    bool even = (per_core % b) == 0;
-                    bool best_even = (per_core % best) == 0;
-                    if (blocks < best_blocks || (blocks == best_blocks && even && !best_even) ||
-                        (blocks == best_blocks && even == best_even && b > best)) {
-                        best = b;
-                        best_blocks = blocks;
-                    }
-                }
-                return best;
-            };
-            const uint32_t sbw = std::max(1u, subblock_w);
-            const uint32_t sbh = std::max(1u, subblock_h);
-            N_block_tiles = choose(N_tiles_per_core, sbw, N_block_tiles, [&](uint32_t nb) {
-                return footprint(M_block_tiles, nb) <= L1_CB_BUDGET;
-            });
-            M_block_tiles = choose(M_tiles_per_core, sbh, M_block_tiles, [&](uint32_t mb) {
-                return footprint(mb, N_block_tiles) <= L1_CB_BUDGET;
-            });
-        }
-    }
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
+
+    if (fuse_swiglu) {
+        // The gate/up tile pairs are interleaved along N (gate=2p, up=2p+1). Every core's
+        // N range and every N block must start on an even tile and span an even number of
+        // tiles so a pair is never split across cores or blocks.
+        TT_FATAL(
+            N_tiles % 2 == 0 && N_tiles_per_core % 2 == 0 && N_block_tiles % 2 == 0,
+            "minimal_matmul fuse_swiglu requires N_tiles ({}), N_tiles_per_core ({}) and N_block_tiles ({}) all even",
+            N_tiles,
+            N_tiles_per_core,
+            N_block_tiles);
+    }
 
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
@@ -681,7 +305,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
     // TODO: consider not double buffering the output
-    uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+    // SwiGLU emits half the N tiles per block (one per gate/up pair), so the output CB only
+    // needs to hold half a block. The intermediate CB still holds the full (2N) block.
+    uint32_t out_block_num_tiles_written = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;
+    uint32_t out_cb_num_tiles = out_block_num_tiles_written * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -697,37 +324,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    // Slicing: the BIG input (forwarded down rows) gets an injector at EACH group's top row, not just
-    // row 0 — one independent forwarding chain per row-group. The SMALL input (across cols) is
-    // unchanged (injector at col 0 of every row). At num_slices==1 the group-top set is just row 0,
-    // so these specs match the original single-range sender/receiver cores.
-    std::vector<CoreRange> rows_sender_ranges;
-    for (uint32_t g = 0; g < num_slices * num_k_slices; g++) {
-        std::size_t r = static_cast<std::size_t>(g * rows_per_group);
-        rows_sender_ranges.push_back(CoreRange(CoreCoord{0, r}, CoreCoord{grid_size.x - 1, r}));
-    }
-    CoreRangeSet rows_sender_spec(rows_sender_ranges);                // big input: group-top rows x all cols
-    CoreRangeSet cols_sender_spec(CoreRange(core_0_0, core_0_endy));  // small input: col 0 x all rows
-    CoreRangeSet in0_sender_spec = transpose_core_grid ? rows_sender_spec : cols_sender_spec;
-    CoreRangeSet in1_sender_spec = transpose_core_grid ? cols_sender_spec : rows_sender_spec;
-    CoreRangeSet in0_receiver_spec = CoreRangeSet(core_grid).subtract(in0_sender_spec);
-    CoreRangeSet in1_receiver_spec = CoreRangeSet(core_grid).subtract(in1_sender_spec);
-
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
     auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
-
-    // Split-K plan B (fused L1 column reduction): two semaphores for the vertical running-sum handshake.
-    //  - reduce_ready: lives on the band-BELOW (sender); the band-above increments it to signal "my
-    //    cb_reduce slot is free, you may write" (mirror of in0/in1 sender_semaphore).
-    //  - reduce_recv:  lives on the band-ABOVE (receiver); the band-below sets it VALID after writing the
-    //    partial into the receiver's cb_reduce (mirror of in0/in1 receiver_semaphore). The VALID source
-    //    reuses the writer's existing in{0,1}_valid_semaphore (a constant VALID cell).
-    auto reduce_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto reduce_recv_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
@@ -741,16 +343,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t intermediate_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
-
-    // Split-K plan B: cb_reduce (c_7) holds the running sum forwarded UP the column from the band below.
-    // The band-below's output writer NoC-writes its out_cb (output_data_format) here, then compute adds it
-    // to this band's own partial. Single block (1 slot) => its L1 write pointer is constant on every core,
-    // so the remote writer can target it with its own local write pointer (no cross-core ptr tracking).
-    if (num_k_fused) {
-        uint32_t reduce_cb_id = tt::CBIndex::c_7;
-        tt::tt_metal::create_cb(
-            reduce_cb_id, program, core_grid, out_tile_size, out_block_num_tiles, output_data_format);
-    }
 
     if (use_bias) {
         uint32_t in2_cb_id = tt::CBIndex::c_4;
@@ -819,6 +411,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         defines["FUSE_BIAS"] = "1";
     }
 
+    if (fuse_swiglu) {
+        defines["FUSE_SWIGLU"] = "1";
+    }
+
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
 
@@ -828,64 +424,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
-    }
-
-    // Output-contention DRAM levers. Both relieve the same bottleneck — output writes contending with
-    // in0 reads on NOC_1 — so they only pay off when the output is WIDE (large N). Trigger on N, not
-    // max(M,K,N): the latter also fires on skewed shapes where M or K is large but N is small, where
-    // both levers REGRESS (e.g. 4864x2048x1024: both -11%, output-split -6.8%, in0-barrier -3.7%).
-    // Measured by output width: N=4096 helps (+0.6% to +2.6%), N<=3072 hurts. (Verified per-lever via
-    // matched-blocking ablation; both levers track N.)
-    //   - IN0_READ_BARRIER_THRESHOLD: cap outstanding in0 DRAM reads (un-staggered bursts share NOC_1
-    //     with output writes); only worth it when there are heavy output writes to contend with.
-    //   - OUTPUT_WRITE_NOC0_PCT: route ~40% of output writes onto the otherwise-idle NOC_0 (needs
-    //     DM_DYNAMIC_NOC); parallelism gain scales with the per-row write run length, i.e. N.
-    auto dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    constexpr uint32_t WIDE_OUTPUT_DIM = 4096;  // N threshold for the output-contention levers
-    // The in0-read barrier and prefetch are fundamentally opposed: the barrier caps outstanding in0
-    // reads (every IN0_READ_BARRIER_THRESHOLD tiles), while prefetch's whole purpose is to keep the
-    // next block's read in flight. Applying both negates prefetch (~+14% slowdown, worst on the
-    // transpose orientation where in0 is the large input). So skip the in0 barrier whenever prefetch
-    // is active. The split-NOC output write is independent (minor effect) and kept.
-    const char* force_prefetch = std::getenv("TT_MM_MCAST_PREFETCH");
-    const bool prefetch_active = prefetch_gate || (force_prefetch != nullptr && std::string(force_prefetch) != "0");
-    // TT_MM_NO_LARGE_LEVERS: ablation toggle to isolate the large-shape DRAM-contention levers
-    // (in0-read barrier + split-NOC output write) from the rest of the dataflow.
-    if (N >= WIDE_OUTPUT_DIM && std::getenv("TT_MM_NO_LARGE_LEVERS") == nullptr) {
-        if (std::getenv("TT_MM_NO_IN0_BARRIER") == nullptr && !prefetch_active) {
-            defines["IN0_READ_BARRIER_THRESHOLD"] = "10";
-        }
-        if (std::getenv("TT_MM_NO_OUTPUT_NOC_SPLIT") == nullptr) {
-            defines["OUTPUT_WRITE_NOC0_PCT"] = "40";
-        }
-        dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
-    }
-
-    // Experimental dataflow selectors (env-gated, off by default).
-    auto env_flag_set = [](const char* name) {
-        const char* v = std::getenv(name);
-        return v != nullptr && v[0] != '\0' && std::string(v) != "0";
-    };
-    // Prefetch: software-pipeline the injector k-loop so block k+1's DRAM read is issued before block
-    // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. The
-    // auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
-    // compile-time block). TT_MM_MCAST_PREFETCH forces the dataflow on regardless of the gate.
-    // Fused split-K (plan B) and the mcast prototypes are MUTUALLY EXCLUSIVE: the reduction reuses the
-    // unicast store-and-forward semaphore protocol, and running the mcast injector k-loop alongside the
-    // reduction handshake deadlocks (the two were never co-designed). The delivery-bound prefetch_gate
-    // fires on exactly the same skinny per-core shapes K-par engages on, so without this guard deep-K
-    // K-par shapes silently get both -> intermittent device hang. Keep K-par on the plain unicast path.
-    const bool mcast_prefetch = (env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate) && !num_k_fused;
-    const bool mcast_broadcast = (env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch) && !num_k_fused;
-    if (mcast_broadcast) {
-        // Replace the store-and-forward chain with a single NoC multicast per block. The injector reads
-        // DRAM once and mcasts the block to all cores along its broadcast axis (one hardware-replicated
-        // transaction instead of N serialized unicast+handshake hops).
-        TT_FATAL(!fuse_op && !fuse_srs, "MCAST_BROADCAST does not support fused ops");
-        defines["MCAST_BROADCAST"] = "1";
-    }
-    if (mcast_prefetch) {
-        defines["MCAST_PREFETCH"] = "1";
     }
 
     if (fuse_op) {
@@ -937,24 +475,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
-    // Split-K plan B: REDUCE_K is defined only on the OUTPUT-WRITER DM kernel (the one that owns out_cb)
-    // and on compute. The non-writer DM keeps the plain defines. The reduction dataflow lives in the
-    // writer; compute emits the running sum (copy on the bottom band, add on the rest).
-    std::map<std::string, std::string> in0_defines = defines;
-    std::map<std::string, std::string> in1_defines = defines;
-    if (num_k_fused) {
-        (in0_is_output_writer ? in0_defines : in1_defines)["REDUCE_K"] = "1";
-    }
-    // MM_KPAR gates the split-K per-core runtime offsets (k_block_start / out_m_tile_offset /
-    // out_M_tiles_total). Only defined when K-parallelism is actually engaged (num_k_slices > 1, which
-    // also covers plan B since fused requires it). When undefined, the senders compile those offsets to
-    // compile-time 0 so the base-path inner loops keep main's clean affine DRAM addressing (~10% on big
-    // shapes — bisected to de95e3a). The args are still always pushed, so the contract is unchanged.
-    if (num_k_slices > 1) {
-        in0_defines["MM_KPAR"] = "1";
-        in1_defines["MM_KPAR"] = "1";
-    }
-
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
         padded_M_tiles,
@@ -990,14 +510,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
-        in0_sender_spec,
+        in0_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc,
             .noc = in0_noc,
-            .noc_mode = dm_noc_mode,
             .compile_args = in0_sender_compile_time_args,
-            .defines =
-                (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : in0_defines});
+            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -1035,13 +553,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in0_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
-        in0_receiver_spec,
+        in0_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc,
-            .noc = in0_noc,
-            .noc_mode = dm_noc_mode,
-            .compile_args = in0_receiver_compile_time_args,
-            .defines = in0_defines});
+            .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
 
     std::vector<uint32_t> in1_sender_compile_time_args = {
         M_tiles,
@@ -1078,13 +592,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
-        in1_sender_spec,
+        in1_sender_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc,
-            .noc = in1_noc,
-            .noc_mode = dm_noc_mode,
-            .compile_args = in1_sender_compile_time_args,
-            .defines = in1_defines});
+            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
 
     std::vector<uint32_t> in1_receiver_compile_time_args = {
         M_tiles,
@@ -1121,13 +631,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
-        in1_receiver_spec,
+        in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc,
-            .noc = in1_noc,
-            .noc_mode = dm_noc_mode,
-            .compile_args = in1_receiver_compile_time_args,
-            .defines = in1_defines});
+            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
@@ -1140,9 +646,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         subblock_w};
 
     auto compute_defines = defines;
-    if (num_k_fused) {
-        compute_defines["REDUCE_K"] = "1";
-    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(
@@ -1190,71 +693,27 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
-        // Slicing: group physical rows (grid.y). The dim on grid.y is grouped (parallel index = row
-        // within group); the dim on grid.x is sliced (parallel index = group * grid.x + col). At
-        // num_slices==1 this is exactly the original (group=0, y_idx=core.y, x_idx=core.x).
-        const uint32_t group = core.y / rows_per_group;   // innermost group: [0, num_slices*num_k_slices)
-        const uint32_t kband = group / num_slices;        // K-band index (outer)
-        const uint32_t slice_group = group % num_slices;  // N-slice group within the band
-        const uint32_t y_idx = core.y % rows_per_group;
-        // N-slice index uses ONLY slice_group (K-bands share the full N, they differ in K not output cols).
-        const uint32_t x_idx = slice_group * grid_size.x + core.x;
-        uint32_t in0_idx = transpose_core_grid ? x_idx : y_idx;
-        uint32_t in1_idx = transpose_core_grid ? y_idx : x_idx;
-        // Split-K per-core: which K-block this band starts at, and where its partial lands in the
-        // [num_k_slices * M, N] output (offset down by kband full-M stripes). num_k_slices=1 => all 0.
-        // Plan B (num_k_fused) instead reduces in L1 to a single [M, N], so every band targets the same
-        // output (offset 0, total M_tiles) and only the top band actually writes it.
-        const uint32_t k_block_start = kband * (padded_K_tiles / K_block_tiles);
-        const uint32_t out_m_tile_offset = num_k_fused ? 0u : kband * M_tiles;
-        const uint32_t out_M_tiles_total = num_k_fused ? M_tiles : num_k_slices * M_tiles;
-        // Split-K plan B: bottom K-band has no incoming running sum (emits its own partial). Consumed by
-        // the compute kernel only under REDUCE_K; harmless otherwise.
-        const uint32_t is_reduce_bottom = (kband == num_k_slices - 1) ? 1u : 0u;
-        const uint32_t is_reduce_top = (kband == 0) ? 1u : 0u;
-        // Plan B vertical reduction neighbors: the band ABOVE (kband-1, where this band forwards its
-        // running sum) and the band BELOW (kband+1, which forwards into this band's cb_reduce). Same
-        // grid.x, +/- one K-band of rows. Clamped to self at the ends (unused there: top never sends,
-        // bottom never receives). Physical NoC coords are what the kernel writes to.
-        const uint32_t band_rows = num_slices * rows_per_group;  // rows spanning one K-band
-        CoreCoord reduce_up_l = {(std::size_t)core.x, (std::size_t)(is_reduce_top ? core.y : core.y - band_rows)};
-        CoreCoord reduce_down_l = {(std::size_t)core.x, (std::size_t)(is_reduce_bottom ? core.y : core.y + band_rows)};
-        auto reduce_up_p = device->worker_core_from_logical_core(reduce_up_l);
-        auto reduce_down_p = device->worker_core_from_logical_core(reduce_down_l);
+        uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
+        uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
-        // Injector identification by PHYSICAL position (not the sliced idx): the across-cols (small)
-        // injector is at col 0 of every row; the down-rows (big) injector is at each group's top row.
-        const bool is_cols_injector = (core.x == 0);
-        const bool is_rows_injector = (core.y % rows_per_group == 0);
-        const bool is_in0_injector = transpose_core_grid ? is_rows_injector : is_cols_injector;
-        const bool is_in1_injector = transpose_core_grid ? is_cols_injector : is_rows_injector;
-
-        // Forwarding chains: the SMALL input is forwarded across cols (full grid.x, base 0); the BIG
-        // input is forwarded down rows but BOUNDED to the row-group (length rows_per_group, base =
-        // group's top row). The big-input injector endpoint (top_core) sits at the group's top row.
-        const uint32_t base_row = group * rows_per_group;
         CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
-        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)base_row};
+        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
 
-        // in0: across-cols (small) when !transpose; down-rows (big, group-bounded) when transpose.
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
             transpose_core_grid,
-            transpose_core_grid ? rows_per_group : grid_size.x,
+            in1_parallel_axis_cores,
             in0_noc,
             /*axis_is_x_when_not_transposed=*/true,
-            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core),
-            /*axis_base=*/(transpose_core_grid ? base_row : 0));
+            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
 
-        // in1: down-rows (big, group-bounded) when !transpose; across-cols (small) when transpose.
         auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
             core,
             transpose_core_grid,
-            transpose_core_grid ? grid_size.x : rows_per_group,
+            in0_parallel_axis_cores,
             in1_noc,
             /*axis_is_x_when_not_transposed=*/false,
-            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core),
-            /*axis_base=*/(transpose_core_grid ? 0 : base_row));
+            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
 
         auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
         auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
@@ -1284,54 +743,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
-        // Multicast-broadcast prototype (TT_MM_MCAST_BROADCAST): per core, compute the broadcast
-        // rectangle (the receiver cores along each input's broadcast axis), num receivers, and the
-        // injector's physical coords (receivers signal readiness to it). in0 broadcasts perpendicular
-        // to in0_idx, in1 perpendicular to in1_idx; transpose swaps which axis is which.
-        CoreCoord in0_inj_l, in0_rf_l, in0_rl_l, in1_inj_l, in1_rf_l, in1_rl_l;
-        uint32_t num_in0_recv = 0, num_in1_recv = 0;
-        // The big input (down rows) mcasts only within its row-group: rect = [base_row+1, group end],
-        // injector at the group's top row. The small input (across cols) mcasts the full row. num_recv
-        // for the big input is rows_per_group-1 (== 0 when a group is a single row → no big-input mcast,
-        // the kernel skips it). At num_slices==1 (base_row=0, rows_per_group=grid.y) this is the original.
-        const std::size_t grp_last_row = base_row + rows_per_group - 1;
-        if (!transpose_core_grid) {
-            in0_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
-            in0_rf_l = {(std::size_t)1, (std::size_t)core.y};
-            in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
-            num_in0_recv = grid_size.x - 1;
-            in1_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
-            // rows_per_group==1 => no receivers (num_in1_recv==0); clamp the (unused) receiver-first row
-            // to the group's last row so it never indexes y==grid.y (off-by-one on the last group).
-            in1_rf_l = {(std::size_t)core.x, std::min<std::size_t>(base_row + 1, grp_last_row)};
-            in1_rl_l = {(std::size_t)core.x, grp_last_row};
-            num_in1_recv = rows_per_group - 1;
-        } else {
-            in0_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
-            // rows_per_group==1 => no receivers (num_in0_recv==0); clamp the (unused) receiver-first row
-            // to the group's last row so it never indexes y==grid.y (off-by-one on the last group).
-            in0_rf_l = {(std::size_t)core.x, std::min<std::size_t>(base_row + 1, grp_last_row)};
-            in0_rl_l = {(std::size_t)core.x, grp_last_row};
-            num_in0_recv = rows_per_group - 1;
-            in1_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
-            in1_rf_l = {(std::size_t)1, (std::size_t)core.y};
-            in1_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
-            num_in1_recv = grid_size.x - 1;
-        }
-        auto in0_inj_p = device->worker_core_from_logical_core(in0_inj_l);
-        auto in0_mc_s = device->worker_core_from_logical_core(in0_rf_l);
-        auto in0_mc_e = device->worker_core_from_logical_core(in0_rl_l);
-        // The multicast-rect start/end ordering must match the mcast NoC (swap iff NOC_1).
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-            std::swap(in0_mc_s, in0_mc_e);
-        }
-        auto in1_inj_p = device->worker_core_from_logical_core(in1_inj_l);
-        auto in1_mc_s = device->worker_core_from_logical_core(in1_rf_l);
-        auto in1_mc_e = device->worker_core_from_logical_core(in1_rl_l);
-        if (in1_noc == tt::tt_metal::NOC::NOC_1) {
-            std::swap(in1_mc_s, in1_mc_e);
-        }
-
         std::vector<uint32_t> in0_args = {
             in0_addr,
             in2_addr,
@@ -1347,22 +758,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
-            k_block_start,      // split-K: absolute first K-block this band reduces (0 unless K-par)
-            out_m_tile_offset,  // split-K: M-stripe offset of this band's partial in [Pk*M, N]
-            out_M_tiles_total,  // split-K: total M tiles of the [Pk*M, N] output (= num_k_slices * M)
         };
-        // Split-K plan B reduction args (read by the writer kernel under REDUCE_K, right after the
-        // split-K args and before any ternary/output args — must match the kernel's read order).
-        if (num_k_fused && in0_is_output_writer) {
-            in0_args.push_back((std::uint32_t)reduce_up_p.x);
-            in0_args.push_back((std::uint32_t)reduce_up_p.y);
-            in0_args.push_back((std::uint32_t)reduce_down_p.x);
-            in0_args.push_back((std::uint32_t)reduce_down_p.y);
-            in0_args.push_back(is_reduce_top);
-            in0_args.push_back(is_reduce_bottom);
-            in0_args.push_back(reduce_ready_semaphore_id);
-            in0_args.push_back(reduce_recv_semaphore_id);
-        }
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
@@ -1373,20 +769,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
             in0_args.push_back(output_tensor.buffer()->address());
-        }
-        if (mcast_broadcast) {
-            // Appended after outputs (mcast prototype is incompatible with fused ops, so nothing else
-            // follows). Kernel reads these at out_addr_rt_arg_idx + N_chunks under MCAST_BROADCAST.
-            in0_args.push_back((std::uint32_t)in0_mc_s.x);
-            in0_args.push_back((std::uint32_t)in0_mc_s.y);
-            in0_args.push_back((std::uint32_t)in0_mc_e.x);
-            in0_args.push_back((std::uint32_t)in0_mc_e.y);
-            in0_args.push_back(num_in0_recv);
-            in0_args.push_back((std::uint32_t)in0_inj_p.x);
-            in0_args.push_back((std::uint32_t)in0_inj_p.y);
-            // Pipelined: this core's index within the in0 broadcast group (= in1_idx). Injector
-            // (idx 0) polls slots 1..num; receiver incs its own slot on the injector's credit CB.
-            in0_args.push_back(in1_idx);
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
@@ -1407,9 +789,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in0_args.push_back(1);  // mcast_signal_op_cores
         }
-        if (is_in0_injector) {
+        if (in1_idx == 0) {
+            // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
+            // in0 receiver
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
         }
 
@@ -1427,22 +811,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
-            k_block_start,      // split-K: absolute first K-block this band reduces (0 unless K-par)
-            out_m_tile_offset,  // split-K: M-stripe offset of this band's partial in [Pk*M, N]
-            out_M_tiles_total,  // split-K: total M tiles of the [Pk*M, N] output (= num_k_slices * M)
         };
-        // Split-K plan B reduction args (read by the writer kernel under REDUCE_K, right after the
-        // split-K args and before any ternary/output args — must match the kernel's read order).
-        if (num_k_fused && in1_is_output_writer) {
-            in1_args.push_back((std::uint32_t)reduce_up_p.x);
-            in1_args.push_back((std::uint32_t)reduce_up_p.y);
-            in1_args.push_back((std::uint32_t)reduce_down_p.x);
-            in1_args.push_back((std::uint32_t)reduce_down_p.y);
-            in1_args.push_back(is_reduce_top);
-            in1_args.push_back(is_reduce_bottom);
-            in1_args.push_back(reduce_ready_semaphore_id);
-            in1_args.push_back(reduce_recv_semaphore_id);
-        }
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
@@ -1453,16 +822,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
             in1_args.push_back(output_tensor.buffer()->address());
-        }
-        if (mcast_broadcast) {
-            in1_args.push_back((std::uint32_t)in1_mc_s.x);
-            in1_args.push_back((std::uint32_t)in1_mc_s.y);
-            in1_args.push_back((std::uint32_t)in1_mc_e.x);
-            in1_args.push_back((std::uint32_t)in1_mc_e.y);
-            in1_args.push_back(num_in1_recv);
-            in1_args.push_back((std::uint32_t)in1_inj_p.x);
-            in1_args.push_back((std::uint32_t)in1_inj_p.y);
-            in1_args.push_back(in0_idx);
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
@@ -1483,7 +842,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in1_args.push_back(1);  // mcast_signal_op_cores
         }
-        if (is_in1_injector) {
+        if (in0_idx == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -1496,7 +855,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             M_end_tile,
             N_start_tile,
             N_end_tile,
-            is_reduce_bottom,  // split-K B (used by compute only under REDUCE_K)
         };
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
@@ -1515,9 +873,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input,
-        rows_per_group,
-        num_k_fused};
+        fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
@@ -1530,7 +886,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
+    bool fuse_swiglu) {
     std::vector<Tensor> output_tensors = {output_tensor};
     return minimal_matmul_factory_helper_common(
         program,
@@ -1546,7 +903,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        srs_fused_op_signaler);
+        srs_fused_op_signaler,
+        fuse_swiglu);
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
@@ -1571,7 +929,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         operation_attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
         tensor_args.fused_ternary_input_b,
-        empty_srs_fused_op_signaler);
+        empty_srs_fused_op_signaler,
+        operation_attributes.fuse_swiglu);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -1600,44 +959,27 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
+    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
+    constexpr uint32_t in0_ternary_b_addr_idx = 15;
+
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
+    constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
+    constexpr uint32_t in1_ternary_b_addr_idx = 14;
 
+    // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-
-    // The kernel RT-arg layout after the base args (in0 ends at idx 13, in1 at 12) is, IN ORDER and
-    // matching the factory push + the kernel's argidx reads:
-    //   split-K (3: k_block_start, out_m_tile_offset, out_M_tiles_total)  -- ALWAYS present
-    //   reduce  (8) -- ONLY on the fused split-K OUTPUT-WRITER DM (#ifdef REDUCE_K; in0 if !transpose)
-    //   ternary (3) -- ONLY if FUSE_TERNARY
-    //   output addresses (N)
-    // The override MUST reproduce this argidx exactly, else cached replay writes addresses to the wrong
-    // slots: the fused-K-par cache bug was the output address landing in a stale slot -> replay zeros.
-    constexpr uint32_t kSplitK = 3;
-    const bool fused = override_variables.num_k_fused;
-    const bool in0_is_writer = !override_variables.transpose_core_grid;  // matches create(): in0 writes when !transpose
-    const bool in1_is_writer = override_variables.transpose_core_grid;
-    const uint32_t in0_reduce = (fused && in0_is_writer) ? 8u : 0u;
-    const uint32_t in1_reduce = (fused && in1_is_writer) ? 8u : 0u;
-    const uint32_t tern = has_fused_ternary ? 3u : 0u;
-    const uint32_t in0_ternary_a_addr_idx = 14 + kSplitK + in0_reduce;
-    const uint32_t in0_ternary_b_addr_idx = in0_ternary_a_addr_idx + 1;
-    const uint32_t in1_ternary_a_addr_idx = 13 + kSplitK + in1_reduce;
-    const uint32_t in1_ternary_b_addr_idx = in1_ternary_a_addr_idx + 1;
-    const uint32_t in0_out_addr_start_idx = 14 + kSplitK + in0_reduce + tern;
-    const uint32_t in1_out_addr_start_idx = 13 + kSplitK + in1_reduce + tern;
+    // Output addresses start after max_defer_write_k_block and optional ternary addresses
+    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 17 : 14;
+    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 16 : 13;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
-        // Injector identification by physical position, slicing-aware (must match create()): across-cols
-        // (small) injector at col 0; down-rows (big) injector at each group's top row.
-        const bool is_cols_injector = (core.x == 0);
-        const bool is_rows_injector = (core.y % override_variables.rows_per_group == 0);
-        const bool is_in0_injector = override_variables.transpose_core_grid ? is_rows_injector : is_cols_injector;
-        const bool is_in1_injector = override_variables.transpose_core_grid ? is_cols_injector : is_rows_injector;
+        uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
+        uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
 
-        if (is_in0_injector) {
+        if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
 
             in0_sender_args[in0_in0_addr_idx] = tensor_args.input_tensor.buffer()->address();
@@ -1673,7 +1015,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             }
         }
 
-        if (is_in1_injector) {
+        if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[in1_in0_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             in1_sender_args[in1_bias_addr_idx] =

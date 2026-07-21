@@ -15,6 +15,7 @@ from tt_lib.utils import (
     untilize,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_scale_mask_softmax_in_place
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -32,6 +33,8 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 )
 def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     torch.manual_seed(0)
+    # Single-call (no determinism wrapper): the in-place wrapper clones the sharded input, and
+    # on Blackhole that extra L1 buffer clashes with the statically-allocated circular buffers.
     sm_op = ttnn.scale_mask_softmax_in_place
 
     fuse_head = 2
@@ -115,6 +118,8 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
 )
 def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     torch.manual_seed(0)
+    # Single-call (no determinism wrapper): the in-place wrapper clones the sharded input, and
+    # on Blackhole that extra L1 buffer exhausts L1 / clashes with the static circular buffers.
     sm_op = ttnn.scale_mask_softmax_in_place
 
     fuse_head = 2
@@ -207,6 +212,8 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
 )
 def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     torch.manual_seed(0)
+    # Single-call (no determinism wrapper): the in-place wrapper clones the sharded input, and
+    # on Blackhole that extra L1 buffer exhausts L1 / clashes with the static circular buffers.
     sm_op = ttnn.scale_mask_softmax_in_place
 
     fuse_head = 1
@@ -303,7 +310,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
 )
 def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orient):
     torch.manual_seed(0)
-    sm_op = ttnn.scale_mask_softmax_in_place
+    sm_op = ttnn_scale_mask_softmax_in_place
 
     grid_size = (8, 4)
     input_shape = (1, 32, 32, 1024)

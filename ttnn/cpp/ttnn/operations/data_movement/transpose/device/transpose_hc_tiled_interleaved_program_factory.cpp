@@ -84,11 +84,8 @@ void emit_runtime_args_hc_tiled_interleaved(
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{input_buffer->address(), num_tiles_per_core, start_idx});
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{output_buffer->address(), start_idx, end_idx, padded_start_idx, padded_end_idx});
+        reader_desc.emplace_runtime_args(core, {input_buffer, num_tiles_per_core, start_idx});
+        writer_desc.emplace_runtime_args(core, {output_buffer, start_idx, end_idx, padded_start_idx, padded_end_idx});
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;
@@ -157,7 +154,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledInterleavedProgramFactory::creat
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = max_padding_write / num_packed_values;
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});

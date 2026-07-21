@@ -5,25 +5,21 @@
 """Llama LoRA fine-tuning on Shakespeare using SFTTrainer, with optional DDP and TP.
 
 This is a reimplementation of train_lora_llama.py that delegates the training
-loop to :class:`SFTTrainer`.  DDP support is wired externally via:
-
-* A collate function that shards batch tensors across the mesh.
-* An ``on_before_optimizer_step`` callback that synchronises gradients.
+loop to :class:`SFTTrainer`.  DDP is wired via a collate function that shards
+batch tensors across the mesh; the trainer synchronises gradients automatically.
 """
 
 import argparse
 import os
 from functools import partial
 
-import ml_dtypes
 import numpy as np
-import ttnn
 import ttml
 
 from ttml.common.config import load_config
 from ttml.common.data import CharTokenizer, load_shakespeare_text
 from ttml.common.utils import get_tt_metal_runtime_root, set_seed, summary
-from ttml.datasets import Batch, InMemoryDataloader
+from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import (
     Llama,
@@ -45,16 +41,6 @@ LORA_RANK = 8
 LORA_ALPHA = 16
 LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
 LORA_DROPOUT = 0.05
-
-
-# ── DDP callback ──────────────────────────────────────────────────────────────
-
-
-class DDPCallback(TrainerCallback):
-    """Synchronise gradients across all DDP devices before the optimiser step."""
-
-    def on_before_optimizer_step(self, trainer):
-        ttml.sync_gradients(trainer.model.parameters())
 
 
 class LossLogger(TrainerCallback):
@@ -100,53 +86,6 @@ class ShakespeareChunkDataset:
             "input_ids": self._ids[start : start + self._seq_len].tolist(),
             "labels": self._ids[start + 1 : start + self._seq_len + 1].tolist(),
         }
-
-
-def causal_lm_collate(
-    examples: list,
-    seq_len: int,
-    mapper=None,
-) -> Batch:
-    """Collate for causal LM -- every token position contributes to the loss."""
-    batch_size = len(examples)
-
-    input_ids_np = np.zeros((batch_size, 1, 1, seq_len), dtype=np.uint32)
-    labels_np = np.zeros((batch_size, seq_len), dtype=np.uint32)
-    loss_mask_np = np.ones((batch_size, 1, seq_len, 1), dtype=np.float32)
-
-    for i, ex in enumerate(examples):
-        ids = ex["input_ids"][:seq_len]
-        lbs = ex["labels"][:seq_len]
-        n = len(ids)
-        input_ids_np[i, 0, 0, :n] = ids
-        labels_np[i, :n] = lbs
-        if n < seq_len:
-            loss_mask_np[i, 0, n:, 0] = 0.0
-
-    total = loss_mask_np.sum()
-    if total > 0:
-        loss_mask_np *= (batch_size * seq_len) / total
-
-    return Batch(
-        input_ids=ttml.autograd.Tensor.from_numpy(
-            input_ids_np,
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.DataType.UINT32,
-            mapper,
-        ),
-        labels=ttml.autograd.Tensor.from_numpy(
-            labels_np,
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.DataType.UINT32,
-            mapper,
-        ),
-        loss_mask=ttml.autograd.Tensor.from_numpy(
-            loss_mask_np.astype(ml_dtypes.bfloat16),
-            ttnn.Layout.TILE,
-            ttnn.DataType.BFLOAT16,
-            mapper,
-        ),
-    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -376,14 +315,12 @@ def main():
     # ── Dataloader ────────────────────────────────────────────────────────────
 
     dataset = ShakespeareChunkDataset(train_ids, seq_len)
-    collate = partial(causal_lm_collate, seq_len=seq_len, mapper=mapper)
+    collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper)
     train_loader = InMemoryDataloader(dataset, collate, batch_size=batch_size, shuffle=True)
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     callbacks: list[TrainerCallback] = []
-    if use_ddp:
-        callbacks.append(DDPCallback())
     if args.loss_log:
         callbacks.append(LossLogger(args.loss_log))
 

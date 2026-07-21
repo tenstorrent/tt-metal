@@ -5,10 +5,12 @@
 #pragma once
 
 #include <algorithm>
-#include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <iterator>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <type_traits>
@@ -17,6 +19,23 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
+#include <tt_stl/small_vector.hpp>
+
+// Forward declarations of the ttsl::hash entry points used by the std::hash<Table> specialization
+// below, so this header need not pull in the (heavy) <tt_stl/reflection.hpp>. The definitions live
+// there; any translation unit that actually hashes a Table must include reflection.hpp so the
+// specialization can be instantiated. These signatures must stay in sync with reflection.hpp.
+namespace ttsl::hash {
+
+using hash_t = std::uint64_t;
+
+template <typename... Types>
+hash_t hash_objects(hash_t seed, const Types&... args) noexcept;  // NOLINT(readability-redundant-declaration)
+
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value);  // NOLINT(readability-redundant-declaration)
+
+}  // namespace ttsl::hash
 
 namespace tt::tt_metal::experimental {
 
@@ -49,7 +68,10 @@ private:
     // Entries are stored as a mutable std::pair<K, V> (so the backing vector stays
     // easy to grow, erase, and assign), but exposed through the iterators below as
     // the const-key value_type.
-    using Storage = std::vector<std::pair<K, V>>;
+    // Small-vector backing: Tables typically hold only a handful of entries, so the inline storage
+    // avoids a heap allocation in the common case. Larger Tables spill to the heap with identical
+    // semantics, so correctness never depends on the inline capacity.
+    using Storage = ttsl::SmallVector<std::pair<K, V>, 8>;
 
 public:
     // Wraps a backing iterator and re-presents the stored pair it points at as the
@@ -139,6 +161,9 @@ public:
         return const_iterator{std::ranges::find(entries_, key, &Storage::value_type::first)};
     }
 
+    // Returns true if `key` is present in the table, false otherwise.
+    [[nodiscard]] bool contains(const K& key) const { return find(key) != end(); }
+
     // Inserts an entry only if its key is absent. Returns {iterator to the entry,
     // true} when inserted, or {iterator to the existing entry, false} otherwise.
     std::pair<iterator, bool> insert(const value_type& entry) {
@@ -221,3 +246,29 @@ private:
 };
 
 }  // namespace tt::tt_metal::experimental
+
+// Makes Table hashable via std::hash, and therefore via ttsl::hash, which dispatches to it. Like
+// operator==, the result ignores the entries' storage order. A translation unit that hashes a Table
+// must include <tt_stl/reflection.hpp> so this specialization can be instantiated.
+template <typename K, typename V>
+struct std::hash<tt::tt_metal::experimental::Table<K, V>> {
+    std::size_t operator()(const tt::tt_metal::experimental::Table<K, V>& table) const {
+        using ttsl::hash::hash_t;
+
+        // Hash each entry on its own, recursing through K and V via ttsl::hash.
+        std::vector<hash_t> entry_hashes;
+        entry_hashes.reserve(table.size());
+        for (const auto& entry : table) {
+            entry_hashes.push_back(ttsl::hash::hash_objects(hash_t{0}, entry));
+        }
+
+        // Fold the per-entry hashes in sorted order, so the result is independent of the entries'
+        // storage order — consistent with operator==, which ignores order.
+        std::ranges::sort(entry_hashes);
+        return std::accumulate(
+            entry_hashes.begin(), entry_hashes.end(), std::size_t{0}, [](std::size_t seed, hash_t entry_hash) {
+                ttsl::hash::hash_combine(seed, entry_hash);
+                return seed;
+            });
+    }
+};

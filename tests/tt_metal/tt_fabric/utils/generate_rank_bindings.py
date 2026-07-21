@@ -176,9 +176,9 @@ def resolve_fabric_test_visible_devices(
 #   outer pair  -> slices {0, 3}  (the wrap/split 4x4 in the blitz config)
 # Both lists are ordered top-tray-pair slice first, bottom-tray-pair slice
 # second (1 before 2, 0 before 3) so the two meshes share a consistent
-# device ordering. The discovery runs across all hosts in one mpirun and writes
-# a per-host keyed mapping, so the quad layout (8x4x4z) no longer needs a
-# per-host SSH discovery loop.
+# device ordering. Discovery is a single-host (--np 1) mpirun; the quad layout
+# (8x4x4z) replicates that one host's slice map across the identical ring hosts
+# (see resolve_quad_split_rank_table) rather than discovering each host.
 SLICE_MAPPING_GTEST_FILTER = "*Generate2x4SliceToPCIeDeviceMapping*"
 SLICE_MAPPING_FILE = "slice_to_pcie_device_mapping.yaml"
 DEVICES_PER_SLICE = 8
@@ -196,7 +196,12 @@ SLICE_CONFIG_CHOICES = ["2x4x4z", "8x4x4z"]
 
 
 def generate_slice_to_pcie_device_mapping(hosts, mpi_if=None, work_dir=None, mapping_file=SLICE_MAPPING_FILE):
-    """Run the multi-host 2x4 slice discovery; writes slice_to_pcie_device_mapping.yaml."""
+    """Run the 2x4 slice discovery; writes slice_to_pcie_device_mapping.yaml.
+
+    With one or more hosts, runs one rank per host (cross-host mpirun). With no
+    hosts (None/empty), runs a single LOCAL rank (mpirun --np 1, no --host) so
+    discovery works inside a single container with no cross-host ssh.
+    """
     cwd = Path(work_dir) if work_dir else Path.cwd()
     test_executable = cwd / "build/test/tt_metal/tt_fabric/test_physical_discovery"
     if not test_executable.exists():
@@ -204,18 +209,24 @@ def generate_slice_to_pcie_device_mapping(hosts, mpi_if=None, work_dir=None, map
         logger.info("Please build with: ./build_metal.sh --build-tests")
         sys.exit(1)
 
-    cmd = [
-        "mpirun",
-        "--np",
-        str(len(hosts)),
-        "--host",
-        ",".join(hosts),
-        "--mca",
-        "btl",
-        "self,tcp",
-    ]
-    if mpi_if:
-        cmd.extend(["--mca", "btl_tcp_if_include", mpi_if])
+    if hosts:
+        cmd = [
+            "mpirun",
+            "--np",
+            str(len(hosts)),
+            "--host",
+            ",".join(hosts),
+            "--mca",
+            "btl",
+            "self,tcp",
+        ]
+        if mpi_if:
+            cmd.extend(["--mca", "btl_tcp_if_include", mpi_if])
+    else:
+        # Purely local single-rank discovery: no --host => mpirun never ssh's out.
+        cmd = ["mpirun", "--np", "1", "--mca", "btl", "self,tcp"]
+        if mpi_if:
+            cmd.extend(["--mca", "btl_tcp_if_include", mpi_if])
     cmd.extend(["--bind-to", "none", "--tag-output", "--wdir", str(cwd)])
     cmd.extend([str(test_executable), f"--gtest_filter={SLICE_MAPPING_GTEST_FILTER}"])
 
@@ -334,7 +345,12 @@ def build_quad_split_rank_table(hosts):
 
 
 def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_dir=None):
-    """Discover 2x4 slices across the 4 quad hosts; return the 12-rank table.
+    """Resolve the 8x4x4z 12-rank table from a single local 2x4 slice discovery.
+
+    Discovery runs --np 1 on the local host and the resulting slice -> device map
+    is replicated across all four ring hosts (identical galaxies), so no
+    cross-host discovery is needed and the whole thing runs inside one docker
+    container.
 
     Returns a list (in canonical rank order) of dicts:
       {"mesh_id": int, "host_rank": int, "host": str, "devices": "d0,d1,..."}.
@@ -343,8 +359,14 @@ def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_d
     cwd = Path(work_dir) if work_dir else Path.cwd()
     mapping_path = cwd / SLICE_MAPPING_FILE
 
+    # Discover the 2x4 slice -> device numbering with a single LOCAL rank
+    # (mpirun --np 1, no --host => no ssh) rather than across all four ring hosts.
+    # Every Blackhole Galaxy in the pod is wired identically, so the local host's
+    # slice -> device map applies to every host. This keeps discovery entirely
+    # inside one docker container, so the script works when the local env only has
+    # the pulled image and no native build. The launch host need not be hosts[0].
     if run_discovery:
-        generate_slice_to_pcie_device_mapping(hosts, mpi_if=mpi_if, work_dir=cwd)
+        generate_slice_to_pcie_device_mapping(None, mpi_if=mpi_if, work_dir=cwd)
     elif not mapping_path.exists():
         logger.error(f"{mapping_path} not found (run discovery or generate it first)")
         sys.exit(1)
@@ -352,21 +374,25 @@ def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_d
     with open(mapping_path, "r") as f:
         slice_mapping = yaml.safe_load(f)
     device_mapping = slice_mapping.get("device_mapping", {})
+    if not device_mapping:
+        logger.error(f"No device_mapping found in {mapping_path}")
+        sys.exit(1)
+
+    # Single-host discovery yields exactly one host entry; reuse its slice -> device
+    # map for every ring host (homogeneous galaxies).
+    reference_slices = next(iter(device_mapping.values()))
 
     rank_table = []
     for mesh_id, host_rank, host, slice_ids in table:
-        host_key = _match_slice_host_key(device_mapping, host)
-        host_slices = device_mapping[host_key]
         devices = []
         for slice_id in slice_ids:
-            if slice_id not in host_slices:
-                logger.error(f"Slice {slice_id} not found for host {host_key} in {mapping_path}")
+            if slice_id not in reference_slices:
+                logger.error(f"Slice {slice_id} not found in {mapping_path}")
                 sys.exit(1)
-            slice_devices = sorted(host_slices[slice_id])
+            slice_devices = sorted(reference_slices[slice_id])
             if len(slice_devices) != DEVICES_PER_SLICE:
                 logger.error(
-                    f"Slice {slice_id} on {host_key} resolved to {len(slice_devices)} devices, "
-                    f"expected {DEVICES_PER_SLICE}"
+                    f"Slice {slice_id} resolved to {len(slice_devices)} devices, " f"expected {DEVICES_PER_SLICE}"
                 )
                 sys.exit(1)
             devices.extend(slice_devices)

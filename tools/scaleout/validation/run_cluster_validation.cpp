@@ -407,6 +407,8 @@ int main(int argc, char* argv[]) {
     distributed_context.barrier();
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
         log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
+        log_unretrainable_channels(
+            missing_asic_topology, physical_system_descriptor, num_retrains, input_args.output_path);
         TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }

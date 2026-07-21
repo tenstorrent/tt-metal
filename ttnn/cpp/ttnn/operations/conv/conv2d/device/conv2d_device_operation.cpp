@@ -65,7 +65,8 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};
-        auto mem_config = args.memory_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
         return TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
@@ -146,6 +147,7 @@ ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     hashable_operation_attributes_t hashable_args = {
         .sliding_window_config = args.sliding_window_config,
         .output_channels = args.output_channels,
+        .groups = args.groups,
         .untilize_out = args.untilize_out,
         .has_bias = args.has_bias,
         .activation = args.activation,

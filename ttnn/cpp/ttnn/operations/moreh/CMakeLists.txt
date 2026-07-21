@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_moreh ${LIB_TYPE})
 add_library(TTNN::Ops::Moreh ALIAS ttnn_op_moreh)
 
-tt_reuse_precompile_headers(ttnn_op_moreh TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_moreh TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_moreh)
 set_target_properties(
     ttnn_op_moreh
@@ -15,45 +15,46 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    moreh_abs_pow/device/kernels/*
-    moreh_adam/device/kernels/*
-    moreh_adamw/device/kernels/*
-    moreh_arange/device/kernels/*
-    moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/*
-    moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/*
-    moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/*
-    moreh_dot/device/kernels/*
-    moreh_dot_backward/device/kernels/*
-    moreh_fold/device/kernels/*
-    moreh_getitem/device/moreh_getitem_kernels/*
-    moreh_getitem/device/moreh_getitem_tilized_kernels/*
-    moreh_group_norm/device/kernels/*
-    moreh_group_norm_backward/device/gamma_beta_grad/kernels/*
-    moreh_group_norm_backward/device/input_grad/kernels/*
-    moreh_layer_norm/device/kernels/*
-    moreh_layer_norm_backward/device/kernels/*
-    moreh_linear_backward/device/kernels/*
-    moreh_matmul/device/kernels/*
-    moreh_mean/device/kernels/*
-    moreh_mean_backward/device/kernels/*
-    moreh_nll_loss/moreh_nll_loss_step1/device/kernels/*
-    moreh_nll_loss/moreh_nll_loss_step2/device/kernels/*
-    moreh_nll_loss_backward/device/kernels/*
-    moreh_nll_loss_unreduced_backward/device/kernels/*
-    moreh_norm/device/moreh_norm_h/kernels/*
-    moreh_norm/device/moreh_norm_other/kernels/*
-    moreh_norm/device/moreh_norm_w/kernels/*
-    moreh_norm/device/ord_other/moreh_norm_h/kernels/*
-    moreh_norm/device/ord_other/moreh_norm_nc/kernels/*
-    moreh_norm/device/ord_other/moreh_norm_w/kernels/*
-    moreh_norm_backward/device/kernels/*
-    moreh_sgd/device/kernels/*
-    moreh_softmax/device/kernels/*
-    moreh_softmax_backward/device/kernels/*
-    moreh_sum/device/moreh_sum_h_impl_kernels/*
-    moreh_sum/device/moreh_sum_nc_impl_kernels/*
-    moreh_sum/device/moreh_sum_w_impl_kernels/*
-    moreh_sum_backward/device/kernels/*
+    moreh_abs_pow/device/kernels/*.cpp
+    moreh_adam/device/kernels/*.cpp
+    moreh_adamw/device/kernels/*.cpp
+    moreh_arange/device/kernels/*.cpp
+    moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/*.cpp
+    moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/*.cpp
+    moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/*.cpp
+    moreh_dot/device/kernels/*.cpp
+    moreh_dot_backward/device/kernels/*.cpp
+    moreh_fold/device/kernels/*.cpp
+    moreh_getitem/device/moreh_getitem_kernels/*.cpp
+    moreh_getitem/device/moreh_getitem_tilized_kernels/*.cpp
+    moreh_getitem/device/moreh_getitem_tilized_kernels/*.hpp
+    moreh_group_norm/device/kernels/*.cpp
+    moreh_group_norm_backward/device/gamma_beta_grad/kernels/*.cpp
+    moreh_group_norm_backward/device/input_grad/kernels/*.cpp
+    moreh_layer_norm/device/kernels/*.cpp
+    moreh_layer_norm_backward/device/kernels/*.cpp
+    moreh_linear_backward/device/kernels/*.cpp
+    moreh_matmul/device/kernels/*.cpp
+    moreh_mean/device/kernels/*.cpp
+    moreh_mean_backward/device/kernels/*.cpp
+    moreh_nll_loss/moreh_nll_loss_step1/device/kernels/*.cpp
+    moreh_nll_loss/moreh_nll_loss_step2/device/kernels/*.cpp
+    moreh_nll_loss_backward/device/kernels/*.cpp
+    moreh_nll_loss_unreduced_backward/device/kernels/*.cpp
+    moreh_norm/device/moreh_norm_h/kernels/*.cpp
+    moreh_norm/device/moreh_norm_other/kernels/*.cpp
+    moreh_norm/device/moreh_norm_w/kernels/*.cpp
+    moreh_norm/device/ord_other/moreh_norm_h/kernels/*.cpp
+    moreh_norm/device/ord_other/moreh_norm_nc/kernels/*.cpp
+    moreh_norm/device/ord_other/moreh_norm_w/kernels/*.cpp
+    moreh_norm_backward/device/kernels/*.cpp
+    moreh_sgd/device/kernels/*.cpp
+    moreh_softmax/device/kernels/*.cpp
+    moreh_softmax_backward/device/kernels/*.cpp
+    moreh_sum/device/moreh_sum_h_impl_kernels/*.cpp
+    moreh_sum/device/moreh_sum_nc_impl_kernels/*.cpp
+    moreh_sum/device/moreh_sum_w_impl_kernels/*.cpp
+    moreh_sum_backward/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_moreh
@@ -219,3 +220,19 @@ install(
 )
 
 install(TARGETS ttnn_op_moreh LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_MOREH_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_MOREH_NANOBIND_SRCS})
+endif()

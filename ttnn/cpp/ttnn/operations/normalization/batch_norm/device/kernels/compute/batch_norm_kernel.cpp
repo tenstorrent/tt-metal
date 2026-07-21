@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_binary.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "ttnn/kernel/compute/dest_format_helpers.hpp"
 
 #include <cstdint>
 

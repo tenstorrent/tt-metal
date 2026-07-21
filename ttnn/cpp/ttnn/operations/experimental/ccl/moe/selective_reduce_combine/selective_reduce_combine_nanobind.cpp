@@ -91,7 +91,6 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             batch_size (int): B
             seq_size (int): S
             select_experts_k (int): K
-            experts (int) E*D, total experts across all devices
             cluster_axis (int): Mesh axis to cluster along. 0 = column (COLS), 1 = row (ROWS).
             topology (ttnn.Topology): Line or Ring supported
             num_links (int): Number of fabric links to utilize
@@ -122,7 +121,6 @@ void bind_selective_reduce_combine(nb::module_& mod) {
         nb::arg("batch_size"),
         nb::arg("seq_size"),
         nb::arg("select_experts_k"),
-        nb::arg("experts"),
         nb::arg("cluster_axis"),
         nb::arg("topology"),
         nb::arg("num_links"),

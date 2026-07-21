@@ -6,6 +6,7 @@
 
 #include "build.h"
 #include "dprint.h"
+#include "tensix_types.h"
 
 enum class Color : std::uint8_t
 {
@@ -51,6 +52,10 @@ void run_kernel(RUNTIME_PARAMETERS)
     DEVICE_PRINT("unpack: flag_full={:#}", Perm::R | Perm::W);
     DEVICE_PRINT("unpack: flag_unk={}", static_cast<Perm>(0x18));
     DEVICE_PRINT("unpack: flag_rev={}", Rev::X | Rev::Y | Rev::Z);
+
+    // dp_typed_array_t wire-format smoke (bit patterns for 1.0, 2.0, 3.0, 4.0).
+    std::uint32_t arr[4] = {0x3F800000, 0x40000000, 0x40400000, 0x40800000};
+    DEVICE_PRINT("unpack: array={}", dp_typed_array_t<4>(static_cast<std::uint16_t>(DataFormat::Float32), arr));
 }
 
 #endif

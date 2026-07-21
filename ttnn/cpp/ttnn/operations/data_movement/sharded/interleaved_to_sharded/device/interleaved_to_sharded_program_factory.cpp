@@ -227,7 +227,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
                 "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
                 "writer_unary_sharded_stick_layout_start_id.cpp";
         }
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     } else {
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
@@ -309,9 +309,6 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
                 writer_rt.push_back(num_units_offset);
                 writer_rt.push_back(curr_idx_h + curr_idx_w);
                 writer_rt.push_back(starting_idx_h);
-                std::vector<uint32_t> extra;
-                shard_builder::extend_sharding_run_time_args(output, extra);
-                writer_rt.append(extra);
                 writer_desc.emplace_runtime_args(core, writer_rt);
             } else {
                 writer_desc.emplace_runtime_args(core, {curr_num_units_per_shard});
@@ -411,9 +408,6 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
                 writer_rt.push_back(padded_offset_bytes);
                 writer_rt.push_back(start_id);
                 writer_rt.push_back(output_width_in_pages);
-                std::vector<uint32_t> extra;
-                shard_builder::extend_sharding_run_time_args(output, extra);
-                writer_rt.append(extra);
                 writer_desc.emplace_runtime_args(core, writer_rt);
             } else {
                 writer_desc.emplace_runtime_args(core, {curr_num_units_per_shard});

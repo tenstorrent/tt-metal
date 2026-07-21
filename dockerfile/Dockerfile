@@ -10,7 +10,11 @@
 # =============================================================================
 #
 #   docker buildx bake -f dockerfile/docker-bake.hcl dev
+#   docker buildx bake -f dockerfile/docker-bake.hcl dev-light
 #   docker buildx bake -f dockerfile/docker-bake.hcl ci-test
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-build-light
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-build
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-test-light
 #   UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake -f dockerfile/docker-bake.hcl dev
 #   docker buildx bake -f dockerfile/docker-bake.hcl --print dev   # dry run
 #
@@ -18,7 +22,7 @@
 #   ./dockerfile/build-local.sh dev
 #   ./dockerfile/build-local.sh --help
 #
-# Available targets: ci-build, ci-test, dev, release, release-models
+# Available targets: ci-build-light, ci-build, ci-test-light, ci-test, dev-light, dev, release, release-models
 # =============================================================================
 
 #############################################################
@@ -26,6 +30,9 @@
 #############################################################
 
 ARG UBUNTU_VERSION=22.04
+# As of June 2026: this is where you set SMI version of Metal container image
+# for CI and things like IRD or other workflows using the dev container.
+ARG TT_SMI_VERSION=5.2.0
 # PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
@@ -130,24 +137,20 @@ RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 #############################################################
-# CI Build image
+# CI Build light image (no Python venv layers)
 #############################################################
 
-FROM base AS ci-build
+FROM base AS ci-build-light
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
-LABEL org.opencontainers.image.description="TT-Metalium CI build environment for compiling tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium CI build environment without pre-built Python venv layers"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
-# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PYTHON_ENV_DIR=/opt/venv
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
-COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+COPY --from=ccache-layer /install/ /usr/local/
 COPY --from=doxygen-layer /install/ /usr/local/
 COPY --from=clangbuildanalyzer-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
@@ -156,15 +159,6 @@ RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-l
     test -x /usr/local/bin/doxygen || { echo "ERROR: doxygen not found in doxygen-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/yq || { echo "ERROR: yq not found in yq-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/mold || { echo "ERROR: mold not found in mold-layer" >&2; exit 1; }
-
-# Copy pre-built ci-build venv from tool image
-# Set umask 000 to allow all users to write (required for uv pip install at runtime)
-# SECURITY NOTE: This enables any user in the container to modify the Python environment.
-RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
-    umask 000 && \
-    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
-    umask 002 && \
-    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 RUN git config --global --add safe.directory '*'
 
@@ -185,59 +179,98 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     sudo \
     uuid-runtime \
+    unzip \
     wget \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
-# CI Test image
+# CI Build image
 #############################################################
 
-FROM ci-build AS ci-test
+FROM ci-build-light AS ci-build
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
-LABEL org.opencontainers.image.description="TT-Metalium CI test environment with Python dependencies"
+LABEL org.opencontainers.image.description="TT-Metalium CI build environment for compiling tt-metal"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
+
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Copy pre-built ci-build venv from tool image
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
+    umask 000 && \
+    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+#############################################################
+# CI Test light image (no Python venv layers)
+#############################################################
+
+FROM ci-build-light AS ci-test-light
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium CI test environment without pre-built Python venv layers"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG UBUNTU_VERSION
+ARG TT_SMI_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install tt-smi from GitHub releases and make it executable for all users
+# (notably the default non-root container user). Verify the installed version
+# matches TT_SMI_VERSION in the same command.
+RUN curl -fsSL -o /usr/local/bin/tt-smi \
+    "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" && \
+    chmod a+rx /usr/local/bin/tt-smi && \
+    tt-smi --version | grep -q "${TT_SMI_VERSION}"
 
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
 
 # Copy requirements files (needed for fallback install if no pre-built venv)
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /models/tt_dit/utils/vbench-requirements.txt ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/vbench-requirements.txt
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-# Merge ci-test venv into existing ci-build venv.
-# cp -ua merges contents (-u updates only newer/missing files, -a preserves attrs).
-# The trailing /. and / are required: "venv/." references the directory CONTENTS,
-# preventing cp from nesting venv/ inside the existing ${PYTHON_ENV_DIR}/.
+#############################################################
+# CI Test image
+#############################################################
+
+FROM ci-test-light AS ci-test
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium CI test environment with Python dependencies"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
+
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Copy pre-built ci-test venv. This layer already includes the ci-build venv packages.
 RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
-    cp -ua /venv-staging/venv/. ${PYTHON_ENV_DIR}/
-
-COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
-RUN umask 000 && \
-    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-    echo "Installing debugger for Ubuntu 22.04..." && \
-    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
-    echo "Debugger installation completed" && \
-    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
-    fi
+    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 #############################################################
-# Development image
+# Development light image (no Python venv layers)
 #############################################################
 
-FROM ci-test AS dev
+FROM ci-test-light AS dev-light
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
-LABEL org.opencontainers.image.description="TT-Metalium development environment with full toolchain"
+LABEL org.opencontainers.image.description="TT-Metalium development environment with full toolchain, without pre-built Python venv layers"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
@@ -256,13 +289,6 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
         apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Configure SSH for MPI multihost jobs readiness
-RUN adduser --uid 1001 --shell /bin/bash user && \
-    usermod -aG sudo user && \
-    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
-    mkdir -p /run/sshd && \
-    echo "StrictModes no" >> /etc/ssh/sshd_config
-
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -279,6 +305,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH for MPI multihost jobs readiness
+# To be safe, keep this **after** the apt install to avoid openssh-server mangling configs
+RUN adduser --uid 1001 --shell /bin/bash --disabled-password --gecos "" user && \
+    usermod -aG sudo user && \
+    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
+    mkdir -p /run/sshd && \
+    echo "StrictModes no" >> /etc/ssh/sshd_config
+
+#############################################################
+# Development image
+#############################################################
+
+FROM dev-light AS dev
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium development environment with full toolchain"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
+
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Copy pre-built ci-test venv. This layer already includes the ci-build venv packages.
+RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
+    umask 000 && \
+    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # IWYU (Include What You Use) could be useful to developers.
 # Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh

@@ -22,13 +22,10 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     expert_mask = torch.zeros([N, C, 1, W], dtype=torch_dtype)
     expert_mask[:, :, :, E:] = float("-inf")
 
-    # TODO: make this addition a part of the moe op
-    input += expert_mask
-
     topE_mask = torch.zeros([N, C, 1, k], dtype=torch_dtype)
     topE_mask[:, :, :, e:] = float("-inf")
 
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input + expert_mask, k, dim=-1)
     torch_weights_1SB1 = torch.sum(
         (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
         dim=-1,
@@ -67,7 +64,10 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 )
 @pytest.mark.parametrize(
     "N, C, H, W, k, E, e",
-    ((1, 1, 32, 64, 32, 8, 2),),  # Mixtral8x7B
+    [
+        (1, 1, 32, 64, 32, 8, 2),  # Mixtral8x7B decode shape (Wt=2)
+        (1, 1, 32, 256, 32, 8, 2),  # wider expert dim (Wt=8) — exercises the upfront expert-mask load for Wt>4
+    ],
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)

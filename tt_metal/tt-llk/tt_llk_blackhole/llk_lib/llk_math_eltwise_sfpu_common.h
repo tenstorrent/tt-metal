@@ -25,14 +25,6 @@ inline void _llk_math_eltwise_sfpu_done_()
     math::clear_dst_reg_addr();
 }
 
-inline void _llk_math_eltwise_sfpu_done_with_addrmod_reset_()
-{
-    math::clear_dst_reg_addr();
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    TTI_SETC16(2, 0);
-}
-
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
     math::inc_dst_addr<8>();
@@ -53,13 +45,23 @@ inline void _llk_math_eltwise_sfpu_assert_dst_index_(std::uint32_t dst_index, [[
 template <typename Callable, typename... Args>
 inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, VectorMode vector_mode, Args&&... args)
 {
-    if (vector_mode == VectorMode::R)
+    if (vector_mode == VectorMode::RC)
+    {
+        // Do all four faces, and iterate through all 4 blocks of 4 rows each
+#pragma GCC unroll 0
+        for (int face = 0; face < 4; face++)
+        {
+            sfpu_func(args...);
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        }
+    }
+    else if (vector_mode == VectorMode::R)
     {
         // Do a row vector, Face0 + Face1 -- first iteration (first row)
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            sfpu_func(args...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
         // Skip the next 2 faces
@@ -72,18 +74,8 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            sfpu_func(args...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-        }
-    }
-    else if (vector_mode == VectorMode::RC)
-    {
-        // Do all four faces, and iterate through all 4 blocks of 4 rows each
-#pragma GCC unroll 0
-        for (int face = 0; face < 4; face++)
-        {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }

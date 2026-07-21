@@ -53,6 +53,8 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
+#include "tt_metal/impl/profiler/profiler.hpp"                // tt::tt_metal::SyncInfo, DeviceProfiler
+#include "tt_metal/impl/profiler/profiler_state_manager.hpp"  // ProfilerStateManager
 
 namespace tt::tt_metal::distributed {
 
@@ -62,9 +64,7 @@ namespace {
 // between finish-path sync checks, per physical chip. Matches the finish-path throttle.
 constexpr auto kRtProfilerMinSyncInterval = std::chrono::seconds(60);
 
-// Last time we completed a full init sync (run_sync success) for a chip, process-wide
-// (across MeshDevice open/close). Used to avoid repeating ~0.5s+ run_sync on every mesh
-// open when the same host chips are frequently reconstructed.
+// Last full init sync per chip, process-wide, to avoid repeating ~0.5s run_sync on every mesh open.
 std::mutex g_rt_profiler_init_sync_mu;
 std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_rt_profiler_last_init_sync_by_chip;
 
@@ -79,9 +79,8 @@ struct RealtimeProfilerRuntimeSizes {
     static constexpr uint32_t core_l1_size = sizeof(RealtimeProfilerCoreL1);
 };
 
-// Compute the RT-profiler tensix L1 carve-out addresses for a given RealtimeProfilerCoreL1
-// base, anchored past dispatch_mem_map's UNRESERVED so the layout sits outside the
-// user-space allocator.
+// Compute the RT-profiler L1 carve-out addresses from a base anchored past UNRESERVED (outside the user-space
+// allocator).
 inline RealtimeProfilerCoreL1Addrs compute_rt_profiler_core_l1_addrs(uint32_t base) {
     return {
         .base = base,
@@ -96,26 +95,10 @@ struct RealtimeProfilerEligibility {
     CoreCoord core;  // Only meaningful when enabled == true.
 };
 
-// Consolidated eligibility check; logs the reason for disabling and returns
-// {enabled=false} on failure.
-//
-// Evaluates against the device's owning context (passed in as `context_id`) rather than
-// bare MetalContext::instance(): the latter would route through the inline non-default
-// fallback in instance() and pick whichever context happens to populate the global
-// lookup first. In silicon-first coexistence (#38445), that fallback returns the silicon
-// DEFAULT_CONTEXT_ID even when `device` is a mock device, falsely enabling the profiler
-// on mock and SEGV'ing in LaunchProgram. See #39849.
-//
-// Checks (in order):
-//   0. Target is not mock or emulated (extends #43968's Mock-only short-circuit to also
-//      cover Emule; D2HSocket requires a real PCIe hugepage in either case).
-//   1. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
-//   2. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
-//   3. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
-//   4. A tensix core was reserved for the RT profiler at dispatch_core_manager construction.
-//   5. Reserved coordinate lives inside the logical TENSIX grid.
-//   6. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
-//   7. Reserved profiler core's L1 bank fits the ring + socket-config layout.
+// Consolidated eligibility check; logs the disable reason. Evaluates against the device's owning context_id (not bare
+// instance()) so a mock device isn't falsely enabled via the silicon DEFAULT_CONTEXT_ID fallback (#38445/#39849).
+// Checks: not mock/emulated, MMIO-capable, IOMMU if 64-bit PCIe, fabric tensix datamover off, a tensix reserved and
+// in-grid, kernels not nullified, L1 bank fits the layout.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device, ContextId context_id) {
     auto device_id = device->id();
     auto& metal = MetalContext::instance(context_id);
@@ -123,11 +106,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
-    // Subsumes the Mock-only short-circuit added in #43968: is_mock_or_emulated() also
-    // catches Emule, and is the canonical accessor used throughout metal_context.cpp /
-    // device.cpp. D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage
-    // and faults on either target, so gate here before any per-device profiler state is
-    // constructed.
+    // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
         log_debug(
             tt::LogMetal,
@@ -137,13 +116,8 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
-    // ttsim: the simulator's D2H socket exists but its device kernels run many orders of
-    // magnitude slower than real silicon, so the 2 s WriteToDeviceL1/sync poll deadline
-    // in run_sync() always trips before the profiler core can respond. That burns ~30 s
-    // per chip during MeshDevice bring-up, and on WH (where the 64-bit-PCIe gate below
-    // does NOT fire) it deadlocks downstream waiters that depend on first_unthrottled
-    // finish_sync. Skip the profiler entirely on Simulator targets; performance traces
-    // are not interesting on the sim anyway.
+    // Skip Simulator: ttsim kernels are too slow to meet run_sync's 2s poll deadline, burning ~30s/chip and deadlocking
+    // finish_sync waiters on WH.
     if (cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
         log_debug(
             tt::LogMetal,
@@ -250,9 +224,8 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     return {.enabled = true, .core = core};
 }
 
-// Host clock wrapper for the RT profiler sync handshake. Tracy stubs TracyGetCpuTime() /
-// TracyGetTimerMul() to 0 when disabled, which would write sync_host_timestamp = 0 to L1
-// and stall the device handshake. Fall back to steady_clock in that case.
+// Host clock for the sync handshake; falls back to steady_clock since Tracy stubs TracyGetCpuTime to 0 when disabled
+// (which would stall the device).
 inline int64_t rt_profiler_host_ticks() {
 #ifdef TRACY_ENABLE
     return TracyGetCpuTime();
@@ -335,15 +308,13 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     // HAL offsets are the same for all devices (same arch).
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
-    // realtime_profiler_msg_t lives in a dispatch-core-local L1 region assigned by
-    // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG (only reachable on dispatch cores
-    // and the reserved RT-profiler tensix).
+    // realtime_profiler_msg_t lives in the REALTIME_PROFILER_MSG dispatch-core-local L1 region (reachable on dispatch
+    // cores and the reserved RT tensix).
     const auto& dispatch_mem_map = MetalContext::instance(context_id_).dispatch_mem_map();
     const uint32_t realtime_profiler_base_addr =
         dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
-    // RealtimeProfilerCoreL1 (ring + D2H socket sender config) sits past the dispatch
-    // carve-outs on the reserved profiler tensix; the core is excluded from the L1 bank
-    // table so the user-space allocator can never land here.
+    // RealtimeProfilerCoreL1 (ring + D2H sender config) sits past the dispatch carve-outs; the core is off the L1 bank
+    // table so the allocator never lands here.
     const uint32_t rt_profiler_core_l1_base =
         dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
     const auto rt_profiler_core_l1_addrs = compute_rt_profiler_core_l1_addrs(rt_profiler_core_l1_base);
@@ -397,8 +368,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         dev_state.chip_id = device_id;
         dev_state.mesh_coord = coord;
         dev_state.realtime_profiler_core = realtime_profiler_core;
-        // Single base anchored past dispatch_mem_map's UNRESERVED, with all sub-addresses
-        // derived via offsetof — bypasses the user-space allocator entirely.
+        // Single base past UNRESERVED, sub-addresses via offsetof, bypassing the allocator.
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
         auto sender_core = MeshCoreCoord{coord, realtime_profiler_core};
@@ -409,14 +379,11 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             device_id,
             mesh_device->id());
 
-        // Defensive: the eligibility gate above filters known-bad configurations, but D2H
-        // socket construction (host pinning / hugepage / UMD interaction) has been
-        // historically fragile, so we catch and skip this device on failure rather than
+        // D2H socket construction (host pinning / hugepage / UMD) is fragile, so catch and skip this device rather than
         // abort the run.
         try {
-            // Pass the L1 sender-config address from the dispatch carve-out so D2HSocket
-            // does not allocate via MeshBuffer::create on a reserved dispatch core (which
-            // would crash get_buffer_pages on cores not in the L1 bank table).
+            // Pass the carve-out L1 sender-config address so D2HSocket doesn't MeshBuffer::create on a core absent from
+            // the L1 bank table.
             dev_state.socket = std::make_unique<D2HSocket>(
                 mesh_device,
                 sender_core,
@@ -490,9 +457,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 dispatch_s_core.y);
         }
 
-        // Ring buffer (BRISC->NCRISC handoff) sits at a fixed offset inside the carve-out;
-        // not allocated via Buffer::create because the profiler core is excluded from the
-        // L1 bank table.
+        // Ring buffer (BRISC->NCRISC handoff) at a fixed carve-out offset; not Buffer::create'd since the core is off
+        // the L1 bank table.
         const uint32_t ring_buffer_addr = dev_state.core_l1.ring_buffer;
 
         // Get PCIe core NOC-0 coordinates for WH (NCRISC kernel translates to NOC 1).
@@ -522,12 +488,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 device, realtime_profiler_core, ring_buffer_addr, zero_header, CoreType::WORKER);
         }
 
-        // Zero the realtime_profiler_msg_t region before launching the kernels — L1 is not
-        // guaranteed zero between runs and stale values misbehave at BRISC/NCRISC boot:
-        //   * config_buffer_addr != 0  -> NCRISC reads garbage socket config.
-        //   * sync_request != 0        -> BRISC enters sync before the host is ready.
-        //   * sync_host_timestamp != 0 -> phantom sync marker pushed on first boot.
-        //   * realtime_profiler_state / program_id_fifo_{start,end} corrupt state machine.
+        // Zero realtime_profiler_msg_t before launch: stale L1 values misbehave at BRISC/NCRISC boot (garbage socket
+        // config, premature sync, phantom marker, corrupt state machine).
         {
             const uint32_t profiler_msg_size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
             const uint32_t profiler_msg_words = profiler_msg_size / sizeof(uint32_t);
@@ -536,9 +498,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 device, realtime_profiler_core, realtime_profiler_base_addr, zero_msg, CoreType::WORKER);
         }
 
-        // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher).
-        // The Program is owned by dev_state so it (and its kernel metadata) outlives this
-        // scope; otherwise tt-inspector loses track of the running RT-profiler kernels.
+        // Compile and launch RT-profiler kernels (BRISC reader + NCRISC pusher); Program owned by dev_state so its
+        // kernel metadata outlives this scope for tt-inspector.
         {
             dev_state.realtime_profiler_program = std::make_unique<Program>();
             auto& realtime_profiler_program = *dev_state.realtime_profiler_program;
@@ -631,9 +592,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     std::vector<size_t> init_run_sync_indices;
     init_run_sync_indices.reserve(devices_.size());
 
-    // Run our own host-device sync; the device profiler's SyncInfo masks the high word to
-    // 12 bits and would shift RT zones by hours in Tracy. Skip full calibration for chips
-    // that were init-synced recently (same window as finish-path trigger_sync_check).
+    // Run our own host-device sync (device profiler's SyncInfo masks the high word to 12 bits, shifting RT zones by
+    // hours); skip recently init-synced chips.
     for (size_t di = 0; di < devices_.size(); ++di) {
         auto& dev_state = devices_[di];
         bool throttle_skip = false;
@@ -697,11 +657,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             dev_state.sync_host_start,
             static_cast<double>(dev_state.first_timestamp),
             dev_state.sync_frequency);
+        publish_device_profiler_sync_anchor(
+            dev_state.chip_id,
+            static_cast<double>(dev_state.sync_host_start),
+            static_cast<double>(dev_state.first_timestamp),
+            dev_state.sync_frequency,
+            dev_state.realtime_profiler_core.str());
     }
 
-    // Emit sync verification markers: take one independent device measurement per device
-    // and push paired host + device events. In Tracy, the horizontal distance between the
-    // host "SYNC_CHECK" zone and the device "SYNC_CHECK" zone is the sync error.
+    // Emit paired host+device SYNC_CHECK markers; their horizontal distance in Tracy is the sync error.
     std::vector<size_t> init_sync_check_indices;
     init_sync_check_indices.reserve(devices_.size());
     for (size_t di = 0; di < devices_.size(); ++di) {
@@ -721,9 +685,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        // Same anchor convention as trigger_sync_check: capture host TSC, emit Tracy
-        // message, then PCIe write; CalibrateDevice must run before PushSyncCheckMarker
-        // or extrapolation skew can exceed the ±10µs test bound.
+        // Capture host TSC, emit Tracy message, then PCIe write; CalibrateDevice must precede PushSyncCheckMarker or
+        // skew exceeds the ±10µs test bound.
         int64_t sync_check_host_anchor = rt_profiler_host_ticks();
         uint32_t host_time_id = 0x5C5C5C5C;
         std::vector<uint32_t> host_time_data = {host_time_id};
@@ -762,6 +725,12 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             tracy_handler_->CalibrateDevice(
                 dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
             tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+            publish_device_profiler_sync_anchor(
+                dev_state.chip_id,
+                static_cast<double>(sync_check_host_anchor),
+                static_cast<double>(device_time),
+                dev_state.sync_frequency,
+                dev_state.realtime_profiler_core.str());
 
             dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
 
@@ -799,9 +768,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 return false;
             }
 
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("ProcessPage");
+            TTZoneScopedDN(RT_PROFILER, "ProcessPage");
             dev_state.socket->read(page_buf.data(), 1);
             uint32_t* read_ptr = page_buf.data();
 
@@ -811,6 +778,12 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                publish_device_profiler_sync_anchor(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency,
+                    dev_state.realtime_profiler_core.str());
                 pages_received++;
                 dev_state.sync_response_received.store(true);
                 return true;
@@ -825,16 +798,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             // Skip records with id==0 (non-GO dispatch commands like SET_NUM_WORKER_SEMS):
             // they have no valid program and may carry stale end timestamps.
             if (start_id != 0) {
-                // TODO: Uncomment this and apply a debug verbosity level when
-                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-                // ZoneScopedN("InvokeCallbacks");
-                tt::ProgramRealtimeRecord record;
-                record.program_id = start_id;
-                record.start_timestamp = start_time;
-                record.end_timestamp = end_time;
-                record.frequency = dev_state.sync_frequency;
-                record.chip_id = dev_state.chip_id;
-                record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                TTZoneScopedDN(RT_PROFILER, "InvokeCallbacks");
+                tt::ProgramRealtimeRecord record{
+                    .runtime_id = start_id,
+                    .chip_id = dev_state.chip_id,
+                    .start_timestamp = start_time,
+                    .end_timestamp = end_time,
+                    .frequency = dev_state.sync_frequency,
+                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                };
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
 
@@ -852,9 +824,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 continue;
             }
 
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("PollLoop");
+            TTZoneScopedDN(RT_PROFILER, "PollLoop");
             bool any_data = false;
 
             for (auto& dev_state : devices_) {
@@ -872,18 +842,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             }
 
             if (!any_data) {
-                // TODO: Uncomment this and apply a debug verbosity level when
-                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-                // ZoneScopedN("Idle");
+                TTZoneScopedDN(RT_PROFILER, "Idle");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
 
         // Drain in-flight PCIe pages until all sockets stay empty for several rounds.
         {
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("DrainShutdown");
+            TTZoneScopedDN(RT_PROFILER, "DrainShutdown");
             constexpr uint32_t kDrainQuietRounds = 10;
             uint64_t drain_pages = 0;
             uint32_t quiet_rounds = 0;
@@ -923,8 +889,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
 
 void RealtimeProfilerManager::shutdown() {
-    // Re-write ring_buffer->terminate as a safety net (dispatch_s already set it via the
-    // profiler core's TERMINATE), then give the push kernel time to deliver the last PCIe page.
+    // Re-write ring_buffer->terminate as a safety net, then let the push kernel deliver the last PCIe page.
     for (auto& dev_state : devices_) {
         if (dev_state.core_l1.ring_buffer != 0 && dev_state.device) {
             const uint32_t terminate_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, terminate);
@@ -973,10 +938,8 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
     };
     std::vector<SyncSample> samples;
 
-    // Discard pre-existing pages before entering sync mode without reading the data
-    // region (its PCIe-mapped bytes can be undefined on the first sync of a fresh
-    // MeshDevice). discard_pending_pages() rebases bytes_acked -> bytes_sent and
-    // notifies the device.
+    // Discard pre-existing pages before sync (their PCIe-mapped bytes can be undefined on a fresh MeshDevice);
+    // discard_pending_pages rebases bytes_acked and notifies the device.
     constexpr uint32_t kSyncPageWords = 64 / sizeof(uint32_t);
     uint32_t stale_pages = dev_state.socket->discard_pending_pages();
     if (stale_pages > 0) {
@@ -1076,9 +1039,8 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         sync_req_data,
         CoreType::WORKER);
 
-    // Centered linear regression for slope = frequency * tracy_ratio (device cycles per
-    // TSC tick). Centering on the mean avoids catastrophic cancellation in the normal
-    // equations at the ~10^25 operand magnitudes seen for absolute timestamps.
+    // Mean-centered linear regression for slope (device cycles per TSC tick); centering avoids catastrophic
+    // cancellation at absolute-timestamp magnitudes.
     if (samples.size() >= 2) {
         const double n = static_cast<double>(samples.size());
         const double tracy_ratio = rt_profiler_ns_per_tick();
@@ -1124,6 +1086,8 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
             samples.size(),
             dev_state.sync_frequency,
             dev_state.first_timestamp);
+        // Device-profiler sync anchor is published in lockstep with the rt calibration sites, not here -- see
+        // publish_device_profiler_sync_anchor().
     } else {
         dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
         dev_state.first_timestamp = 0;
@@ -1133,6 +1097,33 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
             "[Real-time profiler] Device {} sync failed - not enough samples, using default frequency",
             dev_state.chip_id);
     }
+}
+
+void RealtimeProfilerManager::publish_device_profiler_sync_anchor(
+    uint32_t chip_id, double host_anchor, double device_anchor, double frequency, const std::string& core_label) {
+    // Accumulate-only: there the device profiler skips its own sync and borrows the rt fit; otherwise it runs its own
+    // sync so leave realtime_sync_line unset.
+    if (!MetalContext::instance(context_id_).rtoptions().get_profiler_accumulate()) {
+        return;
+    }
+    // Pass the raw anchor (host TSC, device cycle, frequency), not a SyncInfo: the device profiler keeps its own worker
+    // anchor and only adopts our host<->device mapping. Valid because all cores share one wall clock.
+    auto& psm = MetalContext::instance(context_id_).profiler_state_manager();
+    if (!psm || !psm->device_profiler_map.contains(chip_id)) {
+        return;
+    }
+    std::scoped_lock map_lock(psm->device_profiler_map_mutex);
+    psm->device_profiler_map.at(chip_id).realtime_sync_line =
+        tt::tt_metal::DeviceProfiler::RealtimeSyncLine{host_anchor, device_anchor, frequency};
+    log_debug(
+        tt::LogMetal,
+        "[Real-time profiler] Device-profiler clock anchor for device {} core {}: "
+        "host_anchor={:.0f}, device_anchor={:.0f}, freq={:.6f} GHz",
+        chip_id,
+        core_label,
+        host_anchor,
+        device_anchor,
+        frequency);
 }
 
 void RealtimeProfilerManager::trigger_sync_check() {
@@ -1160,9 +1151,8 @@ void RealtimeProfilerManager::trigger_sync_check() {
         return;
     }
 
-    // 1. Pause the receiver thread for exclusive socket access. This breaks a potential
-    //    GIL deadlock: the receiver may be waiting on the GIL for a Python callback while
-    //    the caller (holding the GIL) blocks here. Skip the check if pause times out.
+    // 1. Pause the receiver for exclusive socket access (breaks a GIL deadlock vs Python callbacks); skip if pause
+    // times out.
     pause_requested_.store(true, std::memory_order_release);
     {
         auto pause_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPauseTimeoutMs);
@@ -1177,8 +1167,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
         }
     }
 
-    // Only devices in device_indices_to_sync enter sync mode and emit FINISH_SYNC; others
-    // keep receiving via the receiver thread once it resumes (no device-side sync_request).
+    // Only these devices enter sync mode and emit FINISH_SYNC; others keep receiving once the thread resumes.
     parallel_for_each_device_index(device_indices_to_sync, [&](size_t dev_index) {
         auto& dev_state = devices_[dev_index];
         std::vector<uint32_t> page_buf(kPageWords);
@@ -1192,13 +1181,14 @@ void RealtimeProfilerManager::trigger_sync_check() {
             uint32_t start_id = rp[2];
             uint64_t end_time = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
             if (start_id != 0) {
-                tt::ProgramRealtimeRecord record;
-                record.program_id = start_id;
-                record.start_timestamp = start_time;
-                record.end_timestamp = end_time;
-                record.frequency = dev_state.sync_frequency;
-                record.chip_id = dev_state.chip_id;
-                record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                tt::ProgramRealtimeRecord record{
+                    .runtime_id = start_id,
+                    .chip_id = dev_state.chip_id,
+                    .start_timestamp = start_time,
+                    .end_timestamp = end_time,
+                    .frequency = dev_state.sync_frequency,
+                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                };
                 std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
@@ -1252,6 +1242,12 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                publish_device_profiler_sync_anchor(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency,
+                    dev_state.realtime_profiler_core.str());
                 dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
                 dev_state.pending_first_unthrottled_finish_sync = false;
                 got_sync = true;
@@ -1260,13 +1256,14 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 uint32_t start_id = rp[2];
                 uint64_t end_time = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
                 if (start_id != 0) {
-                    tt::ProgramRealtimeRecord record;
-                    record.program_id = start_id;
-                    record.start_timestamp = start_time;
-                    record.end_timestamp = end_time;
-                    record.frequency = dev_state.sync_frequency;
-                    record.chip_id = dev_state.chip_id;
-                    record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                    tt::ProgramRealtimeRecord record{
+                        .runtime_id = start_id,
+                        .chip_id = dev_state.chip_id,
+                        .start_timestamp = start_time,
+                        .end_timestamp = end_time,
+                        .frequency = dev_state.sync_frequency,
+                        .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                    };
                     std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                     tt::InvokeProgramRealtimeProfilerCallbacks(record);
                 }

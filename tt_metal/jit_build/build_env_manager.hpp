@@ -47,24 +47,30 @@ public:
     BuildEnvManager(BuildEnvManager&&) = delete;
     BuildEnvManager& operator=(BuildEnvManager&&) = delete;
 
-    // Returns the process-wide singleton, seeding its HAL on first call from the supplied
-    // ContextId's MetalContext. Subsequent calls return the same singleton regardless of
-    // which ContextId is passed -- the parameter is therefore advisory after first seeding.
-    // It exists to make the BuildEnvManager-to-MetalContext dependency explicit at the API
-    // surface so a future per-ContextId BuildEnvManager refactor (#38445 follow-up) has the
-    // right shape already.
+    // Returns the per-context BuildEnvManager for the supplied ContextId, seeding its HAL on
+    // first call from that ContextId's MetalContext. Each ContextId gets its own
+    // BuildEnvManager instance so that contexts with different dispatch configurations
+    // (e.g. silicon vs mock) do not share device_id_to_build_env_ slots and overwrite each
+    // other's build_keys. Required to fix the mock/silicon coexistence regression
+    // (#38445 follow-up).
     static BuildEnvManager& get_instance(ContextId context_id);
 
-    // Legacy no-arg accessor for callers that only have a build_id / device pointer in scope.
-    // Asserts that the singleton has already been seeded (driven by MetalContext::create_*),
-    // which is true for every reader that runs after a MetalEnv has been constructed.
+    // Legacy no-arg accessor that returns the DEFAULT_CONTEXT_ID instance. Asserts that the
+    // default context's BuildEnvManager has been seeded (driven by MetalContext::create_*),
+    // which is true for every reader that runs after the default-context MetalEnv has been
+    // constructed. Callers that may run under a non-default ContextId must use the
+    // get_instance(ContextId) overload instead.
     static BuildEnvManager& get_instance();
 
-    // Internal seeding entry: seeds the singleton with the supplied HAL on first call,
-    // no-op thereafter. Takes a HAL by reference so callers that already hold
-    // g_instance_mutex (e.g. MetalContext::create_*) can seed without re-entering
+    // Internal seeding entry: seeds the BuildEnvManager slot for the given ContextId with the
+    // supplied HAL on first call, no-op thereafter. Takes a HAL by reference so callers that
+    // already hold g_instance_mutex (e.g. MetalContext::create_*) can seed without re-entering
     // MetalContext::instance(ContextId). Idempotent and thread-safe.
-    static void seed_if_unseeded_with_hal(const Hal& hal);
+    static void seed_if_unseeded_with_hal(ContextId context_id, const Hal& hal);
+
+    // Frees the per-context slot so a recycled context_id seeds fresh on next create.
+    // No-op on an unseeded slot.
+    static void destroy_for_context(ContextId context_id);
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.  This requires a live device to be available at device_id.

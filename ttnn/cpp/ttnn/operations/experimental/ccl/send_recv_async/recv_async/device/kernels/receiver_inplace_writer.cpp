@@ -6,8 +6,12 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -36,11 +40,14 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
+    Noc noc_obj;
+    CircularBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
+
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing reads from upstream data cores
     //  - socket_packet_header: Used by socket APIs for control flow
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(cb_fabric_packet_header.get_write_ptr());
     fabric_connection.open();
 
     // Create Socket Interface
@@ -58,13 +65,17 @@ void kernel_main() {
             socket_wait_for_pages(receiver_socket, 1);
             uint32_t l1_read_addr = receiver_socket.read_ptr;
             for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
-                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-                noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
+                noc_obj.async_write(
+                    CoreLocalMem<uint8_t>(l1_read_addr),
+                    output_addr_gen,
+                    output_page_size,
+                    {},
+                    {.page_id = page_index});
                 page_index++;
                 l1_read_addr += socket_page_size;
             }
             socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
             fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
         }
 
@@ -72,13 +83,17 @@ void kernel_main() {
             socket_wait_for_pages(receiver_socket, 1);
             uint32_t l1_read_addr = receiver_socket.read_ptr;
             for (uint32_t j = 0; j < num_pages_remainder; ++j) {
-                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-                noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
+                noc_obj.async_write(
+                    CoreLocalMem<uint8_t>(l1_read_addr),
+                    output_addr_gen,
+                    output_page_size,
+                    {},
+                    {.page_id = page_index});
                 page_index++;
                 l1_read_addr += socket_page_size;
             }
             socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
             fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
         }
 
@@ -86,12 +101,16 @@ void kernel_main() {
     // Large pages. We write page chunks from multiple packets.
     else {
         for (uint32_t i = 0; i < num_pages; ++i) {
-            auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
             socket_wait_for_pages(receiver_socket, 1);
-            noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
+            noc_obj.async_write(
+                CoreLocalMem<uint8_t>(receiver_socket.read_ptr),
+                output_addr_gen,
+                output_page_size,
+                {},
+                {.page_id = page_index});
             page_index++;
             socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
             fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
         }
     }

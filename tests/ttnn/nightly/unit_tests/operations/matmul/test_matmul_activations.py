@@ -7,6 +7,7 @@
 import pytest
 from loguru import logger
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import torch.nn.functional as F
@@ -211,7 +212,7 @@ def test_matmul_with_fused_activations(
     )
 
     # Run matmul with fused activation
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -308,7 +309,7 @@ def test_matmul_with_custom_activation_params(
     )
 
     # Run matmul with custom activation
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -440,7 +441,7 @@ def test_activation_with_different_program_configs(
     )
 
     # Run matmul
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -686,7 +687,7 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
 
     # Run the operation
     if has_bias:
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -696,7 +697,7 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -1030,7 +1031,7 @@ def test_matmul_1d_gather_with_activations(
 
     # Run matmul with fused activation
     try:
-        output_ttnn = ttnn.matmul(
+        output_ttnn = ttnn_matmul(
             in0_ttnn,
             in1_ttnn,
             program_config=program_config,
@@ -1040,7 +1041,7 @@ def test_matmul_1d_gather_with_activations(
     except Exception as e:
         # If it fails with this config, try without the specific program config
         logger.warning(f"Failed with 1D program config: {e}, trying without specific config")
-        output_ttnn = ttnn.matmul(
+        output_ttnn = ttnn_matmul(
             in0_ttnn,
             in1_ttnn,
             activation=activation_param,

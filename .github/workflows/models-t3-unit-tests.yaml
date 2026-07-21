@@ -2,8 +2,8 @@ name: "(Tier 3) Models Unit Tests"
 
 on:
   schedule:
-    # Twice a day at 06:00 and 18:00 UTC — all models, all SKUs
-    - cron: "0 6,18 * * *"
+    # Once a day at 06:00 UTC — all models, all SKUs
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -23,8 +23,13 @@ on:
           - qwen2.5-vl-32b
           - qwq-32b
           - phi-3-mini
+          - janus-pro-7b
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           # mamba-2.8b: disabled — PCC failures (see #42163)
+          - gemma-4-e2b
+          - gemma-4-e4b
+          - panoptic-deeplab
+          - bevformer
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -39,6 +44,7 @@ on:
           - "wh_galaxy (WH Galaxy)"
           - "wh_galaxy_perf (WH Galaxy perf)"
           - "bh_p150 (P150)"
+          - "bh_p150b_civ2 (P150 CIv2)"
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
@@ -82,7 +88,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
       model: ${{ steps.resolve.outputs.model }}
@@ -90,7 +96,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -122,6 +128,12 @@ jobs:
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
+    # OIDC only on this caller (the reusable workflow's multihost job needs ttop auth), not
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate what tests need.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

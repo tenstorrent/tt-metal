@@ -71,7 +71,28 @@ class DataFormat(Enum):
     MxFp4 = DataFormatInfo(
         "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
+    MxFp4_2x_A = DataFormatInfo(
+        "MxFp4_2x_A", Fraction(1, 2)
+    )  # QSR specific - 2x-packed FP4 in Src Reg, 5-bit exp (FP16 family) - 10 bits per element in one double-datumed element in src reg.
+    MxFp4_2x_B = DataFormatInfo(
+        "MxFp4_2x_B", Fraction(1, 2)
+    )  # QSR specific - 2x-packed FP4 in Src Reg, 8-bit exp (FP16_b family) - 10 bits per element in one double-datumed element in src reg.
+    MxInt8 = DataFormatInfo("MxInt8", 1)  # QSR specific - S1.6, 8 bits per element
+    MxInt4 = DataFormatInfo(
+        "MxInt4", Fraction(1, 2)
+    )  # QSR specific - S1.2, 4 bits (0.5 bytes) per element
+    MxInt2 = DataFormatInfo(
+        "MxInt2", Fraction(1, 4)
+    )  # QSR specific - S1.0, 2 bits (0.25 bytes) per element
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
+
+    @property
+    def cpp_enum_value(self) -> str:
+        return f"DataFormat::{self.name}"
+
+    @property
+    def cpp_underlying_value(self) -> str:
+        return f"ckernel::to_underlying(DataFormat::{self.name})"
 
     @property
     def size(self) -> Fraction:
@@ -93,6 +114,10 @@ class DataFormat(Enum):
             DataFormat.UInt8,
         }
 
+    def needs_int8_math_config(self) -> bool:
+        """Checks if the format requires int8 math mode in the ALU."""
+        return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
+
     def is_32_bit(self) -> bool:
         """Checks if the data format is a 32-bit type."""
         return self in {DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32}
@@ -103,6 +128,7 @@ class DataFormat(Enum):
         return self in {
             DataFormat.Float16,
             DataFormat.Bfp8,
+            DataFormat.MxFp4_2x_A,
         }
 
     def is_exponent_B(self) -> bool:
@@ -114,6 +140,7 @@ class DataFormat(Enum):
             DataFormat.Bfp2_b,
             DataFormat.Tf32,
             DataFormat.Float32,
+            DataFormat.MxFp4_2x_B,
         }
 
     def num_bytes_per_tile(self, num_datums: int = 1024) -> int:
@@ -146,6 +173,17 @@ class DataFormat(Enum):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        }
+
+    def is_mx_int_format(self) -> bool:
+        """Checks if the data format is an MX integer format."""
+        return self in {
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         }
 
     def is_mx_fp_format(self) -> bool:
@@ -239,6 +277,19 @@ MX_FORMAT_MIN_MAGNITUDE = {
     DataFormat.MxFp8R: 2.44e-4,
     DataFormat.MxFp8P: 0.0625,
     DataFormat.MxFp4: 1.0,
+}
+
+# Max representable element magnitude for MxInt formats (signed 2's-complement
+# with implicit power-of-2 scale per OCP spec; no normal/subnormal split).
+# MxInt8 (S1.6, scale 2^-6): symmetric ±127/64; MxInt4 (S1.2, scale 2^-2):
+# symmetric ±7/4; MxInt2 (S1.0, scale 2^0): symmetric ±1 (only -1/0/+1
+# representable; the -2 encoding 0b10 is left unused for symmetry).
+# (ws-tensix metadata says 15/8 for MxInt4, but its decode formula at
+# storage.py:419-434 actually yields 7/4 = raw_7 × 2^-2.)
+MX_INT_MAX = {
+    DataFormat.MxInt8: 127.0 / 64.0,
+    DataFormat.MxInt4: 7.0 / 4.0,
+    DataFormat.MxInt2: 1.0,
 }
 
 # ============================================================================
@@ -382,6 +433,7 @@ class FormatConfig:
     pack_S_src: DataFormat
     pack_S_dst: DataFormat
     math: DataFormat
+    sfpu_math: DataFormat
 
     def __init__(
         self,
@@ -390,6 +442,9 @@ class FormatConfig:
         pack_src: DataFormat,
         pack_dst: DataFormat,
         math: DataFormat,
+        sfpu_math: Optional[
+            DataFormat
+        ] = None,  # SFPU-side math format; defaults to `math`. Differs only when the SFPU operates in a format with no native register/dest representation (e.g. UInt16 on Quasar, routed through an Int16 data path).
         same_src_format: bool = True,  # If True, A and B share unpack formats; omit unpack_B_src / unpack_B_dst (they are set from A).
         # Optional unpack_S_* and pack_S_* default to the A and main pack paths when omitted (mirrors common "S same as A" usage).
         unpack_B_src: Optional[DataFormat] = None,
@@ -405,6 +460,7 @@ class FormatConfig:
         self.pack_src = pack_src
         self.pack_dst = pack_dst
         self.math = math
+        self.sfpu_math = sfpu_math if sfpu_math is not None else math
         if same_src_format:
             self.unpack_B_src = unpack_A_src
             self.unpack_B_dst = unpack_A_dst
@@ -418,11 +474,38 @@ class FormatConfig:
         self.unpack_S_src = (
             unpack_S_src if unpack_S_src is not None else self.unpack_A_src
         )
-        self.unpack_S_dst = (
-            unpack_S_dst if unpack_S_dst is not None else self.unpack_A_dst
-        )
+        if unpack_S_dst is not None:
+            self.unpack_S_dst = unpack_S_dst
+        elif self.unpack_A_dst == DataFormat.MxFp4_2x_A:
+            self.unpack_S_dst = DataFormat.Float16
+        elif self.unpack_A_dst == DataFormat.MxFp4_2x_B:
+            self.unpack_S_dst = DataFormat.Float16_b
+        else:
+            self.unpack_S_dst = self.unpack_A_dst
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
+
+        # MxFp4_2x_A/B are 2x-packed Src Register formats. They have no L1, math, or pack
+        # representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
+        srcab_only = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
+        for field_name, value in (
+            ("unpack_A_src", self.unpack_A_src),
+            ("unpack_B_src", self.unpack_B_src),
+            ("unpack_S_src", self.unpack_S_src),
+            ("unpack_S_dst", self.unpack_S_dst),
+            ("math", self.math),
+            ("sfpu_math", self.sfpu_math),
+            ("pack_src", self.pack_src),
+            ("pack_dst", self.pack_dst),
+            ("pack_S_src", self.pack_S_src),
+            ("pack_S_dst", self.pack_S_dst),
+        ):
+            if value in srcab_only:
+                raise ValueError(
+                    f"{value.name} is a 2x-packed SrcA/SrcB-only format and cannot be used "
+                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst. "
+                    f"For L1 input use DataFormat.MxFp4."
+                )
 
     @property
     def output_format(self) -> DataFormat:
@@ -448,6 +531,7 @@ struct FormatConfig
     std::uint32_t unpack_B_dst = 0;
     std::uint32_t unpack_S_dst = 0;
     std::uint32_t math = 0;
+    std::uint32_t sfpu_math = 0;
     std::uint32_t pack_src = 0;
     std::uint32_t pack_dst = 0;
     std::uint32_t pack_S_src = 0;
@@ -467,6 +551,7 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "    const std::uint32_t unpack_B_dst;",
     "    const std::uint32_t unpack_S_dst;",
     "    const std::uint32_t math;",
+    "    const std::uint32_t sfpu_math;",
     "    const std::uint32_t pack_src;",
     "    const std::uint32_t pack_dst;",
     "    const std::uint32_t pack_S_src;",
@@ -480,6 +565,7 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        std::uint32_t unpack_B_dst_,",
     "        std::uint32_t unpack_S_dst_,",
     "        std::uint32_t math_,",
+    "        std::uint32_t sfpu_math_,",
     "        std::uint32_t pack_src_,",
     "        std::uint32_t pack_dst_,",
     "        std::uint32_t pack_S_src_,",
@@ -491,6 +577,7 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        unpack_B_dst(unpack_B_dst_),",
     "        unpack_S_dst(unpack_S_dst_),",
     "        math(math_),",
+    "        sfpu_math(sfpu_math_),",
     "        pack_src(pack_src_),",
     "        pack_dst(pack_dst_),",
     "        pack_S_src(pack_S_src_),",
@@ -542,6 +629,11 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
     DataFormat.MxFp4: 22,
+    DataFormat.MxInt8: 2,
+    DataFormat.MxInt4: 3,
+    DataFormat.MxInt2: 11,
+    DataFormat.MxFp4_2x_A: 27,
+    DataFormat.MxFp4_2x_B: 24,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,
@@ -558,21 +650,28 @@ class InputOutputFormat:
     They are used for format inference model to infer the rest of the formats for the LLk pipeline, instead of the user.
 
     If input_B is not specified, it defaults to the same as input (input_A).
+
+    register_format_hint: optional opt-in for SrcA/SrcB-only register formats (e.g. MxFp4_2x_A / MxFp4_2x_B).
+    When set, the inferred unpack_A_dst / unpack_B_dst become the hint instead of the default
+    (e.g. for MxFp4 input, defaults to Float16_b). Only valid when input == MxFp4 today.
     """
 
     input: DataFormat
     output: DataFormat
     input_B: Optional[DataFormat] = None
+    register_format_hint: Optional[DataFormat] = None
 
     def __init__(
         self,
         input_format: DataFormat,
         output_format: DataFormat,
         input_format_B: Optional[DataFormat] = None,
+        register_format_hint: Optional[DataFormat] = None,
     ):
         self.input = input_format
         self.output = output_format
         self.input_B = input_format_B if input_format_B is not None else input_format
+        self.register_format_hint = register_format_hint
 
     @property
     def output_format(self) -> DataFormat:
@@ -586,17 +685,13 @@ class InputOutputFormat:
     def input_format_B(self) -> DataFormat:
         return self.input_B
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     def __str__(self):
+        if self.register_format_hint is not None:
+            return f"InputOutputFormat[L1_Input:{self.input},A(reg_hint):{self.register_format_hint},B(reg_hint):{self.register_format_hint},out:{self.output}]"
         return f"InputOutputFormat[A:{self.input},B:{self.input_B},out:{self.output}]"
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-    def __str__(self):
-        return f"InputOutputFormat[{self.input},{self.output}]"
-
-    def __repr__(self) -> str:
-        return self.__str__()
 
 
 def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:

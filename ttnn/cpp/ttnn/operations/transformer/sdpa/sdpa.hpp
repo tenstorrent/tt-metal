@@ -24,7 +24,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -39,7 +40,12 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // Geometry overrides for an HMA-shared paged cache (see PagedCacheGeometryOverride).
+    // Q drives head_dim; supply this call's block_size / num_kv_heads when the cache was
+    // allocated for a different layer's view. Unset ⇒ use the cache's declared values.
+    std::optional<uint32_t> block_size = std::nullopt,
+    std::optional<uint32_t> num_kv_heads = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
 ttnn::Tensor chunked_scaled_dot_product_attention(
@@ -51,7 +57,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // See PagedCacheGeometryOverride (chunked overload above).
+    std::optional<uint32_t> block_size = std::nullopt,
+    std::optional<uint32_t> num_kv_heads = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -87,6 +96,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool is_causal = false,
     bool is_balanced = false,
+    bool is_cross = false,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
@@ -120,9 +130,9 @@ struct ExecuteExpRingJointAttention {
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& joint_tensor_q,
-        const ttnn::Tensor& joint_tensor_k,
-        const ttnn::Tensor& joint_tensor_v,
+        const std::optional<ttnn::Tensor>& joint_tensor_q,
+        const std::optional<ttnn::Tensor>& joint_tensor_k,
+        const std::optional<ttnn::Tensor>& joint_tensor_v,
         ttnn::Tensor& persistent_output_buffer_k,
         ttnn::Tensor& persistent_output_buffer_v,
         const std::string& joint_strategy,

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -63,6 +66,8 @@ inline QChunkInfo get_q_chunk_info(
 }
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
@@ -138,7 +143,7 @@ void kernel_main() {
     const uint32_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(argidx++);
     const uint32_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_channel_id = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-    const uint32_t termination_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t termination_sync_sem_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_fabric_mux_status_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t local_flow_control_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t local_teardown_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
@@ -215,6 +220,8 @@ void kernel_main() {
             pkt_unicast_hdr, 1, nullptr, ag_page_size);
 
         // Pre-configure atomic inc header for signaling the injector core on the next device
+        // safe_get_noc_addr() cannot be migrated to Device 2.0 because it creates a cross-chip semaphore address,
+        // while the current Device 2.0 Semaphore class only supports same-chip operations.
         const uint64_t injector_out_ready_sem_noc_addr =
             safe_get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr, 0);
         fabric_unicast_noc_unicast_atomic_inc_set_state<
@@ -237,6 +244,9 @@ void kernel_main() {
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+
+    CircularBuffer cb_k_w(cb_k_writer_in);
+    CircularBuffer cb_v_w(cb_v_writer_in);
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
 
@@ -250,14 +260,13 @@ void kernel_main() {
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
@@ -266,7 +275,7 @@ void kernel_main() {
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
     if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>();
+        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>(noc);
     }
 
     const uint32_t last_active_ring_iter =
@@ -328,10 +337,10 @@ void kernel_main() {
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
                         // Wait for reader to fill K, forward this writer's row slice over fabric
-                        cb_wait_front(cb_k_writer_in, k_chunk_tiles);
+                        cb_k_w.wait_front(k_chunk_tiles);
                         if (!is_last_ring_iter) {
                         if (!kv_chunk_is_joint) {
-                            const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
+                            const uint32_t base_k_read_ptr = cb_k_w.get_read_ptr();
                             for (uint32_t col = 0; col < DHt; ++col) {
                                 for (uint32_t row = my_row_start; row < my_row_end; row += ag_packet_size_in_pages) {
                                     uint32_t tiles_in_batch = 0;
@@ -360,11 +369,11 @@ void kernel_main() {
                                             &mux_conn, pkt_scatter_hdr, src_l1_addr,
                                             NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, tiles_in_batch),
                                             ag_page_size * tiles_in_batch);
-                                        noc_async_writes_flushed();
+                                        noc.async_writes_flushed();
                                     } else {
                                         // Partial batch: fall back to per-tile unicast writes to avoid
                                         // variable chunk_count scatter writes which cause non-determinism.
-                                        // noc_async_writes_flushed() after each send ensures the previous
+                                        // noc.async_writes_flushed() after each send ensures the previous
                                         // header NOC write completes before pkt_unicast_hdr is modified
                                         // for the next tile (they share the same L1 header).
                                         for (uint32_t i = 0; i < tiles_in_batch; i++) {
@@ -374,20 +383,20 @@ void kernel_main() {
                                                 pkt_unicast_hdr,
                                                 src_l1_addr + i * ag_page_size,
                                                 NocUnicastCommandHeader{k_noc_addrs[i]});
-                                            noc_async_writes_flushed();
+                                            noc.async_writes_flushed();
                                         }
                                     }
                                 }
                             }
                         }
                         }
-                        cb_pop_front(cb_k_writer_in, k_chunk_tiles);
+                        cb_k_w.pop_front(k_chunk_tiles);
 
                         // Wait for reader to fill V, forward this writer's row slice over fabric
-                        cb_wait_front(cb_v_writer_in, v_chunk_tiles);
+                        cb_v_w.wait_front(v_chunk_tiles);
                         if (!is_last_ring_iter) {
                         if (!kv_chunk_is_joint) {
-                            const uint32_t base_v_read_ptr = get_read_ptr(cb_v_writer_in);
+                            const uint32_t base_v_read_ptr = cb_v_w.get_read_ptr();
                             for (uint32_t row = my_row_start; row < my_row_end; ++row) {
                                 if (kv_slice.d2_start + row >= end_seq_tile) break;
                                 for (uint32_t col = 0; col < DHt; col += ag_packet_size_in_pages) {
@@ -416,11 +425,11 @@ void kernel_main() {
                                             &mux_conn, pkt_scatter_hdr, src_l1_addr,
                                             NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, tiles_in_batch),
                                             ag_page_size * tiles_in_batch);
-                                        noc_async_writes_flushed();
+                                        noc.async_writes_flushed();
                                     } else {
                                         // Partial batch: fall back to per-tile unicast writes to avoid
                                         // variable chunk_count scatter writes which cause non-determinism.
-                                        // noc_async_writes_flushed() after each send ensures the previous
+                                        // noc.async_writes_flushed() after each send ensures the previous
                                         // header NOC write completes before pkt_unicast_hdr is modified
                                         // for the next tile (they share the same L1 header).
                                         for (uint32_t i = 0; i < tiles_in_batch; i++) {
@@ -430,26 +439,26 @@ void kernel_main() {
                                                 pkt_unicast_hdr,
                                                 src_l1_addr + i * ag_page_size,
                                                 NocUnicastCommandHeader{v_noc_addrs[i]});
-                                            noc_async_writes_flushed();
+                                            noc.async_writes_flushed();
                                         }
                                     }
                                 }
                             }
                         }
                         }
-                        cb_pop_front(cb_v_writer_in, v_chunk_tiles);
+                        cb_v_w.pop_front(v_chunk_tiles);
 
                         if (!is_last_ring_iter) {
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
-                            noc_async_writes_flushed();
+                            noc.async_writes_flushed();
                         }
                     }
 
                     if (KV_chunks_processed_in_iter % 2 == 0) {
-                        cb_wait_front(cb_k_writer_in, k_chunk_tiles);
-                        cb_wait_front(cb_v_writer_in, v_chunk_tiles);
-                        cb_pop_front(cb_k_writer_in, k_chunk_tiles);
-                        cb_pop_front(cb_v_writer_in, v_chunk_tiles);
+                        cb_k_w.wait_front(k_chunk_tiles);
+                        cb_v_w.wait_front(v_chunk_tiles);
+                        cb_k_w.pop_front(k_chunk_tiles);
+                        cb_v_w.pop_front(v_chunk_tiles);
                     }
                 }
 #endif
@@ -458,6 +467,7 @@ void kernel_main() {
                 if (is_last_ring_iter) {
                     // Default trid here → pass 0 so per-group flush waits exactly for these writes.
                     write_block_row_grouped_trid(
+                        noc,
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         qi.end_seq_tile,
@@ -465,7 +475,7 @@ void kernel_main() {
                         tile_bytes,
                         out_subblock_h,
                         /*flush_trid=*/0);
-                    noc_async_write_barrier();
+                    noc.async_write_barrier();
                 }
             }
         }
@@ -473,19 +483,17 @@ void kernel_main() {
 
 #ifdef USE_MUX
     if (mux_connection_valid) {
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
+        Semaphore<> termination_sync_sem(termination_sync_sem_id);
         if (is_termination_master) {
-            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_sem_addr);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            termination_sync_sem.wait(num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
-            uint64_t dest_addr =
-                get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_sem_addr);
-            noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            termination_sync_sem.up(noc, termination_master_noc_x, termination_master_noc_y, 1);
+            noc.async_atomic_barrier();
         }
     }
 #endif
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

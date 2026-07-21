@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/context/context_types.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -19,7 +20,9 @@ public:
     ~Data();
 
 private:
-    Data(std::optional<int> rank);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    Data(
+        std::optional<int> rank,
+        ContextId context_id);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
@@ -48,6 +51,8 @@ private:
         rpc::CoreCategory category_type,
         const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
         const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
+
+    ContextId context_id;  // Owning MetalContext's id
 
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
@@ -80,7 +85,7 @@ private:
 
     std::atomic<bool> kernel_path_collection_enabled{false};
     std::mutex kernel_path_mutex;
-    std::unordered_map<int, std::string> kernel_id_to_path;
+    std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

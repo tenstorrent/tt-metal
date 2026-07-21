@@ -72,23 +72,24 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
-// ProgramRunArgs) from create_program_spec. The framework adapter stamps a Program
-// from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
-// via experimental::UpdateTensorArgs on cache hit.
+// Metal 2.0 op-porting stepping-stone factory concept: factories that return
+// ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
+// create_program_artifacts. The framework adapter stamps a Program from the spec onto
+// each mesh coordinate range on cache miss, and patches every TensorArg (io and
+// op-owned alike) via experimental::UpdateTensorArgs on cache hit.
 //
-// NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable
-// from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
-// matches by pointer identity. Constructing or copying a MeshTensor and referencing the
-// copy will TT_FATAL at runtime.
+// NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
+// the factory's `tensor_args` / `tensor_return_value` parameters, OR one of the
+// MeshTensors the factory places in `ProgramArtifacts::op_owned_tensors` — the adapter
+// matches by pointer identity. Referencing a copy or any other MeshTensor will TT_FATAL
+// at runtime.
 //
-// NOTE: A separate MeshWorkloadSpecFactoryConcept is planned for ops whose programs vary
-// across the mesh (CCL-style); that one will require a multi-program artifact.
-// Alternatively, we could have only a single, common MeshWorkloadSpecFactoryConcept.
-// (Should follow whatever style ProgramDescriptor port ends up using.)
+// NOTE: This is a stepping-stone concept for incremental migration of operations to
+// Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
+// op-owned tensors redundantly rather than skipping them.
 template <typename T>
-concept ProgramSpecFactoryConcept = requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> &&
-                                    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+concept MetalV2FactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
+                                !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -127,7 +128,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or ProgramSpecFactoryConcept.
+// or MetalV2FactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -135,7 +136,7 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          MetalV2FactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

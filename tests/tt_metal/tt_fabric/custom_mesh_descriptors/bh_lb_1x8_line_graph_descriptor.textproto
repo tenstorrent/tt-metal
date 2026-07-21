@@ -1,13 +1,4 @@
 # BH single Loudbox exposed as a 1x8 LINE.
-# Same physical hardware as p150_x8_mesh_graph_descriptor.textproto (8x p150b, 2 eth
-# channels per link, no chassis-level ring wraparound), just presented to the runtime
-# as a 1-row mesh of 8 chips. Used by test_moe_compute_bh_lb_1x8 to exercise the EP=8
-# all-chips-active code path that the (2, 4) cax=1 variant cannot reach (in (2, 4) cax=1
-# only half the chips host experts; the other 4 are an idle replica row).
-#
-# Topology is LINE/LINE because BH LB has no physical wraparound — distinguishes this
-# from the WH 1xN test descriptors (single_galaxy_1x{8,16}_torus_*), where the host
-# galaxy IS a torus so the flattened 1xN view can advertise RING.
 
 mesh_descriptors {
   name: "M0"

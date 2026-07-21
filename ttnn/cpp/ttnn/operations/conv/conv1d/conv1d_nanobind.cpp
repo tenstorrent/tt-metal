@@ -47,6 +47,7 @@ void bind_conv1d(nb::module_& mod) {
             conv_config (ttnn.Conv2dConfig, optional): Configuration for convolution. Default: None
             compute_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for compute kernel. Default: None
             memory_config (ttnn.MemoryConfig, optional): Output Tensor's Memory Configuration. Default: None
+            slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for slicing the input & output tensors in DRAM along the input_length (width) dimension. Use slice_type=Conv2dDRAMSliceWidth with num_slices=0 to auto-determine the number of slices, or num_slices=N to slice manually. DRAM_HEIGHT slicing is not supported because the conv1d height is always 1. If None, slicing is auto-routed by input location: inputs already in L1 run fully in L1, while DRAM/host inputs are auto width-sliced through DRAM. Default: None
             return_output_dim (bool, optional): If true, the op also returns the length of the output tensor. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
@@ -81,6 +82,7 @@ void bind_conv1d(nb::module_& mod) {
         nb::arg("conv_config") = nb::none(),
         nb::arg("compute_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
+        nb::arg("slice_config") = nb::none(),
         nb::arg("return_output_dim") = false,
         nb::arg("return_weights_and_bias") = false);
 }

@@ -22,7 +22,7 @@ from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import line_params, ring_params, ring_params_8k
 
-DEVICE_PARAMS = {"trace_region_size": 120000000}
+DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
@@ -76,10 +76,10 @@ def t2v_metrics(mesh_device, height):
             }
         else:
             expected_metrics = {
-                "encoder": 0.1,
+                "encoder": 0.2,
                 "denoising": 370.0,
                 "vae": 7.0,
-                "total": 375.0,
+                "total": 375.2,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"

@@ -28,6 +28,7 @@ import ttnn
 from models.demos.informer.reference.torch_reference import compute_metrics, load_etth1_csv
 from models.demos.informer.tt.config import InformerConfig, informer_config_from_hf
 from models.demos.informer.tt.model import create_informer
+from models.demos.utils.trace_region_sizes import build_trace_device_params
 
 
 def load_checkpoint(path: str | None) -> tuple[dict | None, dict | None, torch.Tensor | None, torch.Tensor | None]:
@@ -74,7 +75,7 @@ def build_time_features_from_start(start, *, length: int, dim: int, freq: str) -
 
 
 def open_device(*, device_id: int) -> ttnn.Device:
-    return ttnn.open_device(device_id=device_id, trace_region_size=128 << 20)
+    return ttnn.open_device(device_id=device_id, **build_trace_device_params("informer"))
 
 
 def load_series_from_csv(path: Path, *, cfg: InformerConfig) -> tuple[list[dict], str]:

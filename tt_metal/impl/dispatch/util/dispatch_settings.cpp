@@ -60,7 +60,7 @@ void DispatchSettings::init_worker_defaults(
     uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment) {
     uint32_t prefetch_q_entries;
     if (are_cqs_dram_backed) {
-        prefetch_q_entries = 256;
+        prefetch_q_entries = 64 / num_hw_cqs;
     } else if (is_galaxy_cluster) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {

@@ -498,10 +498,6 @@ def test_batch_norm_output_Default(input_shapes, device):
     "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
-    if input_dtype == "float32" and os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip(
-            "Skipping float32 batch_norm compute_config on ttsim - fp16a untested functionality (ttsim-private issue #324)"
-        )
     N, H, W, C = input_shapes
     torch.manual_seed(0)
 
@@ -576,7 +572,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     # Execute low-accuracy groupnorm
     config_low = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
     )
@@ -814,3 +810,121 @@ def test_batch_norm_aliased_running_and_affine_tensors(device):
     # weight is all zeros, so the normalized term is zeroed out and the output collapses to the
     # bias (all ones) on both backends - the comparison is therefore exact.
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=1.0, rtol=0.0, atol=0.0, frobenius_threshold=0.0)
+
+
+def test_batch_norm_program_cache_shape_collision(device):
+    """Covers #46018: program cache collision in BatchNormOperation.
+
+    BatchNormOperation::compute_program_hash keys only on operation attributes and tensor
+    dtype/memory_config, not on tensor shape/layout/padded shape. Two batch_norm calls that
+    differ only in shape therefore share a program cache entry, and with the program cache
+    enabled the second call silently reuses the first call's program.
+
+    This runs a sequence of distinct shapes (all sharing dtype/memory_config/eps, so they only
+    differ in shape) with a freshly-cleared program cache and asserts each distinct shape adds
+    its own cache entry. On buggy main the shapes collide and the cache stays at a single entry,
+    so this test FAILS. Once the hash includes tensor shape/layout the cache grows by one per
+    distinct shape and the test PASSES. Outputs are also validated to be numerically correct.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    # Distinct shapes, all bfloat16 / TILE / DRAM-interleaved / same eps -> identical buggy hash.
+    # NOTE: deliberately do NOT call fill_implicit_tile_padding here - that op adds its own
+    # shape-dependent program cache entries which would mask the batch_norm collision we test.
+    # With plain batch_norm, ttnn.batch_norm contributes exactly one program per distinct shape.
+    shapes = [
+        torch.Size([1, 8, 32, 32]),
+        torch.Size([2, 16, 64, 120]),
+        torch.Size([4, 32, 128, 128]),
+        torch.Size([1, 128, 14, 14]),
+        torch.Size([3, 2, 64, 96]),
+    ]
+    eps = 1e-05
+
+    try:
+        for idx, input_shapes in enumerate(shapes, start=1):
+            in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+            mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+            var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
+
+            tt_output_tensor_on_device = ttnn.batch_norm(
+                input_tensor,
+                running_mean=mean_tensor,
+                running_var=var_tensor,
+                eps=eps,
+            )
+            tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+            torch_result = torch.nn.functional.batch_norm(
+                input=in_data, running_mean=mean_data, running_var=var_data, eps=eps
+            )
+            assert_numeric_metrics(
+                torch_result,
+                tt_output,
+                pcc_threshold=0.99,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+            )
+
+            # Each distinct shape must create a distinct program cache entry. If the hash ignores
+            # shape (the #46018 bug) the entry count stays at 1 and this assertion fails.
+            entries = device.num_program_cache_entries()
+            assert entries == idx, (
+                f"Program cache collision (#46018): after {idx} distinct shapes the cache holds "
+                f"{entries} entries, expected {idx}. Shape {tuple(input_shapes)} reused a program "
+                f"built for a different shape."
+            )
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_batch_norm_training_avoids_variance_cancellation(device):
+    """Regression test for #45968: avoid bf16 E[x^2] - E[x]^2 cancellation in training mode."""
+
+    input_shape = torch.Size([2, 64, 32, 32])
+    channels = input_shape[1]
+    eps = 1e-5
+
+    torch.manual_seed(0)
+    channel_offsets = torch.where(torch.arange(channels, dtype=torch.float32) % 2 == 0, 5.0, -5.0).view(
+        1, channels, 1, 1
+    )
+    in_data = (channel_offsets + 0.1 * torch.randn(input_shape, dtype=torch.float32)).to(torch.bfloat16)
+
+    def to_tt(tensor):
+        return ttnn.from_torch(tensor.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = to_tt(in_data)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    running_mean_tensor = to_tt(torch.zeros(1, channels, 1, 1))
+    running_var_tensor = to_tt(torch.ones(1, channels, 1, 1))
+    weight_tensor = to_tt(torch.ones(1, channels, 1, 1))
+    bias_tensor = to_tt(torch.zeros(1, channels, 1, 1))
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=running_mean_tensor,
+        running_var=running_var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        eps=eps,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor).float()
+    tt_running_var = ttnn.to_torch(running_var_tensor)
+
+    torch_output = torch.nn.functional.batch_norm(
+        input=in_data.float(),
+        running_mean=None,
+        running_var=None,
+        weight=torch.ones(channels),
+        bias=torch.zeros(channels),
+        training=True,
+        eps=eps,
+    )
+
+    assert torch.isfinite(tt_output).all()
+    assert torch.isfinite(tt_running_var).all()
+    assert_numeric_metrics(torch_output, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)

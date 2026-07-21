@@ -12,7 +12,7 @@
 //   4. Wait for IDMA ack
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include <cstdint>
@@ -41,7 +41,8 @@ void kernel_main() {
     issue_cmdbuf_0();
 
     /* wait on IDMA to finish */
-    while (!idma_acked_cmdbuf_0());
+    while (!idma_acked_cmdbuf_0()) {
+    }
 
-    DPRINT("IDMA basic done: {} elements ({} B)\n", num_elements, total_bytes);
+    DEVICE_PRINT("IDMA basic done: {} elements, total_bytes: {}\n", num_elements, total_bytes);
 }

@@ -93,6 +93,8 @@ void kernel_main() {
     const auto expert_out_addrgen = TensorAccessor(expert_out_args, expert_out_addr, TILE_BYTES);
     const auto offsets_addrgen = TensorAccessor(offsets_args, offsets_addr);
 
+    Noc noc;
+
     // L1 layout in cb_reader_scratch (sized by host as (e_local+1)*4 + 2*e_local*4):
     //   [offsets_l1 (e_local+1) u32]
     //   [tr_start_per_expert e_local u32]
@@ -153,9 +155,8 @@ void kernel_main() {
                 read_tiles_by_row</* UseBarrier = */ false>(
                     cb_src0, expert_out_addrgen, tile_id_base, tiles_to_read, TILE_BYTES, tiles_per_chunk);
 
-                uint32_t dst_l1 = get_write_ptr(cb_src0);
                 for (uint32_t t = tiles_to_read; t < tiles_per_chunk; ++t) {
-                    fill_zeros_async(dst_l1 + t * TILE_BYTES, TILE_BYTES);
+                    fill_zeros_async(noc, cb_src0, TILE_BYTES, t * TILE_BYTES);
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_src0, tiles_per_chunk);

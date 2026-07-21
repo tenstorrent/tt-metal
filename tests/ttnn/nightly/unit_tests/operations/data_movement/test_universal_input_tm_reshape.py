@@ -5,92 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-# Element size (bytes) for each ttnn dtype we exercise in this file.
-_DTYPE_ELEM_SIZE = {
-    ttnn.bfloat16: 2,
-    ttnn.float32: 4,
-    ttnn.uint32: 4,
-    ttnn.int32: 4,
-    ttnn.uint16: 2,
-    ttnn.uint8: 1,
-    ttnn.bfloat8_b: 1,
-}
-
-
-def _divisible_grid_1d(total_dim, max_cores, step):
-    """Return the largest n <= max_cores such that total_dim % (n * step) == 0.
-
-    Raises:
-        ValueError: If no valid n exists (i.e. total_dim is not a multiple of step).
-    """
-    for n in range(max_cores, 0, -1):
-        if total_dim % (n * step) == 0:
-            return n
-    raise ValueError(f"No valid 1D grid size for total_dim={total_dim}, max_cores={max_cores}, step={step}")
-
-
-def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloat16):
-    """Create a valid sharded MemoryConfig for `shape` on `device`.
-
-    For TILE layout the shard dims must be tile-aligned (multiples of 32).
-    For ROW_MAJOR, shard_width * element_size must be a multiple of the
-    recommended L1 alignment (64 bytes today), so the shard-width step is
-    derived from the `dtype` argument.
-    """
-    grid = device.compute_with_storage_grid_size()
-    max_x, max_y = grid.x, grid.y
-    tile_h, tile_w = 32, 32
-
-    # TILE layout: pad last two dims to tile-multiples before collapsing so
-    # total_h/total_w match the physical layout and create_sharded_memory_config
-    # gets tile-aligned shards.
-    shape_for_memcfg = list(shape)
-    if layout == ttnn.TILE_LAYOUT and len(shape) >= 2:
-        padded_h_dim = ((shape[-2] + tile_h - 1) // tile_h) * tile_h
-        padded_w_dim = ((shape[-1] + tile_w - 1) // tile_w) * tile_w
-        total_h = padded_h_dim
-        for d in shape[:-2]:
-            total_h *= d
-        total_w = padded_w_dim
-        shape_for_memcfg[-2] = padded_h_dim
-        shape_for_memcfg[-1] = padded_w_dim
-    else:
-        total_h = 1
-        for d in shape[:-1]:
-            total_h *= d
-        total_w = shape[-1]
-
-    step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
-    recommended_alignment_bytes = 64
-    element_size = _DTYPE_ELEM_SIZE.get(dtype, 2)
-    rm_step_w = max(1, recommended_alignment_bytes // element_size)
-    step_w = tile_w if layout == ttnn.TILE_LAYOUT else rm_step_w
-
-    if strategy == ttnn.ShardStrategy.HEIGHT:
-        ny = _divisible_grid_1d(total_h, max_y, step_h)
-        core_grid = ttnn.CoreGrid(y=ny, x=1)
-    elif strategy == ttnn.ShardStrategy.WIDTH:
-        nx = _divisible_grid_1d(total_w, max_x, step_w)
-        core_grid = ttnn.CoreGrid(y=1, x=nx)
-    else:  # BLOCK
-        ny = _divisible_grid_1d(total_h, max_y, step_h)
-        nx = _divisible_grid_1d(total_w, max_x, step_w)
-        core_grid = ttnn.CoreGrid(y=ny, x=nx)
-
-    return ttnn.create_sharded_memory_config(
-        shape=shape_for_memcfg,
-        core_grid=core_grid,
-        strategy=strategy,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+from tests.ttnn.utils_for_testing import assert_with_pcc, make_sharded_memory_config
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +43,10 @@ SCENARIOS = [
     ("dram_height", _mc_interleaved(ttnn.DRAM_MEMORY_CONFIG), _mc_sharded(HEIGHT)),
     ("dram_width", _mc_interleaved(ttnn.DRAM_MEMORY_CONFIG), _mc_sharded(WIDTH)),
     ("dram_block", _mc_interleaved(ttnn.DRAM_MEMORY_CONFIG), _mc_sharded(BLOCK)),
+    # L1 input, sharded output (#46161: close L1→sharded test gap)
+    ("l1_height", _mc_interleaved(ttnn.L1_MEMORY_CONFIG), _mc_sharded(HEIGHT)),
+    ("l1_width", _mc_interleaved(ttnn.L1_MEMORY_CONFIG), _mc_sharded(WIDTH)),
+    ("l1_block", _mc_interleaved(ttnn.L1_MEMORY_CONFIG), _mc_sharded(BLOCK)),
     # sharded-to-sharded, same strategy
     ("height_height", _mc_sharded(HEIGHT), _mc_sharded(HEIGHT)),
     ("width_width", _mc_sharded(WIDTH), _mc_sharded(WIDTH)),
@@ -163,6 +82,11 @@ SHAPE_CASES = [
     ([1, 3, 96, 96], [1, 9, 32, 96], "irreg_aligned"),
     # grid reduction: forces recompute_shard_spec_for_output to shrink the grid
     ([1, 8, 32, 256], [1, 1, 256, 256], "grid_reduction"),
+    # odd batch sizes (#46161: inner dims are tile-aligned and L1-aligned)
+    ([3, 1, 64, 64], [1, 3, 64, 64], "odd_batch_3"),
+    ([7, 32, 32], [1, 7, 32, 32], "odd_batch_7"),
+    ([2, 3, 64, 64], [6, 1, 64, 64], "odd_batch_2x3"),
+    ([3, 64, 128], [3, 128, 64], "odd_batch_swap_hw"),
 ]
 SHAPE_IDS = [s[2] for s in SHAPE_CASES]
 
@@ -182,19 +106,29 @@ DTYPES = [
     (ttnn.bfloat16, "bf16"),
     (ttnn.float32, "fp32"),
     (ttnn.bfloat8_b, "bfp8"),
+    (ttnn.bfloat4_b, "bfp4"),
 ]
 DTYPE_IDS = [d[1] for d in DTYPES]
 
 # Per-shape scenario allowlist — matches the semantic coverage of the
 # pre-consolidation test file (i.e. the union of what the 16 separate
-# test_reshape_* functions exercised, minus redundant duplicates).
+# test_reshape_* functions exercised, minus redundant duplicates),
+# plus #46161 expansions for L1→sharded, irregular+sharded output,
+# and odd batch sizes.
 _ALL_SCENARIOS = set(SCENARIO_IDS)
 _SHARDED_IN_DEFAULT_OUT = {"height_default", "width_default", "block_default"}
 _SAME_STRATEGY_S2S = {"height_height", "width_width", "block_block"}
+_INTERLEAVED_TO_SHARDED = {
+    "dram_height",
+    "dram_width",
+    "dram_block",
+    "l1_height",
+    "l1_width",
+    "l1_block",
+}
 
 _SHAPE_SCENARIO_ALLOWLIST = {
-    # Tile-aligned 4D: full scenario set (as in the original dram/l1/
-    # height/width/block_sharded_input + sharded_output + sharded_to_sharded tests).
+    # Tile-aligned 4D: full scenario set (includes L1→sharded from #46161).
     "merge_ch": _ALL_SCENARIOS,
     "swap_hw": _ALL_SCENARIOS,
     "halve_w_double_h": _ALL_SCENARIOS,
@@ -203,14 +137,13 @@ _SHAPE_SCENARIO_ALLOWLIST = {
     "2d_swap": _SHARDED_IN_DEFAULT_OUT,
     "2d_to_3d_view": _SHARDED_IN_DEFAULT_OUT,
     "2d_to_3d_dim_change": _SHARDED_IN_DEFAULT_OUT,
-    # Irregular: dram interleaved + sharded_in × default_out
-    # (as in test_reshape_irregular_interleaved{,_tile} + irregular_sharded_input_tile).
-    "irreg_2d_to_3d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    "irreg_2d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    "irreg_3d_to_2d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    # The last two irregular shapes were TILE-only originally (no RM case).
-    "irreg_4d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
-    "irreg_4d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT,
+    # Irregular: expanded to include TILE sharded-output scenarios (#46161).
+    # RM remains blocked for irregular shapes by the _is_valid filter (non-L1-aligned widths).
+    "irreg_2d_to_3d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_2d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_3d_to_2d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_4d": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
+    "irreg_4d_swap": {"dram_default"} | _SHARDED_IN_DEFAULT_OUT | _INTERLEAVED_TO_SHARDED | _SAME_STRATEGY_S2S,
     # irreg_aligned in the old file was only exercised via cross_strategy
     # (separate test) and via test_reshape_bfloat8_b. Restrict main-test
     # coverage to the sharded-in-default scenarios for the bfp8 dtype only
@@ -218,20 +151,26 @@ _SHAPE_SCENARIO_ALLOWLIST = {
     "irreg_aligned": _SHARDED_IN_DEFAULT_OUT,
     # grid_reduction: same-strategy sharded-to-sharded only.
     "grid_reduction": _SAME_STRATEGY_S2S,
+    # Odd batch sizes (#46161): inner dims are tile-aligned and L1-aligned,
+    # so all scenarios work for both TILE and RM.
+    "odd_batch_3": _ALL_SCENARIOS,
+    "odd_batch_swap_hw": _ALL_SCENARIOS,
+    "odd_batch_7": _SHARDED_IN_DEFAULT_OUT | {"dram_default", "l1_default"},
+    "odd_batch_2x3": _SHARDED_IN_DEFAULT_OUT | {"dram_default", "l1_default"},
 }
 
 # dtype axis restrictions matching the pre-consolidation test_reshape_bfloat8_b
 # and test_reshape_multi_dtype coverage (sharded_in × default_out, TILE only).
 _FP32_CASE_IDS = {"merge_ch", "swap_hw"}
 _BFP8_CASE_IDS = {"merge_ch", "swap_hw", "irreg_aligned"}
+_BFP4_CASE_IDS = _BFP8_CASE_IDS  # bf4 mirrors bf8 scope exactly
 
 
 def _is_valid(scenario_label, case_id, layout, dtype):
     """Return True if (scenario, shape, layout, dtype) is in-scope.
 
-    Strict allowlist that reproduces the pre-consolidation coverage —
-    we do not expand the cross product beyond what the original 16
-    test_reshape_* functions already exercised.
+    Allowlist based on the pre-consolidation coverage plus #46161
+    expansions (L1→sharded, irregular+sharded output, odd batch).
     """
     # Per-shape scenario allowlist
     if scenario_label not in _SHAPE_SCENARIO_ALLOWLIST.get(case_id, set()):
@@ -258,6 +197,13 @@ def _is_valid(scenario_label, case_id, layout, dtype):
             return False
     if dtype == ttnn.bfloat8_b:
         if case_id not in _BFP8_CASE_IDS:
+            return False
+        if scenario_label not in _SHARDED_IN_DEFAULT_OUT:
+            return False
+        if layout != ttnn.TILE_LAYOUT:
+            return False
+    if dtype == ttnn.bfloat4_b:
+        if case_id not in _BFP4_CASE_IDS:
             return False
         if scenario_label not in _SHARDED_IN_DEFAULT_OUT:
             return False
@@ -296,7 +242,9 @@ def _assert_reshape(torch_output, actual, dtype):
     assert list(actual.shape) == list(
         torch_output.shape
     ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
-    if dtype == ttnn.bfloat8_b:
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        # Block-float dtypes quantize, so compare with PCC (bf16/fp32/int reshape is exact).
+        # Measured on-device: bf8 ~0.999, bf4 ~0.993 (seed-fixed) — both clear 0.99.
         assert_with_pcc(torch_output, actual, 0.99)
     else:
         assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
@@ -568,7 +516,7 @@ def test_reshape_sharded_memory_config_without_shard_spec_autoderives_from_input
     _assert_reshape(torch_output, actual, ttnn.bfloat16)
 
 
-def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(device):
+def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(device, expect_error):
     """Interleaved input + layout-only sharded output memory_config must TT_FATAL
     with an actionable message when no input shard_spec is available to seed from.
     """
@@ -584,5 +532,5 @@ def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(devic
     out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1)
     assert out_mc.shard_spec is None
 
-    with pytest.raises(RuntimeError, match="no input_shard_spec is available"):
+    with expect_error(RuntimeError, "no input_shard_spec is available"):
         ttnn.reshape(tt_input, (1, 1, 512, 128), memory_config=out_mc)

@@ -34,14 +34,9 @@ from __future__ import annotations
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
-    add_shared_expert_weights,
-    get_weight_core_shard_maps,
-    get_weight_mem_configs,
+    auto_output_width_shard_dim,
+    effective_matmul_ring_size,
     map_shared_experts,
-    prepare_w0_w1_tensor_for_moe_compute,
-    prepare_w0_w1_tensor_with_bias,
-    prepare_w2_tensor_for_moe_compute,
-    prepare_w2_tensor_with_bias,
 )
 
 import ttnn
@@ -172,6 +167,17 @@ class _TTMoEDecodeExpertState:
                     f"shared_expert_ids_to_devices has {len(shared_expert_ids_to_devices)} entries "
                     f"but num_shared_experts={num_shared_experts}"
                 )
+
+            shared_experts_per_device = [0] * num_devices
+            for edl in shared_expert_ids_to_devices.values():
+                for d in edl:
+                    shared_experts_per_device[d] += 1
+            if len(set(shared_experts_per_device)) > 1 or 0 in shared_experts_per_device:
+                raise ValueError(
+                    "Every device, should have the same number of, and at least 1 shared expert:"
+                    f" {shared_experts_per_device=}"
+                )
+
             expected_ids = set(range(num_routed_experts, num_routed_experts + num_shared_experts))
             if set(shared_expert_ids_to_devices.keys()) != expected_ids:
                 raise ValueError(
@@ -298,11 +304,13 @@ class _TTMoEDecodeExpertState:
     ):
         """Prepare and upload all expert state to the mesh.
 
-        Pipeline: argsort-permute routed weights to match the device assignment
-        (`_device_reorder_weights`), optionally splice in shared expert weights so each
-        device holds `routed_per_device + shared_per_device` slots (`add_shared_expert_weights`),
-        then run the prepared tensors through the bf4-tile reordering preparers and
-        upload sharded along the expert dim.
+        Pipeline: argsort-permute routed weights on host to match the device assignment
+        (`_device_reorder_weights`), upload them to the mesh sharded on the experts dim
+        (dim 1) as bf16, optionally splice in shared experts on-device so each device holds
+        `routed_per_device + shared_per_device` slots (`ttnn.experimental.add_shared_expert_weights`),
+        then run the C++ on-device packers (`ttnn.experimental.prepare_*`) and quantize to
+        `bfloat4_b` (`ttnn.experimental.quantize_weights_via_host`) — see
+        `_init_total_expert_weights_impl`.
 
         Routed weight shapes (host, post-permute): `w0/w1 = [L, num_routed, H, N]`,
         `w2 = [L, num_routed, N, H]`. Shared weights are dicts keyed by global expert id;
@@ -310,8 +318,7 @@ class _TTMoEDecodeExpertState:
 
         Biases match the routed shape minus the matmul-output dim (`[L, num_routed, N]`
         for `b0/b1`, `[L, num_routed, H]` for `b2`). Shared experts + bias is not yet
-        supported because `add_shared_expert_weights` doesn't take a bias dict — would
-        need a parallel API.
+        supported because the shared splice doesn't carry bias rows — would need a parallel API.
         """
         self._validate(
             torch_w0,
@@ -333,6 +340,11 @@ class _TTMoEDecodeExpertState:
             torch_b2,
         )
 
+        # An empty mapping ({} when num_shared_experts==0) means "no shared experts" —
+        # normalize to None so the shared-expert paths below are skipped entirely.
+        if not shared_expert_ids_to_devices:
+            shared_expert_ids_to_devices = None
+
         num_routed = torch_w0.shape[1]
         logger.info(
             f"Initializing expert state: routed_experts={num_routed} num_shared={num_shared_experts} "
@@ -352,6 +364,28 @@ class _TTMoEDecodeExpertState:
             torch_expert_mapping, torch_w0, torch_w1, torch_w2, torch_b0, torch_b1, torch_b2
         )
 
+        num_devices = mesh_device.get_num_devices()
+        num_layers = torch_w0.shape[0]
+        hidden_size = torch_w0.shape[-2]
+        intermediate_size = torch_w0.shape[-1]
+        routed_per_device = num_routed // num_devices
+
+        # Upload the (reordered) routed weights to the mesh sharded on the experts dim (dim 1),
+        # bf16 / ROW_MAJOR, so the C++ `ttnn.experimental.prepare_*` helpers can do the layout
+        # transform on-device. Each device receives its assigned contiguous expert chunk.
+        def _shard_experts(t):
+            return ttnn.from_torch(
+                t,
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            )
+
+        tt_w0 = _shard_experts(mapped_torch_w0)
+        tt_w1 = _shard_experts(mapped_torch_w1)
+        tt_w2 = _shard_experts(mapped_torch_w2)
+
         if shared_expert_ids_to_devices is not None:
             if has_bias:
                 # add_shared_expert_weights only handles weights; extending it to bias
@@ -359,21 +393,41 @@ class _TTMoEDecodeExpertState:
                 raise NotImplementedError("bias + shared experts is not yet supported")
 
             logger.info(f"Adding shared expert weights for {len(shared_expert_ids_to_devices)} shared experts")
-            total_torch_w0, total_torch_w1, total_torch_w2 = add_shared_expert_weights(
-                mapped_torch_w0,
-                mapped_torch_w1,
-                mapped_torch_w2,
-                shared_id_to_torch_w0,
-                shared_id_to_torch_w1,
-                shared_id_to_torch_w2,
-                shared_expert_ids_to_devices,
-                mesh_device.get_num_devices(),
+            # The C++ add_shared_expert_weights consumes pre-arranged shared *device* tensors
+            # (per device: its assigned shared experts in sorted-id order; then concatenated
+            # across devices). Arrange on host, upload sharded on dim 1, splice on-device.
+            tt_shared_w0 = _shard_experts(
+                self._arrange_shared(shared_id_to_torch_w0, shared_expert_ids_to_devices, num_devices)
             )
-            total_torch_b0 = total_torch_b1 = total_torch_b2 = None
+            tt_shared_w1 = _shard_experts(
+                self._arrange_shared(shared_id_to_torch_w1, shared_expert_ids_to_devices, num_devices)
+            )
+            tt_shared_w2 = _shard_experts(
+                self._arrange_shared(shared_id_to_torch_w2, shared_expert_ids_to_devices, num_devices)
+            )
+            routed_w0, routed_w1, routed_w2 = tt_w0, tt_w1, tt_w2
+            tt_w0, tt_w1, tt_w2 = ttnn.experimental.add_shared_expert_weights(
+                routed_w0,
+                routed_w1,
+                routed_w2,
+                tt_shared_w0,
+                tt_shared_w1,
+                tt_shared_w2,
+                cluster_axis=cluster_axis,
+            )
+            for t in (routed_w0, routed_w1, routed_w2, tt_shared_w0, tt_shared_w1, tt_shared_w2):
+                ttnn.deallocate(t)
 
+            total_shared_slots = sum(len(devs) for devs in shared_expert_ids_to_devices.values())
+            experts_per_device = (num_routed + total_shared_slots) // num_devices
         else:
-            total_torch_w0, total_torch_w1, total_torch_w2 = mapped_torch_w0, mapped_torch_w1, mapped_torch_w2
-            total_torch_b0, total_torch_b1, total_torch_b2 = mapped_torch_b0, mapped_torch_b1, mapped_torch_b2
+            experts_per_device = routed_per_device
+
+        tt_b0 = tt_b1 = tt_b2 = None
+        if has_bias:
+            tt_b0 = _shard_experts(mapped_torch_b0)
+            tt_b1 = _shard_experts(mapped_torch_b1)
+            tt_b2 = _shard_experts(mapped_torch_b2)
 
         self.tt_expert_mapping = self._init_expert_mapping(
             torch_expert_mapping, shared_expert_ids_to_devices, mesh_device, mesh_shape, cluster_axis
@@ -381,133 +435,114 @@ class _TTMoEDecodeExpertState:
         logger.info("Uploaded expert mapping to mesh")
 
         self.tt_w0_w1, self.tt_w2 = self._init_total_expert_weights_impl(
-            total_torch_w0,
-            total_torch_w1,
-            total_torch_w2,
-            cluster_axis,
+            tt_w0,
+            tt_w1,
+            tt_w2,
             mesh_device,
-            has_bias,
-            total_torch_b0,
-            total_torch_b1,
-            total_torch_b2,
-        )
-
-    @staticmethod
-    def _init_total_expert_weights_impl(
-        torch_w0: "torch.Tensor",
-        torch_w1: "torch.Tensor",
-        torch_w2: "torch.Tensor",
-        cluster_axis: int,
-        mesh_device: ttnn.MeshDevice,
-        has_bias: bool,
-        torch_b0: "torch.Tensor" | None = None,
-        torch_b1: "torch.Tensor" | None = None,
-        torch_b2: "torch.Tensor" | None = None,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Tile-reorder and upload the routed+shared weight tensors as `bfloat4_b`.
-
-        Calls the `prepare_*_for_moe_compute` helpers (with the `_with_bias` variants
-        when bias rows are folded in), gets the per-device DRAM shard configs from
-        `get_weight_mem_configs`, then `from_torch` uploads with `ShardTensorToMesh(dim=2)`
-        — dim 2 is the expert axis after the preparers' permutations, so each device
-        receives its assigned slice of experts.
-
-        Returns the two device tensors `(tt_w0_w1, tt_w2)` ready to feed `moe_compute`.
-        """
-        # TODO validate these be comparing to explicit values in the config
-        num_layers = torch_w0.shape[0]
-        # torch_w0 holds all experts globally [L, num_devices * experts_per_device, K, N];
-        # ShardTensorToMesh(dim=2) below splits the experts dim across mesh devices, so the
-        # `E` we feed prepare_* must match the tensor's actual experts dim, not the per-device count.
-        num_experts_total = torch_w0.shape[1]
-        experts_per_device = num_experts_total // mesh_device.get_num_devices()
-        hidden_size = torch_w0.shape[-2]
-        intermediate_size = torch_w0.shape[-1]
-
-        logger.info(
-            f"Preparing expert weights: total_experts={num_experts_total} per_device={experts_per_device} "
-            f"hidden={hidden_size} intermediate={intermediate_size} has_bias={has_bias}"
-        )
-
-        w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
-            mesh_device, hidden_size, intermediate_size
-        )
-
-        if has_bias:
-            torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-                torch_w0,
-                torch_w1,
-                torch_b0,
-                torch_b1,
-                num_layers,
-                num_experts_total,
-                hidden_size,
-                intermediate_size,
-                w0_w1_shard_map,
-            )
-            torch_w2_reordered = prepare_w2_tensor_with_bias(
-                torch_w2,
-                torch_b2,
-                num_layers,
-                num_experts_total,
-                intermediate_size,
-                hidden_size,
-                w2_shard_map,
-                w0_w1_shard_map,
-            )
-
-        else:
-            torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-                torch_w0,
-                torch_w1,
-                num_layers,
-                num_experts_total,
-                hidden_size,
-                intermediate_size,
-                w0_w1_shard_map,
-            )
-            torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-                torch_w2,
-                num_layers,
-                num_experts_total,
-                intermediate_size,
-                hidden_size,
-                w2_shard_map,
-                w0_w1_shard_map,
-            )
-
-        # get_weight_mem_configs sizes per-device shard footprints, so it wants the per-device count.
-        # has_bias is passed so K_for_shard / w2_N_total grow by a tile to accommodate the bias row.
-        w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
             num_layers,
             experts_per_device,
             hidden_size,
             intermediate_size,
-            w0_w1_shard_map,
-            w2_shard_map,
-            dram_core_range_set,
+            has_bias,
+            tt_b0,
+            tt_b1,
+            tt_b2,
+        )
+
+    @staticmethod
+    def _arrange_shared(
+        shared_dict: dict[int, "torch.Tensor"],
+        shared_expert_ids_to_devices: dict[int, list[int]],
+        num_devices: int,
+    ) -> "torch.Tensor":
+        """Arrange a `{shared_expert_id: tensor}` dict into the per-device-stacked layout the
+        C++ `add_shared_expert_weights` expects.
+
+        For each device (in order), concatenate its assigned shared experts (in sorted global-id
+        order) along the experts dim (dim 1), then concatenate across devices. Sharding the
+        result on dim 1 then lands each device's shared experts on it, in slot order — matching
+        how the device-side splice appends shared experts after routed ones per device.
+        """
+        device_to_shared: list[list[int]] = [[] for _ in range(num_devices)]
+        for sid in sorted(shared_expert_ids_to_devices):
+            for d in shared_expert_ids_to_devices[sid]:
+                device_to_shared[d].append(sid)
+        per_device = [torch.cat([shared_dict[sid] for sid in device_to_shared[d]], dim=1) for d in range(num_devices)]
+        return torch.cat(per_device, dim=1)
+
+    @staticmethod
+    def _init_total_expert_weights_impl(
+        tt_w0: ttnn.Tensor,
+        tt_w1: ttnn.Tensor,
+        tt_w2: ttnn.Tensor,
+        mesh_device: ttnn.MeshDevice,
+        num_layers: int,
+        experts_per_device: int,
+        hidden_size: int,
+        intermediate_size: int,
+        has_bias: bool,
+        tt_b0: ttnn.Tensor | None = None,
+        tt_b1: ttnn.Tensor | None = None,
+        tt_b2: ttnn.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Pack and quantize the combined routed+shared weight device tensors to `bfloat4_b`.
+
+        Inputs are multi-device tensors sharded on the experts dim (dim 1), bf16 / ROW_MAJOR.
+        Runs the C++ on-device packers (`ttnn.experimental.prepare_*`, with the `_with_bias`
+        variants when bias rows are folded in), fetches the DRAM-sharded mem configs from
+        `ttnn.experimental.get_weight_mem_configs`, then quantizes to `bfloat4_b` onto those
+        configs via `ttnn.experimental.quantize_weights_via_host` (host round-trip).
+
+        `experts_per_device` is the *combined* (routed + shared) per-device expert count — the
+        experts dim of the inputs, divided across the mesh. Returns the two device tensors
+        `(tt_w0_w1, tt_w2)` ready to feed `moe_compute`.
+        """
+        logger.info(
+            f"Preparing expert weights on device: per_device={experts_per_device} "
+            f"hidden={hidden_size} intermediate={intermediate_size} has_bias={has_bias}"
+        )
+
+        if has_bias:
+            tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_with_bias(
+                tt_w0, tt_w1, tt_b0, tt_b1, L=num_layers, E=experts_per_device, K=hidden_size, N=intermediate_size
+            )
+            tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_with_bias(
+                tt_w2, tt_b2, L=num_layers, E=experts_per_device, N=intermediate_size, K=hidden_size
+            )
+        else:
+            tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_for_moe_compute(
+                tt_w0, tt_w1, L=num_layers, E=experts_per_device, K=hidden_size, N=intermediate_size
+            )
+            tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_for_moe_compute(
+                tt_w2, L=num_layers, E=experts_per_device, N=intermediate_size, K=hidden_size
+            )
+
+        # Raw uploaded inputs are consumed by the packers; free them before the host round-trip.
+        for t in (tt_w0, tt_w1, tt_w2):
+            ttnn.deallocate(t)
+        if has_bias:
+            for t in (tt_b0, tt_b1, tt_b2):
+                ttnn.deallocate(t)
+
+        # has_bias grows the padded K / N by a tile to accommodate the bias row.
+        weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
+            mesh_device,
+            num_layers=num_layers,
+            experts_per_device=experts_per_device,
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
             has_bias=has_bias,
         )
 
-        # Prepared tensors are shape (num_cores, L, E_total, groups_per_core, ..., 4*TILE).
-        # Shard along E (dim=2) so each device receives its assigned experts.
-        tt_w0_w1 = ttnn.from_torch(
-            torch_w0_w1_reordered,
-            dtype=ttnn.bfloat4_b,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=w0_w1_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
+            tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=weight_mem_configs.w0_w1
         )
-        tt_w2 = ttnn.from_torch(
-            torch_w2_reordered,
-            dtype=ttnn.bfloat4_b,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=w2_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        ttnn.deallocate(tt_w0_w1_prepped)
+        tt_w2 = ttnn.experimental.quantize_weights_via_host(
+            tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=weight_mem_configs.w2
         )
-        logger.info("Uploaded w0/w1 and w2 to mesh")
+        ttnn.deallocate(tt_w2_prepped)
+        logger.info("Prepared and quantized w0/w1 and w2 to bfloat4_b on mesh")
 
         return tt_w0_w1, tt_w2
 
@@ -689,7 +724,21 @@ class TTMoEDecode:
             torch_b1=torch_b1,
             torch_b2=torch_b2,
         )
-        self.buffers = _TTMoEDecodeBuffers(mesh_device, **config.buffers.model_dump())
+        buffers_dict = config.buffers.model_dump()
+        if buffers_dict.get("compute_tilize_drain_core") is None:
+            matmul_ring_size = effective_matmul_ring_size(mesh_device)
+            buffers_dict["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(
+                mesh_device,
+                config.compute.output_height_shard_dim,
+                auto_output_width_shard_dim(config.hidden_size, matmul_ring_size=matmul_ring_size),
+                config.hidden_size,
+                mux_core_range_set=config.compute.mux_core_range_set,
+            )
+        else:
+            raise ValueError(
+                "compute_tilize_drain_core is not user-configurable; omit it to resolve dynamically at runtime"
+            )
+        self.buffers = _TTMoEDecodeBuffers(mesh_device, **buffers_dict)
 
     @property
     def _num_fast_reduce_outputs(self) -> int:

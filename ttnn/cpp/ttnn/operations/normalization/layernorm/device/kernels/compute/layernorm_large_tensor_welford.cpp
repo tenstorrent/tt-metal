@@ -15,7 +15,7 @@
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
@@ -101,7 +101,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_inb_obj.pop_front(block.full_block_size());
 
         // Pack to intermediate CB (needed
-        // to workaround transpose_wh_dest bug)
+        // to workaround transpose_dest bug)
         pack_reconfig_data_format(cb_interm_pre_add);
         cb_interm_pre_add_obj.reserve_back(block.full_block_size());
         tile_regs_wait();
@@ -132,10 +132,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         welford_restore_state(mean_dst);
 
         reconfig_data_format_srca(cb_ex2_welford, cb_interm_pre_add);
-        transpose_wh_init_short(cb_interm_pre_add);
+        transpose_init(cb_interm_pre_add);
         for (auto i : block.local()) {
             // Welford's needs transposed input tile
-            transpose_wh_tile(cb_interm_pre_add, i, input_dst);
+            transpose_tile(cb_interm_pre_add, i, input_dst);
 
             // Welford over this tile: include only valid elements, never padding.
             if constexpr (is_last_tile_full) {
@@ -181,6 +181,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             cb_ex2_welford_obj.push_back(1);
         }
     }
+
+    reconfig_data_format_srca(cb_interm_pre_add, cb_ex_welford);
 
     cb_ex_obj.wait_front(1);
     cb_ex2_obj.wait_front(1);
@@ -240,16 +242,9 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     uint32_t sample_idx = 0;
     reconfig_data_format_srca(cb_x_welford);
-    // Full transpose_wh_init when the alias is active. cb_x_welford's buffer index isn't
-    // visible to compute_kernel_hw_startup at the top of kernel_main (only cb_in is), so we
-    // run the full init once to program all hw config registers for it. The non-alias path
-    // (cb_x_welford == cb_in) uses transpose_wh_init_short since cb_in's hw config is
-    // already programmed.
-    if constexpr (welford_fp32_alias) {
-        transpose_wh_init(cb_x_welford, cb_ex);
-    } else {
-        transpose_wh_init_short(cb_x_welford);
-    }
+    // Reconfigure the transpose op for the welford intake CB. When the alias is active,
+    // cb_x_welford has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
+    transpose_init(cb_x_welford);
     tile_regs_acquire();
     welford_init();
 
@@ -259,22 +254,22 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             cb_x_welford_obj.wait_front(1);
             // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses the
             // full 32-slot math-thread replay buffer; the recovery block below re-records all
-            // of it after each transpose). transpose_wh_init_short re-records slots [16, 32)
-            // with the transpose-dest setup so transpose_wh_tile below can replay them.
-            transpose_wh_init_short(cb_x_welford);
+            // of it after each transpose). transpose_init re-records slots [16, 32)
+            // with the transpose-dest setup so transpose_tile below can replay them.
+            transpose_init(cb_x_welford);
         } else {
             cb_in_obj.wait_front(1);
         }
         // Welford's needs transposed input tile
-        transpose_wh_tile(cb_x_welford, 0, input_dst);
+        transpose_tile(cb_x_welford, 0, input_dst);
         if constexpr (welford_fp32_alias) {
-            // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+            // transpose_tile took the UnpackToDestFp32 path. Its math-side init clobbered
             // the welford recurrence at SFPU replay slots [16, 32).
             // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with the
             // welford recurrence; PreserveStats keeps the running mean / M2 accumulator in
             // LREG4/5. UNPACK A is left in transpose=1;
             // welford_update is pure SFPU and does not consume that state, and the next
-            // iteration's transpose_wh_init_short reprograms it.
+            // iteration's transpose_init reprograms it.
             welford_init<WelfordInitMode::PreserveStats>();
         }
         welford_update<W>(input_dst, sample_idx, reciprocal_lut);
@@ -293,11 +288,11 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
     if constexpr (welford_fp32_alias) {
         cb_x_welford_obj.wait_front(num_to_sync);
-        transpose_wh_init_short(cb_x_welford);
+        transpose_init(cb_x_welford);
     } else {
         cb_in_obj.wait_front(num_to_sync);
     }
-    transpose_wh_tile(cb_x_welford, 0, input_dst);
+    transpose_tile(cb_x_welford, 0, input_dst);
     if constexpr (welford_fp32_alias) {
         welford_init<WelfordInitMode::PreserveStats>();
     }
@@ -355,7 +350,7 @@ void kernel_main() {
     constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                        // x - E[x]
+    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                   // x - E[x]
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
@@ -446,13 +441,13 @@ void kernel_main() {
         // Transpose mean and variance back to
         // columns and pack back to CBs
         reconfig_data_format_srca(cb_ex);
-        transpose_wh_init_short(cb_ex);
+        transpose_init(cb_ex);
 
         cb_ex_obj.wait_front(onetile);
         cb_ex2_obj.wait_front(onetile);
         tile_regs_acquire();
-        transpose_wh_tile(cb_ex, 0, mean_dst);
-        transpose_wh_tile(cb_ex2, 0, var_dst);
+        transpose_tile(cb_ex, 0, mean_dst);
+        transpose_tile(cb_ex2, 0, var_dst);
         tile_regs_commit();
         cb_ex_obj.pop_front(onetile);
         cb_ex2_obj.pop_front(onetile);
@@ -554,70 +549,17 @@ void kernel_main() {
                         cb_inb, i, i);
                 }
                 cb_inb_obj.pop_front(block.full_block_size());
-                reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
-            // Multiply by 1/(√(Var(X) + ε)).
-            //
-            // On Wormhole, binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> on c_0 (cb_in)
-            // silently corrupts when an earlier unpack op in this kernel routed through an
-            // UnpackToDestFp32 CB. The two triggers are different in each path:
-            //   * non-fuse welford (welford_fp32_alias): transpose_wh_tile reads cb_x_welford
-            //     (c_29, UnpackToDestFp32 alias of cb_x).
-            //   * fuse_pre_add welford state (welford_state_fp32_alias): copy_tile reads
-            //     cb_ex_welford / cb_ex2_welford (c_30 / c_31, UnpackToDestFp32 aliases of
-            //     cb_ex / cb_ex2). cb_interm_pre_add (c_23) is kept in Default mode and the
-            //     fuse path's transpose_wh_tile on it does not contribute to the trigger.
-            // The leaked unpacker state survives across the welford -> eltwise boundary;
-            // even-indexed DEST half blocks accumulate (output = (1+rsqrt)*(x-mean), ~1.286x),
-            // odd-indexed blocks produce mostly zeros. The standard reconfig_data_format(...,
-            // IGNORE) skip-optimization at the start of the eltwise block does not reset
-            // whatever state needs resetting. Blackhole is unaffected.
-            //
-            // If we're on Wormhole and any UnpackToDestFp32 alias is active in
-            // this kernel, stage (x - mean) through cb_xmm and use the mul_tiles_bcast_cols
-            // path so the multiply reads through SrcA instead of reusing DEST.
-            // In all other cases, use the DEST_TO_SRCB reuse path, to avoid an extra pack/unpack
-            // round-trip. Tracked in Issue #45216.
-            constexpr bool wh_dest_reuse_workaround_needed =
-#if defined(ARCH_WORMHOLE)
-                (welford_fp32_alias || welford_state_fp32_alias);
-#else
-                false;
-#endif
-            if constexpr (wh_dest_reuse_workaround_needed) {
-                tile_regs_commit();
-
-                const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
-                CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
-                pack_reconfig_data_format(cb_xmm_intermediate);
-                cb_xmm_intermediate_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_xmm_intermediate);
-                }
-                cb_xmm_intermediate_obj.push_back(block.full_block_size());
-                tile_regs_release();
-
-                reconfig_data_format(cb_xmm_intermediate, cb_ex2pe);
-                mul_bcast_cols_init_short(cb_xmm_intermediate, cb_ex2pe);
-                cb_xmm_intermediate_obj.wait_front(block.full_block_size());
-                tile_regs_acquire();
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_cols(cb_xmm_intermediate, cb_ex2pe, i, 0, i);
-                }
-                cb_xmm_intermediate_obj.pop_front(block.full_block_size());
-                tile_regs_commit();
-            } else {
-                reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe);
-                for (auto i : block.local()) {
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        cb_ex2pe, 0, i);
-                }
-                tile_regs_commit();
+            // Multiply by 1/(√(Var(X) + ε)). SrcA currently holds cb_inb (fused) or cb_in
+            // (non-fused), the last operand read above; switch it to cb_ex2pe's format.
+            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+            for (auto i : block.local()) {
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_ex2pe, 0 /*in_tile_index*/, i);
             }
+            tile_regs_commit();
 
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_xmm = cb_out;
@@ -696,4 +638,7 @@ void kernel_main() {
         cb_ex2pe_obj.pop_front(onetile);
         cb_ex_obj.pop_front(onetile);
     }  // NCHt loop
+    // The single eps tile is waited once and reused across all NCHt iterations; pop it at the end
+    // so the CB is left balanced.
+    cb_eps_obj.pop_front(onetile);
 }

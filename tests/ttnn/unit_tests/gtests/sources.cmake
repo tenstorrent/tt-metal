@@ -24,6 +24,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_levelized_graph.cpp
     test_graph_capture_arguments_morehdot.cpp
     test_graph_capture_arguments_transpose.cpp
+    test_graph_capture_arguments_untilize_with_unpadding.cpp
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
@@ -67,22 +68,21 @@ set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
 )
 
 set(UNIT_TESTS_TTNN_TENSOR_SOURCES
-    tensor/common_tensor_test_utils.cpp
-    tensor/test_create_tensor.cpp
     tensor/test_create_tensor_multi_device.cpp
-    tensor/test_create_tensor_with_layout.cpp
+    tensor/test_h2d_stream_service.cpp
+    tensor/test_d2h_stream_service.cpp
+    tensor/test_d2d_stream_service.cpp
+    tensor/test_stream_pipeline.cpp
     tensor/test_device_storage_ownership.cpp
     tensor/test_tensor_deallocation.cpp
     tensor/test_distributed_tensor.cpp
     tensor/test_tensor_topology.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_partition.cpp
-    tensor/test_tensor_layout.cpp
     tensor/test_tensor_nd_sharding.cpp
     tensor/test_tensor_serialization.cpp
     tensor/test_tensor_utils.cpp
     tensor/test_unit_mesh_utils.cpp
-    tensor/test_vector_conversion.cpp
     tensor/test_xtensor_adapter.cpp
     tensor/test_unchecked_reinterpret_layout.cpp
     tensor/test_xtensor_conversion.cpp

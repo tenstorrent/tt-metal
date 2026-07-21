@@ -48,7 +48,7 @@ namespace sfpu {
  * @param dst_index_in2 DEST tile index holding the false-branch operand.
  * @param dst_index_out DEST tile index that receives the per-lane result.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_where(
     const std::uint32_t dst_index_in0,
     const std::uint32_t dst_index_in1,

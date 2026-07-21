@@ -21,6 +21,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import BootMode, TestConfig
@@ -30,6 +31,8 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -61,6 +64,9 @@ def get_valid_dest_acc_unary_broadcast(formats):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
         same=True,
     ),
@@ -76,7 +82,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
         else [ImpliedMathFormat.Yes]
     ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
 )
 def test_unary_broadcast_quasar(
     formats,
@@ -134,12 +140,12 @@ def test_unary_broadcast_quasar(
         "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(
@@ -153,6 +159,8 @@ def test_unary_broadcast_quasar(
                 output_num_blocks=output_num_blocks,
             ),
             TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

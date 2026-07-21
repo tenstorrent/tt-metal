@@ -13,15 +13,44 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 
 // local function declarations
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
+/**
+ * @brief Copy a tile into the destination register, optionally broadcasting source B.
+ *
+ * For the unpack-to-dest path with 32-bit data, applies the hi16/lo16 broadcast workarounds (Issue #449);
+ * otherwise runs the preconfigured datacopy MOP.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
+ * @param dst_index: Tile index into the destination register.
+ * @param src_format: Source data format (DataFormat enum underlying value).
+ * @param dst_format: Destination data format (DataFormat enum underlying value).
+ * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this function, and
+ *       @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
+ * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
+ */
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
+    if constexpr (type == DataCopyType::A2D)
+    {
+        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
+    }
+    else
+    {
+        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
+    }
+    llk::san::operation_check<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, dst_format);
+
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
@@ -34,8 +63,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         // Switch from the default SrcA format bank to the override bank so manual SrcA_val writes control MOVB2D behavior.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
-        // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
+        // zero-substitution flag via the math state tracker.
+        math::_configure_mov_ops_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -160,11 +190,29 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TTI_CLEARDVALID(0b10, 0);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+
+        // This 32b hi16/lo16 MOV sequence drove the Src zero-substitution flag (and the SrcA format
+        // override bank) directly for the duration of the block; invalidate the tracked state so the
+        // next configurator re-applies the flag from a known baseline instead of taking its
+        // skip-if-set fast path (matches the Blackhole path).
+        math::_invalidate_src_zero_flag_state_();
     }
     else
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+        if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
+        {
+            // UInt16 case needs to use format switching for 32bit dest
+            // without the debug bit 11 hack to write into high bits
+            // avoiding BroadcastType::NONE mode as that path is used by SFPU
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
+            }
+        }
 
         if constexpr (type == DataCopyType::A2D)
         {
@@ -186,10 +234,35 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             }
         }
 
+        if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
+        {
+            // Undo format switching option: clear the override and zero-flag-disable bits set above so the
+            // implied SrcA format and default zero-flag behavior are restored (matches the Blackhole path).
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+                // The Zero_Flag_disabled_src bit was set/cleared above via raw RMW, bypassing the math
+                // state tracker; invalidate the tracked state so the next configurator re-applies the flag
+                // instead of taking its skip-if-set fast path (matches the Blackhole path).
+                math::_invalidate_src_zero_flag_state_();
+            }
+        }
+
         math::clear_dst_reg_addr();
     }
 }
 
+/**
+ * @brief Program the address-mod slots for a datacopy: single-row and 8-row (or 4-row for UInt16) dest/source steps.
+ *
+ * The increment pattern depends on the datacopy direction (A2D walks SrcA, B2D walks SrcB) and broadcast type;
+ * UInt16 B2D uses 4-row steps because it relies on MOVB2D.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param dst_format: Destination data format (DataFormat enum underlying value); selects the UInt16 4-row step.
+ */
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 {
@@ -272,6 +345,21 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
     }
 }
 
+/**
+ * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
+ *
+ * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT (except UInt16, which stays on MOVA2D) or the datum is UInt8; B2D uses
+ * MOVB2D (or ELWADD for non-UInt16 column broadcast) with loop counts derived from the broadcast type.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (forces the ELWADD move path like FP32 dest).
+ * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
+ * @param total_rows: Total rows to move across the inner loop.
+ * @param num_faces: Number of faces in the tile.
+ * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
+ */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
 {
@@ -289,9 +377,17 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
+        else if (is_fp32_dest_acc_en && (dst_format == to_underlying(DataFormat::UInt16)))
+        {
+            // Typecasting uint16 to 32bit data, need data to be written to lower 16 bits without modification
+            // to be consumed by SFPU easily.
+            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
+            tmp.program();
+        }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(0, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
@@ -378,10 +474,33 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
     }
 }
 
+/**
+ * @brief Initialize the math thread (address mods and MOP) for an elementwise unary datacopy.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath.
+ * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
+ * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
+ * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ which feeds the tile.
+ * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
+ */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    if constexpr (type == DataCopyType::A2D)
+    {
+        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
+    }
+    else
+    {
+        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
+    }
+    llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, dst_format);
+
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
@@ -398,6 +517,13 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Uninitialize after an elementwise unary datacopy.
+ *
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam unpack_to_dest: Whether unpack wrote directly to dest.
+ * @note Reverses @ref _llk_math_eltwise_unary_datacopy_init_; currently a no-op since all state is transient.
+ */
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_uninit_()
 {

@@ -4,8 +4,6 @@
 
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
-#include <algorithm>
-#include <cstdlib>
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -87,6 +85,31 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const int32_t dim = operation_attributes.dim;
     TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
     TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
+
+    // Validate fused SwiGLU constraints. The weight packs gate/up tile-pairs along N, so
+    // its width must be an even number of tiles; the matmul output collapses each pair to
+    // one tile (silu(gate)*up).
+    if (operation_attributes.fuse_swiglu) {
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value(),
+            "minimal_matmul cannot combine fuse_swiglu with a unary fused_activation");
+        TT_FATAL(
+            !operation_attributes.fused_ternary_scalar.has_value(),
+            "minimal_matmul cannot combine fuse_swiglu with fused ternary (addcmul)");
+        TT_FATAL(
+            N % (2 * tt::constants::TILE_WIDTH) == 0,
+            "minimal_matmul fuse_swiglu requires weight width N={} to be a multiple of 2*TILE_WIDTH={}",
+            N,
+            2 * tt::constants::TILE_WIDTH);
+        // For chunked split each chunk must hold whole gate/up pairs, so the per-chunk weight
+        // width must be a multiple of 2 tiles (the output per-chunk width is a multiple of 1 tile).
+        TT_FATAL(
+            (N / chunks) % (2 * tt::constants::TILE_WIDTH) == 0,
+            "minimal_matmul fuse_swiglu requires per-chunk weight width N/chunks={} to be a multiple of "
+            "2*TILE_WIDTH={}",
+            N / chunks,
+            2 * tt::constants::TILE_WIDTH);
+    }
 
     if (chunks > 1) {
         // Validate N is divisible by chunks
@@ -205,10 +228,6 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
             "compute_with_storage_grid_size must be <= device grid size");
 
-        // The kernel runs half-sync (the factory does not enable dst_full_sync_en on ComputeConfig),
-        // so the subblock must fit the configured half-sync DST depth: 8 tiles bf16, 4 tiles fp32.
-        // A subblock larger than this overflows DST and silently corrupts the output (verified PCC
-        // 0.28-0.79 for fp32 2x4/4x2), so validate against the real (half-sync) depth.
         const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
         TT_FATAL(
             cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
@@ -221,7 +240,9 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    const uint32_t N = in1_input_tensor_shape[-1];
+    // For SwiGLU the weight is a [gate|up] matrix of width 2*N; the op emits silu(gate)*up
+    // of width N, so the output along the last dim is half the weight width.
+    const uint32_t N = operation_attributes.fuse_swiglu ? (in1_input_tensor_shape[-1] / 2) : in1_input_tensor_shape[-1];
     const int32_t chunks = operation_attributes.chunks;
 
     const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
@@ -231,31 +252,10 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
-    // Split-K (plan A2, env TT_MM_K_SLICES): the op writes K_slices partial M x N results stacked along
-    // M into a single [K_slices * M, N] buffer that the host sums. Only on the auto path (no config) and
-    // only for the regular (chunks == 1) op. K must divide evenly (validated in the factory).
-    // Split-K (env TT_MM_K_SLICES). Two reduction modes:
-    //  - A2 (default): each band writes its partial; output is [K_slices * M, N] and the host sums.
-    //  - B (TT_MM_K_FUSED=1): bands reduce up the column on-device; output is the final [M, N].
-    // Env split-K applies with OR without a pinned blocking config (so blocking and S/Pk sweep jointly);
-    // the factory honors the same env. Fused (k_fused) -> [M,N]; A2 -> [k_slices*M, N].
-    uint32_t k_slices = 1;
-    bool k_fused = false;
-    if (chunks == 1) {
-        if (const char* ks = std::getenv("TT_MM_K_SLICES"); ks != nullptr) {
-            k_slices = std::max(1, std::atoi(ks));
-        }
-        if (const char* kf = std::getenv("TT_MM_K_FUSED"); kf != nullptr && std::atoi(kf) != 0) {
-            k_fused = true;
-        }
-    }
-    const uint32_t out_m_mult = (k_slices > 1 && !k_fused) ? k_slices : 1;  // A2 stacks partials along M
-
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_shape[-2] = output_shape[-2] * out_m_mult;
         output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
@@ -294,7 +294,8 @@ std::vector<Tensor> minimal_matmul(
     int32_t dim,
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
-    const std::optional<Tensor>& fused_ternary_input_b) {
+    const std::optional<Tensor>& fused_ternary_input_b,
+    bool fuse_swiglu) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -315,7 +316,8 @@ std::vector<Tensor> minimal_matmul(
             .fused_ternary_scalar = fused_ternary_scalar,
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
-            .dim = dim},
+            .dim = dim,
+            .fuse_swiglu = fuse_swiglu},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

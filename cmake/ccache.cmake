@@ -16,6 +16,14 @@ function(useCcache)
         set(CCACHE_ENV "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime")
     endif()
 
+    # Default to zstd level-3 compression if the caller has not already chosen a compression setting.
+    # This reduces remote storage (Redis) entry size by ~3-5x with negligible impact on build times.
+    if(NOT DEFINED ENV{CCACHE_COMPRESS})
+        list(APPEND CCACHE_ENV "CCACHE_COMPRESS=true")
+        list(APPEND CCACHE_ENV "CCACHE_COMPRESSLEVEL=3")
+        message(STATUS "ccache compression: defaulting to zstd level 3 (override with CCACHE_COMPRESS env var)")
+    endif()
+
     if(CMAKE_GENERATOR MATCHES "Ninja")
         foreach(lang IN ITEMS C CXX)
             set(CMAKE_${lang}_COMPILER_LAUNCHER
@@ -47,7 +55,21 @@ useCcache()
 # Skipping ccache for the (tiny, dedicated) PCH provider targets is the
 # simplest reliable fix: the .pch is always built fresh, so its metadata
 # always matches.  All other translation units still benefit from ccache.
+#
+# This problem is Clang-specific.  GCC uses a different PCH validation
+# mechanism (-fpch-preprocess) that does not embed per-header file sizes,
+# so the stale-metadata issue does not arise.  Disabling ccache for GCC PCH
+# providers is therefore counterproductive: GCC's .gch binary embeds a
+# compilation timestamp, making each fresh build produce a different binary.
+# That causes every consumer translation unit to get a different input hash
+# and miss the cache.  With ccache enabled on the provider, the first worker
+# stores the .gch and all subsequent workers (same run or future runs with
+# identical inputs) retrieve the same binary, giving consumers consistent
+# input hashes and high hit rates.
 function(tt_disable_ccache_for_pch target)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        return()
+    endif()
     set_target_properties(
         ${target}
         PROPERTIES

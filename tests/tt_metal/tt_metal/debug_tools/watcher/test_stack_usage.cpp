@@ -85,17 +85,15 @@ void RunOneTest(
         for (uint32_t i = 0; i < num_kernels; i++) {
             std::string name = fmt::format("dm_{}", i);
             kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = name,
+                .unique_id = experimental::KernelSpecName{name},
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
-                .hw_config =
-                    experimental::DataMovementHardwareConfig{
-                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+                .hw_config = experimental::DataMovementGen2Config{},
             });
-            kernel_names.push_back(name);
+            kernel_names.emplace_back(name);
         }
-        constexpr const char* COMPUTE_NAME = "compute";
+        const experimental::KernelSpecName COMPUTE_NAME{"compute"};
         kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_NAME,
             .source = path_metal2,
@@ -103,7 +101,7 @@ void RunOneTest(
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = experimental::ComputeGen2Config{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -115,18 +113,15 @@ void RunOneTest(
             auto processor = static_cast<tt::tt_metal::DataMovementProcessor>(type_idx);
             auto noc = (type_idx == 1) ? tt::tt_metal::NOC::RISCV_1_default : tt::tt_metal::NOC::RISCV_0_default;
             kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = name,
+                .unique_id = experimental::KernelSpecName{name},
                 .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
-                .hw_config =
-                    experimental::DataMovementHardwareConfig{
-                        .gen1_config =
-                            experimental::DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc}},
+                .hw_config = experimental::DataMovementGen1Config{.processor = processor, .noc = noc},
             });
-            kernel_names.push_back(name);
+            kernel_names.emplace_back(name);
         }
-        constexpr const char* COMPUTE_NAME = "compute";
+        const experimental::KernelSpecName COMPUTE_NAME{"compute"};
         kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_NAME,
             .source = path_metal2,

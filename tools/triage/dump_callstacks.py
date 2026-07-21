@@ -8,11 +8,13 @@ Usage:
     dump_callstacks [--all-cores]
 
 Options:
-    --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
+    --all-cores        Show all cores, including those with Go Message = DONE and RISCs not enabled
+                       by the running program. By default, both are filtered out.
 
 Description:
-    Dumps callstacks for all devices in the system and for every supported risc processor.
-    By default, filters out cores with DONE status and shows essential fields.
+    Dumps callstacks for all devices in the system and for every supported RISC processor.
+    By default, shows essential fields and filters out cores with Go Message = DONE and RISCs not
+    enabled by the running program (kernel_config.enables).
     Use --all-cores to see all cores, and -v/-vv to show more columns.
 
     Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
@@ -46,11 +48,9 @@ def dump_callstacks(
     try:
         if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
             return None
-        # Skip DONE cores unless --all-cores is specified
-        if not show_all_cores:
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
-            if dispatcher_core_data.go_message == "DONE":
-                return None
+        # Skip DONE / not-enabled-by-design cores unless --all-cores is specified
+        if not show_all_cores and callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+            return None
         return callstack_provider.get_cached_callstacks(location, risc_name)
     except TimeoutDeviceRegisterError:
         raise

@@ -6,6 +6,7 @@ import pytest
 import torch
 import math
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     pytorch_ops,
@@ -178,7 +179,7 @@ def test_bert_linear_batch7(
     )
 
     if has_bias:
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -187,7 +188,7 @@ def test_bert_linear_batch7(
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -309,7 +310,7 @@ def run_bert_linear_batch4(
     )
 
     if has_bias:
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -318,7 +319,7 @@ def run_bert_linear_batch4(
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -549,7 +550,7 @@ def test_bert_linear_batch4_fp32_input_output(
     )
 
     if has_bias:
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -558,7 +559,7 @@ def test_bert_linear_batch4_fp32_input_output(
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,

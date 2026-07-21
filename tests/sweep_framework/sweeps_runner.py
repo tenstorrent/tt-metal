@@ -8,6 +8,7 @@ import builtins
 import datetime as dt
 import importlib
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -29,10 +30,11 @@ except ImportError:
 from framework.device_fixtures import default_device
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
+from framework.constants import parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from sweep_utils.perf_utils import run_single, run_with_cache_comparison
+from sweep_utils.perf_utils import run_single, run_with_cache_comparison, DEVICE_PERF_SKIPPED
 
 
 @dataclass
@@ -60,6 +62,13 @@ class SweepsConfig:
     arch_name: str | None = None
     main_proc_verbose: bool = False
     trace_params: bool = False
+    # Restrict the run to vectors whose mesh is 1D ("1d": rows==1 or cols==1) or
+    # 2D ("2d": both >1). Used to split CCL ops (e.g. all_gather) into separate
+    # jobs per fabric family (1D -> FABRIC_1D/RING, 2D -> FABRIC_2D) so a single
+    # process never does a live FABRIC_1D->FABRIC_2D control-plane transition,
+    # whose first post-transition op hangs on T3K CI. None = run all meshes.
+    mesh_dims: str | None = None
+    fail_on_test_failure: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -85,6 +94,8 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
         trace_params=args.trace_params,
+        mesh_dims=args.mesh_dims,
+        fail_on_test_failure=args.fail_on_test_failure,
     )
 
     # Validate and set ARCH_NAME
@@ -279,12 +290,15 @@ def device_context(test_module, output_queue):
 
 
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
-    # Enable operation tracing if --trace-params is set
+    # Enable operation tracing if --trace-params is set. Capture arguments BEFORE
+    # each op runs (not after), so in-place output buffers — e.g. all_gather_async's
+    # persistent_output_buffer — are recorded with their input topology, matching
+    # how the master was traced. See framework/preop_arg_capture.py.
     if config.trace_params:
         try:
-            import ttnn.operation_tracer
+            from tests.sweep_framework.framework.preop_arg_capture import enable_preop_capture
 
-            ttnn.operation_tracer.enable_tracing(True)
+            enable_preop_capture()
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
@@ -334,6 +348,11 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
 MAX_RETRIES = 1
 
+# After a device-fatal wedge we reset and continue with the next vector. Guard
+# against a permanently-wedged device (every vector re-faults) by aborting the
+# suite once this many consecutive resets fail to recover it.
+MAX_CONSECUTIVE_DEVICE_RECOVERIES = 3
+
 
 def _create_main_proc_runner(module_name, input_queue, output_queue, config):
     """Create a persistent runner for main process mode that keeps device open.
@@ -342,12 +361,13 @@ def _create_main_proc_runner(module_name, input_queue, output_queue, config):
     The runner_function executes a single test vector.
     The cleanup_context must be exited to close the device.
     """
-    # Enable operation tracing if --trace-params is set
+    # Enable operation tracing if --trace-params is set (pre-op argument capture;
+    # see framework/preop_arg_capture.py and the note in run()).
     if config.trace_params:
         try:
-            import ttnn.operation_tracer
+            from tests.sweep_framework.framework.preop_arg_capture import enable_preop_capture
 
-            ttnn.operation_tracer.enable_tracing(True)
+            enable_preop_capture()
             logger.info("Operation tracing enabled in main process mode")
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
@@ -444,7 +464,19 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
 
     if status:
         if config.measure_device_perf:
-            if device_perf is None:
+            if device_perf == DEVICE_PERF_SKIPPED:
+                # Module opted this vector out of profiling (unsupported config, e.g.
+                # conv2d heavy FABRIC_1D -> profiler ARC read hangs). PCC passed, so
+                # PASS with device-perf N/A -- not a failure.
+                result["status"] = TestStatus.PASS
+                result["device_perf"] = None
+            elif device_perf is None and _should_skip_device_profiler(config):
+                # The profiler was intentionally gated off for this run (e.g. conv2d on
+                # a multi-chip mesh, or CCL on FABRIC_2D), so there is no device-perf by
+                # design. PCC passed -> PASS with device-perf N/A, not a failure.
+                result["status"] = TestStatus.PASS
+                result["device_perf"] = None
+            elif device_perf is None:
                 result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
             else:
                 result["status"] = TestStatus.PASS
@@ -530,10 +562,57 @@ def _is_device_hang_message(message) -> bool:
     return any(sig in msg for sig in _DEVICE_HANG_SIGNATURES)
 
 
+# Signatures of a device-level *fatal* (distinct from a hang): one vector leaves
+# a core in a bad run state, so the NEXT program launch on that device aborts
+# reading the stale run mailbox ("Read unexpected run_mailbox value: 0x40").
+# Unlike a hang we do NOT abort the whole suite — the fault is tied to the single
+# offending vector, so we reset the device and continue with the next vector on a
+# clean mesh. Without this, one bad vector wedges the device and every remaining
+# vector in the process cascade-fails with the same error (observed on N300: a
+# clamp (12,1,1) config wedging cores 25-16/25-17 then ~25 false FAIL_ASSERT).
+_DEVICE_FATAL_SIGNATURES = (
+    "unexpected run_mailbox value",
+    "read unexpected run_mailbox",
+)
+
+
+def _is_device_fatal_message(message) -> bool:
+    """Return True if a returned exception indicates a device-fatal wedge that
+    requires a device reset before the next vector can run."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _DEVICE_FATAL_SIGNATURES)
+
+
+# Signatures of a transient kernel-ELF build/load failure. When the persisted
+# cache is cold (CI clears it before the job) and FABRIC_2D opens all chips at
+# once, the fabric_erisc_router ELF is built+loaded concurrently across devices;
+# a device can load a partially-written ELF and throw "tt_elffile.cpp:405". The
+# build itself completes (the .elf is written), so simply resetting and retrying
+# the SAME vector in a fresh child — whose cache is now warm — loads it cleanly.
+# (Observed on T3K [2D] all_gather: first FABRIC_2D config 0dd01b5f after a cache
+# clear.) Genuinely-corrupt ELFs just exhaust the retries and fail as before.
+_ELF_LOAD_RETRY_SIGNATURES = (
+    "tt_elffile.cpp",
+    "failed to generate binaries",
+)
+
+
+def _is_elf_load_error(message) -> bool:
+    """Return True if a returned exception looks like a transient kernel-ELF
+    build/load failure that a warm-cache retry should clear."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _ELF_LOAD_RETRY_SIGNATURES)
+
+
 def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
     result["exception"] = "TEST TIMED OUT (CRASH / HANG)"
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
     result["e2e_perf"] = None
     result["peak_l1_memory_per_core"] = None
     result["peak_cb_per_core"] = None
@@ -590,6 +669,29 @@ def _execute_vector_with_retry(
             # and every later vector will throw the same error. Treat this like
             # a hang: kill/reset the device and (under skip-on-timeout) abort
             # the suite so we recover instead of spinning for the whole job.
+            # An intermittent dispatch hang (system_memory_manager.cpp:757 "device
+            # timeout") -- the device accumulates dispatch state over the long
+            # sequential suite and a vector's dispatch occasionally stalls past the
+            # hang-detector, even though the SAME config passes on a clean device
+            # (verified: conv2d 1df14794 etc. pass 4/4 in isolation; profiler-off CI
+            # runs still hit it, so it is NOT profiler-related). A device reset clears
+            # that state, so reset + RETRY the vector -- it runs clean on the next
+            # attempt. Falls through to the abort path below only if it hangs AGAIN on
+            # the last attempt (a genuine, non-transient hang).
+            if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"DEVICE HANG (likely intermittent dispatch-state stall) for "
+                    f"input_hash='{input_hash}': {result.get('message')}. Resetting + retrying on a "
+                    f"clean device (attempt {attempt + 1}/{1 + MAX_RETRIES})."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                continue
+
             if _is_device_hang_message(result.get("message")):
                 logger.error(
                     f"DEVICE HANG detected for input_hash='{input_hash}': {result.get('message')}. "
@@ -599,6 +701,7 @@ def _execute_vector_with_retry(
                 p = None
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(result.get("message", "DEVICE HANG"))
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 reset_util.reset()
                 if child_mode:
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
@@ -606,6 +709,51 @@ def _execute_vector_with_retry(
                 result["_child_process"] = p
                 result["_abort_suite"] = config.skip_on_timeout
                 return result
+
+            # A device-fatal wedge (e.g. "Read unexpected run_mailbox value")
+            # corrupts the mesh: this vector failed AND every later vector on
+            # the same device would abort the same way. Reset the device and
+            # respawn the child so the REST of the suite runs on a clean mesh —
+            # but, unlike a hang, do NOT abort the suite: the fault is tied to
+            # this one vector, not the whole device session. A repeatedly-faulting
+            # device is caught by the consecutive-recovery cap in execute_suite.
+            if _is_device_fatal_message(result.get("message")):
+                logger.error(
+                    f"DEVICE FATAL detected for input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting device and continuing with the next vector."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(result.get("message", "DEVICE FATAL"))
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                result["_child_process"] = p
+                result["_abort_suite"] = False
+                result["_device_recovered"] = True
+                return result
+
+            # A transient kernel-ELF build/load failure (tt_elffile.cpp:405),
+            # typically a cold-cache concurrent fabric_erisc_router build race on
+            # the first FABRIC_2D open. The .elf is written by the time we get
+            # here, so reset + respawn (warm cache) and retry the SAME vector;
+            # it loads cleanly on the next attempt. Fall through to fail only
+            # after exhausting retries.
+            if _is_elf_load_error(result.get("message")) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"KERNEL ELF load failure (likely cold-cache concurrent build) for "
+                    f"input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting + retrying on warm cache (attempt {attempt + 1}/{1 + MAX_RETRIES})."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                continue
 
             result["_child_process"] = p
             result["_abort_suite"] = False
@@ -662,6 +810,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
+    # Consecutive device-fatal resets; reset to 0 on any vector that runs without
+    # a device-fatal wedge. Abort the suite if it exceeds the cap (device won't recover).
+    consecutive_device_recoveries = 0
     # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
     child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
@@ -730,6 +881,20 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 p = result.pop("_child_process", p)
                 abort_suite = result.pop("_abort_suite", False)
 
+                # Track device-fatal recoveries. We continue past a single wedge,
+                # but if the device keeps faulting it isn't recovering — abort the
+                # suite rather than reset+respawn for every remaining vector.
+                if result.pop("_device_recovered", False):
+                    consecutive_device_recoveries += 1
+                    if consecutive_device_recoveries > MAX_CONSECUTIVE_DEVICE_RECOVERIES:
+                        logger.error(
+                            f"{consecutive_device_recoveries} consecutive device-fatal resets in suite "
+                            f"'{suite_name}'; device is not recovering. Aborting remaining tests in suite."
+                        )
+                        abort_suite = True
+                else:
+                    consecutive_device_recoveries = 0
+
                 if abort_suite:
                     if config.skip_on_timeout:
                         results.append(result)
@@ -751,6 +916,41 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                             results.append(skipped_result)
                             suite_pbar.update()
                         break
+            except tt_smi_util.ResetFailed as e:
+                # Every reset mechanism failed: the device is wedged and cannot be
+                # recovered on this host. Continuing would re-hang + re-reset every
+                # remaining vector and burn the whole job timeout, so abort the
+                # suite now (regardless of skip-on-timeout) and mark the rest NOT_RUN.
+                logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(e)
+                # This path breaks before the common footer that stamps this; set it here
+                # so the abort record carries original_vector_data like every other result.
+                result["original_vector_data"] = original_vector_data
+                result["e2e_perf"] = None
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                result["host"] = get_hostname()
+                result["user"] = get_username()
+                results.append(result)
+                suite_pbar.update()
+                for j in range(i + 1, len(test_vectors)):
+                    remaining_vector = test_vectors[j]
+                    skipped_result = dict()
+                    skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
+                    skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                    skipped_result["original_vector_data"] = remaining_vector.copy()
+                    skipped_result["status"] = TestStatus.NOT_RUN
+                    skipped_result["exception"] = "SKIPPED DUE TO UNRECOVERABLE DEVICE RESET"
+                    skipped_result["e2e_perf"] = None
+                    skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                    skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                    skipped_result["host"] = get_hostname()
+                    skipped_result["user"] = get_username()
+                    results.append(skipped_result)
+                    suite_pbar.update()
+                p = None
+                break
             except Exception as e:
                 logger.exception(f"Unexpected error executing vector: {e}")
                 result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
@@ -793,6 +993,82 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     return results, invalid_vectors_count
 
 
+def _vector_mesh_dims(vector) -> str | None:
+    """Classify a raw (pre-sanitize) vector's mesh as '1d', '2d', or None.
+
+    '1d' when the mesh has a unit axis (rows==1 or cols==1) -> FABRIC_1D/RING;
+    '2d' when both axes > 1 -> FABRIC_2D. Returns None when the mesh shape can't
+    be determined (such vectors are never filtered out). Mirrors how the
+    all_gather sweep body itself derives mesh_shape (tensor_placement first).
+    """
+
+    def _dims_from_pair(r, c):
+        return "1d" if (r == 1 or c == 1) else "2d"
+
+    def _parse_two_ints(value):
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                return int(value[0]), int(value[1])
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            nums = re.findall(r"\d+", value)
+            if len(nums) >= 2:
+                return int(nums[0]), int(nums[1])
+        return None
+
+    # 1) Explicit tensor placement mesh_device_shape (model_traced vectors).
+    for key in ("input_a_tensor_placement", "input_tensor_tensor_placement"):
+        tp = vector.get(key)
+        if isinstance(tp, dict):
+            pair = _parse_two_ints(tp.get("mesh_device_shape"))
+            if pair:
+                return _dims_from_pair(*pair)
+    # 2) Explicit mesh_shape field (generality / lead_model vectors).
+    pair = _parse_two_ints(vector.get("mesh_shape"))
+    if pair:
+        return _dims_from_pair(*pair)
+    # 3) mesh_device descriptor.
+    md = vector.get("mesh_device")
+    if isinstance(md, dict):
+        pair = _parse_two_ints(md.get("shape") or md.get("repr", ""))
+        if pair:
+            return _dims_from_pair(*pair)
+    # 4) .mesh_RxC suffix on the stored sweep/suite name.
+    for key in ("sweep_name", "suite_name"):
+        name = vector.get(key)
+        if isinstance(name, str):
+            ms = parse_mesh_suffix(name)
+            if ms:
+                return _dims_from_pair(ms[0], ms[1])
+    return None
+
+
+def _filter_vectors_by_mesh_dims(vectors, mesh_dims):
+    """Keep only vectors matching the requested mesh dimensionality.
+
+    Vectors whose mesh can't be determined are kept (never silently dropped);
+    they are rare for CCL ops (which always carry a tensor placement).
+    """
+    if not mesh_dims:
+        return vectors
+    kept, dropped, undetermined = [], 0, 0
+    for v in vectors:
+        dims = _vector_mesh_dims(v)
+        if dims is None:
+            undetermined += 1
+            kept.append(v)
+        elif dims == mesh_dims:
+            kept.append(v)
+        else:
+            dropped += 1
+    logger.info(
+        f"mesh-dims filter '{mesh_dims}': kept {len(kept)} vector(s), dropped {dropped} "
+        f"(mesh mismatch){f', {undetermined} undetermined kept' if undetermined else ''}."
+    )
+    return kept
+
+
 def run_sweeps(
     module_names,
     config: SweepsConfig,
@@ -822,7 +1098,7 @@ def run_sweeps(
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
             "card_type": config.arch_name,
-            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LLMBox)
+            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LoudBox)
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -866,6 +1142,7 @@ def run_sweeps(
                 suite_start_time = dt.datetime.now(dt.timezone.utc)
 
                 vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
+                vectors = _filter_vectors_by_mesh_dims(vectors, config.mesh_dims)
                 # Update summary counters
                 total_vectors_run += len(vectors)
                 total_tests_run += 1
@@ -965,6 +1242,25 @@ def run_sweeps(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
 
+    # Derive failure from actual per-test statuses, not from export_results() return value
+    # (export_results unconditionally returns "success" for file-based destinations).
+    if config.fail_on_test_failure and status_counts:
+        from tests.sweep_framework.framework.statuses import TestStatus
+
+        fail_status_names = {
+            TestStatus.FAIL_ASSERT_EXCEPTION.name,
+            TestStatus.FAIL_CRASH_HANG.name,
+            TestStatus.FAIL_L1_OUT_OF_MEM.name,
+            TestStatus.FAIL_WATCHER.name,
+            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF.name,
+        }
+        failed_count = sum(count for name, count in status_counts.items() if name in fail_status_names)
+        if failed_count > 0:
+            final_status = "failure"
+            logger.error(f"{failed_count} test case(s) failed/crashed/hung")
+
+    return final_status
+
 
 def get_module_names(config: SweepsConfig):
     """Extract module names based on configuration"""
@@ -1027,13 +1323,53 @@ def disable_watcher():
     os.environ.pop("TT_METAL_WATCHER_APPEND", None)
 
 
+def _is_multidevice_ccl_module(module_name):
+    """True if module_name is a CCL / multi-device op (all_gather, all_reduce,
+    reduce_scatter, all_to_all, all_broadcast). Used to decide whether the device
+    profiler is safe to enable for the run -- see _should_skip_device_profiler."""
+    if not module_name:
+        return False
+    _ccl = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
+    return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
+
+
+def _should_skip_device_profiler(config):
+    """Whether to skip enabling the device profiler for this run. The profiler is a
+    process-global toggle (TT_METAL_DEVICE_PROFILER, read once at startup; kernels are
+    JIT-compiled with instrumentation), so it can't be disabled per-vector -- if it's
+    unsafe for any vector the run will hit, skip it for the whole run.
+
+    CCL on a 2D mesh: with the profiler on, the cq_prefetch dispatch kernel that
+    FABRIC_2D pushes onto idle-erisc overflows the idle-erisc code region
+    (idle_erisc.elf 0x5544 > 0x5390) and wedges the erisc cores at mesh open
+    (run_mailbox 0x40). FABRIC_1D CCL (mesh_dims=="1d") profiles fine -> keep it.
+
+    (conv2d is NOT skipped: a controlled A/B on relay T3K -- looping the 5 known-hanging
+    SDXL configs 787ff3a2/8c7a2cf1/1df14794/46992c20/f350bce3 with
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=30 -- shows the large 3x3 height-sharded
+    auto-sliced/haloed conv2d dispatch deadlock (system_memory_manager.cpp:702/757)
+    reproduces with the profiler OFF at the same onset (~10-15 cumulative executions,
+    round 3) as with it ON, so skipping the profiler does NOT avoid it. It is a genuine
+    intermittent conv2d/dispatch op-level deadlock, handled by reset+retry in
+    _execute_vector_with_retry; the heavy-conv profiler GATHER hang is handled per-vector
+    by conv2d's _SKIP_DEVICE_PERF.)
+
+    Vectors of a skipped run report device-perf N/A and PASS (not
+    FAIL_UNSUPPORTED_DEVICE_PERF) -- see _populate_result_from_response."""
+    if _is_multidevice_ccl_module(config.module_name) and config.mesh_dims != "1d":
+        return True
+    return False
+
+
 def enable_profiler():
     logger.info("Enabling Device Profiler")
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
-    # TT_METAL_PROFILER_SYNC skipped: triggers syncAllDevices() on ETH cores,
-    # which deadlocks on Galaxy due to residual fabric state between test iterations.
+    # C++ post-process exposes per-chip perf in memory via
+    # ttnn._ttnn.profiler.get_latest_programs_perf_data(); required for the
+    # modern (multi-chip-safe) device-perf read in perf_utils.gather_single_test_perf.
+    os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
 
 
 def disable_profiler():
@@ -1041,7 +1377,7 @@ def disable_profiler():
     os.environ.pop("TT_METAL_DEVICE_PROFILER", None)
     os.environ.pop("ENABLE_TRACY", None)
     os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
-    os.environ.pop("TT_METAL_PROFILER_SYNC", None)
+    os.environ.pop("TT_METAL_PROFILER_CPP_POST_PROCESS", None)
 
 
 if __name__ == "__main__":
@@ -1067,6 +1403,18 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--file-path", required=False, help="Read and execute test vectors from a specified file path.")
+
+    parser.add_argument(
+        "--mesh-dims",
+        required=False,
+        choices=["1d", "2d"],
+        default=None,
+        help=(
+            "Restrict the run to vectors whose mesh is 1D (rows==1 or cols==1) or 2D (both >1). "
+            "Splits CCL ops into separate jobs per fabric family so one process never does a live "
+            "FABRIC_1D->FABRIC_2D transition. Omit to run all meshes."
+        ),
+    )
 
     parser.add_argument(
         "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."
@@ -1165,6 +1513,13 @@ if __name__ == "__main__":
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
+    parser.add_argument(
+        "--fail-on-test-failure",
+        action="store_true",
+        required=False,
+        help="Exit with non-zero status if any test case fails, crashes, or hangs. Use in CI to mark the job as failed.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     # Argument validation
@@ -1176,8 +1531,16 @@ if __name__ == "__main__":
     if config.watcher:
         enable_watcher()
 
-    if config.measure_device_perf:
+    if config.measure_device_perf and not _should_skip_device_profiler(config):
         enable_profiler()
+    elif config.measure_device_perf:
+        logger.info(
+            f"Skipping device profiler for {config.module_name!r} "
+            f"(mesh_dims={config.mesh_dims!r}, MESH_DEVICE_SHAPE={os.environ.get('MESH_DEVICE_SHAPE')!r}): "
+            "the profiler is process-global and unsafe for this run -- CCL on FABRIC_2D overflows the "
+            "idle-erisc code region at mesh open (idle_erisc.elf 0x5544 > 0x5390; run_mailbox 0x40). "
+            "Such vectors report device-perf N/A and PASS. 1D-only CCL keeps device-perf."
+        )
 
     # Generate run contents description
     config.run_contents = get_run_contents(config)
@@ -1210,7 +1573,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    run_sweeps(
+    final_status = run_sweeps(
         module_names,
         config=config,
     )
@@ -1220,3 +1583,7 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    if config.fail_on_test_failure and final_status == "failure":
+        logger.error("Exiting with failure: one or more test cases did not pass (--fail-on-test-failure)")
+        sys.exit(1)

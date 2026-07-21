@@ -107,6 +107,8 @@ void fabric_mux_connection_rt_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
+    uint32_t num_mux_clients,
+    uint32_t termination_sync_id,
     std::vector<uint32_t>& worker_rt_args) {
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid
     worker_rt_args.push_back(is_termination_master);  // is_termination_master
@@ -124,13 +126,14 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // termination_sync_address
+    worker_rt_args.push_back(termination_sync_id);  // termination_sync_address (shared, uniform L1 addr)
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_fabric_mux_status_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_flow_control_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_teardown_address
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_buffer_index_address
     worker_rt_args.push_back(termination_master_virtual_core.x);                    // termination_master_noc_x
     worker_rt_args.push_back(termination_master_virtual_core.y);                    // termination_master_noc_y
+    worker_rt_args.push_back(num_mux_clients);                                      // num_mux_clients (this mux)
 }
 
 // Append tensor accessors in a consistent order
@@ -142,7 +145,8 @@ static inline void append_accessors(
     const ttnn::Tensor& ag_input_tensor,
     const std::optional<const ttnn::Tensor>& ternary_a_tensor = std::nullopt,
     const std::optional<const ttnn::Tensor>& ternary_b_tensor = std::nullopt,
-    bool is_injector_core = false) {
+    bool is_injector_core = false,
+    const std::optional<const ttnn::Tensor>& fsdp_local_weight_tensor = std::nullopt) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
@@ -152,6 +156,10 @@ static inline void append_accessors(
     }
     if (is_injector_core) {
         tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.buffer()).append_to(args);
+    }
+    if (fsdp_local_weight_tensor.has_value()) {
+        // FSDP-sharded local weight (for in1 kernel reading its own K-slice from DRAM)
+        tt::tt_metal::TensorAccessorArgs(*fsdp_local_weight_tensor.value().buffer()).append_to(args);
     }
     if (ternary_a_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*ternary_a_tensor.value().buffer()).append_to(args);
@@ -188,7 +196,16 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const ttnn::Tensor>& fused_ternary_input_a,
-    const std::optional<const ttnn::Tensor>& fused_ternary_input_b) {
+    const std::optional<const ttnn::Tensor>& fused_ternary_input_b,
+    // FSDP fusion args (all unset/default when not fused)
+    const std::optional<const ttnn::Tensor>& persistent_weight_buffer,
+    const std::optional<ttnn::MeshCoordinate>& fsdp_forward_coord,
+    const std::optional<ttnn::MeshCoordinate>& fsdp_backward_coord,
+    uint32_t fsdp_ring_size,
+    uint32_t fsdp_ring_index,
+    const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
+    ttnn::ccl::Topology fsdp_topology,
+    bool fuse_swiglu = false) {
     auto* device = input_tensor.device();
 
     if (!config.has_value()) {
@@ -308,8 +325,17 @@ all_gather_minimal_matmul_async_factory_helper(
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+
+    // SwiGLU partitions on gate/up PAIRS (= output tiles) so a pair never splits across cores.
+    uint32_t padded_N_tiles;
+    if (fuse_swiglu) {
+        uint32_t out_N_tiles = N_tiles / 2;
+        uint32_t padded_out_N_tiles = tt::round_up(out_N_tiles, in1_parallel_axis_cores);
+        padded_N_tiles = 2 * padded_out_N_tiles;
+    } else {
+        padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
+    }
 
     // K is sharded equally across devices (validated upstream: K_tiles % ring_size == 0).
     // Within a device, K_per_device tiles are processed in K_blocks_per_device blocks (div_up).
@@ -326,6 +352,16 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
+    if (fuse_swiglu) {
+        TT_FATAL(
+            N_tiles % 2 == 0 && N_tiles_per_core % 2 == 0 && N_block_tiles % 2 == 0,
+            "all_gather_minimal_matmul_async fuse_swiglu requires N_tiles ({}), N_tiles_per_core ({}) and "
+            "N_block_tiles ({}) all even",
+            N_tiles,
+            N_tiles_per_core,
+            N_block_tiles);
+    }
+
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
     log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
@@ -336,60 +372,23 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    // Adaptive CB depth: maximize in0_cb depth (it hides chain mcast pipeline build-up,
-    // ~100us at depth 2), then opportunistically bump in1_cb.
+    // CB sizing: fixed depth-2 for in0/in1, single-buffered out/interm/in2.
     //
-    // Budget = (lowest L1 address occupied by allocator buffers) - (allocator base) -
-    // a small safety margin for non-CB allocations the allocator does not yet account
-    // for at program-factory time (semaphores allocated below, runtime-args staging).
-    // Pattern lifted from ttnn::operations::data_movement::common::get_max_l1_space.
-    // Falls back to `l1_size_per_core` when no L1 buffers are placed yet (typical for
-    // AGMM where input tensors are in DRAM and the op's own buffers haven't been
-    // allocated). On WH 4x8 this yields ~1300 KB — the same value the earlier
-    // hardcoded constant gave — without needing arch- or sweep-specific tuning.
-    auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
-    const uint32_t l1_top =
-        lowest_occupied_l1.has_value() ? static_cast<uint32_t>(lowest_occupied_l1.value()) : device->l1_size_per_core();
-    const uint32_t l1_unreserved = l1_top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    constexpr uint32_t L1_NON_CB_MARGIN_BYTES = 64 * 1024;
-    const uint32_t L1_BUDGET_BYTES =
-        l1_unreserved > L1_NON_CB_MARGIN_BYTES ? l1_unreserved - L1_NON_CB_MARGIN_BYTES : 0u;
-    // Warn if L1 is under pressure (existing tensors take up enough room that our
-    // CB budget falls noticeably below the sweep-validated working point of ~1300 KB
-    // on WH 4x8). Smaller budget forces shallower CBs and degrades perf. Trigger at
-    // 1100 KB to allow ~200 KB of normal headroom variation without false alarms.
-    constexpr uint32_t L1_BUDGET_WARN_THRESHOLD_BYTES = 1100 * 1024;
-    if (L1_BUDGET_BYTES < L1_BUDGET_WARN_THRESHOLD_BYTES) {
-        log_warning(
-            tt::LogOp,
-            "AGMM L1 budget is unexpectedly small ({} KB); CB depths will be capped and perf may "
-            "regress. lowest_occupied_l1={} alloc_base={} l1_size={}. Check L1 allocator pressure "
-            "(persistent tensors in L1, large sharded buffers).",
-            L1_BUDGET_BYTES / 1024,
-            l1_top,
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
-            device->l1_size_per_core());
-    }
-    const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
-                                      + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
-                                      + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
-    const uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
-    const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
-    // Start with in1 depth-2 (safe). Maximize in0_cb depth.
-    uint32_t in0_depth = 2;
-    const uint32_t fixed_with_in1_depth2 = base_fixed_bytes + in1_block_bytes * 2;
-    if (fixed_with_in1_depth2 + 2 * in0_block_bytes <= L1_BUDGET_BYTES) {
-        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_with_in1_depth2) / std::max(1u, in0_block_bytes));
-        in0_depth = std::max(2u, in0_depth);
-    }
-    // Opportunistically bump in1 to depth 3 if there's room left.
-    uint32_t in1_depth = 2;
-    if (fixed_with_in1_depth2 + in0_depth * in0_block_bytes + in1_block_bytes <= L1_BUDGET_BYTES) {
-        in1_depth = 3;
-    }
-    uint32_t in0_cb_num_tiles = in0_block_num_tiles * in0_depth;
-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * in1_depth;
-    uint32_t out_cb_num_tiles = out_block_num_tiles;
+    // This reverts the OOM-causing part of #44982 — the adaptive L1-budget sizing that grew
+    // in0_cb depth up to 8x to fill L1 for perf. That budget is estimated from
+    // lowest_occupied_compute_l1_address() (which falls back to the full l1_size_per_core when
+    // no L1 buffers are placed yet) minus a fixed 64 KB margin; on systems where that estimate
+    // is too optimistic, the depth-8 in0_cb exceeds available L1 and OOMs. Fixed depth-2 is
+    // sized purely from the matmul blocking and is safe on all systems.
+    //
+    // The PR's single-buffered output is KEPT (not reverted to 2x): it is what lets large-N
+    // shapes such as chunks=3 QKV fit in L1; re-doubling it OOMs those here.
+    const uint32_t double_buffer_factor = 2;
+    uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
+    uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
+    // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
+    // still holds the full (2N) block.
+    uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -418,6 +417,14 @@ all_gather_minimal_matmul_async_factory_helper(
     auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
+
+    // Mux termination-sync semaphores. Created ONCE on the full grid so every mux client
+    // (master and peers) sees this semaphore at the SAME L1 address — required because peers
+    // increment it on the master's core. Per-core creation diverges when a core also carries
+    // the other operand's mux semaphores (the in0/in1 sender overlap), which deadlocked teardown.
+    // Separate ids for in0 vs in1 so an overlap core's two muxes don't share a termination slot.
+    auto in0_term_sync_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto in1_term_sync_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
@@ -474,15 +481,96 @@ all_gather_minimal_matmul_async_factory_helper(
         sender_device_coord, forward_coord, backward_coord, device);
 
     auto full_grid_size = device->compute_with_storage_grid_size();
-    TT_FATAL(
-        !((transpose_core_grid ? grid_size.x : grid_size.y) % num_links),
-        "The number of in0 rows must be a multiple of num_links");
+    // Place the fsdp muxes in the last column (packed along the in1/Y axis) only when the matmul
+    // actually leaves that column free — i.e. a transpose grid narrower than the physical grid (the
+    // 7x8-on-an-8-wide-device case). On a full-width grid the last column is a worker column, so
+    // fall back to the original bottom-row mux layout to avoid colliding with the matmul.
+    const bool fsdp_mux_in_column = transpose_core_grid && (grid_size.x < full_grid_size.x);
+    // The in0 sender axis is grouped by num_workers_per_link; each group owns one mux per
+    // direction, so it must form exactly num_links groups (the last group may be short when the
+    // axis isn't a multiple of num_workers_per_link — the per-mux client-count clamp handles that).
+    {
+        uint32_t in0_axis = transpose_core_grid ? grid_size.x : grid_size.y;
+        TT_FATAL(
+            (in0_axis + num_workers_per_link - 1) / num_workers_per_link == num_links,
+            "The in0 sender axis ({}) must form exactly num_links ({}) groups of num_workers_per_link ({})",
+            in0_axis,
+            num_links,
+            num_workers_per_link);
+    }
     uint32_t num_mux_cores = num_links * 2;  // 2 being the number of directions
     TT_FATAL(
         (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
         "The are not enough cores for the number of mux cores requested");
 
-    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
+    // In-column fsdp mux row for a given (group, dir): dir SWAPPED (flip) AND the result shifted up by
+    // one cyclically within the 2*num_links packed rows. The flip swaps which direction owns the
+    // even vs odd row; the up-shift then moves both of a group's muxes to rows <= the group base so
+    // every in1 write (hot tail and cold rank-0) is same-row or upward on NOC_1 — no "down" write
+    // anywhere. Cost: the hot tail write becomes up-1/up-2 instead of same-row, and group 0's muxes
+    // wrap to the top rows. Must stay in lockstep with the fsdp mux create/RT-args/sender loops.
+    const auto fsdp_mux_col_row = [num_mux_cores](uint32_t group, uint32_t dir) {
+        return (group * 2 + (1 - dir) + num_mux_cores - 1) % num_mux_cores;
+    };
+
+    // Scheme 4 single-row interleave: when the fsdp ring is fused and BOTH axes are uni-rings
+    // (Linear), every device creates exactly one mux per (ring, link) — so all 8 muxes fit on the
+    // single row R = full_grid_size.y - 1, interleaved by parity: in0 link g -> ODD col (nwpl*g + 1),
+    // fsdp link g -> EVEN col (nwpl*g). This frees the fsdp column AND the second mux row the old
+    // fallback consumed, letting the matmul reclaim the full 8x8. Collision-free for nwpl==2 (4 links
+    // exactly fill cols 0..7). The create / RT-args / sender-wiring sites all route mux placement
+    // through these helpers so they stay in lockstep.
+    //
+    // in0 on the ODD column (not even) is deliberate: in0's worker->mux write runs on NOC_0 (prefers
+    // +x), and a group's chain-tail sender sits at the group's columns {2g, 2g+1}. Placing the mux at
+    // 2g+1 keeps that write on the +x (with-grain) side; placing it at 2g (the group's left edge)
+    // forced the odd-column sender to write -x against NOC_0, which measured ~11% slower on the fused
+    // op. fsdp takes the even column; its relay write is column-matched (vertical) and m==0-gated, so
+    // the +x/-x grain doesn't apply to it.
+    const bool single_row_muxes = persistent_weight_buffer.has_value() && topology == ttnn::ccl::Topology::Linear &&
+                                  fsdp_topology == ttnn::ccl::Topology::Linear;
+    TT_FATAL(
+        !single_row_muxes || num_workers_per_link == 2,
+        "Scheme-4 single-row mux interleave assumes num_workers_per_link==2 (got {})",
+        num_workers_per_link);
+    const uint32_t single_mux_row = full_grid_size.y - 1;
+    const auto in0_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
+        if (single_row_muxes) {
+            return CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1 (NOC_0 +x-aligned)
+        }
+        uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
+        if (x >= full_grid_size.x) {
+            x -= full_grid_size.x;
+        }
+        return CoreCoord(x, full_grid_size.y - 1);
+    };
+    const auto fsdp_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
+        if (single_row_muxes) {
+            return CoreCoord(num_workers_per_link * link, single_mux_row);  // even col 2g
+        }
+        if (fsdp_mux_in_column) {
+            return CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
+        }
+        uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
+        if (x >= full_grid_size.x) {
+            x -= full_grid_size.x;
+        }
+        x = (x == 0) ? (full_grid_size.x - 1) : (x - 1);
+        return CoreCoord(x, full_grid_size.y - 2);
+    };
+
+    // Uni-ring (Linear): each device relays through exactly ONE mux direction — rank>0 (has a
+    // backward neighbor) short-hops backward (dir=1); rank 0 (no backward neighbor) long-wraps
+    // forward (dir=0). Create/wire only that direction so interior devices stop allocating an
+    // opposite-direction mux they never send through (collapses the 64/68/72 core spread to a
+    // flat 64). The same validity flag that already lets line-END devices skip their absent
+    // direction now applies to every device. Ring is genuinely bidirectional, so keep the
+    // neighbor-existence gate there.
+    const uint32_t in0_uni_dir = backward_coord.has_value() ? 1u : 0u;
+    const auto mux_connection_valid = [&backward_coord, &forward_coord, &topology, in0_uni_dir](const uint32_t dir) {
+        if (topology == ttnn::ccl::Topology::Linear) {
+            return dir == in0_uni_dir;
+        }
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
 
@@ -491,12 +579,7 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
-            mux_core_ranges.emplace_back(mux_logical_core);
+            mux_core_ranges.emplace_back(in0_mux_logical(link, dir));
         }
     }
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
@@ -563,6 +646,11 @@ all_gather_minimal_matmul_async_factory_helper(
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
+    // Added to `defines` before the per-kernel copies below (in0/in1/compute) so every
+    // kernel containing output-writer or compute code sees FUSE_SWIGLU.
+    if (fuse_swiglu) {
+        defines["FUSE_SWIGLU"] = "1";
+    }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
 
@@ -578,6 +666,12 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
+    auto in1_defines = defines;
+    if (persistent_weight_buffer.has_value()) {
+        in1_defines["FSDP_FUSED"] = "1";
+        in1_defines["IS_IN1"] = "1";
+        in1_defines["USE_MUX"] = "1";
+    }
 
     // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
     // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
@@ -587,8 +681,89 @@ all_gather_minimal_matmul_async_factory_helper(
         unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
     }
 
+    const bool fsdp_fused = persistent_weight_buffer.has_value();
+
+    // Skewed rank for compute_actual_k_block's `my_rank` (the consume rooting). With the (a+b)
+    // skewed sharding, device (tp=ring_index, fsdp=fsdp_ring_index) holds local K-stripe
+    // (ring_index + fsdp_ring_index) mod ring_size for BOTH operands, so both in0 (tp uni-ring)
+    // and in1 (fsdp uni-ring) must root their K-walk there. Non-fsdp path: fsdp_ring_index==0 so
+    // this is just ring_index. NOTE: routing/mcast still use the *physical* ring_index, not this.
+    const uint32_t skewed_rank = fsdp_fused ? (ring_index + fsdp_ring_index) % ring_size : ring_index;
+
+    // FSDP-axis ring metrics and fabric mux setup. Mirrors the in0 mux block (above) but
+    // uses fsdp_ring_size / fsdp_ring_index / fsdp_topology and lives on row full_grid_size.y - 2.
+    uint32_t fsdp_num_targets_forward = 0;
+    uint32_t fsdp_num_targets_backward = 0;
+    std::array<uint32_t, 2> fsdp_unicast_forward_args{};
+    std::array<uint32_t, 2> fsdp_unicast_backward_args{};
+    tt::tt_fabric::FabricMuxConfig fsdp_mux_kernel_config = mux_kernel_config;  // overwritten below if fsdp_fused
+    tt::tt_metal::KernelHandle fsdp_mux_kernel_id{};
+    // Uni-ring (Linear): mirror the in0 gate on the fsdp axis — create/wire only the single
+    // direction each device relays through (rank>0 backward dir=1, rank 0 forward dir=0). Ring stays
+    // bidirectional via the neighbor-existence gate.
+    const uint32_t fsdp_uni_dir = fsdp_backward_coord.has_value() ? 1u : 0u;
+    const auto fsdp_mux_connection_valid =
+        [&fsdp_backward_coord, &fsdp_forward_coord, &fsdp_topology, fsdp_uni_dir](const uint32_t dir) {
+            if (fsdp_topology == ttnn::ccl::Topology::Linear) {
+                return dir == fsdp_uni_dir;
+            }
+            return (dir && fsdp_backward_coord.has_value()) || (!dir && fsdp_forward_coord.has_value());
+        };
+    if (fsdp_fused) {
+        std::tie(fsdp_num_targets_forward, fsdp_num_targets_backward) =
+            ttnn::ccl::get_forward_backward_line_mcast_distance(fsdp_ring_size, fsdp_ring_index, fsdp_topology, false);
+        std::tie(fsdp_unicast_forward_args, fsdp_unicast_backward_args) =
+            ttnn::ccl::get_forward_backward_line_unicast_configuration(
+                sender_device_coord, fsdp_forward_coord, fsdp_backward_coord, device);
+
+        // FSDP uni-ring routing (mirrors the in0 override above): fsdp Dev 0's forward unicast
+        // routes N-1 hops to fsdp Dev N-1 to close the virtual ring.
+        if (fsdp_topology == ttnn::ccl::Topology::Linear && fsdp_ring_index == 0) {
+            fsdp_unicast_forward_args[1] = fsdp_ring_size - 1;  // distance_in_hops = N-1
+        }
+
+        std::vector<CoreRange> fsdp_mux_core_ranges;
+        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+            uint32_t dir = mux_id % 2;
+            if (fsdp_mux_connection_valid(dir)) {
+                uint32_t link = mux_id / 2;
+                // Transpose grid (in1 chain runs along X): the fsdp muxes live in the LAST column
+                // (freed by the 7-wide matmul), packed along the in1 sender axis (Y) at rows
+                // 0..2*num_links-1. Each row's chain-tail sender then reaches its mux with a short
+                // horizontal NOC_1 hop, instead of the old long vertical write down to a bottom mux
+                // row (which ran against NOC_1's up/left bias). Non-transpose keeps the bottom-row
+                // layout with the -1 NOC_1 shift.
+                fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical(link, dir));
+            }
+        }
+        CoreRangeSet fsdp_mux_core_range_set = CoreRangeSet(fsdp_mux_core_ranges);
+
+        fsdp_mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            num_full_size_channels,
+            num_header_only_channels,
+            num_buffers_per_channel,
+            0,
+            buffer_size_bytes_full_size_channel,
+            mux_base_l1_address);
+
+        if (!fsdp_mux_core_ranges.empty()) {
+            fsdp_mux_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                fsdp_mux_core_range_set,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_1_default,
+                    .compile_args = fsdp_mux_kernel_config.get_fabric_mux_compile_time_args(),
+                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+        }
+    }
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
-    uint32_t in1_addr = weight_tensor.buffer()->address();
+    // When FSDP fusion is active, in1 reads from the (op-managed) persistent_weight_buffer
+    // — which holds the gathered weight [K_full, N_local] — rather than the FSDP-sharded
+    // local weight slice. The FSDP gather kernel populates this buffer before in1 reads.
+    uint32_t in1_addr =
+        fsdp_fused ? persistent_weight_buffer.value().buffer()->address() : weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     // Note: Dataflow kernels can take a variable number of output tensors.
     // They are appended as a variable-length array at the end of the runtime-args:
@@ -621,7 +796,7 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         true,
         ring_size,
-        ring_index,
+        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -669,7 +844,7 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        ring_index,
+        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -718,7 +893,7 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        ring_index,
+        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -758,89 +933,91 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = in0_receiver_fabric_compile_time_args,
             .defines = in0_fabric_defines});
 
-    std::vector<uint32_t> in1_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in1_is_output_writer,
-        true,  // is_injector_core
-        ring_size,
-        ring_index,
-        N_chunks,                         // N_chunks
-        N_tiles_per_chunk,                // N_tiles_per_chunk
-        static_cast<uint32_t>(topology),  // topology
-        K_tiles_per_device,
-        K_block_tail_tiles,
+    // For in1's primary accessor: when fsdp_fused, the kernel reads from PWB (gathered weight),
+    // so the main accessor describes the PWB. When not fsdp_fused, it describes the weight tensor
+    // as before. The FSDP-sharded local weight (the original `weight_tensor`) gets a separate
+    // accessor appended after bias.
+    const ttnn::Tensor& in1_primary_tensor = fsdp_fused ? persistent_weight_buffer.value() : weight_tensor;
+    std::optional<const ttnn::Tensor> in1_fsdp_local_weight =
+        fsdp_fused ? std::optional<const ttnn::Tensor>{weight_tensor} : std::nullopt;
+
+    auto build_in1_ct_args = [&](bool is_injector) {
+        std::vector<uint32_t> ct = {
+            M_tiles,
+            padded_M_tiles,
+            K_tiles,
+            padded_K_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles,
+            M_blocks_per_core,
+            N_blocks_per_core,
+            in1_tile_size,
+            out_tile_size,
+            in2_tile_size,
+            in1_is_output_writer,
+            (uint32_t)is_injector,  // is_injector_core
+            ring_size,
+            skewed_rank,                      // my_rank (skewed for fsdp; == ring_index otherwise)
+            N_chunks,                         // N_chunks
+            N_tiles_per_chunk,                // N_tiles_per_chunk
+            static_cast<uint32_t>(topology),  // topology
+            K_tiles_per_device,
+            K_block_tail_tiles,
+        };
+        // FSDP-only CT args. Order matches the kernel's parse order under FSDP_FUSED.
+        if (fsdp_fused) {
+            ct.push_back(fsdp_ring_size);
+            ct.push_back(fsdp_ring_index);
+            ct.push_back(fsdp_num_targets_forward);
+            ct.push_back(fsdp_num_targets_backward);
+            ct.push_back(static_cast<uint32_t>(fsdp_topology));
+            fabric_mux_connection_ct_args(
+                num_workers_per_link,
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                fsdp_mux_kernel_config,
+                ct);
+            ct.insert(ct.end(), fsdp_unicast_forward_args.begin(), fsdp_unicast_forward_args.end());
+            ct.insert(ct.end(), fsdp_unicast_backward_args.begin(), fsdp_unicast_backward_args.end());
+        }
+        append_accessors(
+            ct,
+            in1_primary_tensor,
+            mm_output_tensors,
+            bias_tensor,
+            input_tensor,
+            fused_ternary_input_a,
+            fused_ternary_input_b,
+            /*is_injector_core=*/false,
+            in1_fsdp_local_weight);
+        return ct;
     };
-    append_accessors(
-        in1_sender_compile_time_args,
-        weight_tensor,
-        mm_output_tensors,
-        bias_tensor,
-        input_tensor,
-        fused_ternary_input_a,
-        fused_ternary_input_b,
-        false);
+
+    std::vector<uint32_t> in1_sender_compile_time_args = build_in1_ct_args(/*is_injector=*/true);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
         "dm_in1_sender_out.cpp",
         in1_sender_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_sender_compile_time_args,
+            .defines = in1_defines});
 
-    std::vector<uint32_t> in1_receiver_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in1_is_output_writer,
-        false,  // is_injector_core
-        ring_size,
-        ring_index,
-        N_chunks,                         // N_chunks
-        N_tiles_per_chunk,                // N_tiles_per_chunk
-        static_cast<uint32_t>(topology),  // topology
-        K_tiles_per_device,
-        K_block_tail_tiles,
-    };
-    append_accessors(
-        in1_receiver_compile_time_args,
-        weight_tensor,
-        mm_output_tensors,
-        bias_tensor,
-        input_tensor,
-        fused_ternary_input_a,
-        fused_ternary_input_b,
-        false);
+    std::vector<uint32_t> in1_receiver_compile_time_args = build_in1_ct_args(/*is_injector=*/false);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
         "dm_in1_sender_out.cpp",
         in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
+            .processor = in1_risc,
+            .noc = in1_noc,
+            .compile_args = in1_receiver_compile_time_args,
+            .defines = in1_defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
@@ -907,11 +1084,7 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+            auto mux_logical_core = in0_mux_logical(link, dir);
 
             std::vector<uint32_t> mux_rt_args = {};
             const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -925,6 +1098,32 @@ all_gather_minimal_matmul_async_factory_helper(
                     src_node_id, dst_node_id, link, program, {mux_logical_core});
             }
             tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+        }
+    }
+
+    // FSDP mux RT args. Same iteration pattern as in0 mux above, but on row full_grid_size.y - 2
+    // and using FSDP-axis neighbor coords.
+    if (fsdp_fused) {
+        for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+            uint32_t dir = mux_id % 2;
+            if (fsdp_mux_connection_valid(dir)) {
+                uint32_t link = mux_id / 2;
+                // Match the create-loop placement via the shared helper.
+                CoreCoord fsdp_mux_logical_core = fsdp_mux_logical(link, dir);
+
+                std::vector<uint32_t> fsdp_mux_rt_args;
+                const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
+                if (dir) {
+                    const auto dst_node_id = device->get_fabric_node_id(fsdp_backward_coord.value());
+                    fsdp_mux_rt_args = fsdp_mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {fsdp_mux_logical_core});
+                } else {
+                    const auto dst_node_id = device->get_fabric_node_id(fsdp_forward_coord.value());
+                    fsdp_mux_rt_args = fsdp_mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {fsdp_mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, fsdp_mux_kernel_id, {fsdp_mux_logical_core}, fsdp_mux_rt_args);
+            }
         }
     }
 
@@ -953,7 +1152,8 @@ all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
     }
 
-    // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
+    // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b],
+    //                   [local_weight_addr, fsdp_sem_backward, fsdp_sem_forward], output_addrs...]
     {
         std::vector<uint32_t> in1_common_args = {
             in1_addr,
@@ -964,6 +1164,14 @@ all_gather_minimal_matmul_async_factory_helper(
             in1_common_args.push_back(fused_ternary_input_b.value().buffer()->address());
             uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             in1_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+        }
+        if (fsdp_fused) {
+            // local_weight_addr: the FSDP-sharded weight (injector reads its own K-slice from this).
+            // fsdp_sem_backward / fsdp_sem_forward: per-direction counters that the injector waits on
+            //   for remote K-slices to land in the local PWB (mirrors in0's out_ready_sem pair).
+            in1_common_args.push_back(weight_tensor.buffer()->address());
+            in1_common_args.push_back(fsdp_semaphore.at(0).address());
+            in1_common_args.push_back(fsdp_semaphore.at(1).address());
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in1_common_args.push_back(mm_output_tensor.buffer()->address());
@@ -1061,57 +1269,67 @@ all_gather_minimal_matmul_async_factory_helper(
         if (in0_core_order_index > (in0_core_order.size() - 3)) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
-            auto termination_master_logical_core_backward = transpose_core_grid
-                                                                ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
-                                                                : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
-            CoreCoord termination_master_virtual_core_backward =
-                device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
-            // in0 backward sender
-            uint32_t mux_core_index_backward =
-                ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-            if (mux_core_index_backward >= full_grid_size.x) {
-                mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
+            // Actual client count on this core's mux: the senders share a mux per group of
+            // num_workers_per_link along the in0 sender axis. The last group is short when the
+            // axis isn't a multiple of num_workers_per_link, so clamp to the axis size.
+            uint32_t in0_group_base = in0_idx - worker_idx;
+            uint32_t in0_mux_clients =
+                std::min(in0_group_base + num_workers_per_link, in0_parallel_axis_cores) - in0_group_base;
+
+            // Each fabric-sender core only registers as a client of the mux for the SINGLE
+            // direction it actually sends in. (Previously both directions were registered, with
+            // the unused one returning nullptr from build_and_connect — wasting 5 semaphores per
+            // core for nothing.)
+            // Core at size-2 → backward fabric sender → backward mux only.
+            // Core at size-1 → forward  fabric sender → forward  mux only.
+            const bool is_in0_backward_sender = (in0_core_order_index == (in0_core_order.size() - 2));
+            if (is_in0_backward_sender) {
+                auto termination_master_logical_core_backward =
+                    transpose_core_grid ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
+                                        : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+                CoreCoord termination_master_virtual_core_backward =
+                    device->worker_core_from_logical_core(termination_master_logical_core_backward);
+
+                auto mux_logical_core_backward = in0_mux_logical(in0_idx / num_workers_per_link, /*dir=*/0);
+                CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
+                fabric_mux_connection_rt_args(
+                    mux_connection_valid(0),
+                    !(in0_idx % num_workers_per_link),  // termination master at worker_idx 0
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_backward,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_virtual_core_backward,
+                    in0_mux_clients,
+                    in0_term_sync_id,
+                    in0_args);
+            } else {
+                // Forward fabric sender (in0_core_order_index == size - 1).
+                auto termination_master_logical_core_forward = transpose_core_grid
+                                                                   ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
+                                                                   : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+                CoreCoord termination_master_virtual_core_forward =
+                    device->worker_core_from_logical_core(termination_master_logical_core_forward);
+
+                auto mux_logical_core_forward = in0_mux_logical(in0_idx / num_workers_per_link, /*dir=*/1);
+                CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
+                fabric_mux_connection_rt_args(
+                    mux_connection_valid(1),
+                    !(in0_idx % num_workers_per_link),  // termination master at worker_idx 0
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_forward,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_virtual_core_forward,
+                    in0_mux_clients,
+                    in0_term_sync_id,
+                    in0_args);
             }
-            auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
-            CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
-            fabric_mux_connection_rt_args(
-                mux_connection_valid(0),
-                (in0_core_order_index == (in0_core_order.size() - 2)) && !(in0_idx % num_workers_per_link),
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core_backward,
-                worker_idx,
-                core,
-                mux_kernel_config,
-                program,
-                termination_master_virtual_core_backward,
-                in0_args);
-
-            auto termination_master_logical_core_forward = transpose_core_grid
-                                                               ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
-                                                               : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
-            CoreCoord termination_master_virtual_core_forward =
-                device->worker_core_from_logical_core(termination_master_logical_core_forward);
-
-            // in0 forward sender
-            uint32_t mux_core_index_forward =
-                ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-            if (mux_core_index_forward >= full_grid_size.x) {
-                mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
-            }
-            auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
-            CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
-            fabric_mux_connection_rt_args(
-                mux_connection_valid(1),
-                (in0_core_order_index == (in0_core_order.size() - 1)) && !(in0_idx % num_workers_per_link),
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core_forward,
-                worker_idx,
-                core,
-                mux_kernel_config,
-                program,
-                termination_master_virtual_core_forward,
-                in0_args);
         }
         if (in0_core_order_index == 0) {
             // in0 sender
@@ -1125,6 +1343,7 @@ all_gather_minimal_matmul_async_factory_helper(
         }
 
         // Per-core args only (common values set via SetCommonRuntimeArgs above)
+        auto in1_injector_virtual_core = device->worker_core_from_logical_core(in1_core_order.front());
         std::vector<uint32_t> in1_args = {
             is_in1_sink,
             (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
@@ -1140,6 +1359,140 @@ all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
             defer_write_k_block,
         };
+        // FSDP fabric senders are the in1 chain tail — the last two cores of in1_core_order, one per
+        // direction (size-2 backward, size-1 forward). For a transpose grid the in1 chain runs along
+        // X, so the tail relays a short horizontal NOC_1 hop to its mux in the freed last column (see
+        // the fsdp mux create loop); for non-transpose the tail relays to the bottom-row mux. Each
+        // mux is shared by a group of num_workers_per_link consecutive rows along the in1 sender axis.
+        uint32_t fsdp_worker_idx = in1_idx % num_workers_per_link;
+        uint32_t fsdp_group_base = in1_idx - fsdp_worker_idx;
+        uint32_t fsdp_backward_sender_index = static_cast<uint32_t>(in1_core_order.size()) - 2;
+        uint32_t fsdp_forward_sender_index = static_cast<uint32_t>(in1_core_order.size()) - 1;
+        // Scheme 3 (single-row muxes): relay from the in1-chain core in the SAME column as the fsdp
+        // mux (odd col 2g+1), so the sender->mux write drops straight down the mux column instead of
+        // zig-zagging from the chain tail (col 6/7). All cores in a row hold the identical weight
+        // block / consume order, so any column works for relay-what-you-consume. Only the surviving
+        // uni-ring direction connects; point it at the column-matched core, disable the other.
+        // fsdp_uni_dir==0 -> backward sender relays (Dev 0 chain head); ==1 -> forward sender relays.
+        constexpr uint32_t NO_FSDP_SENDER = 0xFFFFFFFFu;
+        if (single_row_muxes) {
+            const uint32_t fsdp_mux_col = num_workers_per_link * (in1_idx / num_workers_per_link);
+            uint32_t col_matched_index = fsdp_forward_sender_index;  // fallback (tail) if not found
+            for (uint32_t i = 0; i < in1_core_order.size(); ++i) {
+                if (in1_core_order[i].x == fsdp_mux_col) {
+                    col_matched_index = i;
+                    break;
+                }
+            }
+            if (fsdp_uni_dir == 0) {
+                fsdp_backward_sender_index = col_matched_index;
+                fsdp_forward_sender_index = NO_FSDP_SENDER;
+            } else {
+                fsdp_forward_sender_index = col_matched_index;
+                fsdp_backward_sender_index = NO_FSDP_SENDER;
+            }
+        }
+
+        // FSDP-only per-core args: kernel parses these under FSDP_FUSED. The two sender indices tell
+        // the kernel which cores in this row's chain relay (backward / forward direction).
+        if (fsdp_fused) {
+            in1_args.push_back(virtual_core.x);
+            in1_args.push_back(virtual_core.y);
+            in1_args.push_back(in1_injector_virtual_core.x);
+            in1_args.push_back(in1_injector_virtual_core.y);
+            in1_args.push_back(in1_core_order_index);
+            in1_args.push_back(in1_core_order.size());
+            in1_args.push_back(fsdp_backward_sender_index);
+            in1_args.push_back(fsdp_forward_sender_index);
+        }
+        // Wire the FSDP mux RT args only on the two fabric-sender cores (one per direction). Each
+        // call creates 5 semaphores per direction, so we cap the per-core semaphore count by
+        // skipping non-fabric cores. The kernel correspondingly skips mux parsing on those cores.
+        const bool is_in1_backward_sender = (in1_core_order_index == fsdp_backward_sender_index);
+        const bool is_in1_forward_sender = (in1_core_order_index == fsdp_forward_sender_index);
+        const bool is_in1_fabric_sender = is_in1_backward_sender || is_in1_forward_sender;
+        if (fsdp_fused && is_in1_fabric_sender) {
+            uint32_t worker_idx = fsdp_worker_idx;
+            auto last_in1_core = in1_core_order.back();
+
+            // Actual client count on this core's FSDP mux. in1 senders share a mux per group of
+            // num_workers_per_link along the in1 sender axis (in1_parallel_axis_cores). When that
+            // axis isn't a multiple of num_workers_per_link the last group is short (e.g. an odd
+            // core_grid_y with nwpl=2 → 1 client), so num_mux_clients must be clamped to the axis
+            // — otherwise that mux's termination master waits forever for a non-existent peer.
+            uint32_t in1_group_base = fsdp_group_base;
+            uint32_t in1_mux_clients =
+                std::min(in1_group_base + num_workers_per_link, in1_parallel_axis_cores) - in1_group_base;
+
+            // Each FSDP fabric-sender core only registers as a client of the mux for the SINGLE
+            // direction it actually sends in (backward / forward). The termination master is the
+            // group's worker-0 client, which now lives in the mux's column at the group-base row.
+            if (is_in1_backward_sender) {
+                // Backward sender = chain tail core_order[size-2]. Transpose: its mux is in the last
+                // column at the group's backward row ((group)*2 + 0); the sender reaches it with a
+                // horizontal NOC_1 hop. Non-transpose: the original bottom-row mux with the -1 shift.
+                // The termination master is the group's worker-0 client — the backward sender of the
+                // group-base row, which sits in the chain-tail column on the in1 axis.
+                auto second_last_in1_core = in1_core_order[in1_core_order.size() - 2];
+                CoreCoord fsdp_mux_logical_backward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/0);
+                // Term master = the group's worker-0 client. The layout follows the GRID orientation,
+                // not the mux placement: a transpose grid (in1 chain along X) indexes the client by its
+                // chain-tail column + group-base row; non-transpose swaps the axes. Gating on
+                // fsdp_mux_in_column was wrong for the single-row case (transpose grid, column==false),
+                // which picked the swapped non-transpose form and pointed at non-client cores -> the mux
+                // never terminated. Mirror the in0 term-master, which already gates on transpose.
+                // Scheme 3: clients now sit in the mux's column (not the chain tail), so the
+                // worker-0 term master is the column-matched core at the group-base row.
+                CoreCoord fsdp_term_master_logical_backward =
+                    single_row_muxes
+                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
+                    : transpose_core_grid ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
+                                          : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
+                CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
+                CoreCoord fsdp_term_master_virtual_backward =
+                    device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
+                fabric_mux_connection_rt_args(
+                    fsdp_mux_connection_valid(0),
+                    !(in1_idx % num_workers_per_link),
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    fsdp_mux_virtual_backward,
+                    worker_idx,
+                    core,
+                    fsdp_mux_kernel_config,
+                    program,
+                    fsdp_term_master_virtual_backward,
+                    in1_mux_clients,
+                    in1_term_sync_id,
+                    in1_args);
+            } else {
+                // Forward fabric sender (in1_core_order_index == size - 1) = chain tail back().
+                // Transpose: mux in the last column at the group's forward row ((group)*2 + 1).
+                // Non-transpose: original bottom-row mux with the -1 shift. Term master = the group's
+                // worker-0 forward sender (chain tail) at the group-base row.
+                CoreCoord fsdp_mux_logical_forward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/1);
+                CoreCoord fsdp_term_master_logical_forward =
+                    single_row_muxes
+                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
+                    : transpose_core_grid ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
+                                          : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
+                CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
+                CoreCoord fsdp_term_master_virtual_forward =
+                    device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
+                fabric_mux_connection_rt_args(
+                    fsdp_mux_connection_valid(1),
+                    !(in1_idx % num_workers_per_link),
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    fsdp_mux_virtual_forward,
+                    worker_idx,
+                    core,
+                    fsdp_mux_kernel_config,
+                    program,
+                    fsdp_term_master_virtual_forward,
+                    in1_mux_clients,
+                    in1_term_sync_id,
+                    in1_args);
+            }
+        }
         if (in1_core_order_index == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
@@ -1200,6 +1553,9 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     // validate guarantees that scalar and tensors are always provided together.
     bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
 
+    // Output layout: [0]=ag_output, [1]=persistent_weight_buffer (if FSDP), then chunk outputs
+    const size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
+
     // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary], output_addrs...]
     std::vector<uint32_t> in0_common = {
         output_tensor.at(0).buffer()->address(),
@@ -1215,13 +1571,18 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
             tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         in0_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
     }
-    for (size_t i = 1; i < output_tensor.size(); ++i) {
+    for (size_t i = mm_outputs_start; i < output_tensor.size(); ++i) {
         in0_common.push_back(output_tensor[i].buffer()->address());
     }
 
     // Build in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
+    // When FSDP fusion is active, in1 reads from the gathered persistent_weight_buffer
+    // (output_tensor[1]) instead of from the FSDP-sharded weight_tensor directly.
+    const bool fsdp_fused_override = attributes.fsdp_cluster_axis.has_value();
+    uint32_t in1_in_addr =
+        fsdp_fused_override ? output_tensor.at(1).buffer()->address() : tensor_args.weight_tensor.buffer()->address();
     std::vector<uint32_t> in1_common = {
-        tensor_args.weight_tensor.buffer()->address(),
+        in1_in_addr,
         tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0,
     };
     if (has_fused_ternary) {
@@ -1231,7 +1592,12 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
             tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         in1_common.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
     }
-    for (size_t i = 1; i < output_tensor.size(); ++i) {
+    if (fsdp_fused_override) {
+        in1_common.push_back(tensor_args.weight_tensor.buffer()->address());
+        in1_common.push_back(attributes.fsdp_semaphore.at(0).address());
+        in1_common.push_back(attributes.fsdp_semaphore.at(1).address());
+    }
+    for (size_t i = mm_outputs_start; i < output_tensor.size(); ++i) {
         in1_common.push_back(output_tensor[i].buffer()->address());
     }
 
@@ -1305,7 +1671,15 @@ all_gather_minimal_matmul_async_factory(
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_b) {
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    const std::optional<const Tensor>& persistent_weight_buffer,
+    const std::optional<MeshCoordinate>& fsdp_forward_coord,
+    const std::optional<MeshCoordinate>& fsdp_backward_coord,
+    uint32_t fsdp_ring_size,
+    uint32_t fsdp_ring_index,
+    const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
+    ttnn::ccl::Topology fsdp_topology,
+    bool fuse_swiglu) {
     tt::tt_metal::Program program{};
 
     return {
@@ -1336,7 +1710,15 @@ all_gather_minimal_matmul_async_factory(
             N_chunks,
             fused_ternary_scalar,
             fused_ternary_input_a,
-            fused_ternary_input_b)};
+            fused_ternary_input_b,
+            persistent_weight_buffer,
+            fsdp_forward_coord,
+            fsdp_backward_coord,
+            fsdp_ring_size,
+            fsdp_ring_index,
+            fsdp_semaphore,
+            fsdp_topology,
+            fuse_swiglu)};
 }
 
 ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
@@ -1354,10 +1736,31 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
     std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
 
+    // FSDP neighbor lookup along fsdp_cluster_axis (only when FSDP fusion is active).
+    std::optional<MeshCoordinate> fsdp_forward_coord;
+    std::optional<MeshCoordinate> fsdp_backward_coord;
+    uint32_t fsdp_ring_index = 0;
+    if (attributes.fsdp_cluster_axis.has_value()) {
+        fsdp_ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, attributes.fsdp_cluster_axis);
+        fsdp_forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, 1, attributes.fsdp_topology, attributes.fsdp_cluster_axis);
+        fsdp_backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, -1, attributes.fsdp_topology, attributes.fsdp_cluster_axis);
+    }
+
     const auto& act_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& ag_output_tensor = output_tensor.at(0);
+
+    // Output layout: [ag_output, (optional: persistent_weight_buffer), chunks...]
+    // Strip ag_output (always) and persistent_weight_buffer (if FSDP) from mm_output_tensors.
+    size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
+    std::optional<ttnn::Tensor> pwb_opt;
+    if (attributes.fsdp_cluster_axis.has_value()) {
+        pwb_opt = output_tensor.at(1);
+    }
 
     return all_gather_minimal_matmul_async_factory(
         act_tensor,
@@ -1365,7 +1768,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         bias_tensor,
         attributes.fused_activation,
         attributes.config,
-        std::vector<ttnn::Tensor>(output_tensor.begin() + 1, output_tensor.end()),
+        std::vector<ttnn::Tensor>(output_tensor.begin() + mm_outputs_start, output_tensor.end()),
         ag_output_tensor,
         attributes.compute_kernel_config,
         mesh_coordinate,
@@ -1384,7 +1787,15 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.chunks,
         attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b);
+        tensor_args.fused_ternary_input_b,
+        pwb_opt,
+        fsdp_forward_coord,
+        fsdp_backward_coord,
+        attributes.fsdp_ring_size,
+        fsdp_ring_index,
+        attributes.fsdp_semaphore,
+        attributes.fsdp_topology,
+        attributes.fuse_swiglu);
 }
 
 }  // namespace ttnn::experimental::prim

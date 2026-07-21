@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
@@ -16,6 +17,8 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -45,59 +48,70 @@ struct ProgramRunArgs {
     // Kernel runtime arguments
     ////////////////////////////////////////////////////////////////////////
     struct KernelRunArgs {
-        // Kernel identifier
-        KernelSpecName kernel_spec_name;
+        KernelSpecName kernel;
 
-        // Runtime argument values (per-node).
-        // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be set,
-        // for every node the kernel runs on.
-        // Missing arguments or superfluous arguments will trigger validation errors.
+        // Per-node runtime argument values.
+        // Arguments are keyed by argument name and then by node:
+        //   runtime_arg_values[name][node] = value.
         //
-        // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
-        // a common runtime argument would provide better dispatch efficiency.
-        struct NodeRuntimeArgs {
-            NodeCoord node;
-            std::unordered_map<std::string, uint32_t> args;
-        };
-        std::vector<NodeRuntimeArgs> runtime_arg_values;
+        // When calling SetProgramRunArgs:
+        //  Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
+        //  set, for every node the kernel runs on.
+        //  Missing arguments or superfluous arguments will trigger validation errors.
+        //
+        // When calling UpdateProgramRunArgs:
+        //  Only non-enqueue invariant runtime arguments must be set.
+        //  Updated arguments must be updated for every node the kernel runs on.
+        //
+        // NOTE: If a kernel runtime argument always has the same value for all nodes,
+        // passing a common runtime argument would provide better dispatch efficiency.
+        //
+        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
+        RuntimeArgValues runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
-        // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
-        std::unordered_map<std::string, uint32_t> common_runtime_arg_values;
+        //
+        // When calling SetProgramRunArgs:
+        //  Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names
+        //  must be set.
+        //
+        // When calling UpdateProgramRunArgs:
+        //  Only non-enqueue invariant common runtime arguments must be set.
+        //  (However, CRTAs should seldom-to-never be enqueue invariant!)
+        //
+        using CommonRuntimeArgValues = Table<std::string, uint32_t>;
+        CommonRuntimeArgValues common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
         // positional vararg values.
         AdvancedKernelRunArgs advanced_options;
     };
-    // KernelRunArgs must be specified for ALL kernels in the ProgramSpec.
-    std::vector<KernelRunArgs> kernel_run_args;
+    // A KernelRunArgs must be specified for ALL kernels in the ProgramSpec.
+    Group<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
-    struct TensorArgument {
-        // Tensor identifier (matches a TensorParameter::unique_id in the ProgramSpec)
-        TensorParameterName tensor_parameter_name;
 
-        // The actual MeshTensor argument
-        // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
-        std::reference_wrapper<const MeshTensor> tensor;
-    };
+    // The actual MeshTensor argument
+    // (Non-owning reference. Will also permit MeshTensorView when it becomes available.)
+    using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
+
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    std::vector<TensorArgument> tensor_args;
+    Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
     struct DFBRunOverrides {
-        // DFB identifier
-        DFBSpecName dfb_spec_name;
+        DFBSpecName dfb;
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // If unset, the ProgramSpec value is used.
+        // These overrides are stateful across executions: if unset, the DFB keeps its current size
+        // (initially the ProgramSpec value; a prior override persists until changed).
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
@@ -105,54 +119,78 @@ struct ProgramRunArgs {
         // the corresponding tensor_arg.
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
-    std::vector<DFBRunOverrides> dfb_run_overrides;
+    Group<DFBRunOverrides> dfb_run_overrides;
 };
 
-//------------------------------------------------
-// ProgramRunArgsView (for advanced users)
-//------------------------------------------------
-//
-// NOTE: ProgramRunArgsView is not yet supported! It is included here as a sketch only.
-//
-// Non-owning view into a Program's command buffers.
-// Enables in-place modification of mutable Program parameters.
-//
-// STATEFULNESS: Program command buffers are stateful.
-//   Parameters retain their previously specified value unless modified.
-//
-// LIFETIME: This view is valid for the lifetime of the Program.
-//   Accessing the view after the Program is destroyed is undefined behavior.
-//
-// THREAD SAFETY: Modifications through this view are not synchronized;
-//   the caller must ensure exclusive access when modifying.
-//
-struct ProgramRunArgsView {
-    struct KernelRunArgsView {
-        // Direct views into per-node vararg runtime args
-        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
+//-----------------------------------------------------
+// Convenience aliases
+//-----------------------------------------------------
 
-        // Direct view into common vararg runtime args
-        std::span<uint32_t> common_runtime_varargs;
-    };
-    // TODO: Better to just expose the multi-dim dispatch vectors directly?
-    //       Would eliminate the lookup indirection.
-    //       ...But would mess up all the implicit RTAs....
-    //       Look into this when implementing.
-    std::unordered_map<KernelSpecName, KernelRunArgsView> kernel_run_args;
+using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
+using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
+using TensorArgument = ProgramRunArgs::TensorArgument;
 
-    struct DFBRunOverridesView {
-        // DFB size overrides
-        // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // (This is seldom used in practice)
-        uint32_t* entry_size;   // points to the value that will be used to allocate DFB ephemeral memory
-        uint32_t* num_entries;  // always set to non-null location
+//-----------------------------------------------------
+// Helper functions
+//-----------------------------------------------------
 
-        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
-        // the corresponding tensor_arg.
-    };
-    std::unordered_map<DFBSpecName, DFBRunOverridesView> dfb_run_overrides;
-};
+// Resolve a TensorArgument to its MeshTensor.
+// (Switch to std::visit once MeshTensorView is added as a second variant alternative.)
+inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
+    return std::get<std::reference_wrapper<const MeshTensor>>(arg).get();
+}
 
-// TODO: Consider a const version of the view object, for debug/test use?
+// Helper function to merge two or more ProgramRunArgs objects into one.
+// Validates that the provided ProgramRunArgs objects specify mutually disjoint arguments.
+ProgramRunArgs MergeProgramRunArgs(
+    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
+// Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
+
+//-----------------------------------------------------
+// Helper function for per-node runtime argument values
+//-----------------------------------------------------
+
+// Runtime argument (RTA) values must be provided for every node the kernel runs on.
+// In ProgramRunArgs, runtime arguments (RTAs) are expressed first by name, then by
+// node (name -> node -> value). However, legacy use sites usually produce RTA values
+// in a node-first style (node -> name -> value).
+//
+// These helper functions bridge the gap between the legacy style and ProgramRunArgs.
+// It is much better to refactor legacy code to express RTA values in name-first style.
+// But, these helpers are provided for convenience and backward compatibility.
+
+// Two shapes for the two call patterns:
+//
+//   Multi-node kernel — accumulate across the core loop:
+//     KernelRunArgs kra{.kernel = ...};
+//     for (const auto& core : cores) {
+//         AddRuntimeArgsForNode(kra.runtime_arg_values, core, {{"num_tiles", num_tiles[core]}, ...});
+//     }
+//
+//   Special case for a single-node kernel — build the table inline:
+//     KernelRunArgs{
+//         .kernel = ...,
+//         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+//              node, {{"var", a}, {"num_tiles", n}}),
+//     };
+
+// Append RTAs for a single node to an existing RuntimeArgValues table.
+inline void AddRuntimeArgsForNode(
+    KernelRunArgs::RuntimeArgValues& runtime_arg_values,                  // existing RTA table
+    const NodeCoord& node,                                                // node
+    std::initializer_list<std::pair<std::string, uint32_t>> named_values  // name -> value list
+) {
+    for (const auto& [name, value] : named_values) {
+        runtime_arg_values[name][node] = value;
+    }
+}
+
+// Build a fresh table for a single node
+inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForSingleNode(
+    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    KernelRunArgs::RuntimeArgValues runtime_arg_values;
+    AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
+    return runtime_arg_values;
+}
 
 }  // namespace tt::tt_metal::experimental

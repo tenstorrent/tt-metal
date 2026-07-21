@@ -50,7 +50,6 @@ on:
           - llama3_evals
           - llama3_8b_dp
           - llama3_70b_dp
-          - falcon7b
           - sentence_bert
           - whisper
           - sd35
@@ -156,7 +155,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-sanity: ${{ steps.logic.outputs.run-sanity }}
       run-unit: ${{ steps.logic.outputs.run-unit }}
@@ -249,72 +248,65 @@ jobs:
       build-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   galaxy-sanity:
     if: ${{ needs.determine-tests.outputs.run-sanity == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-sanity-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
       topology: "topology-6u"
   galaxy-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-integration || 'all' }}
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-demo || 'all' }}
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: wh_galaxy_perf,wh_galaxy_perf_uf
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-perf || 'all' }}
   galaxy-e2e-tests:
     if: ${{ needs.determine-tests.outputs.run-e2e == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: >-

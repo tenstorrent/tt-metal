@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "ckernel_sfpu_exp.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 /*
@@ -66,7 +67,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         sfpi::vFloat scale, bias;
 
         r = 8.361816406e-03f;
-        sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt i = sfpi::as<sfpi::vInt>(j);
         j = j - rounding_bias;
 
         sfpi::vFloat c2 = 4.177856445e-02f;
@@ -93,11 +94,11 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
             sfpi::vFloat jm2 = j + -2.0f;
             // Keep reconstruction half-scaled: scale is 0.5 * 2**i. Avoids
             // materialising 2**i directly near overflow boundary.
-            scale = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
+            scale = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w));
 
             sfpi::vFloat abs_jm2 = sfpi::abs(jm2);
             bias = scale - w;
-            sfpi::vInt tail = sfpi::float_to_int8(abs_jm2, sfpi::RoundMode::NearestEven);
+            sfpi::vInt tail = sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(abs_jm2, sfpi::RoundMode::Nearest));
             r = scale * r + bias;
 
             v_if(tail >= 127) {
@@ -115,7 +116,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         sfpi::vFloat s, t, u, x, y;
 
         r = 1.974105835e-04f;
-        sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt i = sfpi::as<sfpi::vInt>(j);
         j = j - rounding_bias;
 
         sfpi::vFloat c4 = 1.393107930e-3f;
@@ -130,7 +131,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         r = r * f + 4.166680202e-2f;
         sfpi::vFloat w = 0.5f;
         r = r * f + sfpi::vConstFloatPrgm2;
-        sfpi::vFloat c0 = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(w) + -1);
+        sfpi::vFloat c0 = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(w) + -1);
 
         u = f;
         sfpi::vFloat jm1 = j + -1.0f;
@@ -141,7 +142,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
 
         v_if(j != 0.0f) {
             v_if(jm1 != 0.0f) {
-                t = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
+                t = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w));
                 y = t - w;
                 sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
                 x = t - y;  // double-float canonicalization of difference
@@ -151,7 +152,8 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
                 sfpi::vFloat abs_jm2 = sfpi::abs(jm2);
                 r = r * t + x;
                 // This will be -127 in the case of -NaN, otherwise 0 <= clamped <= 127.
-                sfpi::vInt clamped = sfpi::float_to_int8(abs_jm2, sfpi::RoundMode::NearestEven);
+                sfpi::vInt clamped =
+                    sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag8>(abs_jm2, sfpi::RoundMode::Nearest));
                 r += y;
                 // Handle special cases a * log2(e) <= -125 and a * log2(e) >= 129.
                 v_if(clamped >= 127) {
@@ -180,7 +182,7 @@ inline void calculate_expm1() {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat y = _sfpu_expm1_<is_fp32_dest_acc_en>(x);
         if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = y;
         sfpi::dst_reg++;
@@ -189,6 +191,7 @@ inline void calculate_expm1() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void expm1_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi

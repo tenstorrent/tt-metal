@@ -5,8 +5,9 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -22,7 +23,8 @@ void kernel_main() {
 #ifndef ROWWISE
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    transpose_init(tt::CBIndex::c_0);
 #endif
     cumsum_tile_init();
 
@@ -39,13 +41,13 @@ void kernel_main() {
 #ifndef ROWWISE
                 copy_tile(tt::CBIndex::c_0, 0, 0);
 #else
-                transpose_wh_init_short(tt::CBIndex::c_0);
-                transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+                transpose_init(tt::CBIndex::c_0);
+                transpose_tile(tt::CBIndex::c_0, 0, 0);
 #endif
                 cumsum_tile(0, ht == 0);
 #ifdef ROWWISE
-                transpose_wh_dest_init_short();
-                transpose_wh_dest(0);
+                transpose_dest_init(tt::CBIndex::c_0);
+                transpose_dest(0);
 #endif
 
                 tile_regs_commit();

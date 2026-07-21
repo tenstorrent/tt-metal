@@ -284,7 +284,9 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     auto* const mean_buf = mean.buffer();
     auto* const rstd_buf = rstd.buffer();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
+    // Pass gamma as Buffer* (not raw ->address()) so the program-cache fast hit path patches its
+    // address when gamma is reallocated across calls. nullptr is valid for the absent optional.
+    auto* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
 
     auto* const input_grad_buf = input_grad.buffer();
 
@@ -309,7 +311,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
              input_buf,
              mean_buf,
              rstd_buf,
-             gamma_addr,
+             gamma_buf,
              num_rows_per_core,
              num_inner,
              tile_offset,

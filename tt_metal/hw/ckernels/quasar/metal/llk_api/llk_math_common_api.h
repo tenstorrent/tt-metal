@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -11,30 +12,11 @@
 #include "llk_io.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
+#include "llk_sync.h"
 
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-
-/**
- * @brief Determines whether the source register format and Float32 destination format are a supported combination
- *
- * @param src_reg_fmt: The source register format
- */
-inline bool is_src_fmt_fp32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 ||
-           src_reg_fmt == DataFormat::Tf32;
-}
-
-/**
- * @brief Determines whether the source register format and Int32 destination format are a supported combination
- *
- * @param src_reg_fmt: The source register format
- */
-inline bool is_src_fmt_int32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Int32 || src_reg_fmt == DataFormat::Int16 || src_reg_fmt == DataFormat::Int8 ||
-           src_reg_fmt == DataFormat::UInt16 || src_reg_fmt == DataFormat::UInt8;
-}
 
 /**
  *
@@ -58,16 +40,16 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
 
     // TODO: AM; introduce dest mode enum, issue #37483
     // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
-    if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
-        is_src_fmt_fp32_dest_compatible(srcb_format)) {
+    if (EN_32BIT_DEST_FORMAT && _is_src_fmt_fp32_dest_compatible_(srca_format) &&
+        _is_src_fmt_fp32_dest_compatible_(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,
             true /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else if (
-        EN_32BIT_DEST_FORMAT && is_src_fmt_int32_dest_compatible(srca_format) &&
-        is_src_fmt_int32_dest_compatible(srcb_format)) {
+        EN_32BIT_DEST_FORMAT && _is_src_fmt_int32_dest_compatible_(srca_format) &&
+        _is_src_fmt_int32_dest_compatible_(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,
@@ -101,6 +83,10 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  * @brief Sets the dest dvalid for FPU/SFPU
  *
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = p_cleardvalid::FPU/SFPU
+ *
+ * @warning SYNC SCHEME: dest-dvalid. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  **/
 template <std::uint8_t SET_DEST_DVALID>
 inline void llk_math_set_dvalid() {
@@ -118,28 +104,56 @@ inline void llk_math_set_dvalid() {
 /**
  * @brief Waits until destination register space is available.
  * Blocks on the MATH_PACK semaphore until the packer gets the semaphore.
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_math_wait_for_dest_available() {
-    WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_();
-    WAYPOINT("MWDD");
+
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
+            semaphore::UNPACK_MATH);
+        _llk_sync_get_(semaphore::UNPACK_MATH);
+    }
 }
 
 /**
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
+    // Always post MATH_PACK, the math thread is in the chain for every op, including the
+    // no-real-work unpack-to-dest forwarder.
+    _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
+        _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
+    }
 }
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
-inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
+inline void llk_math_pack_sync_init() {
+    _llk_math_pack_sync_init_<DST_SYNC_MODE>();
+
+    if constexpr (UnpackToDestEn) {
+        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
+        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
+    }
+}
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h

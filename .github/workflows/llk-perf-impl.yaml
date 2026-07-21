@@ -19,7 +19,7 @@ jobs:
     secrets: inherit
 
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
@@ -28,6 +28,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -66,6 +67,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -121,12 +123,27 @@ jobs:
         if: always()
         with:
           name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          # Match the merged report, the compile report, the BH per-slice
+          # `-<tname>-run` reports, and the WH `-run` report so that per-test
+          # reports are still uploaded even when a timeout prevents the merge.
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
 
       - name: Publish Test Results
         uses: mikepenz/action-junit-report@v5
         if: always()
         with:
-          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          # Read the per-phase / per-slice result reports directly (compile +
+          # run for WH, per-slice run for BH) rather than only the merged
+          # report, so results are still published if a shard times out before
+          # the merge step. The three patterns are disjoint and exclude the
+          # merged report, so no test is counted twice.
+          report_paths: |
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true

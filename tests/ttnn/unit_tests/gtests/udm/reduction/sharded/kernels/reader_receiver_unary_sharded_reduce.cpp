@@ -74,8 +74,7 @@ void kernel_main() {
         cb_scaler,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
     // ============================================================================
     // Determine number of rows this core is responsible for

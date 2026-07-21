@@ -36,7 +36,6 @@ struct SDPAOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& attrs, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
@@ -57,6 +56,9 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& cu_window_seqlens = std::nullopt,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt);
 
 }  // namespace ttnn::prim

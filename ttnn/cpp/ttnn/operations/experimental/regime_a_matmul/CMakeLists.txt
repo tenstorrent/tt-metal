@@ -50,3 +50,11 @@ install(
 )
 
 install(TARGETS ttnn_op_experimental_regime_a_matmul FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake. The file list (TTNN_OP_EXPERIMENTAL_REGIME_A_MATMUL_NANOBIND_SRCS)
+# lives in sources.cmake. `ttnn` only exists when WITH_PYTHON_BINDINGS is on.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_REGIME_A_MATMUL_NANOBIND_SRCS})
+endif()

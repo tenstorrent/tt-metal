@@ -22,6 +22,12 @@ struct SDPAParams {
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;
     std::optional<uint32_t> sliding_window_size;
+    // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
+    // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
+    bool is_windowed = false;
+    // Chunked/paged geometry overrides (shared with paged decode). See
+    // ttnn::operations::transformer::PagedCacheGeometryOverride.
+    ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
 };
 
 struct SDPAInputs {
@@ -33,6 +39,9 @@ struct SDPAInputs {
     // Mirrors SDPAParams::chunk_start_idx_tensor so ProgramDescriptor buffer bindings can patch cache hits.
     std::optional<Tensor> chunk_start_idx_tensor;
     std::optional<Tensor> attention_sink;
+    // Cumulative window sequence lengths [num_windows + 1], int32/uint32, ROW_MAJOR. Present only in
+    // windowed mode; the writer builds the block-diagonal mask from it.
+    std::optional<Tensor> cu_window_seqlens;
 };
 
 }  // namespace ttnn::prim

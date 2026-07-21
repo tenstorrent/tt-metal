@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
@@ -27,9 +28,44 @@ using namespace experimental::ccl;
 
 namespace {
 
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+// Chunked causal prefill does not have the same valid-pair geometry as a full causal
+// Sq x Sk attention window. A new Q chunk attends to all prior K/V tokens as a full
+// rectangle, then attends to its own chunk causally as a triangle:
+//
+//   valid_pairs_global = q_chunk * prefix_k + q_chunk * (q_chunk + 1) / 2
+//
+// Ring-joint shards Q rows across the ring, while every shard still sees the same
+// global K prefix, so each device models 1 / ring_size of the global valid pairs.
+// The generic SDPA causal model uses Sq * Sk / 2, which undercounts late chunked
+// prefill chunks where most work is the prefix rectangle.
+int compute_chunked_causal_sdpa_ideal_cycles(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    uint32_t q_global,
+    uint32_t prefix_k_global,
+    uint32_t ring_size,
+    uint32_t DH,
+    uint32_t DV,
+    tt::tt_metal::MathFidelity math_fidelity,
+    int num_cores) {
+    if (ring_size == 0 || num_cores <= 0 || q_global == 0) {
+        return 0;
+    }
+
+    const double q = static_cast<double>(q_global);
+    const double prefix_k = static_cast<double>(prefix_k_global);
+    const double valid_pairs_per_device = (q * prefix_k + (q * (q + 1.0) / 2.0)) / static_cast<double>(ring_size);
+    return operations::transformer::sdpa::compute_sdpa_ideal_cycles_for_valid_pairs(
+        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
+}
+
 void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
-    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args) {
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
+    // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
+    bool allow_single_slot_output) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -106,6 +142,14 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                         output_shape[d],
                         expected_output_shape[d],
                         operation_attributes.ring_size);
+                } else if (allow_single_slot_output && d == 0) {
+                    // Single-slot gather targets gathered slot 0: batch-1 expected, full-batch also ok.
+                    TT_FATAL(
+                        output_shape[d] == 1 || output_shape[d] == expected_output_shape[d],
+                        "Output tensor {} batch dim must be 1 (single-slot gather) or {}: got {}",
+                        i,
+                        expected_output_shape[d],
+                        output_shape[d]);
                 } else {
                     TT_FATAL(
                         output_shape[d] == expected_output_shape[d],
@@ -117,6 +161,67 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                 }
             }
         }
+    }
+}
+
+// Re-validate the scalar args that are runtime-patched on a program-cache hit and therefore NOT part of
+// compute_program_hash: kv_cache_batch_idx (indexed KV cache) and logical_n / kv_actual_isl (KV-pad
+// rotation). Everything else is keyed by the hash, so a cache hit guarantees it already passed at miss
+// time. Shared by validate_on_program_cache_miss and validate_on_program_cache_hit to avoid divergence.
+void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (args.has_indexed_kv_cache()) {
+        const auto K_cache_batch = tensor_args.input_k.logical_shape()[0];
+        const auto V_cache_batch =
+            tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0] : K_cache_batch;
+        TT_FATAL(
+            args.kv_cache_batch_idx.value() < K_cache_batch,
+            "kv_cache_batch_idx={} is outside K cache batch={}",
+            args.kv_cache_batch_idx.value(),
+            K_cache_batch);
+        TT_FATAL(
+            args.kv_cache_batch_idx.value() < V_cache_batch,
+            "kv_cache_batch_idx={} is outside V cache batch={}",
+            args.kv_cache_batch_idx.value(),
+            V_cache_batch);
+    }
+
+    if (args.has_kv_pad_rotation()) {
+        const auto N_local_q = tensor_args.input_q.logical_shape()[2];
+        const auto N_local_kv = tensor_args.local_kv_seq_len();
+        const auto kv_actual_isl = args.kv_actual_isl.value();
+        TT_FATAL(
+            args.logical_n >= kv_actual_isl,
+            "logical_n must be >= kv_actual_isl. Got logical_n={}, kv_actual_isl={}",
+            args.logical_n,
+            kv_actual_isl);
+        const auto new_actual_isl = args.logical_n - kv_actual_isl;
+        const auto chunk_capacity = N_local_q * args.ring_size;
+        const auto cache_capacity = N_local_kv * args.ring_size;
+        TT_FATAL(
+            kv_actual_isl % tt::constants::TILE_HEIGHT == 0 && new_actual_isl % tt::constants::TILE_HEIGHT == 0,
+            "KV-pad-aware rotation currently requires tile-aligned lengths. Got kv_actual_isl={}, "
+            "new_actual_isl={} (logical_n - kv_actual_isl), TILE_HEIGHT={}",
+            kv_actual_isl,
+            new_actual_isl,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            new_actual_isl > 0,
+            "KV-pad-aware rotation requires at least one valid token in the current chunk. Got kv_actual_isl={}, "
+            "logical_n={}",
+            kv_actual_isl,
+            args.logical_n);
+        TT_FATAL(
+            args.logical_n <= cache_capacity,
+            "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
+            "cache capacity={}",
+            args.logical_n,
+            cache_capacity);
+        TT_FATAL(
+            new_actual_isl <= chunk_capacity,
+            "KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl={}, "
+            "chunk capacity={}",
+            new_actual_isl,
+            chunk_capacity);
     }
 }
 
@@ -148,7 +253,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     validate_ring_joint_all_gather_on_program_cache_miss(
-        args.all_gather_operation_attributes, args.all_gather_tensor_args);
+        args.all_gather_operation_attributes, args.all_gather_tensor_args, args.has_indexed_kv_cache());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -183,7 +288,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked();
 
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal && !is_chunked) {
+    if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -237,15 +342,35 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_kv);
 
     TT_FATAL(
-        !is_chunked || args.is_causal,
-        "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
-        "Got N_local_q={}, N_local_kv={}, is_causal={}",
+        !is_chunked || args.is_causal || args.is_cross,
+        "Chunked-shaped prefill (N_local_q < N_local_kv) must be causal (incremental prefill) or cross "
+        "(is_cross=True, non-causal short-Q/long-K). Got N_local_q={}, N_local_kv={}, is_causal={}, is_cross={}",
         N_local_q,
         N_local_kv,
-        args.is_causal);
+        args.is_causal,
+        args.is_cross);
+
+    // Cross is the non-causal short-Q/long-K/V path: requires is_chunked, excludes is_causal and
+    // balanced (causal-only) zigzag.
+    if (args.is_cross) {
+        TT_FATAL(
+            is_chunked,
+            "is_cross requires per-device Q seq length < K/V seq length; use the full-prefill non-causal "
+            "path for equal lengths. Got N_local_q={}, N_local_kv={}",
+            N_local_q,
+            N_local_kv);
+        TT_FATAL(
+            !args.is_causal, "is_cross and is_causal are mutually exclusive (cross attention applies no triangle)");
+        TT_FATAL(!args.is_balanced, "is_cross is non-causal; balanced zigzag load-balancing is causal-only");
+    }
+
+    // Value checks for the runtime-patched scalars (kv_cache_batch_idx, logical_n, kv_actual_isl).
+    // Also invoked on every program-cache hit, where these values vary but the rest is hash-pinned.
+    validate_runtime_patched_scalars(args, tensor_args);
 
     if (has_kv_pad_rotation) {
-        const auto kv_actual_isl = args.kv_actual_isl.value();
+        // Shape/flag preconditions are pinned by the program hash. The logical_n / kv_actual_isl value
+        // checks live in validate_runtime_patched_scalars (called below; also runs on cache hits).
         TT_FATAL(
             is_chunked,
             "kv_actual_isl enables KV-pad-aware rotation and requires chunked-prefill input (Q.seq < K.seq). "
@@ -263,44 +388,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "KV-pad-aware rotation currently supports ring attention without joint tokens. Got joint length L={}",
             L);
         TT_FATAL(
-            args.logical_n >= kv_actual_isl,
-            "logical_n must be >= kv_actual_isl. Got logical_n={}, kv_actual_isl={}",
-            args.logical_n,
-            kv_actual_isl);
-        const auto new_actual_isl = args.logical_n - kv_actual_isl;
-        const auto chunk_capacity = N_local_q * args.ring_size;
-        const auto cache_capacity = N_local_kv * args.ring_size;
-        TT_FATAL(
-            kv_actual_isl % tt::constants::TILE_HEIGHT == 0 && new_actual_isl % tt::constants::TILE_HEIGHT == 0,
-            "KV-pad-aware rotation currently requires tile-aligned lengths. Got kv_actual_isl={}, "
-            "new_actual_isl={} (logical_n - kv_actual_isl), TILE_HEIGHT={}",
-            kv_actual_isl,
-            new_actual_isl,
-            tt::constants::TILE_HEIGHT);
-        TT_FATAL(
-            new_actual_isl > 0,
-            "KV-pad-aware rotation requires at least one valid token in the current chunk. Got kv_actual_isl={}, "
-            "logical_n={}",
-            kv_actual_isl,
-            args.logical_n);
-        TT_FATAL(
             N_local_kv % N_local_q == 0,
             "KV-pad-aware rotation expects K/V local sequence length to be an integer number of Q-sized slabs. "
             "Got N_local_kv={}, N_local_q={}",
             N_local_kv,
             N_local_q);
-        TT_FATAL(
-            args.logical_n <= cache_capacity,
-            "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
-            "cache capacity={}",
-            args.logical_n,
-            cache_capacity);
-        TT_FATAL(
-            new_actual_isl <= chunk_capacity,
-            "KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl={}, "
-            "chunk capacity={}",
-            new_actual_isl,
-            chunk_capacity);
     }
 
     TT_FATAL(
@@ -340,26 +432,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "cache "
             "mode requires Q batch size 1. Got Q batch size {}",
             B);
+        // kv_cache_batch_idx bounds are value checks → validate_runtime_patched_scalars (runs on hits too).
+        // Single-slot gather writes cache slot kv_cache_batch_idx to gathered slot 0: a batch-1 buffer
+        // is the efficient shape; a full-batch buffer is also accepted (only slot 0 is used).
         TT_FATAL(
-            args.kv_cache_batch_idx.value() < K_cache_batch,
-            "kv_cache_batch_idx={} is outside K cache batch={}",
-            args.kv_cache_batch_idx.value(),
-            K_cache_batch);
+            k_shape[0] == 1 || k_shape[0] == K_cache_batch,
+            "Gathered K batch must be 1 (single-slot gather) or match input K cache batch {}. Got gathered K: {}",
+            K_cache_batch,
+            k_shape[0]);
         TT_FATAL(
-            k_shape[0] == K_cache_batch,
-            "Gathered K cache batch must match input K cache batch. Got gathered K: {}, input K: {}",
-            k_shape[0],
-            K_cache_batch);
-        TT_FATAL(
-            args.kv_cache_batch_idx.value() < V_cache_batch,
-            "kv_cache_batch_idx={} is outside V cache batch={}",
-            args.kv_cache_batch_idx.value(),
-            V_cache_batch);
-        TT_FATAL(
-            v_shape[0] == V_cache_batch,
-            "Gathered V cache batch must match input V cache batch. Got gathered V: {}, input V: {}",
-            v_shape[0],
-            V_cache_batch);
+            v_shape[0] == 1 || v_shape[0] == V_cache_batch,
+            "Gathered V batch must be 1 (single-slot gather) or match input V cache batch {}. Got gathered V: {}",
+            V_cache_batch,
+            v_shape[0]);
     } else {
         TT_FATAL(k_shape[0] == B, "K batch size must match Q. Got Q: {}, K: {}", B, k_shape[0]);
         TT_FATAL(v_shape[0] == B, "V batch size must match Q. Got Q: {}, V: {}", B, v_shape[0]);
@@ -375,7 +460,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     // Chunked-prefill targets MLA (K head dim == Q != V) — use is_causal's relaxed K-only check.
-    if (!args.is_causal && !is_chunked) {
+    // Cross is full attention (V head dim must equal Q), so it takes the strict check.
+    if ((!args.is_causal && !is_chunked) || args.is_cross) {
         TT_FATAL(
             k_shape[3] == DH && VDH == DH, "Head dimensions must match. Got Q: {}, K: {}, V: {}", DH, k_shape[3], VDH);
         if (has_joint_tensors) {
@@ -426,12 +512,33 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(
-        has_latent_v || NQH == NVH,
-        "Tensor-V mode requires Q num_heads to equal V num_heads. Got Q: {}, V: {}",
-        NQH,
-        NVH);
-    TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
+    if (!has_latent_v) {
+        const bool tensor_mha = (NQH == NKH) && (NKH == NVH);
+        const bool tensor_separate_v_shared_k = (NKH == 1) && (NVH == NQH);
+        const bool tensor_gqa_grouped_kv =
+            ring_joint::is_gqa_grouped_kv_head_mode(/*v_shares_k_buffer=*/false, NQH, NKH, NVH);
+
+        TT_FATAL(
+            tensor_mha || tensor_separate_v_shared_k || tensor_gqa_grouped_kv,
+            "Unsupported tensor-V head relationship. Expected MHA (NQH == NKH == NVH), separate-V shared-K "
+            "(NKH == 1 && NVH == NQH), or GQA (NKH == NVH < NQH && NQH % NKH == 0). Got NQH: {}, "
+            "NKH: {}, NVH: {}",
+            NQH,
+            NKH,
+            NVH);
+        TT_FATAL(
+            !has_joint_tensors || !tensor_gqa_grouped_kv,
+            "Ring joint SDPA GQA with joint tensors is unsupported. Got NQH: {}, NKH: {}, NVH: {}",
+            NQH,
+            NKH,
+            NVH);
+    } else {
+        TT_FATAL(
+            NKH == NVH || NKH == 1,
+            "K num_heads must be equal to V num_heads or 1 in latent-V mode. Got K: {}, V: {}",
+            NKH,
+            NVH);
+    }
 
     // Validate chunk sizes if program config is provided
 
@@ -476,6 +583,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    // On a cache hit everything except the runtime-patched scalars is guaranteed by the program hash to
+    // match a prior miss that already passed full validation. Re-check only the values that the hash no
+    // longer keys on (kv_cache_batch_idx, logical_n, kv_actual_isl) — they are re-patched per dispatch.
+    validate_runtime_patched_scalars(args, tensor_args);
+}
+
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
@@ -518,46 +633,6 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
-    if (tensor_args.input_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.input_v.value());
-    }
-    if (tensor_args.joint_q.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_q.value());
-        input_tensors.emplace_back(tensor_args.joint_k.value());
-    }
-    if (tensor_args.joint_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_v.value());
-    }
-    input_tensors.emplace_back(tensor_args.gathered_k);
-    if (tensor_args.gathered_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.gathered_v.value());
-    }
-    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.is_causal,
-        args.is_balanced,
-        args.logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.ccl_core_grid_offset,
-        // kv_cache_batch_idx is a reader runtime arg, but descriptor cache-hit patching only updates buffer rt args.
-        // Keep the value in the op hash so a cached Program never reuses stale scalar rt args for another slot.
-        args.kv_cache_batch_idx,
-        args.kv_actual_isl,
-        tensor_args.has_latent_v(),
-        tensor_args.v_num_heads(),
-        tensor_args.v_head_dim(args.latent_v_head_dim),
-        ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-            args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
-    );
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k};
@@ -596,9 +671,21 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
     const uint32_t N_global = gathered_k_shape[2];
+    const bool has_joint_tensors =
+        tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim);
+
+    if (args.is_causal && args.has_kv_pad_rotation() && !has_joint_tensors) {
+        const uint32_t logical_n = static_cast<uint32_t>(args.logical_n);
+        const uint32_t prefix_k = args.kv_actual_isl.value();
+        const uint32_t new_q_global = logical_n - prefix_k;
+        const uint32_t ring_size = static_cast<uint32_t>(args.ring_size);
+        int ideal_cycles = compute_chunked_causal_sdpa_ideal_cycles(
+            B, NQH, new_q_global, prefix_k, ring_size, DH, DV, fidelity, grid.x * grid.y);
+        return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
+    }
 
     // RingJointSDPA: local Q and joint Q attend to (gathered K + joint K)
     // Total Q dimension: N_local + L, Total K dimension: N_global + L
@@ -634,6 +721,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const bool is_causal,
     const bool is_balanced,
+    const bool is_cross,
     const std::optional<float> scale,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
@@ -709,6 +797,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         scale,
         is_causal,
         is_balanced,
+        is_cross,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

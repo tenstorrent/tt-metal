@@ -13,17 +13,17 @@ void kernel_main() {
     const uint32_t start_wt = get_arg_val<uint32_t>(0);
 
     // Compile time args
-    constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(0);                // Final core readiness signal
-    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(1);                  // Local core completion signal
-    constexpr uint32_t noc_final_x = get_compile_time_arg_val(2);                    // Final core X coordinate
-    constexpr uint32_t noc_final_y = get_compile_time_arg_val(3);                    // Final core Y coordinate
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);                             // Height tiles to process
-    constexpr uint32_t K = get_compile_time_arg_val(5);                              // TopK value
-    constexpr uint32_t Kt = get_compile_time_arg_val(6);                             // TopK in tile units (ceil(K/32))
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(7);                // Local TopK values output
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(8);            // Local TopK indices output
-    constexpr uint32_t final_values_cb_index = get_compile_time_arg_val(9);          // Final aggregation values buffer
-    constexpr uint32_t final_indices_cb_index = get_compile_time_arg_val(10);        // Final aggregation indices buffer
+    constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(0);          // Final core readiness signal
+    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(1);            // Local core completion signal
+    constexpr uint32_t noc_final_x = get_compile_time_arg_val(2);              // Final core X coordinate
+    constexpr uint32_t noc_final_y = get_compile_time_arg_val(3);              // Final core Y coordinate
+    constexpr uint32_t Ht = get_compile_time_arg_val(4);                       // Height tiles to process
+    constexpr uint32_t K = get_compile_time_arg_val(5);                        // TopK value
+    constexpr uint32_t Kt = get_compile_time_arg_val(6);                       // TopK in tile units (ceil(K/32))
+    constexpr uint32_t values_cb_index = get_compile_time_arg_val(7);          // Local TopK values output
+    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(8);      // Local TopK indices output
+    constexpr uint32_t final_values_cb_index = get_compile_time_arg_val(9);    // Final aggregation values buffer
+    constexpr uint32_t final_indices_cb_index = get_compile_time_arg_val(10);  // Final aggregation indices buffer
 
     // Constants
     constexpr uint32_t onetile = 1;
@@ -38,8 +38,8 @@ void kernel_main() {
     CircularBuffer final_indices_cb(final_indices_cb_index);
 
     // Memory transfer configuration
-    const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
+    const uint32_t tile_bytes_values = values_cb.get_tile_size();
+    const uint32_t tile_bytes_ind = indices_cb.get_tile_size();
 
     // Calculate target addresses in final core's L1 memory
     const uint32_t final_values_cb_addr = final_values_cb.get_write_ptr();
@@ -67,6 +67,11 @@ void kernel_main() {
                 tile_bytes_values,
                 {.offset_bytes = 0},
                 {.noc_x = noc_final_x, .noc_y = noc_final_y, .addr = final_values_base + i * tile_bytes_values});
+            // Drain the write's source-read before releasing the slot for reuse by the compute
+            // producer: cb_pop_front only advances the read pointer, so without this barrier the
+            // producer's next pack_tile could overwrite this slot while the NoC write is still
+            // reading it (WAR), corrupting the data landed at the final core.
+            noc.async_write_barrier();
             values_cb.pop_front(onetile);
         }  // i loop
 
@@ -82,11 +87,11 @@ void kernel_main() {
                 tile_bytes_ind,
                 {.offset_bytes = 0},
                 {.noc_x = noc_final_x, .noc_y = noc_final_y, .addr = final_indices_base + i * tile_bytes_ind});
+            noc.async_write_barrier();  // drain before releasing the slot for producer reuse (WAR)
             indices_cb.pop_front(onetile);
         }  // i loop
 
-        // Complete all pending NoC writes
-        noc.async_write_barrier();  // Ensure all data is transmitted before signaling
+        // All per-tile writes were drained before their slots were popped above.
 
         // Signal completion: increment sender semaphore by Kt (number of tiles sent)
         sender_sem.up(noc, noc_final_x, noc_final_y, Kt);

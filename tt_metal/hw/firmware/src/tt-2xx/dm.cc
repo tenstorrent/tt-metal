@@ -16,6 +16,16 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
+#if defined(PROFILE_KERNEL)
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
+}  // namespace kernel_profiler
+#endif
+
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
@@ -61,6 +71,14 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
+inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+    uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
+    if (kernel_size == 0) {
+        return;
+    }
+    invalidate_l2_cache_range(kernel_lma, kernel_size);
+}
+
 void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
@@ -93,6 +111,24 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
+    // Temporary workaround due to race vs. host deasserting TRISC reset.
+    // Workaround includes both the assert_trisc_reset() and the DPRINT workaround.
+    // https://github.com/tenstorrent/tt-metal/issues/48064
+    assert_trisc_reset();
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+    // Host may have released TRISCs early; a TRISC can hold the shared compute DPRINT lock
+    // (or leave wpos/rpos mid-print) when we assert reset. Clear that state while TRISCs are
+    // held so the next boot cannot hang in acquire_lock / wait_for_space before writing DONE.
+    {
+        auto* trisc_print = GET_MAILBOX_ADDRESS_DEV(dprint_buf.buffer_triscs);
+        trisc_print->aux.lock = 0;
+        uint32_t wpos = trisc_print->aux.wpos;
+        if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+            trisc_print->aux.wpos = 0;
+            trisc_print->aux.rpos = 0;
+        }
+    }
+#endif
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
@@ -103,7 +139,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
-volatile KernelBarrier g_kernel_barrier __attribute__((used));
+volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -111,7 +147,6 @@ void device_setup() {
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
-    // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
     // set_default_sfpu_constant_register_state
@@ -129,7 +164,6 @@ inline void run_triscs(uint32_t enables) {
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
-        invalidate_l1_cache();
     }
     DPRINT("DM-FW: running TRISCs {}\n", enables);
     invalidate_trisc_instruction_cache();
@@ -173,6 +207,8 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
+    // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
+    subordinate_sync->padding = 0;
     while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
            subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -189,9 +225,14 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        // Originally initalized to WAIT by host firmware initializer.
+        // Will be set back to WAIT immediately before running kernels.
+        (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
+    }
     WAYPOINT("I");
     DPRINT("DM0-FW: initialized\n");
 
@@ -209,6 +250,10 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Initialize wait for trisc FW
+        for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
+            mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+        }
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
@@ -230,7 +275,6 @@ extern "C" uint32_t _start1() {
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
-                invalidate_l1_cache();
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
@@ -259,13 +303,13 @@ extern "C" uint32_t _start1() {
 
             WAYPOINT("GD");
 
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
                 // profile "invalid" iterations.
                 DeviceZoneScopedMainN("DM0-FW");
-                uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
-                launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
                 DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
                 uint32_t enables = launch_msg_address->kernel_config.enables;
@@ -276,10 +320,11 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-                // Invalidate the i$ now the kernels have loaded and before running
-                // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-                // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
-                //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+
+                // Initialize wait for kernels
+                for (uint32_t i = 0; i < MaxNumKernels; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
 
                 run_triscs(enables);
 
@@ -307,9 +352,6 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
-                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
-                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-                }
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
@@ -321,9 +363,11 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("R");
                 if (enables & (1u << index)) {
                     uintptr_t kernel_lma =
-                        (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                    asm("FENCE.i");
-                    uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
+                        (static_cast<uint32_t>(kernel_config_base) +
+                         launch_msg_address->kernel_config.kernel_text_offset[index]);
+                    // Invalidate the i$ now the kernels have loaded and before running
+                    invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
+                    invalidate_l1_icache();
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
@@ -358,25 +402,27 @@ extern "C" uint32_t _start1() {
                     g_remapper_configurator.clear_all_pairs();
                     g_remapper_configurator.disable_remapper();
                 }
+            }
 
-                uint32_t go_message_index = mailboxes->go_message_index;
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
+            // are readable when the host wakes on RUN_MSG_DONE.
+            uint32_t go_message_index = mailboxes->go_message_index;
+            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
 
-                // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
-                if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                    // Set launch message to invalid, so that the next time this slot is encountered, kernels are only
-                    // run if a valid launch message is sent.
-                    launch_msg_address->kernel_config.enables = 0;
-                    launch_msg_address->kernel_config.preload = 0;
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
-                    // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
-                    // the launch message is no longer owned by us.
-                    CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
-                    mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-                }
+            // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                // Set launch message to invalid, so that the next time this slot is encountered, kernels are only
+                // run if a valid launch message is sent.
+                launch_msg_address->kernel_config.enables = 0;
+                launch_msg_address->kernel_config.preload = 0;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
+                // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
+                // the launch message is no longer owned by us.
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+                notify_dispatch_core_done(dispatch_addr, noc_index);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
     }
@@ -397,7 +443,8 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
         int index = hartid;
 
-        uintptr_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+        uintptr_t kernel_lma =
+            static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
@@ -412,10 +459,16 @@ extern "C" uint32_t _start1() {
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
-        asm("FENCE.i");
-        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+        // Invalidate the i$ now the kernels have loaded and before running
+        invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
+        invalidate_l1_icache();
+        {
+            // Profiler FW zone for subordinate DMs (DM1-DM7).
+            DeviceZoneScopedMainN("DM-FW");
+            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
-        record_stack_usage(stack_free);
+            record_stack_usage(stack_free);
+        }
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 

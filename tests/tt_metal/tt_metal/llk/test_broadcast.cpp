@@ -287,19 +287,18 @@ void run_single_core_broadcast(
     log_info(tt::LogTest, "Compute function is {}", defines["BCAST_OP"]);
 
     experimental::KernelSpec::CompilerOptions::Defines defines_vec;
-    defines_vec.reserve(defines.size());
     for (auto& kv : defines) {
-        defines_vec.emplace_back(kv.first, kv.second);
+        defines_vec.emplace(kv.first, kv.second);
     }
 
-    constexpr const char* INP0_DFB = "inp0_dfb";
-    constexpr const char* INP1_DFB = "inp1_dfb";
-    constexpr const char* OUT_DFB = "out_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
+    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    auto make_dfb = [&](const std::string& name) {
+    auto make_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = single_tile_size,
@@ -313,6 +312,13 @@ void run_single_core_broadcast(
     experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB);
     experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB);
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -334,16 +340,16 @@ void run_single_core_broadcast(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB}}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -352,14 +358,15 @@ void run_single_core_broadcast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
+        .hw_config = writer_hw_config,
     };
+
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = test_config.math_fidelity};
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = test_config.math_fidelity};
+    }
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -387,10 +394,7 @@ void run_single_core_broadcast(
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = test_config.math_fidelity,
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -413,28 +417,24 @@ void run_single_core_broadcast(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", static_cast<uint32_t>(dram_buffer_src_a_addr)},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", static_cast<uint32_t>(dram_buffer_src_b_addr)},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}}},
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(dram_buffer_src_a_addr)},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(dram_buffer_src_b_addr)},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", static_cast<uint32_t>(dram_buffer_dst_addr)},
-                       {"bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}}},
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(dram_buffer_dst_addr)},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

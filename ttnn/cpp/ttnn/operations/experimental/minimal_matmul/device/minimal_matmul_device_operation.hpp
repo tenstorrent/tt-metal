@@ -44,7 +44,8 @@ struct MinimalMatmulDeviceOperation {
         int32_t dim = -1,
         std::optional<float> fused_ternary_scalar = std::nullopt,
         const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
-        const std::optional<Tensor>& fused_ternary_input_b = std::nullopt);
+        const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
+        bool fuse_swiglu = false);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -64,6 +65,7 @@ std::vector<Tensor> minimal_matmul(
     int32_t dim = -1,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
-    const std::optional<Tensor>& fused_ternary_input_b = std::nullopt);
+    const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::prim

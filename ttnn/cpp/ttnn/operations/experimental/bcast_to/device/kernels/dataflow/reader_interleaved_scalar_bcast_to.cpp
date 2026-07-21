@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t arg_index = 0;
@@ -27,6 +29,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const auto src = TensorAccessor(src_args, src_addr);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
 
     uint32_t HtWt = Ht * Wt;
     // this is the INPUT tile offset
@@ -37,11 +42,10 @@ void kernel_main() {
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            cb_reserve_back(cb_id_src, onetile);
-            uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-            noc_async_read_page(tile_offset, src, l1_write_addr_src);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_src, onetile);
+            cb_src.reserve_back(onetile);
+            noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_src.push_back(onetile);
             num_tiles_read += HtWt - start_t;
             tile_offset += c_stride;
             // same as following logically

@@ -6,10 +6,10 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.sfpu_node import SfpuNode
 from helpers.golden_generators import (
     BinarySFPUGolden,
     get_golden_generator,
@@ -55,11 +55,11 @@ class BinarySfpu(Sfpu):
         tensor: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        math_format = operation.output.data_format
+        math_format = config.sentinel.golden_math_format
 
         generate_binary_golden = get_golden_generator(BinarySFPUGolden)
         golden_tensor = generate_binary_golden(
@@ -85,28 +85,29 @@ class BinarySfpu(Sfpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
         format = self._format_arg(config)
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
-            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
+            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {dest_acc}, {op}, {iterations}, {format}>();\n"
         )
 
     def calculate(
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: SfpuNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
@@ -118,7 +119,7 @@ class BinarySfpu(Sfpu):
 
         return (
             f"    test_utils::call_binary_sfpu_operation<"
-            f"dest_sync{stage}, {dest_acc}, "
+            f"{dest_sync}, {dest_acc}, "
             f"{approx_mode}, {op}, {iterations}, {format}"
             f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )

@@ -36,16 +36,16 @@ void kernel_main() {
     cb_src.reserve_back(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
     const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
-    FILL_WITH_VALUE_FLOAT(cb_id_src, *float_ptr);
+    FILL_WITH_VALUE_FLOAT(cb_src.get_write_ptr(), *float_ptr);
 #endif
 #ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(cb_id_src, packed_scalar);
+    FILL_WITH_VALUE(cb_src.get_write_ptr(), packed_scalar);
 #endif
     cb_src.push_back(onetile);
 
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
-    const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
+    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
     const auto dst = TensorAccessor(dst_args, dst_addr);
     constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
 

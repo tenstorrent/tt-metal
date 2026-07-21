@@ -15,21 +15,25 @@ on:
       sp-config:
         required: false
         type: string
-        default: "sp1"
-        description: "Single pod configuration (sp1, sp4, sp5)"
+        default: "sc4"
+        description: "Supercluster configuration (sc1, sc4, sc16, sp5)"
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   load-test-matrix:
     name: Load Test Matrix for ${{ inputs.sp-config }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
-      allocation_spec: ${{ steps.extract-allocation.outputs.allocation_spec }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -41,15 +45,6 @@ jobs:
             exit 1
           fi
           echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
-
-      - name: Extract allocation configuration from SKU
-        id: extract-allocation
-        run: |
-          {
-            echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
 
       - name: Verify test timeouts against budget
         run: |
@@ -88,22 +83,10 @@ jobs:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
     env:
-      OMPI_MCA_btl_tcp_if_include: ens5f0np0
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-      PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_HOME: /home/user/tt-metal
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      TT_METAL_CACHE: /home/user/.cache
     strategy:
-      max-parallel: 1  # Run tests sequentially to avoid resource contention
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
@@ -113,6 +96,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Parse docker image
         id: parse-image
@@ -123,6 +107,16 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Extract allocation spec from SKU
+        id: extract-spec
+        run: |
+          pip3 install PyYAML
+          {
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
         uses: ./.github/actions/ttop-create-allocation
@@ -130,15 +124,13 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
-          spec: |
-            ${{ needs.load-test-matrix.outputs.allocation_spec }}
+          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
 
-      - name: Get Allocation data
+      - name: Get allocation configs
         uses: ./.github/actions/ttop-get-allocation-data
-        id: get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
+          allocationNamespace: ttop-ci
 
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
@@ -151,15 +143,7 @@ jobs:
           workerTag: ${{ steps.parse-image.outputs.tag }}
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
-
-      - name: Setup tt-run for test
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
-          copyToWorkers: false
-          ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
+          path: /etc/ttop
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -196,13 +180,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
-          # and expects test binaries under /ci/tt-metal/build/test.
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user
-          sudo chown "$(id -u):$(id -g)" /home/user
-          cp -r /ci/tt-metal /home/user/
+          sudo mkdir -p /home/user/tt-metal
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
@@ -234,6 +216,22 @@ jobs:
               echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
             ' || true
 
+          run_cluster_validation() {
+            mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+              --num-iterations 5
+          }
+
+          echo "--- Checking cluster health before reset ---"
+          if run_cluster_validation; then
+            echo "SUCCESS: Cluster validation passed without reset"
+            exit 0
+          fi
+
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
             reset_success=false
@@ -251,13 +249,7 @@ jobs:
               sleep 5
 
               echo "--- Running cluster validation ---"
-              if mpirun --pernode --tag-output \
-                /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-                --send-traffic \
-                --hard-fail \
-                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-                --num-iterations 5; then
+              if run_cluster_validation; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
@@ -266,27 +258,18 @@ jobs:
               echo "WARNING: Skipping validation because reset failed on attempt $attempt"
             fi
 
-            echo "--- Kill stale processes on all hosts ---"
-            # todo)) figure out a proper way to kill stale processes from the docker containers
-            # mpirun --pernode --tag-output bash -lc '
-            #   mpi_processes="prted|prterun|orted|mpirun"
-            #   test_processes="tt-run|run_cluster_validation"
-            #   b1_demo_processes="models\.demos\.deepseek_v3_b1\.demo\.cli"
-            #   b1_teacher_forced_processes="models\.demos\.deepseek_v3_b1\.demo\.teacher_forced"
-            #   stale_processes="${mpi_processes}|${test_processes}|${b1_demo_processes}|${b1_teacher_forced_processes}"
-            #   pkill -u "$(id -un)" -f "${stale_processes}" || true
-            # '
-
-            echo "Sleeping 30s before retry..."
-            sleep 30
-
-            if [ "$attempt" -gt 4 ] && [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
-              echo "SUCCESS: Recovery completed on attempt $attempt after more than 4 attempts"
+            if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+              echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
               exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
             fi
           done
 
-          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts without a reset+validation success after attempt 4"
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
           exit 1
 
       - name: Verify ttnn imports on workers

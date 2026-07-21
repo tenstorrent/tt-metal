@@ -289,3 +289,49 @@ def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dty
 
     pcc, pcc_msg = assert_with_pcc(golden_tensor, output_tensor, 0.999)
     assert pcc
+
+
+def test_tanh_fp32_special_values(device):
+    input_tensor = torch.tensor(
+        [
+            float("nan"),
+            -0.0,
+            0.0,
+            float("inf"),
+            float("-inf"),
+            1.0,
+            -1.0,
+            10.0,
+            -10.0,
+        ],
+        dtype=torch.float32,
+    )
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.tanh)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.tanh(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    # tanh(NaN) == NaN
+    assert torch.equal(torch.isnan(result), torch.isnan(golden))
+    # tanh(+Inf) != 1.0
+    assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
+    # tanh(-Inf) != -1.0
+    assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
+
+    # tanh(-0.0) == -0.0
+    finite_mask = ~torch.isnan(golden)
+    assert torch.equal(
+        torch.signbit(result)[finite_mask], torch.signbit(golden)[finite_mask]
+    ), f"Sign bit mismatch: result={result.tolist()} golden={golden.tolist()}"
+
+    assert_with_ulp(golden, result, 5, allow_nonfinite=True)

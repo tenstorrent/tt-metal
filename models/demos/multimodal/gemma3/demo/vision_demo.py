@@ -25,9 +25,10 @@ import torch
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.model_config import DecodersPrecision
@@ -144,17 +145,10 @@ def prepare_generator_args(
 
 
 def _gemma3_vision_demo_device_params():
-    # Blackhole (e.g. P150) needs a larger trace region than Wormhole.
-    if is_blackhole():
-        return {
-            "fabric_config": True,
-            "trace_region_size": 70000000,
-            "num_command_queues": 2,
-            "l1_small_size": 24576,
-        }
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
     return {
         "fabric_config": True,
-        "trace_region_size": 21448704,
+        TRACE_MODEL_KEY_PARAM: "gemma-3-27b-vision",
         "num_command_queues": 2,
         "l1_small_size": 24576,
     }
@@ -507,44 +501,34 @@ def test_multimodal_demo_text(
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
         perf_key = f"{tt_device_name}_{base_model_name}"
-        ci_prefill_targets = {
-            "N300_Llama-3.2-11B": 23,
-            "T3K_Llama-3.2-11B": 20,
-            "T3K_Llama-3.2-90B": 3,
-            "N150_gemma-3-4b": 285,
-            "N300_gemma-3-4b": 390,
-            "T3K_gemma-3-27b": 265,
-            "P150_gemma-3-4b": 285,
-            "P150_gemma-3-27b": 265,
-        }
-        ci_decode_targets = {
-            "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 35,
-            "T3K_Llama-3.2-90B": 6,
-            "N150_gemma-3-4b": 24,
-            "N300_gemma-3-4b": 28,
-            "T3K_gemma-3-27b": 13,
-            "P150_gemma-3-4b": 24,
-            "P150_gemma-3-27b": 13,
-        }
-        target_prefill_tok_s = ci_prefill_targets.get(perf_key)
-        target_decode_tok_s_u = ci_decode_targets.get(perf_key)
-        if target_prefill_tok_s is None or target_decode_tok_s_u is None:
-            logger.warning(f"No CI vision perf targets for {perf_key}; skipping benchmark save and verify_perf.")
+        resolved_targets = resolve_perf_targets(
+            model_name=base_model_name,
+            sku=tt_device_name,
+            batch_size=max_batch_size,
+            seq_len=max_seq_len,
+        )
+
+        if not resolved_targets:
+            logger.warning(
+                f"No centralized CI vision perf targets for {perf_key}; skipping benchmark save and verify_perf."
+            )
         else:
-            target_decode_tok_s = target_decode_tok_s_u * max_batch_size
-            targets = {
-                "prefill_t/s": target_prefill_tok_s,
-                "decode_t/s": target_decode_tok_s,
-                "decode_t/s/u": target_decode_tok_s_u,
-            }
+            targets = {}
+            if resolved_targets.get("prefill_t/s") is not None:
+                targets["prefill_t/s"] = float(resolved_targets["prefill_t/s"])
+            if resolved_targets.get("decode_t/s/u") is not None:
+                targets["decode_t/s/u"] = float(resolved_targets["decode_t/s/u"])
+            if resolved_targets.get("decode_t/s") is not None:
+                targets["decode_t/s"] = float(resolved_targets["decode_t/s"])
+            elif "decode_t/s/u" in targets:
+                targets["decode_t/s"] = targets["decode_t/s/u"] * max_batch_size
 
             # Save benchmark data for CI
             N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
             benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
             benchmark_data.save_partial_run_json(
                 profiler,
-                run_type=f"{tt_device_name}-demo",
+                run_type="demo_perf",
                 ml_model_name=f"{base_model_name}-Vision",
                 ml_model_type="vlm",
                 num_layers=model_args[0].n_layers,
@@ -559,4 +543,15 @@ def test_multimodal_demo_text(
                 "gemma-3-27b",  # Gemma-3 functional only - perf tests are not reliable yet
             ]
             if base_model_name not in skip_perf_verification:
-                verify_perf(measurements, targets, high_tol_percentage=1.15)
+                expected_measurements = {
+                    key: True for key in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if key in targets
+                }
+                if expected_measurements:
+                    verify_perf(
+                        measurements,
+                        expected_measurements=expected_measurements,
+                        model_name=base_model_name,
+                        sku=tt_device_name,
+                        batch_size=max_batch_size,
+                        seq_len=max_seq_len,
+                    )

@@ -8,7 +8,7 @@ import pytest
 import torch
 from loguru import logger
 from torch import nn
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.configuration_mllama import MllamaConfig
 from transformers.models.mllama.image_processing_mllama import build_aspect_ratio_mask, convert_aspect_ratios_to_ids
 from transformers.models.mllama.modeling_mllama import MllamaPreTrainedModel, MllamaVisionModel
@@ -104,12 +104,12 @@ def test_vision_transformer_inference(mesh_device, reset_seeds):
     # the following prefixes need to be added so the weights can be loaded correctly on the computational graph.
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
     partial_state_dict = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model."),
+        load_partial_weights(AutoModelForImageTextToText, model_repo_name, "model.vision_model."),
         "vision_model.",
     )
 
     multimodal_proj_weights = add_prefix(
-        load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector."),
+        load_partial_weights(AutoModelForImageTextToText, model_repo_name, "model.multi_modal_projector."),
         "multi_modal_projector.",
     )
 

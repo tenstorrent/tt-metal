@@ -31,6 +31,9 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
                                                 // fist 16 for sfpu, next 16 for fpu
 
 // Pack config
+// Word-2 layout matches THCON_SEC[01]_REG1. The REG8 banks differ: bits 17-23 are not
+// implemented as below (no All_pack_disable_zero_compress/_ovrd; Add_tile_header_size is
+// at bit 17 per cfg_defines.h), so REG8 readback can't be interpreted with this struct.
 typedef struct
 {
     // word 0
@@ -39,15 +42,21 @@ typedef struct
     // word 1
     std::uint32_t l1_dest_addr : 32;
     // word 2
-    std::uint32_t uncompress              : 1;
-    std::uint32_t add_l1_dest_addr_offset : 1;
-    std::uint32_t reserved_0              : 2;
-    std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT;
-    std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;
-    std::uint32_t reserved_1        : 4;
-    std::uint32_t src_if_sel        : 1;
-    std::uint32_t pack_per_xy_plane : 7;
-    std::uint32_t l1_src_addr       : 8;
+    std::uint32_t uncompress              : 1;             // bit0  Disable_zero_compress
+    std::uint32_t add_l1_dest_addr_offset : 1;             // bit1
+    std::uint32_t addr_cnt_context        : 2;             // bits2-3
+    std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT; // bits4-7
+    std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;  // bits8-11
+    std::uint32_t dis_shared_exp_assembler            : 1; // bit12
+    std::uint32_t force_pack_per_max_xy_plane         : 1; // bit13
+    std::uint32_t enable_out_fifo                     : 1; // bit14
+    std::uint32_t sub_l1_tile_header_size             : 1; // bit15
+    std::uint32_t src_if_sel                          : 1; // bit16  Source_interface_selection
+    std::uint32_t all_pack_disable_zero_compress      : 4; // bits17-20
+    std::uint32_t all_pack_disable_zero_compress_ovrd : 1; // bit21
+    std::uint32_t add_tile_header_size                : 1; // bit22
+    std::uint32_t reserved_1                          : 1; // bit23 unused
+    std::uint32_t l1_src_addr                         : 8; // bits24-31
     // word 3
     std::uint32_t downsample_mask                    : 16;
     std::uint32_t downsample_shift_count             : 3;
@@ -300,6 +309,60 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
+/**
+ * @brief Per-packer BFP Exp_section_size (the THCON_SEC*_REG*_Exp_section_size cfg field), in 16-byte chunks.
+ *
+ * Chosen so a packer's data-stream Addr equals face `idx`'s datum address in the tile the unpacker reads.
+ * Per OutputAddressGenerator.md, a BFP packer computes its data-stream Addr (in 16B chunks) as
+ *     Addr = L1_Dest_addr + !Sub_l1_tile_header_size  (+ Packer0InitialAddr for idx >= 1)  + Exp_section_size
+ * Take the tile base as 0 so the values below are just offsets within the tile. Packer 0's L1_Dest_addr is
+ * the tile base, so the terms in its Addr before adding Exp_section_size sum to 0 + 1 (own header) = 1, saved
+ * as Packer0InitialAddr. For idx >= 1, set_packer_l1_offset programs L1_Dest_addr = idx * l1_offset - 1 =
+ * idx - 1 (BFP l1_offset == 1); the own header (+1) and the shared Packer0InitialAddr (+1) are then added:
+ * (idx - 1) + 1 + 1 = idx + 1. Packer 0 is 0 + 1 = 1, also idx + 1, so the terms before Exp_section_size
+ * always sum to idx + 1.
+ *
+ * Per UNPACR_Regular.md, face `idx`'s datums sit at, in 16B chunks from the tile base:
+ *     (1 + DigestSize)                        tile header             (DigestSize == 0 -> 1)
+ *   + ceil(NumExponents/16) == num_faces      exponent section        (one exponent chunk per face)
+ *   + idx * datum_bytes                       datums of the idx preceding faces
+ *
+ * Equating Addr to that datum address and solving for Exp_section_size:
+ *     Exp_section_size = (1 + num_faces + idx * datum_bytes) - (idx + 1) = num_faces + idx * (datum_bytes - 1)
+ *
+ * @param idx: Packer index 0..3 (SEC0_REG1 / SEC0_REG8 / SEC1_REG1 / SEC1_REG8). Only called with idx 1..3 —
+ *             packer 0's value (EXP0 / the partial_face case) is written separately.
+ * @param datum_bytes: Per-face data size in 16B chunks (Bfp8 16, Bfp4 8, Bfp2 4; == 16 * the ISA DatumSizeBytes 1 / 0.5 / 0.25).
+ * @param num_faces: Number of faces in the tile (1, 2, or 4).
+ * @return Exp_section_size for packer `idx`, in 16-byte chunks.
+ *
+ * @note Packers 2 and 3 write faces 2 and 3, which exist only in a 4-face tile, so num_faces is 4 whenever they
+ *       fire; the code uses 4 for idx >= 2 unconditionally. This is also needed for correctness: EXP2/EXP3 are
+ *       not re-cached on a data-format reconfig (only EXP0/EXP1 are), so a config at num_faces < 4 must not
+ *       leave them holding a smaller value that a later 4-face pack would read. Packers 0 and 1 are re-cached
+ *       every reconfig, so they use the actual num_faces.
+ * @note Wormhole only — Blackhole uses a single Exp_section_size value. Centralizes the {1*D, 2*D, 3*D} triple
+ *       hand-expanded in @ref cache_exponential_section_sizes_in_gprs and @ref set_packer_config.
+ *
+ * @see https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/TensixCoprocessor/Packers/OutputAddressGenerator.md
+ * @see https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/TensixCoprocessor/UNPACR_Regular.md
+ */
+constexpr std::uint32_t bfp_exp_section_size(const std::uint32_t idx, const std::uint32_t datum_bytes, const std::uint32_t num_faces)
+{
+    // idx >= 2 packers only ever fire at num_faces == 4 and are not re-cached on reconfig; use 4 for them.
+    const std::uint32_t effective_num_faces = (idx >= 2) ? 4 : num_faces;
+    // face idx datum address (1 + effective_num_faces + idx*datum_bytes, UNPACR_Regular.md)
+    //   minus Addr's terms before Exp_section_size (idx + 1, OutputAddressGenerator.md; see above)
+    return 1 + effective_num_faces + idx * datum_bytes - (idx + 1);
+}
+
+// Mantissa bytes for one face row (16 datums = FACE_C_DIM) of each BFP format, i.e. the `datum_bytes`
+// @ref bfp_exp_section_size expects: 16 datums * per-datum mantissa size (Bfp8 = 1 B, Bfp4 = 1/2 B,
+// Bfp2 = 1/4 B). Named once here so the packer exp-section-size call sites carry no bare 16/8/4.
+constexpr std::uint32_t bfp8_row_bytes = 16;
+constexpr std::uint32_t bfp4_row_bytes = 8;
+constexpr std::uint32_t bfp2_row_bytes = 4;
+
 // This function saves the exponential section size/required offsets to GPR for reconfiguring
 // of data format for packer. These registers are not explicitly used by the packer during
 // operation, thus we do not need to use a semaphore to wait for the packer to finish before
@@ -309,28 +372,30 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces > 2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces)
+                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces)
+                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = (1 + ((num_faces > 2) ? 2 : 0) + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = (1 + 1 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = (1 + 0 + 24) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = (1 + ((num_faces > 2) ? 2 : 0) + 4) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = (1 + 1 + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = (1 + 0 + 12) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
         sync_regfile_write(p_gpr_pack::EXP3_SEC_SIZE_BFP2);
     }
     else
@@ -341,11 +406,9 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 
 inline void set_packer_strides(const std::uint32_t pack_src_format)
 {
-    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                             : 1;
-    std::uint32_t y_stride = FACE_R_DIM * x_stride;
-    std::uint32_t z_stride = FACE_C_DIM * y_stride;
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
+    std::uint32_t y_stride = FACE_C_DIM * x_stride; // Y steps across a row of FACE_C_DIM datums (== FACE_R_DIM for square faces)
+    std::uint32_t z_stride = FACE_R_DIM * y_stride; // Z steps a full face of FACE_R_DIM rows (== FACE_C_DIM for square faces)
     std::uint32_t w_stride = TILE_NUM_FACES * z_stride;
 
     std::uint32_t xy_stride = (x_stride << PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT) | (y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT);
@@ -380,10 +443,9 @@ inline void set_packer_config(
             ? 0
             : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
-    config.f.uncompress        = 1;
-    config.f.out_data_format   = pack_dst_format;
-    config.f.in_data_format    = pack_src_format;
-    config.f.pack_per_xy_plane = 1;
+    config.f.uncompress      = 1;
+    config.f.out_data_format = pack_dst_format;
+    config.f.in_data_format  = pack_src_format;
 
     config.f.exp_threshold_en = 0;
     config.f.exp_threshold    = 0;
@@ -405,12 +467,18 @@ inline void set_packer_config(
     //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
     // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
     // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
-    // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
+    // THCON_SEC0_REG1_Addr_cnt_context = cfg_reg_array[1][66 +: 2];
     // THCON_SEC0_REG1_Out_data_format = cfg_reg_array[1][68 +: 4];
     // THCON_SEC0_REG1_In_data_format = cfg_reg_array[1][72 +: 4];
-    // THCON_SEC0_REG1_Unused00 = cfg_reg_array[1][76 +: 4];
+    // THCON_SEC0_REG1_Dis_shared_exp_assembler = cfg_reg_array[1][76 +: 1];
+    // THCON_SEC0_REG1_Force_pack_per_max_xy_plane = cfg_reg_array[1][77 +: 1];
+    // THCON_SEC0_REG1_Enable_out_fifo = cfg_reg_array[1][78 +: 1];
+    // THCON_SEC0_REG1_Sub_l1_tile_header_size = cfg_reg_array[1][79 +: 1];
     // THCON_SEC0_REG1_Source_interface_selection = cfg_reg_array[1][80 +: 1];
-    // THCON_SEC0_REG1_Packs_per_xy_plane = cfg_reg_array[1][81 +: 7];
+    // THCON_SEC0_REG1_All_pack_disable_zero_compress = cfg_reg_array[1][81 +: 4];
+    // THCON_SEC0_REG1_All_pack_disable_zero_compress_ovrd = cfg_reg_array[1][85 +: 1];
+    // THCON_SEC0_REG1_Add_tile_header_size = cfg_reg_array[1][86 +: 1];
+    // THCON_SEC0_REG1_Unused00 = cfg_reg_array[1][87 +: 1];
     // THCON_SEC0_REG1_L1_source_addr = cfg_reg_array[1][88 +: 8];
     // THCON_SEC0_REG1_Downsample_mask = cfg_reg_array[1][96 +: 16];
     // THCON_SEC0_REG1_Downsample_shift_count = cfg_reg_array[1][112 +: 3];
@@ -459,33 +527,32 @@ inline void set_packer_config(
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
-        // Override exp section size for packers 1,2,3
-        // Tile header + exp size + datum size
+        // Override exp section size for packers 1,2,3 (see bfp_exp_section_size)
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
-            config.f.exp_section_size                              = 1 + ((num_faces > 2) ? 2 : 0) + 16;
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 1 + 32;
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 0 + 48;
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4_b))
         {
-            config.f.exp_section_size                              = 1 + ((num_faces > 2) ? 2 : 0) + 8;
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 1 + 16;
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 0 + 24;
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2_b))
         {
-            config.f.exp_section_size                              = 1 + ((num_faces > 2) ? 2 : 0) + 4;
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 1 + 8;
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 0 + 12;
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
     }
@@ -548,18 +615,27 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
         }
     }
 
+    static_assert(
+        THCON_SEC0_REG1_Exp_threshold_en_ADDR32 == THCON_SEC0_REG1_Exp_threshold_ADDR32,
+        "THCON_SEC0_REG1_Exp_threshold_en and Exp_threshold must share ADDR32 for combined RMW");
+
     constexpr std::uint32_t THRESHOLD_RMW_MASK = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
 
     std::uint32_t threshold_rmw_data = (threshold << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (enable << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
 
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG8_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG8_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
+// Forward declaration: defined later in this file. Needed here so that the non-dependent call
+// inside `reconfig_packer_data_format`'s LLK_ASSERT is found via unqualified lookup at
+// the template's first-phase name lookup (ADL cannot find it from a std::uint32_t argument).
+__attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
+
 template <bool is_fp32_dest_acc_en>
-inline void reconfig_packer_data_format(
+__attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size  = 0,
@@ -588,18 +664,10 @@ inline void reconfig_packer_data_format(
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
-    // Some initialization methods modify this configuration register, so need to set it again
-    // Number of reads per face used for resetting tile position generator for edge masks
-    pack_counters_u pack_counters;
-    pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;
-    TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
-
-    for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
-    {
-        TT_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i); // disable auto last generation
-    }
+    LLK_ASSERT(
+        is_pack_reads_per_xy_plane(1),
+        "reconfig_packer_data_format: pack_reads_per_xy_plane counter must be 1 before packer reconfig (invariant violated; reduce mask should have been "
+        "cleared via _llk_pack_reduce_mask_clear_). Please uncomment DEVICE_PRINT #2111 for debugging.");
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -633,7 +701,6 @@ inline void reconfig_packer_data_format(
         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::TRISC_CFG);
 
         // Override exp section size for packers 1,2,3
-        // Tile header + exp size + datum size
         TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
@@ -673,18 +740,22 @@ inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides(pack_src_format);
+
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize vs Default) and is owned by _llk_pack_init_, which runs after this
+    // reconfig for the specific op/mode.
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size   = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const bool narrow_tile          = false,
-    const std::uint32_t relu_config = 0)
+    const std::uint32_t tile_size           = 0,
+    const std::uint32_t face_r_dim          = FACE_R_DIM,
+    const std::uint32_t num_faces           = 4,
+    const bool partial_face                 = false,
+    [[maybe_unused]] const bool narrow_tile = false,
+    const std::uint32_t relu_config         = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -724,14 +795,19 @@ inline void configure_pack(
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize packs a single face row, Default a full face) and hw-configure
+    // always runs in PackMode::Default, so it cannot establish the Untilize value. _llk_pack_init_ owns
+    // this counter and runs after hw-configure for the specific op/mode.
+
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
     // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
-    pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim; // Number of reads per face
-                                                          // Used for resetting tile position generator for edge masks
+    pack_counters.val = 0;
+    pack_counters.f.pack_reads_per_xy_plane =
+        1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
@@ -749,14 +825,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
-
-    // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
-
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
 inline std::uint8_t get_packer_dest_offset_index()
@@ -799,7 +867,13 @@ inline void program_packer_destination(std::uint32_t addr, bool restore = true)
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
 
-    // TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);
+    // No STALLWAIT is needed before this config write (unlike the BH counterpart):
+    // REG2FLOP executes on ThCon, in program order after the SETDMAREG GPR writes above, so it reads the
+    // freshly written OUTPUT_ADDR without a fence (BH uses WRCFG on the separate Config Unit, hence its
+    // STALL_CFG/THCON guard). No packer-drain (STALL_THCON/PACK) is needed either: the pack thread issues
+    // its instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
+    // which is sampled at PACR start -- before the next call's REG2FLOP reprograms it. The Flush PACR below
+    // drains the previous pack's output buffers and arms a fresh start address.
     TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
 
     TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 0); // pack flush
@@ -817,6 +891,8 @@ inline void program_packer_untilized_destination(const std::uint32_t addr, const
 
     if constexpr (diagonal)
     {
+        // Diagonal untilize drives only packers 0 and 1; the offset2/offset3 + packer-2/3 (SEC1) lines below are
+        // intentionally disabled and kept as reference for a possible 4-packer extension.
         const std::uint32_t block_size  = SCALE_DATUM_SIZE(pack_dst_format, FACE_C_DIM);
         constexpr std::uint32_t offset0 = 0;
         const std::uint32_t offset1     = (1 * block_size) / 16;
@@ -1000,25 +1076,21 @@ inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters()
     return counters_vec;
 }
 
-enum class PackerProgramType
-{
-    ProgramByTile,
-    ProgramByFace,
-};
-
 /**
- * Validates that all packers' config and counters match the expected formats and face dimension.
+ * Validates that all packers' config matches the expected formats.
  * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
- * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly(...))` in llk_pack_tile_api.h.
+ *
+ * The pack_reads_per_xy_plane counter is validated separately via is_pack_reads_per_xy_plane
+ * (invoked at reconfig time), since its expected value depends on whether a reduce mask is
+ * currently programmed, not on the per-pack call site.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers
- * @param face_r_dim        Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
  */
-template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
 __attribute__((noinline)) void are_packers_configured_correctly(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t nop_count = 10)
 {
     // Ensure configuration writes complete before subsequent operations
     tensix_sync();
@@ -1065,25 +1137,46 @@ __attribute__((noinline)) void are_packers_configured_correctly(
                 "are_packers_configured_correctly: pack_dst_format mismatch. Uncomment DEVICE_PRINT #2102 to inspect "
                 "packer index and expected/actual.");
         }
+    }
+}
 
-        if constexpr (program_type == PackerProgramType::ProgramByFace)
+/**
+ * Validates that all packers' pack_reads_per_xy_plane counter matches the expected value.
+ * Intended to be called from reconfig paths to assert the invariant: between non-reduce
+ * operations the counter is 1; the reduce layer owns transitions to FACE_R_DIM via
+ * `_llk_pack_reduce_mask_config_` and back to 1 via `_llk_pack_reduce_mask_clear_`.
+ *
+ * @param expected   Expected value of pack_reads_per_xy_plane
+ * @param nop_count  Number of nop operations to ensure configuration writes complete (default 10)
+ * @return true if all packers' counters match expected, false otherwise.
+ */
+__attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count)
+{
+    // Ensure configuration writes complete before reading back
+    tensix_sync();
+    for (std::uint32_t i = 0; i < nop_count; i++)
+    {
+        asm volatile("nop");
+    }
+
+    const std::array<pack_counters_t, NUM_PACKERS> counters_vec = read_pack_counters();
+    for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
+    {
+        if (counters_vec[i].pack_reads_per_xy_plane != expected)
         {
-            pack_counters_u counters = {.val = 0};
-            counters.val             = cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i];
-            if (counters.f.pack_reads_per_xy_plane != face_r_dim)
-            {
-                // DEVICE_PRINT(
-                // "#2103 are_packers_configured_correctly: packer {} pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n",
-                // i,
-                // face_r_dim,
-                // counters.f.pack_reads_per_xy_plane);
-                LLK_ASSERT(
-                    (counters.f.pack_reads_per_xy_plane == face_r_dim),
-                    "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Uncomment "
-                    "DEVICE_PRINT #2103 to inspect packer index and expected/actual.");
-            }
+            // Debug: print which packer mismatched and dump all per-packer counter values.
+            // DEVICE_PRINT(
+            //     "#2111 is_pack_reads_per_xy_plane: mismatch on packer {} (expected={}) actual [P0={} P1={} P2={} P3={}]\n",
+            //     i,
+            //     expected,
+            //     counters_vec[0].pack_reads_per_xy_plane,
+            //     counters_vec[1].pack_reads_per_xy_plane,
+            //     counters_vec[2].pack_reads_per_xy_plane,
+            //     counters_vec[3].pack_reads_per_xy_plane);
+            return false;
         }
     }
+    return true;
 }
 
 } // namespace ckernel::packer

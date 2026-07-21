@@ -31,7 +31,7 @@ on:
 
 jobs:
   define-models:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       models-to-run: ${{ steps.compute-models.outputs.models-to-run }}
     steps:
@@ -91,7 +91,7 @@ jobs:
 
   generate-matrix:
     needs: define-models
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
     steps:
@@ -207,6 +207,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -407,7 +408,7 @@ jobs:
           device_perf_model_name: "ops-perf-tests"
           commands: |
             pytest tests/ttnn/perf_tests/operations/conv -m models_device_performance_bare_metal --timeout=300
-            ${{ matrix.test-info.arch == 'blackhole' && 'SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py::test_sdpa_perf_check -svv' || '' }}
+            ${{ matrix.test-info.arch == 'blackhole' && 'INDEXER_SCORE_PERF_CHECKS=1 pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_math_util -svv' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ops-perf-tests'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

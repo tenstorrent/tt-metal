@@ -16,6 +16,22 @@ on:
         required: false
         type: string
         default: "not perf and not nightly and not quasar"
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
+      sku-allowlist:
+        required: false
+        type: string
+        default: "*"
+        description: >-
+          Optional logical SKU allowlist (comma-separated) for change gating.
+          Default "*" means no extra filter. Empty string skips all tests.
+          Any other value is forwarded as --sku-allowlist.
 
 permissions:
   checks: write
@@ -26,14 +42,15 @@ env:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_smoke_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -43,18 +60,32 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "smoke"
+            pr_gate \
+            "${extra[@]}"
       - name: Build test matrix
         id: build-matrix
         run: |
+          set -euo pipefail
+          allowlist_args=()
+          allowlist='${{ inputs.sku-allowlist }}'
+          # "*" (default) = omit flag (no filter). Empty = skip all. Else CSV.
+          if [ "$allowlist" != '*' ]; then
+            allowlist_args+=(--sku-allowlist "$allowlist")
+          fi
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}" \
+            "${allowlist_args[@]}"
 
   llk-smoke-exec:
     needs: load-test-matrix
@@ -72,6 +103,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}

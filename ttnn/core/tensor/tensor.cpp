@@ -13,7 +13,6 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/distributed/api.hpp"
 
-#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -78,7 +77,7 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(HostTensor(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
+    Tensor(HostTensor::from_buffer(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
 
 Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
@@ -87,27 +86,7 @@ Tensor::Tensor(HostTensor tensor) :
 Tensor::Tensor(MeshTensor tensor) : Tensor::Tensor(DeviceStorage(std::move(tensor))) {}
 
 Tensor::Tensor(DeviceStorage storage) :
-    tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {
-    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // Use get_device_bypass_deallocate_check() to preserve mesh_device_ even when the
-    // buffer is deallocated. This prevents nullptr device propagation when operations
-    // like reshape create new tensors from existing DeviceStorage.
-    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
-        mesh_device_ = device;
-    }
-}
-
-Tensor& Tensor::operator=(const Tensor& other) {
-    if (this == &other) {
-        return *this;
-    }
-    this->tensor_id = other.tensor_id;
-    if (this->tensor_attributes != other.tensor_attributes) {
-        this->tensor_attributes = other.tensor_attributes;
-    }
-    this->mesh_device_ = other.mesh_device_;
-    return *this;
-}
+    tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {}
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
@@ -115,11 +94,8 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
-    this->mesh_device_ = other.mesh_device_;
     return *this;
 }
-
-Tensor::Tensor(const Tensor& other) = default;
 
 Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
 
@@ -489,10 +465,10 @@ const MeshTensor& Tensor::mesh_tensor() const& {
 }
 
 distributed::MeshDevice* Tensor::device() const {
-    if (this->mesh_device_.has_value()) {
-        return this->mesh_device_.value();
+    if (storage_type() != StorageType::DEVICE || !is_allocated()) {
+        return nullptr;
     }
-    return nullptr;
+    return device_storage().get_mesh_buffer().device();
 }
 
 const distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -43,10 +44,8 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
-#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
@@ -77,9 +76,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+#include "kernel_compile_utils.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -91,9 +88,9 @@
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt {
-class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal::experimental {
 class GlobalCircularBuffer;
@@ -161,12 +158,53 @@ namespace {
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+    const auto& env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
     jit_build_genfiles_descriptors(env, build_options);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
     } else {
         jit_build_genfiles_kernel_include(env, *kernel, kernel->kernel_source());
+    }
+}
+
+// Returns true if every expected ELF for this kernel is already present locally and still valid, so
+// the client can skip the remote round-trip (preprocess + RPC + ELF transfer) entirely and let
+// read_binaries() load the cached ELF.
+bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    if (num_binaries <= 0) {
+        return false;
+    }
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Write the preprocess-and-ship reuse cache for every binary of this kernel, from the .d files the -E
+// step left on disk plus the link inputs. Called only after the remote compile succeeds and the ELFs
+// are on disk, so a failed compile leaves no validatable cache to reuse a stale ELF.
+void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        bs.write_reuse_cache(kernel->get_full_kernel_name());
     }
 }
 
@@ -176,7 +214,8 @@ KernelCompileDescriptor build_kernel_descriptor(
     const std::shared_ptr<Kernel>& kernel,
     const JitBuildOptions& build_options,
     std::size_t kernel_hash) {
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
     uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
@@ -187,41 +226,74 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
-    static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
-    desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    // Non-preprocess mode ships the generated source tree for the server to compile. In
+    // preprocess-and-ship mode the shipped .ii units are self-contained (headers/defines inlined), so
+    // the source tree is neither read nor sent -- saving client I/O and RPC bandwidth on the farm path.
+    if (!preprocess_and_ship) {
+        static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
+        desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    }
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
 
-    return desc;
-}
-
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
-    // Store the build key into the KernelCompile hash. This will be unique per command queue
-    // configuration (necessary for dispatch kernels).
-    // watcher/dprint enabled are accounted for in the build key.
-    tt::StableHasher hasher;
-    hasher.update(build_key);
-    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
-    hasher.update(kernel->compute_hash());
-    size_t compile_hash = static_cast<size_t>(hasher.digest());
-
-#ifdef GENERATE_HASH_LOG
-    static std::ofstream f("/tmp/hashlog.txt");
-    static std::mutex mutex_;
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
-          << std::flush;
+    // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the preprocessor (-E)
+    // on the client and ship the self-contained .ii (headers/defines inlined). The server then
+    // compiles the .ii with no include tree, no defines, and no source file on its filesystem --
+    // only the toolchain. The .ii travels over the generated_files content channel, is written into
+    // the per-kernel cache dir on the server, and is referenced as a sibling of the target output
+    // dir ("../<name>").
+    if (preprocess_and_ship) {
+        for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
+            auto& target = desc.request.targets[t];
+            const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
+            std::filesystem::create_directories(client_out_dir);
+            for (std::size_t i = 0; i < target.srcs.size(); ++i) {
+                const std::string ii_name =
+                    target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
+                const std::string ii_path = client_out_dir + "/" + ii_name;
+                // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
+                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
+                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
+                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
+                // the target + generated-files dirs, identical to the real compile env. -MMD (in
+                // cflags) leaves a .d next to each .ii; the reuse-cache sidecar is built from those
+                // only after a successful compile (see JitBuildState::write_reuse_cache).
+                const auto args = tt::jit_build::utils::build_gpp_argv(
+                    desc.request.gpp,
+                    target.compiler_opt_level,
+                    target.cflags,
+                    target.includes,
+                    target.defines,
+                    target.srcs[i],
+                    tt::jit_build::utils::GppAction::Preprocess,
+                    ii_path);
+                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
+                }
+                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                tt::jit_build::GeneratedFile gf;
+                gf.name = ii_name;
+                gf.content.assign(bytes.begin(), bytes.end());
+                desc.request.generated_files.push_back(std::move(gf));
+                // Server compiles this self-contained unit instead of the original source path.
+                target.srcs[i] = "../" + ii_name;
+            }
+            // The .ii has includes + defines baked in; the server must not need the tree.
+            target.includes.clear();
+            target.defines.clear();
+        }
     }
-#endif
-    return compile_hash;
+
+    return desc;
 }
 
 std::string ensure_kernel_binaries(
@@ -336,7 +408,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
 
         auto config = std::visit(
-            tt::stl::overloaded{
+            ttsl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
@@ -469,7 +541,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
 // Metal 2.0 Name Registry Methods
 // ============================================================================
 
-void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle) {
+void ProgramImpl::register_kernel_spec_name(const std::string& name, KernelHandle handle) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -490,7 +562,9 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "Both DFBs must be created via add_dataflow_buffer before aliasing.",
         secondary_id,
         dataflow_buffers_.size());
-    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+    TT_FATAL(
+        primary_id != secondary_id,
+        "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
 
     auto& primary_dfb = dataflow_buffers_[primary_id];
     auto& secondary_dfb = dataflow_buffers_[secondary_id];
@@ -506,12 +580,11 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         secondary_id,
         secondary_dfb->alias_primary_id.value());
 
-
     dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
 }
 
-void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
+void ProgramImpl::register_dfb_spec_name(const std::string& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -519,7 +592,7 @@ void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_i
     TT_FATAL(inserted, "Duplicate DFB spec name: {}", name);
 }
 
-void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id) {
+void ProgramImpl::register_semaphore_spec_name(const std::string& name, uint32_t sem_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -527,28 +600,28 @@ void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, ui
     TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
 }
 
-KernelHandle ProgramImpl::get_kernel_handle(const KernelSpecName& name) const {
+KernelHandle ProgramImpl::get_kernel_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->kernel_handles.find(name);
     TT_FATAL(it != metal2_registry_->kernel_handles.end(), "Unknown kernel spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_dfb_handle(const DFBSpecName& name) const {
+uint32_t ProgramImpl::get_dfb_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->dfb_handles.find(name);
     TT_FATAL(it != metal2_registry_->dfb_handles.end(), "Unknown DFB spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const {
+uint32_t ProgramImpl::get_semaphore_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->semaphore_handles.find(name);
     TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
+void ProgramImpl::register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -556,7 +629,7 @@ void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const K
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
-const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const KernelSpecName& name) const {
+const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
     }
@@ -567,8 +640,8 @@ const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const Ker
     return &it->second;
 }
 
-std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
-    std::vector<KernelSpecName> names;
+std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
+    std::vector<std::string> names;
     if (metal2_registry_) {
         names.reserve(metal2_registry_->kernel_handles.size());
         for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
@@ -578,13 +651,78 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     return names;
 }
 
+void ProgramImpl::reserve_runtime_arg_buffers() {
+    if (!metal2_registry_) {
+        return;
+    }
+
+    for (const std::string& kernel_name : get_registered_kernel_names()) {
+        const KernelRTASchema* schema = get_kernel_rta_schema(kernel_name);
+        if (schema == nullptr) {
+            continue;
+        }
+
+        std::shared_ptr<Kernel> kernel = get_kernel_by_spec_name(kernel_name);
+        if (kernel == nullptr) {
+            continue;
+        }
+
+        // CRTA word count is fully determined by ProgramSpec resolution:
+        //   [ named | tensor bindings | scratchpads | common varargs ]
+        // vararg_section_offset == named + bindings + scratchpads.
+        const KernelCrtaLayout layout = kernel->get_crta_layout();
+        const size_t crta_words =
+            static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
+
+        // Per-node RTAs: named count + per-node vararg count from the schema.
+        const size_t named_rta_words = schema->runtime_arg_names.size();
+
+        // Reserve unique RTAs first so set_common_runtime_args can validate against
+        // max_runtime_args_per_core_ once CRTAs are installed.
+        for (const CoreCoord& core : kernel->logical_cores()) {
+            size_t vararg_words = 0;
+            if (auto it = schema->num_runtime_varargs_per_node.find(core);
+                it != schema->num_runtime_varargs_per_node.end()) {
+                vararg_words = it->second;
+            }
+            const size_t rta_words = named_rta_words + vararg_words;
+            if (rta_words == 0) {
+                continue;
+            }
+            // set_runtime_args may only allocate on the first call; skip if already sized
+            // (e.g. SetProgramRunArgs ran earlier on a non-factory path).
+            if (!kernel->runtime_args(core).empty()) {
+                continue;
+            }
+            std::vector<uint32_t> zeros(rta_words, 0u);
+            kernel->set_runtime_args(core, zeros);
+        }
+
+        if (crta_words == 0) {
+            continue;
+        }
+        // set_common_runtime_args may only be called once; SetProgramRunArgs overwrites in place after.
+        if (!kernel->common_runtime_args().empty()) {
+            continue;
+        }
+        std::vector<uint32_t> zeros(crta_words, 0u);
+        kernel->set_common_runtime_args(zeros);
+    }
+}
+
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
+    const std::string& name,
+    const TensorSpec& spec,
+    bool dynamic_tensor_shape,
+    bool match_padded_shape_only,
+    bool enqueue_invariant) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
+        name,
+        Metal2NameRegistry::RegisteredTensorParameter{
+            spec, dynamic_tensor_shape, match_padded_shape_only, enqueue_invariant});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -619,6 +757,17 @@ bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string
         return false;
     }
     return it->second.match_padded_shape_only;
+}
+
+bool ProgramImpl::get_tensor_parameter_enqueue_invariant(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.enqueue_invariant;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
@@ -1251,8 +1400,96 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
+// Scratchpad is a Metal 2.0-only construct.
+void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
+    if (this->scratchpads_allocated_) {
+        return;
+    }
+
+    const uint64_t base_l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
+    for (auto& kernels_of_core_type : this->kernels_) {
+        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
+            if (scratchpad_handles.empty()) {
+                continue;
+            }
+            const CoreRangeSet& kernel_cores = kernel->core_range_set();
+
+            for (auto& handle : scratchpad_handles) {
+                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
+                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
+                // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
+                // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
+                for (const CoreRange& core_range : kernel_cores.ranges()) {
+                    bool exists = false;
+                    for (const CircularBufferAllocator& a : this->dfb_allocators_) {
+                        if (a.core_range == core_range) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        this->dfb_allocators_.emplace_back(core_range);
+                    }
+                }
+
+                // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
+                // It must sit at the same L1 offset everywhere that it exists.
+                // Take the max region-end over EVERY allocator that intersects the kernel's cores
+                // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
+                // an overlapping-but-different core range. Mark each such allocator exactly once.
+                std::vector<CircularBufferAllocator*> touched;
+                for (CircularBufferAllocator& a : this->dfb_allocators_) {
+                    for (const CoreRange& core_range : kernel_cores.ranges()) {
+                        if (a.core_range.intersects(core_range)) {
+                            touched.push_back(&a);
+                            break;
+                        }
+                    }
+                }
+                uint64_t addr = base_l1_address;
+                for (const CircularBufferAllocator* a : touched) {
+                    addr = std::max<uint64_t>(addr, a->get_cb_region_end());
+                }
+                addr = align(addr, alignment);
+                for (CircularBufferAllocator* a : touched) {
+                    a->mark_address(addr, handle.size_bytes, base_l1_address);
+                }
+
+                handle.allocated_address = static_cast<uint32_t>(addr);
+
+                TT_FATAL(
+                    handle.allocated_address != 0,
+                    "Internal error: scratchpad '{}' on kernel '{}' "
+                    "has a 0 allocated address (allocation failed or was skipped).",
+                    handle.accessor_name,
+                    kernel->name());
+
+                // Patch the allocated address into the kernel's CRTA buffer if it exists.
+                // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+                // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+                // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+                // handle.allocated_address into the scratchpad section when it builds the buffer.
+                // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+                //
+                // Usage of the CRTA buffer:
+                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+                if (!kernel->common_runtime_args().empty()) {
+                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                }
+            }
+        }
+    }
+
+    this->scratchpads_allocated_ = true;
+}
+
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // If device is a MeshDevice, we need to track all its sub-devices
     std::vector<const IDevice*> devices_to_track;
@@ -1420,7 +1657,7 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     std::optional<DeviceAddr> lowest_address =
@@ -1724,7 +1961,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
 
 void detail::ProgramImpl::set_cb_data_fmt_and_tile(
     const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
@@ -1774,8 +2011,9 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                        .get_device_build_env(device->build_id())
+                                                        .build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1858,8 +2096,11 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     }
                 }
             } else {
-                // Below assumes ethernet dispatch class
-                TT_ASSERT(core_type == CoreType::ETH);
+                // Non-multicast cores are dispatched via unicast. Historically this was only ETH, but
+                // DRAM programmable cores (e.g. the tensor-prefetcher DRISC senders) are also unicast-only
+                // and take the same path — extract_dst_noc_unicast_info handles either core type. The
+                // branch above (get_supports_receiving_multicasts) is the authoritative hal query, so no
+                // enumerated core-type check is needed here.
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 
@@ -1990,14 +2231,15 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        ttsl::hash::hash_combine(device_hash, device->id());
+        ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2010,36 +2252,35 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
 
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
 
-        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
-        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     } else {
         TT_ASSERT(
             cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2052,12 +2293,12 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
@@ -2068,13 +2309,17 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
             trace_cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    // ZoneScoped;
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    TTZoneScopedD(PROGRAM);
+
+    const auto& cluster = MetalContext::instance(extract_context_id(device)).get_cluster();
+
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -2087,6 +2332,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
 
     Inspector::program_compile_started(this, device, build_env.build_key());
+
+    // Currently JIT compile on Quasar mock devices is non functional
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
 
     TT_FATAL(
         device->is_initialized(),
@@ -2125,7 +2377,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 kernel->name());
         }
 
-        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
 
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
         kernel->set_full_name(kernel_path_suffix);
@@ -2143,29 +2395,48 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             !endpoints.empty(),
             "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
             "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
-        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
+        RemoteCompileCoordinator coordinator(
+            std::move(endpoints), extract_context_id(device), device->build_id(), build_env.build_key());
 
+        static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
+        // Kernels preprocess-and-shipped this run, whose reuse cache is written once the compile
+        // succeeds (from the .d files left by the -E step).
+        std::vector<std::shared_ptr<Kernel>> preprocessed_kernels;
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                coordinator.submit(kernel_hash, [&]() {
-                    generate_kernel_source_files(device, build_options, kernel);
-                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                });
+                // Skip the remote round-trip when the ELF is already validly cached locally.
+                if (!remote_kernel_cached(device, kernel)) {
+                    coordinator.submit(kernel_hash, [&]() {
+                        generate_kernel_source_files(device, build_options, kernel);
+                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                    });
+                    if (preprocess_and_ship) {
+                        preprocessed_kernels.push_back(kernel);
+                    }
+                }
+                // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
             }
         }
 
+        // Throws on any compile failure; only past this point are all ELFs guaranteed on disk.
         coordinator.finish();
+
+        // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
+        // so no sidecar is ever written for a missing or stale ELF.
+        for (const auto& kernel : preprocessed_kernels) {
+            finalize_preprocess_reuse_cache(device, kernel);
+        }
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
             kernel->read_binaries(device, binary_root);
             kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
@@ -2179,7 +2450,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
                     },
                     events);
             }
@@ -2193,6 +2464,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     compiled_.insert(build_env.build_key());
 
     Inspector::program_compile_finished(this, device, build_env.build_key());
+}
+
+void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
+    this->compile(device, force_slow_dispatch);
+    this->allocate_circular_buffers(device);
+    this->validate_circular_buffer_core_ranges(device);
+    this->validate_circular_buffer_region(device);
+    this->finalize_dataflow_buffer_configs();
+    this->allocate_dataflow_buffers(device);
+
+    // Pre-size Metal 2.0 RTA/CRTA host buffers from the registered schema before scratchpad allocation and
+    // finalize_offsets. This is a no-op for programs without a Metal 2.0 registry.
+    this->reserve_runtime_arg_buffers();
+
+    // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
+    this->allocate_scratchpads(device);
+    this->validate_dataflow_buffer_region(device);
 }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
@@ -2369,15 +2657,16 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return this->get_kernels(index);
     };
 
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
 
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
-    tt::stl::Span<ProgramImpl*> programs(programs_array);
+    ttsl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
         extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
@@ -2393,7 +2682,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    tt::stl::Span<ProgramImpl*> programs) {
+    ttsl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance(context_id).hal();
@@ -2424,12 +2713,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
-            index,
-            kernel_groups_getter(index),
-            dataflow_buffers,
-            state.offset,
-            state.dfb_offset,
-            state.dfb_size);
+            index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
         // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.

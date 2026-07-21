@@ -1074,7 +1074,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             1,  # check
         ),
         # Composite RS
-        pytest.param(
+        (
             [1, 1, 384, 240],
             3,
             [64, 256],
@@ -1084,15 +1084,14 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             False,
             True,
             10,  # perf
-            marks=pytest.mark.skip(reason="Disabled: see #45687"),
         ),
     ],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1271456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1271456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1610000}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1610000}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],

@@ -13,15 +13,15 @@
 using namespace ckernel;
 
 /**
- * @brief MOP configuration for upk tilize for full 32x32 tiles using the fused HW instruction
- * @details Sets up MOP for unpacking and tilizing block_ct_dim tiles per invocation,
- * works for SRCA/B/S and DEST
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_S
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
+ * @brief Builds the MOP for unpack tilize of full 32x32 tiles using the fused HW instruction.
+ *
+ * Unpacks and tilizes block_ct_dim tiles per invocation; works for SrcA/B and DEST.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length)
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length).
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
@@ -63,15 +63,21 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
 }
 
 /**
- * @brief Initialized unpacker to unpack tilize a single operand by full 32x32 tiles
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
+ * @brief Initializes the unpacker to unpack-tilize a single operand by full 32x32 tiles.
+ *
+ * Packs the UNPACK_TILIZE stride fields into a single struct for a direct 32-bit cfg write, then
+ * programs the MOP.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
- * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length)
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
+ * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length).
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @note On the math thread, pair with @ref _llk_math_eltwise_unary_datacopy_init_ (T1; tilize moves the tilized SrcA tile to dest); on the pack thread, pair
+ * with
+ *       @ref _llk_pack_init_ (T2). @ref _llk_unpack_tilize_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_init_(
@@ -79,20 +85,22 @@ inline void _llk_unpack_tilize_init_(
 {
     // Pack all UNPACK_TILIZE stride fields into a single struct to perform a direct 32-bit cfg write
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
-    unpk_cfg.f.src_z_stride      = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
-                                                                 // Src (L1) counter increments in the UNPACR_TILIZE instruction
-    unpk_cfg.f.dst_z_stride      = 1;           // col dim of a tile in dest reg (1 face)
+    unpk_cfg.f.src_z_stride                       = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
+                                                                                  // Src (L1) counter increments in the UNPACR_TILIZE instruction
+    unpk_cfg.f.dst_z_stride      = 1;                                             // col dim of a tile in dest reg (1 face)
     unpk_cfg.f.stride_val_source = 0;
     unpk_cfg.f.stride_offset_0   = full_ct_dim * tensor_shape.num_faces_c_dim; // how much to stride to go to next row within the same tile
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
     else
     {
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0); // Disable transpose
         cfg[THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
@@ -101,10 +109,11 @@ inline void _llk_unpack_tilize_init_(
 }
 
 /**
- * @brief Unpacks a single full 32x32 tile, works for UNP_A, UNP_B, UNP_DEST
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @param l1_tile_idx: Index into the L1 buffer for a tile
+ * @brief Unpacks and tilizes a single full 32x32 tile; works for UNP_A, UNP_B, UNP_DEST.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @param l1_tile_idx: Index into the L1 buffer for a tile.
+ * @note Call @ref _llk_unpack_tilize_init_ with matching template args before this function.
  */
 template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
@@ -126,11 +135,13 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
 }
 
 /**
- * @brief MOP configuration for batched tilize directly into DEST register
- * @details Sets up a single-instruction MOP: UNPACR_TILIZE with Dst_Z_Cntr_inc=1.
- *          UNPACR_TILIZE for UNP_DEST uses its internal Z counter for DEST addressing.
- *          DST_Z_STRIDE must be set to total_num_faces so each Z increment advances by one full tile.
- * @tparam BLOCK_CT_DIM: Number of tiles per row to process in one MOP invocation
+ * @brief Builds the MOP for batched tilize directly into the DEST register.
+ *
+ * Sets up a single-instruction MOP: UNPACR_TILIZE with Dst_Z_Cntr_inc=1. UNPACR_TILIZE for UNP_DEST
+ * uses its internal Z counter for DEST addressing. DST_Z_STRIDE must be set to NUM_FACES so each Z
+ * increment advances by one full tile.
+ *
+ * @tparam BLOCK_CT_DIM: Number of tiles per row to process in one MOP invocation.
  * @param buf_desc_id: The buffer descriptor ID, values = 0 - 16
  */
 template <std::uint32_t BLOCK_CT_DIM>
@@ -154,28 +165,32 @@ inline void _llk_unpack_tilize_block_mop_config_(const std::uint32_t buf_desc_id
 }
 
 /**
- * @brief Initialize unpacker for batched tilize directly into DEST register
- * @details Configures UNP_A (shared with UNP_DEST) stride registers and programs the block MOP.
- *          DST_Z_STRIDE is set to total_num_faces so each UNPACR_TILIZE Z increment advances by one
- *          full tile in DEST (instead of 1 face as in the single-tile path).
- * @tparam FULL_CT_DIM: Number of tiles in a full row of the input tensor
- * @tparam BLOCK_CT_DIM: Number of tiles per row to process in one MOP invocation
+ * @brief Initializes the unpacker for batched tilize directly into the DEST register.
+ *
+ * Configures UNP_A (shared with UNP_DEST) stride registers and programs the block MOP. DST_Z_STRIDE
+ * is set to NUM_FACES so each UNPACR_TILIZE Z increment advances by one full tile in DEST (instead of
+ * 1 face as in the single-tile path).
+ *
+ * @tparam FULL_CT_DIM: Number of tiles in a full row of the input tensor.
+ * @tparam BLOCK_CT_DIM: Number of tiles per row to process in one MOP invocation.
  * @param buf_desc_id: The buffer descriptor ID, values = 0 - 16
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @pre Caller must ensure BLOCK_RT_DIM * BLOCK_CT_DIM <= dest_size_in_tiles, since all tiles
- *      in the block are accumulated in DEST across rows before a single section_done is issued.
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @note Caller must ensure BLOCK_RT_DIM * BLOCK_CT_DIM <= dest_size_in_tiles, since all tiles
+ *       in the block are accumulated in DEST across rows before a single section_done is issued.
+ * @note @ref _llk_unpack_tilize_block_ is the matching execute call on this thread.
  */
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
-    unpk_cfg.f.src_z_stride      = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face)
+    unpk_cfg.f.src_z_stride                       = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face)
     // Z stride unit = face_r_dim datums. Each tile = total_num_faces faces × face_r_dim rows per face.
     unpk_cfg.f.dst_z_stride      = tensor_shape.total_num_faces() * tensor_shape.face_r_dim; // stride between tiles in DEST
     unpk_cfg.f.stride_val_source = 0;
     unpk_cfg.f.stride_offset_0   = FULL_CT_DIM * tensor_shape.num_faces_c_dim; // stride to next row within same tile
 
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
     cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
 
@@ -183,13 +198,16 @@ inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id, cons
 }
 
 /**
- * @brief Execute batched tilize of one row of tiles directly into DEST register
- * @details Sets L1 source and DEST counters once, then runs the MOP which processes
- *          BLOCK_CT_DIM tiles.  The MOP auto-advances both source (via Src_Z_Cntr_inc)
- *          and dest (via Dst_Z_Cntr_inc with DST_Z_STRIDE=total_num_faces).
- *          Call once per tile row: call _llk_unpack_dest_dvalid_section_done_() after all rows.
- * @param l1_face_idx: Face-level index into the L1 buffer for the start of this tile row
- * @param dest_tile_idx: Tile index within DEST for the first tile of this row
+ * @brief Executes batched tilize of one row of tiles directly into the DEST register.
+ *
+ * Sets the L1 source and DEST counters once, then runs the MOP which processes BLOCK_CT_DIM tiles.
+ * The MOP auto-advances both source (via Src_Z_Cntr_inc) and dest (via Dst_Z_Cntr_inc with
+ * DST_Z_STRIDE=NUM_FACES). Call once per tile row, then call @ref _llk_unpack_dest_dvalid_section_done_
+ * after all rows.
+ *
+ * @param l1_face_idx: Face-level index into the L1 buffer for the start of this tile row.
+ * @param dest_tile_idx: Tile index within DEST for the first tile of this row.
+ * @note Call @ref _llk_unpack_tilize_block_init_ before this function to program the MOP.
  */
 inline void _llk_unpack_tilize_block_(const std::uint32_t l1_face_idx, const std::uint32_t dest_tile_idx)
 {
@@ -204,14 +222,16 @@ inline void _llk_unpack_tilize_block_(const std::uint32_t l1_face_idx, const std
 }
 
 /**
- * @brief MOP configuration for upk tilize strided, works for 32x32 and 16x32 tiles
- * @details Sets up MOP for unpacking half a face with strided instruction and increments L1 counter
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
+ * @brief Builds the MOP for strided unpack tilize; works for 32x32 and 16x32 tiles.
+ *
+ * Unpacks half a face with the strided instruction and increments the L1 counter.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor (row-major).
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM>
 inline void _llk_unpack_tilize_strided_mop_config_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
@@ -237,14 +257,15 @@ inline void _llk_unpack_tilize_strided_mop_config_(const std::uint32_t buf_desc_
 }
 
 /**
- * @brief Initialized unpacker with stride values for tilize strided 32x32 or 16x32
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
+ * @brief Initializes the unpacker with stride values for strided tilize of 32x32 or 16x32 tiles.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @note @ref _llk_unpack_tilize_strided_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM>
 inline void _llk_unpack_tilize_strided_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
@@ -252,11 +273,13 @@ inline void _llk_unpack_tilize_strided_init_(const std::uint32_t buf_desc_id, co
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+        cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
     }
     else
     {
+        cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0); // Disable transpose
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
@@ -266,13 +289,14 @@ inline void _llk_unpack_tilize_strided_init_(const std::uint32_t buf_desc_id, co
 }
 
 /**
- * @brief Unpacks an entire tile, using the stride instruction to tilize for 32x32 or 16x32 tiles
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @param l1_tile_idx: c_dim index of tile in L1
+ * @brief Unpacks and tilizes an entire tile using the stride instruction, for 32x32 or 16x32 tiles.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @param l1_tile_idx: c_dim index of the tile in L1.
+ * @note Call @ref _llk_unpack_tilize_strided_init_ before this function to program the MOP.
  */
 template <std::uint32_t UNP_SEL, std::uint32_t FULL_CT_DIM, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_strided_(const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx)
@@ -332,14 +356,16 @@ inline void _llk_unpack_tilize_strided_(const TensorShape& tensor_shape, const s
 }
 
 /**
- * @brief MOP configuration for upk tilize strided for tiles size 8x32, 4x32, 2x32, 1x32
- * @details Sets up MOP for unpacking half a face with strided instruction and increments L1 counter
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
- * @tparam ROWS_READ: number of rows read by one UNPACR0_STRIDE call
+ * @brief Builds the MOP for strided unpack tilize of small tiles (8x32, 4x32, 2x32, 1x32).
+ *
+ * Unpacks half a face with the strided instruction and increments the L1 counter.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor (row-major).
+ * @tparam ROWS_READ: Number of rows read by one UNPACR0_STRIDE call.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
+ *        stored in the buffer descriptor table, values = 0 - 16
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t ROWS_READ>
 inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32_t buf_desc_id)
@@ -372,31 +398,34 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
 }
 
 /**
- * @brief Initialized unpacker with stride values for tilize strided for 8x32, 4x32, 2x32, 1x32
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
- * @tparam ROWS_READ: number of rows read by one UNPACR0_STRIDE call
+ * @brief Initializes the unpacker with stride values for strided tilize of small tiles (8x32, 4x32, 2x32, 1x32).
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
+ * @tparam ROWS_READ: Number of rows read by one UNPACR0_STRIDE call.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @note @ref _llk_unpack_tilize_strided_small_faces_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t ROWS_READ>
 inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
     cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * tensor_shape.num_faces_c_dim);
     _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, IS_32b_DEST_EN, FULL_CT_DIM, ROWS_READ>(buf_desc_id);
 }
 
 /**
- * @brief Unpacks an entire tiny tile, using the stride instruction to tilize. Does sizes 8x32, 4x32, 2x32, 1x32
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_S
- * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
- * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @brief Unpacks and tilizes an entire tiny tile using the stride instruction; sizes 8x32, 4x32, 2x32, 1x32.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
+ * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
+ * @note Call @ref _llk_unpack_tilize_strided_init_small_faces_ before this function to program the MOP.
  */
 template <std::uint32_t UNP_SEL, std::uint32_t FULL_CT_DIM>
 inline void _llk_unpack_tilize_strided_small_faces_(const TensorShape& tensor_shape)

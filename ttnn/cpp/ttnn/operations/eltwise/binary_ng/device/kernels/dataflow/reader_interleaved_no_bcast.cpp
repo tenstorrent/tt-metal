@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -29,16 +29,16 @@ void kernel_main() {
     constexpr auto cb_id_src = tt::CBIndex::c_0;
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
+    DataflowBuffer dfb_src(cb_id_src);
 
 #if SRC_SHARDED
-    cb_src.reserve_back(src_num_tiles);
-    cb_src.push_back(src_num_tiles);
+    dfb_src.reserve_back(src_num_tiles);
+    dfb_src.push_back(src_num_tiles);
 #else
     constexpr uint32_t onetile = 1;
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
     constexpr bool has_sharding = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = dfb_src.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
     const uint32_t HtWt = Ht * Wt;
 
@@ -73,11 +73,11 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-                            cb_src.reserve_back(onetile);
+                            dfb_src.reserve_back(onetile);
                             noc.async_read(
-                                src, cb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                                src, dfb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
-                            cb_src.push_back(onetile);
+                            dfb_src.push_back(onetile);
                         }
                         if constexpr (!has_sharding) {
                             // next row of tiles should start at the first column

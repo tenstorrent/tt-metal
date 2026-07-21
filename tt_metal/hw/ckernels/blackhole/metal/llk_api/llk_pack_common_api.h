@@ -147,7 +147,6 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
@@ -155,36 +154,6 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        false /* partial_face */);
-}
-
-/**
- * @deprecated Face geometry is now derived from the new output's CB metadata. Use the metadata-based
- * llk_pack_reconfig_data_format(const std::uint32_t new_output) overload instead. This overload is retained
- * only for backwards compatibility and will be removed.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  new_output          Output circular buffer / operand index to reconfigure the packer for.
- * @param  face_r_dim          Face height in rows.
- * @param  num_faces           Number of faces per tile.
- */
-template <bool is_fp32_dest_acc_en>
-[[deprecated(
-    "Face geometry is now derived from the output CB metadata; use the "
-    "llk_pack_reconfig_data_format(const std::uint32_t) overload instead.")]] inline void
-llk_pack_reconfig_data_format_disaggregated(
-    const std::uint32_t new_output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
-    const std::uint32_t output_id = get_output_id(new_output);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
-
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
         tile_c_dim,
         num_faces,
         false /* partial_face */);

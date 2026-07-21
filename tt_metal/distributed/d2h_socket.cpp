@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -43,6 +44,19 @@ namespace {
 // `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
 constexpr uint32_t k_x86_clflush_line_bytes = 64;
 
+void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
+    if (mesh_device == nullptr) {
+        return;
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
+        return;
+    }
+
+    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+}
+
 }  // namespace
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
@@ -71,7 +85,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
@@ -145,7 +159,16 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         .size = config_buffer_size,
     };
 
-    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+    std::optional<DeviceAddr> preallocated_addr;
+    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto* sender_device = mesh_device->get_device(sender_core_.device_coord);
+    if (svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
+        svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
+        preallocated_addr = svc_config_l1_addr_;
+    }
+
+    config_buffer_ =
+        MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), preallocated_addr);
     config_buffer_address_ = config_buffer_->address();
 }
 
@@ -190,6 +213,20 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     CoreCoord sender_virtual_core;
 
     const auto& cluster = MetalContext::instance().get_cluster();
+
+    // MockChip has no TLB manager (get_tlb_manager() == nullptr), so skip TLB window
+    // setup entirely: pcie_writer_ stays unset. Safe under Mock because the runtime I/O
+    // paths that use pcie_writer_ -- read()/write() and notify_sender() -- never execute
+    // for mock devices (mock only exercises socket construction / JIT).
+    //
+    // TODO(emule): this over-skips for Emule. SWEmuleChip also lacks a TLB manager but has
+    // real memory-backed I/O, so it should skip only the TLB-window path and still install
+    // the cluster.write_core() fallback for pcie_writer_. As written, pcie_writer_ is left
+    // null, so enabling D2H socket runtime I/O under emule would null-deref in
+    // notify_sender().
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
@@ -321,6 +358,18 @@ D2HSocket::~D2HSocket() noexcept {
     } catch (...) {
         log_warning(LogMetal, "D2HSocket destructor: barrier failed with unknown exception");
     }
+    if (svc_config_l1_addr_.has_value()) {
+        try {
+            config_buffer_.reset();
+            auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+            auto* sender_device = mesh_device_->get_device(sender_core_.device_coord);
+            svc.deallocate_l1(sender_device, sender_core_.core_coord, svc_config_l1_addr_.value());
+        } catch (const std::exception& e) {
+            log_warning(LogMetal, "D2HSocket destructor: service-core L1 release failed: {}", e.what());
+        } catch (...) {
+            log_warning(LogMetal, "D2HSocket destructor: service-core L1 release failed with unknown exception");
+        }
+    }
     // Mark a clean shutdown so the next connector sees clean_shutdown=1. A process
     // that exits without running this destructor (crash, _exit, kill) leaves the
     // 0 written by connect()/owner-construct in place, signalling unclean exit.
@@ -346,7 +395,13 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     TT_FATAL(page_size % pcie_alignment_ == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
 
-    uint32_t next_fifo_rd_ptr = align(read_ptr_, page_size);
+    // tt::align() uses a bitwise-OR formula that only produces correct
+    // results when alignment is a power of two. Socket page sizes can be
+    // non-power-of-two (e.g. 2560 = 5×512 for some shard sizes), where
+    // tt::align(5120, 2560) returns 7168 instead of 5120. Use modular
+    // arithmetic so this works for any positive alignment.
+    uint32_t next_fifo_rd_ptr =
+        ((read_ptr_ + page_size - 1) / page_size) * page_size;
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
     if (next_fifo_rd_ptr >= fifo_page_aligned_size) {
@@ -372,9 +427,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     }
 }
 
-bool D2HSocket::has_data() {
+bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
-    uint32_t num_bytes = page_size_;
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
@@ -391,6 +446,7 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
+        advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
             _mm_lfence();
@@ -439,19 +495,8 @@ uint32_t D2HSocket::discard_pending_pages() {
     if (pages == 0) {
         return 0;
     }
-    // Rebase: ack everything currently visible without touching the data region; advance
-    // read_ptr_ as a real read() would so subsequent reads stay consistent.
     uint32_t bytes_to_discard = pages * page_size_;
-    uint32_t cursor = read_ptr_ + bytes_to_discard;
-    if (fifo_curr_size_ > 0) {
-        cursor %= fifo_curr_size_;
-    }
-    read_ptr_ = cursor;
-    bytes_acked_ += bytes_to_discard;
-    if (connector_state_) {
-        connector_state_->bytes_acked = bytes_acked_;
-        connector_state_->read_ptr = read_ptr_;
-    }
+    this->pop_bytes(bytes_to_discard);
     notify_sender();
     return pages;
 }
@@ -463,6 +508,19 @@ void D2HSocket::notify_sender() {
 }
 
 void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    // A connector process drains the FIFO: it advances read_ptr and bytes_acked in
+    // the shared connector state (and notify_sender PCIe-writes bytes_acked to the
+    // device's config buffer), leaving the owner's in-process bytes_acked_/read_ptr_
+    // behind. Refresh them from the shared state so the owner's barrier observes the
+    // connector's drain progress; without this the device kernel may stall thinking
+    // the FIFO is full while the new connector waits for fresh data. For a fresh
+    // socket this copies 0 over 0 — a no-op.
+    auto refresh_connector_read_state = [this]() {
+        if (connector_state_) {
+            bytes_acked_ = connector_state_->bytes_acked;
+            read_ptr_ = connector_state_->read_ptr;
+        }
+    };
     auto read_bytes_sent = [this]() -> uint32_t {
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
@@ -473,9 +531,11 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
         return bytes_sent_ptr_[0];
     };
 
+    refresh_connector_read_state();
     volatile uint32_t bytes_sent_value = read_bytes_sent();
     auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_acked_ - bytes_sent_value != 0) {
+        refresh_connector_read_state();
         bytes_sent_value = read_bytes_sent();
         if (timeout_ms.has_value()) {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -498,15 +558,28 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
     this->wait_for_bytes(num_bytes);
-    uint32_t* src = using_hugepage_ ? hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t))
-                                    : host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
+
+    uint32_t head_bytes = num_bytes;
+    if (read_ptr_ + num_bytes > fifo_curr_size_) {
+        head_bytes = fifo_curr_size_ - read_ptr_;
+    }
+    uint32_t tail_bytes = num_bytes - head_bytes;
+
+    uint32_t* base = using_hugepage_ ? hugepage_data_host_ptr_ : host_buffer_.get();
+    uint32_t* src = base + (read_ptr_ / sizeof(uint32_t));
     if (using_hugepage_) {
-        for (uint32_t i = 0; i < num_bytes; i += k_x86_clflush_line_bytes) {
+        for (uint32_t i = 0; i < head_bytes; i += k_x86_clflush_line_bytes) {
             _mm_clflush(reinterpret_cast<char*>(src) + i);
+        }
+        for (uint32_t i = 0; i < tail_bytes; i += k_x86_clflush_line_bytes) {
+            _mm_clflush(reinterpret_cast<char*>(base) + i);
         }
         _mm_lfence();
     }
-    std::memcpy(data, src, num_bytes);
+    std::memcpy(data, src, head_bytes);
+    if (tail_bytes > 0) {
+        std::memcpy(static_cast<char*>(data) + head_bytes, base, tail_bytes);
+    }
     this->pop_bytes(num_bytes);
 
     if (notify_sender) {
@@ -535,15 +608,7 @@ std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_
 MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }
 
 std::string D2HSocket::export_descriptor(const std::string& socket_id) {
-    TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
-    TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
-
-    HDSocketDescriptor desc;
-    desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
-    desc.bytes_sent_offset = fifo_size_;
-    desc.bytes_acked_device_offset = bytes_acked_device_offset_;
-    desc.connector_state_offset = connector_state_offset_;
-
+    auto desc = populate_descriptor();
     descriptor_path_ = descriptor_path_for_socket("d2h", socket_id);
     desc.write_to_file(descriptor_path_);
     ShmResourceTracker::instance().track_file(descriptor_path_);
@@ -551,16 +616,35 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     return descriptor_path_;
 }
 
+HDSocketDescriptor D2HSocket::populate_descriptor() const {
+    TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
+    TT_FATAL(shm_ && shm_->is_open(), "Cannot populate descriptor: shared memory is not initialized.");
+
+    HDSocketDescriptor desc;
+    desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
+    desc.bytes_sent_offset = fifo_size_;
+    desc.bytes_acked_device_offset = bytes_acked_device_offset_;
+    desc.connector_state_offset = connector_state_offset_;
+    return desc;
+}
+
 std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
     auto desc = HDSocketDescriptor::wait_and_read(
         descriptor_path_for_socket("d2h", socket_id), "d2h", timeout_ms.value_or(10000));
+    return connect_from_descriptor(desc);
+}
 
+std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDescriptor& desc) {
     auto socket = std::unique_ptr<D2HSocket>(new D2HSocket());
     socket->is_owner_ = false;
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->pcie_alignment_ = desc.pcie_alignment;
-    socket->sender_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
+    MeshCoordinate device_coord =
+        desc.mesh_coord.empty()
+            ? MeshCoordinate(0, 0)
+            : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
+    socket->sender_core_ = MeshCoreCoord(device_coord, CoreCoord(desc.core_x, desc.core_y));
     socket->bytes_acked_device_offset_ = desc.bytes_acked_device_offset;
 
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
@@ -608,6 +692,7 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
 
     // Reconcile the device-side bytes_acked with the restored SHM value. The
     // previous driver process may have died between pop_bytes (SHM flushed)
+    // A previous connector can advance bytes_acked/read_ptr in SHM and then exit between that update
     // and notify_sender (PCIe write to the device's config buffer), leaving
     // the device's bytes_acked behind. Without this, the device kernel may
     // stall thinking the FIFO is full while the new connector waits for fresh

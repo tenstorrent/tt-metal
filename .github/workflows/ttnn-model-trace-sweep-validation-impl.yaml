@@ -52,6 +52,7 @@ jobs:
     needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -72,6 +73,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Display validation request
         env:
@@ -211,6 +213,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -320,12 +323,13 @@ jobs:
     # Validation stays hardware-grouped, but routing decisions come from the shared
     # CI policy helpers in matrix_runner_config.py rather than workflow-local logic.
     needs: [prepare-validation-inputs, generate-sweeps]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -429,6 +433,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -522,7 +527,7 @@ jobs:
             local is_galaxy=0
             [[ "$tg" == *galaxy* ]] && is_galaxy=1
             local hw_series_filter=""
-            for series in n150 n300 p150b p100a galaxy; do
+            for series in n150 n300 p150b p100a p300a galaxy; do
               if [[ "$tg" == *"$series"* ]]; then hw_series_filter="$series"; break; fi
             done
             # Filter MODULE_SELECTOR to modules with vector files matching our
@@ -572,6 +577,8 @@ jobs:
               TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
               TTNN_MASTER_JSON_PATH="/work/model_tracer/traced_operations/ttnn_operations_master.json" \
               python3 model_tracer/generic_ops_tracer.py \
+                --include-failed \
+                --allow-test-failures \
                 tests/sweep_framework/sweeps_runner.py \
                 -o "$TRACE_OUT" \
                 -- \
@@ -615,6 +622,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Download master JSON artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -719,6 +727,7 @@ jobs:
     steps:
       - name: Checkout repository (actions only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github/actions

@@ -63,11 +63,11 @@ from ttml.models.qwen3 import (
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
-from utils.param_utils import (
+from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
-    build_weight_mapping_distributed,
 )
+from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
@@ -238,22 +238,16 @@ class DistributedQwen3Attention(AbstractModuleBase):
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        q_shape, k_shape = q.shape(), k.shape()
-        B, S = q_shape[0], q_shape[2]
-
-        q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_local_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_local_kv_heads, self.head_dim])
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttml.ops.reshape.reshape(q, q_shape)
-        k = ttml.ops.reshape.reshape(k, k_shape)
-
         kvs = ConcatLastDim.apply(k, v)
         (
             query_heads,
             key_heads,
             value_heads,
         ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_local_heads, self.num_local_kv_heads)
+
+        # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
+        query_heads = self.q_norm(query_heads)
+        key_heads = self.k_norm(key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
@@ -490,8 +484,14 @@ def load_weights_from_hf_distributed(
     tp_size = get_tp_size(shard_dim)
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
 
-    def _prepare_and_transfer(hf_name, ttml_name):
-        """CPU prep + host-side tilize + device transfer (pipelined)."""
+    def _prepare(hf_name, ttml_name):
+        """CPU-only prep: returns (weight_np, shard_type) ready for transfer.
+
+        Device ops (from_numpy -> tilize / shard onto the mesh) are NOT
+        thread-safe on a single mesh device, so this runs the parallelizable
+        host work only; the actual device transfer happens serially on the
+        main thread (see loop below).
+        """
         if hf_name not in hf_state_dict:
             return None
         if ttml_name not in ttml_shapes:
@@ -537,7 +537,7 @@ def load_weights_from_hf_distributed(
             raise ValueError(f"Unexpected weight dim {weight.dim()} for {hf_name}")
 
         weight_np = weight.contiguous().float().numpy()
-        return _load_tensor_distributed(weight_np, st, shard_dim, device)
+        return (weight_np, st)
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -545,10 +545,14 @@ def load_weights_from_hf_distributed(
     loaded = 0
     skipped = []
 
+    # Host prep (torch -> numpy) is parallelized across the pool; the device
+    # transfer (_load_tensor_distributed -> from_numpy tilize/shard) is
+    # serialized on the main thread because TTNN device ops on a single mesh
+    # device are not thread-safe (concurrent enqueue races the program-binary
+    # commit and trips the "Expected Program Binaries to be committed to DRAM"
+    # assert).
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [
-            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name)) for hf_name, ttml_name in items
-        ]
+        futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
 
         for hf_name, ttml_name, future in tqdm(
             futures,
@@ -556,12 +560,14 @@ def load_weights_from_hf_distributed(
             desc="  Loading weights",
             unit="w",
         ):
-            new_tensor = future.result()
-            if new_tensor is None:
+            prepared = future.result()
+            if prepared is None:
                 if ttml_name not in ttml_shapes:
                     print(f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'")
                 skipped.append(hf_name)
                 continue
+            weight_np, st = prepared
+            new_tensor = _load_tensor_distributed(weight_np, st, shard_dim, device)
             ttml_params[ttml_name].assign(new_tensor)
             loaded += 1
 

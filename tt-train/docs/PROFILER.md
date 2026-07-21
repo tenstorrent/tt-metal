@@ -94,7 +94,7 @@ python -m tracy -r -v -p ${TT_METAL_HOME}/build/tt-train/sources/examples/nano_g
 Alternatively you can use this script, passing your full training command (binary or python script) as the argument:
 
 ```bash
-./tt-train/run_profiler.sh ./tt-train/sources/examples/nano_gpt/train_nanogpt.py --config ./tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml
+./tt-train/run_profiler.sh ./tt-train/sources/examples/train/train.py --config ./tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml
 # or for a compiled binary:
 ./tt-train/run_profiler.sh ./build/tt-train/sources/examples/nano_gpt/nano_gpt --config tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml
 ```
