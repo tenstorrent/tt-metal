@@ -30,7 +30,8 @@ class MultiHeadLatentAttention(AbstractModuleBase):
       Q (q_lora_rank == 0): x -> wq (direct, no LoRA bottleneck)
       KV: x -> wkv_a -> split(kv_latent, k_pe) -> norm(kv_latent) -> wkv_b
           -> RoPE(k_pe) broadcast
-      Q/K/V assembly: qkv_assemble + mla_q_rope on Q
+      Q: mla_q_rope(q_pre) does head-split + RoPE
+      K/V assembly: kv_assemble(kv_up, k_pe)
       Attention: fused causal SDPA(Q, K, V) -> fuse_heads -> wo
 
     Causal-only: the fused SDPA generates the causal mask on chip, so this layer
@@ -95,8 +96,8 @@ class MultiHeadLatentAttention(AbstractModuleBase):
 
         kv_up = self.wkv_b(self.kv_norm(kv))  # [B, 1, S, n_heads * (qk_nope + v_dim)]
 
-        q, k_full, v = ttml.ops.mla.qkv_assemble(q_pre, kv_up, k_pe, n_heads, qk_nope, qk_rope, v_dim)
-        q_full = ttml.ops.rope.mla_q_rope(q, self.rope_params, qk_nope, qk_rope)
+        q_full = ttml.ops.rope.mla_q_rope(q_pre, self.rope_params, qk_nope, qk_rope)
+        k_full, v = ttml.ops.mla.kv_assemble(kv_up, k_pe, n_heads, qk_nope, qk_rope, v_dim)
 
         # ── Attention (causal-only) ──
         # None -> fused SDPA generates the causal mask on chip and takes the faster

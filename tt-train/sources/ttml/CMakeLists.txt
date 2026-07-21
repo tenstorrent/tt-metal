@@ -61,8 +61,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_qkv_assemble_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_qkv_assemble_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_kv_assemble_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/mla_kv_assemble_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/polynorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
@@ -219,13 +219,13 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp
     # MLA QKV Assemble Forward (DeepSeek)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/mla_qkv_assemble_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/device/mla_qkv_assemble_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_fw/device/mla_qkv_assemble_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_fw/mla_kv_assemble_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_fw/device/mla_kv_assemble_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_fw/device/mla_kv_assemble_fw_program_factory.cpp
     # MLA QKV Assemble Backward (DeepSeek)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/mla_qkv_assemble_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/device/mla_qkv_assemble_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_qkv_assemble_bw/device/mla_qkv_assemble_bw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_bw/mla_kv_assemble_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_bw/device/mla_kv_assemble_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_kv_assemble_bw/device/mla_kv_assemble_bw_program_factory.cpp
     # MLA Q RoPE forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_q_rope/mla_q_rope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/mla_q_rope/device/mla_q_rope_device_operation.cpp
