@@ -187,19 +187,20 @@ _KERNEL_LOG_PATH = Path(
 )
 _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
-_MAX_TRACE_FIX_RETRIES = int(os.environ.get("PERF_MCP_MAX_TRACE_FIX_RETRIES", "5"))
 _TRACE_SAFE_HINT = (
     "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY defect in the kernel's LIFECYCLE, NOT a "
-    "math error (check_pcc validates math). The compute body is usually fine; the wedge is that the op "
-    "recompiles or re-allocates INSIDE trace capture. Fix the lifecycle: (1) build the generic_op "
+    "math error (check_pcc validates math). A HANG or TIMEOUT under trace capture (no error text) is the "
+    "SIGNATURE of the op recompiling or re-allocating INSIDE capture — treat it as the lifecycle defect "
+    "below, never as 'unfixable'. Author the isolation test to PRINT the full exception/traceback on "
+    "failure so every attempt has a concrete error to act on. Fix the lifecycle: (1) build the generic_op "
     "ProgramDescriptor / ttl op ONCE per shape and cache+reuse it — do NOT rebuild or call generic_op "
     "fresh each call; (2) allocate the output buffer ONCE and reuse the same handle — never ttnn.zeros a "
     "new output per call; (3) use override_runtime_args on the cached program instead of baking "
     "buffer_address() into a freshly-built descriptor; (4) warm up the op once BEFORE begin_trace_capture "
-    "so compilation never lands in the traced region. VALIDATE IN ISOLATION FIRST: author a single-op "
+    "so compilation never lands in the traced region. KEEP FIXING IN ISOLATION until it traces clean — "
+    "there is no attempt limit; only a cleanly-MEASURED result advances the ladder. Author a single-op "
     "trace test (build inputs once -> warm-up -> begin/end_trace_capture -> execute_trace -> assert PCC vs "
-    "the stock op), run it STANDALONE and fix until it traces clean + PCC-passes, THEN wire it into the "
-    "model and call measure_candidate ONCE. This is a fixable implementation issue, not an exhausted rung"
+    "the stock op), run it STANDALONE, THEN wire it into the model and call measure_candidate ONCE"
 )
 _ISOLATE_FIRST = (
     " Before integrating, VALIDATE IN ISOLATION: author a standalone single-op trace test (warm-up + "
@@ -591,26 +592,26 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     if _is_kernel_able(op_code):
         _tl_clean, _tl_wedged = _rung_state(matches, "tt-lang")
         _cpp_clean, _cpp_wedged = _rung_state(matches, "cpp")
-        if not _tl_clean and _ttl_available() and _tl_wedged < _MAX_TRACE_FIX_RETRIES:
+        if not _tl_clean and _ttl_available():
             if _tl_wedged:
                 return (
                     False,
                     "tt-lang",
-                    "HOLD the tt-lang rung (do NOT switch to cpp — it wedges identically): %s (trace-fix %d/%d)"
-                    % (_TRACE_SAFE_HINT, _tl_wedged, _MAX_TRACE_FIX_RETRIES),
+                    "HOLD the tt-lang rung (do NOT switch to cpp — it wedges identically); keep fixing it "
+                    "IN ISOLATION until it traces clean: %s (trace-fix attempt %d)" % (_TRACE_SAFE_HINT, _tl_wedged + 1),
                 )
             return (
                 False,
                 "tt-lang",
                 "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _ISOLATE_FIRST,
             )
-        if (_tl_clean or not _ttl_available()) and not _cpp_clean and _cpp_wedged < _MAX_TRACE_FIX_RETRIES:
+        if (_tl_clean or not _ttl_available()) and not _cpp_clean:
             if _cpp_wedged:
                 return (
                     False,
                     "cpp",
-                    "HOLD the cpp rung (fix it in isolation, do NOT bounce rungs): %s (trace-fix %d/%d)"
-                    % (_TRACE_SAFE_HINT, _cpp_wedged, _MAX_TRACE_FIX_RETRIES),
+                    "HOLD the cpp rung (fix it IN ISOLATION until it traces clean, do NOT bounce rungs): "
+                    "%s (trace-fix attempt %d)" % (_TRACE_SAFE_HINT, _cpp_wedged + 1),
                 )
             return (
                 False,

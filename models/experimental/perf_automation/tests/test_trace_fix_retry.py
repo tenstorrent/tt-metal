@@ -8,7 +8,6 @@ _SPEC = importlib.util.spec_from_file_location(
 perf_mcp = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(perf_mcp)
 ladder = perf_mcp._op_ladder_status
-NT = perf_mcp._MAX_TRACE_FIX_RETRIES
 
 
 def _op(grid="full", wdtype="bf8_b", bound="memory"):
@@ -33,9 +32,10 @@ def test_wedged_ttlang_keeps_rung_open_with_fix_feedback(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
     done, rung, reason = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", 1, wedged=True))
     assert (not done) and rung == "tt-lang"
-    assert ("trace-fix 1/%d" % NT) in reason
+    assert "trace-fix attempt 2" in reason
     assert "override_runtime_args" in reason and "ISOLATION" in reason and "cache+reuse" in reason
     assert "do NOT switch to cpp" in reason
+    assert "HANG or TIMEOUT" in reason and "no attempt limit" in reason
 
 
 def test_author_reason_instructs_isolation_first(monkeypatch):
@@ -45,12 +45,11 @@ def test_author_reason_instructs_isolation_first(monkeypatch):
     assert "ISOLATION" in reason and "STANDALONE" in reason
 
 
-def test_wedged_ttlang_NEVER_bounces_to_cpp(monkeypatch):
+def test_wedged_ttlang_holds_indefinitely_never_cpp(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
-    _, rung_hold, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", 1, wedged=True))
-    assert rung_hold == "tt-lang"
-    _, rung_exhausted, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", NT, wedged=True))
-    assert rung_exhausted != "cpp" and rung_exhausted != "tt-lang"
+    for n in (1, 3, 10, 50):
+        _, rung, _ = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", n, wedged=True))
+        assert rung == "tt-lang", "with %d wedges expected tt-lang held (no budget), got %s" % (n, rung)
 
 
 def test_clean_ttlang_advances_to_cpp(monkeypatch):
@@ -59,12 +58,13 @@ def test_clean_ttlang_advances_to_cpp(monkeypatch):
     assert rung == "cpp"
 
 
-def test_wedged_cpp_keeps_rung_open_with_fix_feedback(monkeypatch):
+def test_wedged_cpp_holds_indefinitely_after_clean_ttlang(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
-    atts = _att("tt-lang", 1, wedged=False) + _att("cpp", 1, wedged=True)
-    done, rung, reason = ladder(_op(), "MatmulDeviceOperation", atts)
-    assert (not done) and rung == "cpp"
-    assert ("trace-fix 1/%d" % NT) in reason
+    for n in (1, 5, 20):
+        atts = _att("tt-lang", 1, wedged=False) + _att("cpp", n, wedged=True)
+        done, rung, reason = ladder(_op(), "MatmulDeviceOperation", atts)
+        assert (not done) and rung == "cpp"
+    assert "trace-fix attempt" in reason
 
 
 def test_trace_compat_feedback_enriches_custom_rung(monkeypatch):
