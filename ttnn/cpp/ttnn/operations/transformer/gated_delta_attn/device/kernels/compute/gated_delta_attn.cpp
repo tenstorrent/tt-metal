@@ -63,6 +63,14 @@ constexpr uint32_t cb_s_upd = tt::CBIndex::c_25;
 constexpr uint32_t cb_S_tmp = tt::CBIndex::c_26;
 constexpr uint32_t cb_final_state = tt::CBIndex::c_27;
 
+// Reconfigure sources + packer and re-init the matmul MOP for a new in0 @ in1 -> out matmul.
+// Matmul maps in0 -> SrcB and in1 -> SrcA, so the source reconfig uses SrcOrder::Reverse.
+static inline void matmul_reconfig_and_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+    reconfig_data_format<SrcOrder::Reverse>(in0_cb, in1_cb);
+    matmul_init(in0_cb, in1_cb);
+    pack_reconfig_data_format(out_cb);
+}
+
 // ---------------------------------------------------------------------------
 // One row of blocked forward substitution.
 //
@@ -100,9 +108,7 @@ __attribute__((noinline)) static void fwd_sub_row(
     for (uint32_t j = 0; j < row_i; j++) {
         // corr = L_unit[row_i*Ct + j] @ out_cb[j*Xt .. (j+1)*Xt-1]
         CircularBuffer(cb_nm_P_b).reserve_back(Xt);
-        reconfig_data_format<SrcOrder::Reverse>(cb_L_unit, out_cb);
-        matmul_init(cb_L_unit, out_cb);
-        pack_reconfig_data_format(cb_nm_P_b);
+        matmul_reconfig_and_init(cb_L_unit, out_cb, cb_nm_P_b);
         uint32_t L_tile = row_i * Ct + j;
         for (uint32_t xt = 0; xt < Xt; xt++) {
             tile_regs_acquire();
@@ -151,9 +157,7 @@ __attribute__((noinline)) static void fwd_sub_row(
     CircularBuffer(cb_nm_P_a).wait_front(Xt);
     CircularBuffer(cb_L_inv_row_i).wait_front(1);
     CircularBuffer(out_cb).reserve_back(Xt);
-    reconfig_data_format<SrcOrder::Reverse>(cb_L_inv_row_i, cb_nm_P_a);
-    matmul_init(cb_L_inv_row_i, cb_nm_P_a);
-    pack_reconfig_data_format(out_cb);
+    matmul_reconfig_and_init(cb_L_inv_row_i, cb_nm_P_a, out_cb);
     for (uint32_t xt = 0; xt < Xt; xt++) {
         tile_regs_acquire();
         matmul_tiles(cb_L_inv_row_i, cb_nm_P_a, 0, xt, 0);
@@ -277,9 +281,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_k_cum).wait_front(in_kv_tiles);
         CircularBuffer(cb_v_prime).reserve_back(out_tiles);
-        reconfig_data_format<SrcOrder::Reverse>(cb_k_cum, cb_S);
-        matmul_init(cb_k_cum, cb_S);
-        pack_reconfig_data_format(cb_v_prime);
+        matmul_reconfig_and_init(cb_k_cum, cb_S, cb_v_prime);
         for (uint32_t ct = 0; ct < Ct; ct++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -318,9 +320,7 @@ void kernel_main() {
         // 3. o_inter = q_decay @ S
         // ==================================================================
         CircularBuffer(cb_o_inter).reserve_back(out_tiles);
-        reconfig_data_format<SrcOrder::Reverse>(cb_q_decay, cb_S);
-        matmul_init(cb_q_decay, cb_S);
-        pack_reconfig_data_format(cb_o_inter);
+        matmul_reconfig_and_init(cb_q_decay, cb_S, cb_o_inter);
         for (uint32_t ct = 0; ct < Ct; ct++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -341,9 +341,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_v_new).wait_front(out_tiles);
         CircularBuffer(cb_intra_v).reserve_back(out_tiles);
-        reconfig_data_format<SrcOrder::Reverse>(cb_intra_att, cb_v_new);
-        matmul_init(cb_intra_att, cb_v_new);
-        pack_reconfig_data_format(cb_intra_v);
+        matmul_reconfig_and_init(cb_intra_att, cb_v_new, cb_intra_v);
         for (uint32_t ct = 0; ct < Ct; ct++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
@@ -382,9 +380,7 @@ void kernel_main() {
         // 6. s_upd = k_decay_t @ v_new
         // ==================================================================
         CircularBuffer(cb_s_upd).reserve_back(state_tiles);
-        reconfig_data_format<SrcOrder::Reverse>(cb_k_dt, cb_v_new);
-        matmul_init(cb_k_dt, cb_v_new);
-        pack_reconfig_data_format(cb_s_upd);
+        matmul_reconfig_and_init(cb_k_dt, cb_v_new, cb_s_upd);
         for (uint32_t kt = 0; kt < Kt; kt++) {
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 tile_regs_acquire();
