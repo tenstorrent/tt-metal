@@ -19,7 +19,9 @@
 // input. A green result pins the invariant "empty uninit + canonical op's own init == correct".
 //
 // POLLUTER selects which experimental op runs first:
-//   0 = matmul_custom_no_mop     (MATH: clobbers ADDR_MOD_0..6, loads a replay image; empty uninit)
+//   0 = matmul_custom_no_mop     (MATH: at THROTTLE_LEVEL 0 clobbers ADDR_MODs — BH full-tile path
+//                                 writes 0/1/2/4/5, WH writes 0..5; ADDR_MOD_6 is programmed only at
+//                                 nonzero throttling — and loads a replay image; empty uninit)
 //   1 = reduce_block_max_row     (MATH: clobbers ADDR_MOD_1/2/3/6 + programs a MOP template; empty uninit)
 //   2 = sdpa_sub_bcast_col       (the paired SDPA fused sub+bcast-col op, exercising BOTH empty uninits:
 //                                 UNPACK unpack_AB_sub_bcast_col_custom (RMW THCON_SEC0_REG2_Haloize_mode
@@ -132,7 +134,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ---- Run 0: POLLUTER math ----
 #if POLLUTER == 0
-    // matmul_custom_no_mop: init clobbers ADDR_MOD_0..6 and records the replay image; empty uninit.
+    // matmul_custom_no_mop: this THROTTLE_LEVEL 0 full-tile init clobbers ADDR_MODs (BH writes
+    // 0/1/2/4/5 — no ADDR_MOD_3 in the full-tile custom path; WH writes 0..5) and records the
+    // replay image; empty uninit. ADDR_MOD_6 is only programmed at nonzero throttling.
     _llk_math_matmul_init_no_mop_<MATH_FIDELITY, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     _llk_math_matmul_no_mop_<MATH_FIDELITY, 0>(0 /* dst_index */, 1, 1);

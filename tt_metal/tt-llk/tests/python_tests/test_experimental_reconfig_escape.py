@@ -73,8 +73,10 @@ class POLLUTER(TemplateParameter):
 
 @parametrize(
     formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
-    # Both fidelities: the matmul_no_mop polluter programs different fidelity-phase
-    # ADDR_MODs (ADDR_MOD_5/6) at HiFi vs LoFi, so sweeping catches a wider ADDR_MOD set.
+    # Two high-fidelity levels: HiFi2 and HiFi4 both take the matmul_no_mop high-fidelity
+    # branch (identical ADDR_MOD_5 fidelity-increment programming; ADDR_MOD_6 is throttle-gated
+    # and not written at THROTTLE_LEVEL 0), but drive a different fidelity-phase replay count,
+    # so the polluter runs a longer MVMUL walk over its clobbered ADDR_MOD state at HiFi4.
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     polluter=list(POLLUTERS.keys()),
 )
