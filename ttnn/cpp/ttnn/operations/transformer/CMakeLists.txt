@@ -19,6 +19,7 @@ file(
     sdpa_decode/device/kernels/*.hpp
     gated_delta_attn/device/kernels/*.cpp
     chunk_gated_delta_rule/device/kernels/*.cpp
+    chunk_kda/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_transformer
@@ -41,6 +42,17 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_TRANSFORMER_SRCS}
+)
+
+# chunk_kda is a fork of chunk_gated_delta_rule; their file-local (anonymous-namespace) helpers share
+# names and would clash inside a merged unity TU. Compile the forked TUs standalone.
+set_source_files_properties(
+    chunk_kda/chunk_kda.cpp
+    chunk_kda/device/chunk_kda_device_operation.cpp
+    chunk_kda/device/chunk_kda_program_factory.cpp
+    chunk_kda/device/chunk_kda_phased.cpp
+    chunk_kda/device/chunk_kda_phased_program_factory.cpp
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})
