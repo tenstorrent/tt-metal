@@ -22,6 +22,14 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+// Test-only causal timing zones (compile-gated; profiler injects DeviceZoneScopedN). Mask 0 => no-op =>
+// byte-identical. See RegimeADiag::DIAG_ZONES.
+#ifdef DIAG_ZONES
+#define RA_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define RA_ZONE(n)
+#endif
+
 void kernel_main() {
     constexpr uint32_t M_block = get_compile_time_arg_val(0);
     constexpr uint32_t K_block = get_compile_time_arg_val(1);       // kb
@@ -212,8 +220,10 @@ void kernel_main() {
 #endif
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
-    cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
-    const uint32_t base0 = get_write_ptr(in0_cb);
+    {
+        RA_ZONE("Z_RING");
+        cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
+        const uint32_t base0 = get_write_ptr(in0_cb);
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
         if (step == 0) {
@@ -244,9 +254,11 @@ void kernel_main() {
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
     }
-    noc_async_write_barrier();  // all ring forwards landed
+        noc_async_write_barrier();  // all ring forwards landed
+    }  // end Z_RING
 
     // ---- PHASE 2: output / split-K reduction over the N_bpc output blocks ----
+    RA_ZONE("Z_PHASE2");  // function-scope zone: destructor fires at return / kernel end (reduce + output)
     constexpr uint32_t out_blk_bytes = out_blk * tile_bytes;
 
     if constexpr (!use_reduce) {

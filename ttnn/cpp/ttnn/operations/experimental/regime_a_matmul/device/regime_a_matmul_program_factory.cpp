@@ -123,6 +123,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_NO_REDUCE"] = "1";
         ddefs["DIAG_NO_REDUCE"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_ZONES) {  // test-only causal timing zones on all 3 kernels
+        rdefs["DIAG_ZONES"] = "1";
+        wdefs["DIAG_ZONES"] = "1";
+        ddefs["DIAG_ZONES"] = "1";
+    }
     if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
         wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
     }

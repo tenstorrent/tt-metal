@@ -20,6 +20,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+// Test-only causal timing zones (compile-gated; mask 0 => no-op => byte-identical). See DIAG_ZONES.
+#ifdef DIAG_ZONES
+#define RA_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define RA_ZONE(n)
+#endif
+
 void kernel_main() {
     constexpr uint32_t K_block = get_compile_time_arg_val(0);             // kb
     constexpr uint32_t N_block = get_compile_time_arg_val(1);             // N_sub
@@ -116,6 +123,7 @@ void kernel_main() {
     // preserved by the writer, which zeros in0 for K/M tails -> 0*garbage == 0 kills the K-tail term; and
     // pad-N columns (>= valid_n) are never written to the output. This keeps the reader on its fast path
     // and confines the (cheap) tail zeroing to the small in0 buffer in the writer.
+    RA_ZONE("Z_IN1READ");  // function-scope: the whole strided in1 read+forward loop (BRISC critical path)
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         const uint32_t ncol_base = nb * N_block;  // owned-column offset of this subblock
         // valid N columns within this subblock (0 => whole subblock is beyond the owned N range)

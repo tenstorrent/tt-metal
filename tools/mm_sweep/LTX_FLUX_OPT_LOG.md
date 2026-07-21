@@ -203,3 +203,58 @@ less split-K reduction overhead. Shapes whose auto already used low Pk were all 
 overlapped); no idle-RISC recoverable stall exists. Reduction-tree / in0-chunk / in1-BW levers stayed
 foreclosed (fresh ablations: NO_REDUCE lossy, all adopted opts active; Pk6 controls show reduction cost is
 work- not depth-bound). All 4 gains are picker-only.
+
+## ============ DEEP KERNEL INVESTIGATION (new goal) ============
+### [DEEP-1] 256x2048x1024 (Mt8, Kt64 shallow-K, Nt32, W1) — DIAGNOSED; hypotheses ranked, pending review
+**Baseline** (config=None, mask 0, resident inputs): auto (1,4,2,2,4)=Ns1/Pk4/Sm2/kb2/nsb4, 64 cores, W1.
+us_med 22.33 [22.13/22.33/22.50], DRAM ideal 11.26, **wall/ideal 1.98**, delivered 258 GB/s, core_spread
+59%, per-RISC B/N/T 22.5/20.6/21.1 (BRISC/in1-read critical), PCC 1.0000 (fresh+cached), ai 186.
+
+**Full sweep** (planner-complete: Pk1-12, Ns1-6, Sm1-8, kb{1,2,4,8}, all nsb): enumerated 4224, feasible/
+measured 264, rejected 3960, failed 1. **BEST = AUTO, 0.0% headroom** (2nd (1,4,3,2,4) Sm3 +3.5%). =>
+NOT a picker problem; kernel/dataflow-limited. Artifact: ltxflux_sweep_256x2048x1024.json.
+
+**Causal timing decomposition** (DIAG_ZONES=1<<4 compile-gated DeviceZoneScopedN; perturbation = DIAG_ZONES
+22.81us vs mask-0 22.33 = **+2.1%**, small). Per-zone med across cores [min..max], spread=core imbalance:
+| zone (role) | med us | min | max | spread% |
+|---|---|---|---|---|
+| Z_IN1READ (reader/BRISC) | 12.4 | 10.2 | 16.8 | 64% |
+| Z_RING (writer in0 all-gather) | 11.2 | 9.0 | 13.7 | 52% |
+| Z_PHASE2 (writer reduce+output) | 6.4 | 2.6 | 13.0 | **392%** |
+Writer NCRISC = Z_RING(11.2)+Z_PHASE2(6.4) ~= 17.5us; reader BRISC = Z_IN1READ(12.4). Wall 22.8.
+Two large, previously-hidden costs: (a) **in0 ring ~11us** — ~half the wall for only ~1MB of in0 (serial
+8-hop forwarding exposed at shallow-K/W1); (b) **Z_PHASE2 392% root-vs-leaf imbalance** — the is_top core
+serially does receive-4-partials + accumulate + write-all-output while leaves idle.
+
+**Controlled ablations** (auto cfg; ceilings, LOSSY unless noted):
+| ablation | wall | delta | reads as |
+|---|---|---|---|
+| baseline | 22.43 | — | |
+| NO_REDUCE | 18.68 | **-16.7%** | split-K reduce+root-output tail = ~3.75us (matches Z_PHASE2 root) |
+| FULL_IN0_WAIT | 26.08 | +16.3% | progressive-wait (adopted) already hides much in0-ring latency |
+| NO_COALESCE | 23.07 | +2.9% | in1 coalescing adopted, active |
+| FWD_FLUSH_FIRST | 22.92 | +2.2% | in1 fwd-order adopted |
+| PLACE_READERS_FIRST | 22.91 | +2.1% | current placement adopted |
+| BARRIER_DRAIN | 22.54 | +0.5% | pipelined drain ~ neutral here |
+
+**Ranked hypotheses** (predicted zone + ceiling):
+- **H1 (lead): reduction/output-tail overlap on the split-K root.** Obs: Z_PHASE2 392% spread, root ~13us
+  vs leaf 2.6us; NO_REDUCE ceiling -16.7% (lossy). Mechanism: is_top serializes receive->accumulate->
+  output-DRAM-write; overlap the per-block output write with the next partial's receive/add (pipeline the
+  root), and/or start writing reduced blocks as they complete rather than after the whole chain. Predicted:
+  shrink Z_PHASE2 root; realizable ~3-6% (fraction of the 16.7% lossy ceiling). Negative control: a Pk=1
+  shape (no reduction) must be unaffected. Falsifier: if root time is dominated by the DRAM write itself
+  (not the serialize), overlap won't help. Lossless.
+- **H2: in0-ring exposure for shallow-K/W1.** Obs: Z_RING ~11us (~half wall) for ~1MB in0. Mechanism: the
+  serial G=8 forwarding chain latency is exposed when per-shard payload is tiny (W1) so BW can't amortize the
+  hop latency. Prior scatter/exchange REJECTED — but on DEEP-K shapes where the ring was hidden; shallow-K/W1
+  with the ring exposed is a NEW regime (prior rejection mechanism = "ring hidden" no longer holds). Needs a
+  skip-in0 ablation (removed in cleanup) re-added to bound the ceiling before prototyping. Predicted: earlier
+  publication / shorter effective chain shrinks Z_RING.
+- H3 (minor): in1-read efficiency (Z_IN1READ 12.4us, 64% spread) — shallow per-core K reads; coalescing
+  already adopted (+2.9%). Lower priority.
+
+**Status**: baseline + full sweep + zone decomposition + ablation ceilings + ranked hypotheses COMPLETE.
+Prototyping H1/H2 is the next step. Instrumentation (DIAG_ZONES) is committed + mask-0 byte-identical
+(regression gate). **PAUSING for review per goal before prototyping** (esp. H2 reopens a previously-rejected
+direction — worth a steer). Artifacts: ltxflux_sweep_256x2048x1024.json, zone_parse.py, this log.

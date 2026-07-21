@@ -25,6 +25,10 @@ namespace ttnn::experimental::prim {
 // objectives; 20/23/24 never assigned. Recover removed variants from git history if ever needed.)
 enum RegimeADiag : uint32_t {
     DIAG_NO_REDUCE = 1u << 3,  // force bottom-band copy path everywhere; bypass reduce credits/recv/fwd
+    // Test-only causal timing zones (DeviceZoneScopedN) around kernel phases: startup / in0-ring / in1-read /
+    // compute / split-K reduce / output. Compile-gated so mask 0 has NO zone overhead (clean baseline); only
+    // this bit activates the DeviceZoneScopedN markers. Perturbation = (DIAG_ZONES run - mask-0 run).
+    DIAG_ZONES = 1u << 4,
     // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
     // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only
