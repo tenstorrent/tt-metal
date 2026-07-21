@@ -77,22 +77,12 @@ inline void execute_high_fidelity_gapool()
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
  * @param idst Destination tile index (0-7)
- * @note On the unpack thread, pair with @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_,
- *       which hands SrcA/SrcB bank ownership to MatrixUnit; this function gates on
- *       SRCA_VLD/SRCB_VLD before MOVD2A/MOVD2B since those instructions do not
- *       auto-wait for AllowedClient == MatrixUnit.
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::uint32_t idst = 0)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
-        // MOVD2A does not auto-wait for SrcA[MatrixUnit.SrcABank].AllowedClient == MatrixUnit
-        // (see cmath_common.h::move_d2a_fixed_face, tt-llk#1664); gate on SRCA_VLD so this
-        // DEST-reuse waits for the unpacker's dummy-valid handoff in
-        // _llk_unpack_mul_reduce_scalar_switch_to_reduce_.
-        wait_bank_valid<SrcA>();
-
         if (idst == 0)
         {
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
@@ -131,10 +121,6 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
     }
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
-        // MOVD2B does not auto-wait for SrcB[MatrixUnit.SrcBBank].AllowedClient == MatrixUnit
-        // either; gate on SRCB_VLD for the same reason as the SrcA branch above.
-        wait_bank_valid<SrcB>();
-
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
 
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
