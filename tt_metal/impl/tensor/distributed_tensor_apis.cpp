@@ -23,16 +23,18 @@ namespace tt::tt_metal {
 //                        Factories (explicit topology)
 // ======================================================================================
 
-HostTensor host_tensor_from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+HostTensor host_tensor_from_buffer_with_topology(
+    DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
     return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
 }
 
-MeshTensor mesh_tensor_from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
+MeshTensor mesh_tensor_from_buffer_with_topology(
+    distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
     return MeshTensor(
         std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
 }
 
-MeshTensor allocate_mesh_tensor_on_device(
+MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
     // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
     // check this, but we enforce it here at the device-binding boundary so any path that
@@ -45,16 +47,16 @@ MeshTensor allocate_mesh_tensor_on_device(
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return mesh_tensor_from_buffer(std::move(*mesh_buffer), spec, topology);
+    return mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), spec, topology);
 }
 
 // ======================================================================================
 //                        Topology accessors
 // ======================================================================================
 
-const TensorTopology& tensor_topology(const MeshTensor& tensor) { return tensor.impl().topology(); }
+const TensorTopology& get_tensor_topology(const MeshTensor& tensor) { return tensor.impl().topology(); }
 
-const TensorTopology& tensor_topology(const HostTensor& tensor) { return tensor.impl().topology(); }
+const TensorTopology& get_tensor_topology(const HostTensor& tensor) { return tensor.impl().topology(); }
 
 void update_tensor_topology(MeshTensor& tensor, TensorTopology topology) {
     tensor.impl().update_topology(std::move(topology));
@@ -117,8 +119,8 @@ HostTensor enqueue_read_tensor(
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    auto result = host_tensor_from_buffer(
-        std::move(distributed_host_buffer), device_tensor.tensor_spec(), tensor_topology(device_tensor));
+    auto result = host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
     enqueue_read_tensor(cq, device_tensor, result, coords, blocking);
     return result;
 }
@@ -162,8 +164,8 @@ void enqueue_read_tensor(
     std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
     cq.enqueue_read(device_tensor.impl().raw_mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
 
-    host_tensor = host_tensor_from_buffer(
-        std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), tensor_topology(device_tensor));
+    host_tensor = host_tensor_from_buffer_with_topology(
+        std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
 }
 
 std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_tensor(
@@ -187,7 +189,8 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor_on_device(mesh_device, *tensor_spec, tensor_topology(host_tensor));
+    auto result =
+        allocate_mesh_tensor_on_device_with_topology(mesh_device, *tensor_spec, get_tensor_topology(host_tensor));
     auto coords = non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, result);
     return {std::move(result), std::move(coords)};
 }
@@ -253,7 +256,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
     const auto& old_spec = host_tensor.tensor_spec();
-    device_tensor = mesh_tensor_from_buffer(
+    device_tensor = mesh_tensor_from_buffer_with_topology(
         std::move(*mesh_buffer),
         TensorSpec(
             old_spec.logical_shape(),
@@ -357,7 +360,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
 
     const auto& old_spec = host_tensor.tensor_spec();
-    device_tensor = mesh_tensor_from_buffer(
+    device_tensor = mesh_tensor_from_buffer_with_topology(
         std::move(*mesh_buffer),
         TensorSpec(
             old_spec.logical_shape(),
@@ -366,7 +369,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
                 old_spec.tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
                 old_spec.tensor_layout().get_alignment())),
-        tensor_topology(host_tensor));
+        get_tensor_topology(host_tensor));
 
     return coords;
 }

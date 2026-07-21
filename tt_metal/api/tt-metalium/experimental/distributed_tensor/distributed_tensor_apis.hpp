@@ -29,21 +29,23 @@ namespace tt::tt_metal {
 // ======================================================================================
 
 // NOLINTNEXTLINE(readability-redundant-declaration)
-HostTensor host_tensor_from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+HostTensor host_tensor_from_buffer_with_topology(
+    DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
 // NOLINTNEXTLINE(readability-redundant-declaration)
-MeshTensor mesh_tensor_from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
+MeshTensor mesh_tensor_from_buffer_with_topology(
+    distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
 
 // NOLINTNEXTLINE(readability-redundant-declaration)
-MeshTensor allocate_mesh_tensor_on_device(
+MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
 
 // ======================================================================================
 //                        Topology accessors
 // ======================================================================================
 
-const TensorTopology& tensor_topology(const MeshTensor& tensor);
-const TensorTopology& tensor_topology(const HostTensor& tensor);
+const TensorTopology& get_tensor_topology(const MeshTensor& tensor);
+const TensorTopology& get_tensor_topology(const HostTensor& tensor);
 
 void update_tensor_topology(MeshTensor& tensor, TensorTopology topology);
 void update_tensor_topology(HostTensor& tensor, TensorTopology topology);

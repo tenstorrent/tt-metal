@@ -195,7 +195,8 @@ public:
     const HostTensorImpl& impl() const;
 
 private:
-    friend HostTensor host_tensor_from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+    friend HostTensor host_tensor_from_buffer_with_topology(
+        DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     // Internal constructors. Use free-function factories to build a HostTensor from a backing buffer.
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);

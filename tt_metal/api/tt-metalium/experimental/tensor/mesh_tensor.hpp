@@ -170,9 +170,9 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
-    friend MeshTensor allocate_mesh_tensor_on_device(
+    friend MeshTensor allocate_mesh_tensor_on_device_with_topology(
         distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
-    friend MeshTensor mesh_tensor_from_buffer(
+    friend MeshTensor mesh_tensor_from_buffer_with_topology(
         distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology);
 
     // Internal constructor for transition. Use the from_buffer factory or allocate_on_device

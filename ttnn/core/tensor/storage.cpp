@@ -99,8 +99,8 @@ struct DeviceStorage::MeshTensorHolder {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
             // Capture spec/topology, then replace the Allocated state. The MeshTensor is destroyed by this
             // assignment, and its destructor releases the underlying device memory.
-            state_ =
-                DeallocatedTombStone{allocated->mesh_tensor_.tensor_spec(), tensor_topology(allocated->mesh_tensor_)};
+            state_ = DeallocatedTombStone{
+                allocated->mesh_tensor_.tensor_spec(), tt::tt_metal::get_tensor_topology(allocated->mesh_tensor_)};
         }
     }
 };
@@ -281,7 +281,7 @@ const TensorTopology& DeviceStorage::get_tensor_topology() const {
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> const TensorTopology& {
-                return tensor_topology(allocated.mesh_tensor_);
+                return tt::tt_metal::get_tensor_topology(allocated.mesh_tensor_);
             },
             [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> const TensorTopology& {
                 return tombstone.tensor_topology_;

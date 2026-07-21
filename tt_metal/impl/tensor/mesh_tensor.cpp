@@ -81,14 +81,14 @@ std::size_t MeshTensor::element_size() const {
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
 MeshTensor MeshTensor::allocate_on_device(distributed::MeshDevice& mesh_device, const TensorSpec& spec) {
-    return allocate_mesh_tensor_on_device(
+    return allocate_mesh_tensor_on_device_with_topology(
         mesh_device, spec, TensorTopology::create_fully_replicated_tensor_topology(mesh_device.shape()));
 }
 
 MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec) {
     auto* device = mesh_buffer.device();
     TT_FATAL(device != nullptr, "MeshBuffer must be associated with a MeshDevice");
-    return mesh_tensor_from_buffer(
+    return mesh_tensor_from_buffer_with_topology(
         std::move(mesh_buffer),
         std::move(spec),
         TensorTopology::create_fully_replicated_tensor_topology(device->shape()));

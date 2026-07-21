@@ -35,7 +35,7 @@ static Tensor manual_insertion(
         logical_shape,
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
-    auto output = Tensor(tt::tt_metal::host_tensor_from_buffer(
+    auto output = Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
                              cpu_tensor.host_storage().buffer(), std::move(output_spec), cpu_tensor.tensor_topology()))
                       .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {

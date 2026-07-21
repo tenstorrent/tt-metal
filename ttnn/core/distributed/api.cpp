@@ -106,7 +106,7 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 
     tt::tt_metal::TensorTopology topology =
         tt::tt_metal::TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
-    return Tensor(host_tensor_from_buffer(
+    return Tensor(host_tensor_from_buffer_with_topology(
         std::move(distributed_host_buffer), reference_shard.tensor_spec(), std::move(topology)));
 }
 

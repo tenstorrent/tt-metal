@@ -1680,7 +1680,8 @@ void pytensor_module(nb::module_& mod) {
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
             DeviceStorage device_storage(
-                mesh_tensor_from_buffer(std::move(*mesh_buffer), tensor_spec, std::move(topology)), {coord});
+                mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), tensor_spec, std::move(topology)),
+                {coord});
             return Tensor(std::move(device_storage));
         },
         nb::arg("host_tensor"),
