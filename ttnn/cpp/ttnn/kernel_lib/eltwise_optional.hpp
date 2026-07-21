@@ -8,9 +8,10 @@
  * @brief Conditional / optional chain element wrappers.
  *
  * Compile-time conditional: `OptionalChainElement<bool COND, Inner>` forwards to `Inner`
- * when COND is true and is a no-op marker (dropped from the chain) when false. Its variadic
- * ctor swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles
- * for either COND.
+ * when COND is true. When false, it is a tag-less inert marker that remains in the chain;
+ * the chain describes it with neutral traits and emits no work for it. Its variadic ctor
+ * swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
+ * either COND.
  *
  * Runtime conditional: template the chain-running function on a `bool` and dispatch from
  * `kernel_main`:
@@ -30,7 +31,7 @@
 
 namespace compute_kernel_lib {
 
-/// Conditional chain element — when COND is false every hook is a no-op.
+/// Conditional chain element — when COND is false it is an inert, tag-less chain position.
 template <bool COND, class Inner>
 struct OptionalChainElement;
 

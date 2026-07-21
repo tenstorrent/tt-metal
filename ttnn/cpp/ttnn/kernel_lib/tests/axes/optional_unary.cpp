@@ -4,7 +4,7 @@
 
 // OptionalChainElement gating: CopyTile -> OptionalChainElement<ON, Negative> -> PackTile. ON runs
 // the negate (out = -A); OFF is a compile-time no-op (out = A). Proves the gate both applies and
-// elides, and that the false case is stripped entirely (as if the element weren't there). `cond` is a CT arg.
+// elides, and that the false case remains inert (as if the element weren't there). `cond` is a CT arg.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

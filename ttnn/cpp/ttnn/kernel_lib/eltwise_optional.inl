@@ -11,16 +11,12 @@ struct OptionalChainElement<true, Inner> : Inner {
     using Inner::Inner;
 };
 
-// COND == false: a trivial inert marker. `eltwise_chain` strips every element carrying
-// `is_disabled == true` from the pack before any stage runs, so the disabled element
-// never reaches a trait scan or a runtime hook — no tag
-// impersonation, no CB-id / pack-slot / lifecycle stubs, no no-op hooks are needed. This
-// is self-checking: if a future stage forgets to drop it, the missing member fails to
-// compile loudly rather than silently misbehaving.
+// COND == false: a trivial inert marker. It remains in the chain but inherits no operation
+// tag and provides no CB, pack-slot, lifecycle, or execution members. The chain's guarded
+// descriptor accessors therefore give it neutral values, and its operation-kind checks are
+// all false, so it neither changes chain state nor emits work.
 template <class Inner>
 struct OptionalChainElement<false, Inner> {
-    static constexpr bool is_disabled = true;
-
     // Variadic ctor swallows any args the caller would pass to the inner element so
     // kernel-side construction `OptionalChainElement<false, Inner>{...}` compiles
     // unchanged regardless of COND. Provides a default ctor too.

@@ -3,12 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-OptionalChainElement — compile-time on/off gating of a chain step (untested mechanism).
+OptionalChainElement — compile-time on/off gating of a chain step.
 
-  - optional_unary.cpp: gate a Negative. ON -> out = -A, OFF -> out = A (element elided).
+  - optional_unary.cpp: gate a Negative. ON -> out = -A, OFF -> out = A (inert marker).
   - optional_pack.cpp:  gate a second PackTile (fan-out). ON -> both cb_out0 and cb_out1 written;
-    OFF -> only cb_out0, and the optional PackTile's FALSE stub must still compile (it must expose
-    pack_dst_slot — the bug fixed in eltwise_optional.hpp).
+    OFF -> only cb_out0, and the tag-less marker must remain neutral in pack planning and emission.
 """
 
 import torch
@@ -24,7 +23,7 @@ OPT_PACK = "ttnn/cpp/ttnn/kernel_lib/tests/axes/optional_pack.cpp"
 
 @pytest.mark.parametrize("cond,name", [(1, "on"), (0, "off")])
 def test_optional_unary_gate(device, cond, name):
-    """ON applies Negative (out=-A); OFF elides it (out=A) and still compiles + runs."""
+    """ON applies Negative (out=-A); OFF leaves an inert marker (out=A) and still compiles + runs."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -76,9 +75,8 @@ def test_optional_pack_on_fanout(device):
         assert ok, f"{tag}: {msg}"
 
 
-def test_optional_pack_off_falsestub(device):
-    """OFF: only cb_out0 written; the optional PackTile FALSE stub must compile (pack_dst_slot bug)
-    and be elided."""
+def test_optional_pack_off_inert_marker(device):
+    """OFF: only cb_out0 is written; the optional PackTile marker stays neutral and emits no work."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -88,7 +86,7 @@ def test_optional_pack_off_falsestub(device):
     cbs = [lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)]
     reader = lib.build_reader_kernel([tt_in], n, core_grid)
     writer = lib.build_writer_1out_kernel(tt_o0, n, core_grid)
-    compute = lib.build_compute_kernel(OPT_PACK, [n, 0], core_grid)  # cond=0 -> optional pack elided
+    compute = lib.build_compute_kernel(OPT_PACK, [n, 0], core_grid)  # cond=0 -> optional pack is inert
 
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     output = ttnn.generic_op([tt_in, tt_o0], program)
@@ -96,5 +94,5 @@ def test_optional_pack_off_falsestub(device):
     golden = torch_in.to(torch.float32)
     out = ttnn.to_torch(output).to(torch.float32)
     ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"OptionalChainElement pack OFF (false stub) | {msg}")
+    logger.info(f"OptionalChainElement pack OFF (inert marker) | {msg}")
     assert ok, msg
