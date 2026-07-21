@@ -89,6 +89,12 @@ void kernel_main() {
             uint32_t l1_write_addr = cb_in0.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
             fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
+            // [avgpool #50329 fix] fill_with_val is a RISC CPU store; on Quasar it lands in the DM core's
+            // private L1 D$/L2 and is NOT visible to the tilize UNPACK (which reads TL1) unless flushed.
+            // Flush the whole tile-row to TL1 before push_back so the pad is coherent (no-op on WH/BH).
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+            flush_l2_cache_range(l1_write_addr, padded_X_size << 5);
+#endif
             cb_in0.push_back(num_tiles_per_row);
         }
     };
@@ -126,6 +132,17 @@ void kernel_main() {
 
         fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
         noc.async_read_barrier();
+        // [avgpool #50329 fix] async_read_barrier fences only the NOC data-row reads. The column pad
+        // (above) and the row pad (just above) are RISC CPU stores (fill_with_val); on Quasar they linger
+        // in the DM core's private L1 D$/L2 and the tilize UNPACK reads STALE TL1 for the padding rows
+        // (leftover block-0 data) -> wrong tilize output. Flush the whole tile-row block through to TL1
+        // before push_back. NOC data rows are unaffected (already written directly to TL1 by the NOC
+        // engine; flushing clean D$ lines is a no-op). No-op on WH/BH. Mirrors prepare_reduce_scaler.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        if (has_rows) {
+            flush_l2_cache_range(cb_in0.get_write_ptr(), padded_X_size << 5);
+        }
+#endif
         cb_in0.push_back(num_tiles_per_row * has_rows);
     };
 
