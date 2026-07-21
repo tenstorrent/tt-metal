@@ -401,16 +401,15 @@ struct BinaryNgPerCoreArgs {
 // SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
 // (cache miss) and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit).
 //
-// binary_ng's compute_program_hash intentionally EXCLUDES the tensor volume, so one cached program
-// is shared across differently-shaped calls.  On a cache hit the descriptor is NOT rebuilt, so every
-// shape/work-split-dependent per-core arg (c_start_id, per-core tile counts, strides, D/N/C/Ht/Wt,
-// compute_tiles, freq/counter, packed scalar, ...) would otherwise stay frozen at the first-miss
-// shape and corrupt results.  override_runtime_arguments() re-runs THIS builder for the current
-// tensors and re-applies each arg every dispatch.  Because the work-core set itself changes with
-// volume (a core can flip between work and noop across hits), the builder emits args for ALL
-// num_cores_total cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
-// override_runtime_arguments re-applies every slot (buffer slots via their current address), so nothing
-// is left frozen regardless of how the partition shifts.
+// binary_ng's program hash EXCLUDES buffer addresses, so one cached program is shared across
+// differently-allocated (incl. in-place, out=x) calls.  On a cache hit the descriptor is NOT rebuilt,
+// so every per-core arg that carries a tensor address -- and every shape/work-split-dependent arg
+// (c_start_id, per-core tile counts, strides, D/N/C/Ht/Wt, compute_tiles, freq/counter, packed scalar,
+// ...) -- would otherwise stay frozen at the first miss and corrupt results.  override_runtime_arguments()
+// re-runs THIS builder for the current tensors and re-applies each arg every dispatch.  The builder
+// emits args for ALL num_cores_total cores -- noop cores get zero-filled lists sized to match the
+// work-core layout -- and override_runtime_arguments re-applies every slot (buffer slots via their
+// current address), so nothing is left frozen.
 BinaryNgPerCoreArgs build_per_core_runtime_args(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const Tensor& a,
@@ -605,8 +604,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             c_num_tiles_core = num_tiles_per_core_group_2;
         } else {
             // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
-            // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
-            // core flips between noop and work across differently-shaped cache hits.
+            // cores neither inflate the per-kernel max runtime-arg allocation nor change the slot count
+            // the reader/writer/compute kernels expect.
             const size_t reader_len = row_major_inputs ? 26 : 21;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
             const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
@@ -1355,9 +1354,9 @@ void BinaryNgDeviceOperation::override_runtime_arguments(
     tensor_return_value_t& c,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Re-apply ALL per-dispatch state to the cached program on a program-cache hit (the descriptor-era
-    // override_runtime_arguments()).  compute_program_hash EXCLUDES the tensor volume, so one cached
-    // program is reused across differently-shaped and differently-allocated (incl. in-place, out=x)
-    // calls; every shape-/work-split-dependent per-core arg AND every tensor-backed CB base address
+    // override_runtime_arguments()).  The program hash EXCLUDES buffer addresses, so one cached
+    // program is reused across differently-allocated (incl. in-place, out=x) calls; every
+    // tensor-backed CB base address AND every shape-/work-split-dependent per-core arg
     // would otherwise stay frozen at the first miss.  We re-derive them for the CURRENT tensors from
     // the SAME shared builder create_descriptor() uses, so the two stay byte-identical by construction.
     //
@@ -1365,10 +1364,9 @@ void BinaryNgDeviceOperation::override_runtime_arguments(
     // from Buffer* identity, so an in-place alias (input_a == output) or a mixed in-place/out-of-place
     // reuse of one cache entry writes each slot from the tensor it actually belongs to.
     //
-    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).  The work-core
-    // partition shifts with the volume (a core can flip between work and noop), so the builder emits
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).  The builder emits
     // args for ALL cores; we re-apply every one, buffer-address slots included (via the current Buffer
-    // address), so a core promoted to a work core on this hit is never left with a stale base address.
+    // address), so no core is ever left with a stale base address.
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
