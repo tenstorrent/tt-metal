@@ -47,13 +47,13 @@ namespace compute_kernel_lib {
 template <
     PoolType pool,
     ReduceDim rdim,
+    uint32_t cb_in,
+    uint32_t cb_scaler,
+    uint32_t cb_acc,
     ReduceInputPolicy in_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     typename PostOp = NoOp>
 ALWI void accumulate_reduce_block(
-    uint32_t cb_in,
-    uint32_t cb_scaler,
-    uint32_t cb_acc,
     ReduceInputBlockShape block_shape,
     uint32_t b,
     uint32_t num_blocks,
@@ -79,13 +79,13 @@ ALWI void accumulate_reduce_block(
 template <
     PoolType pool,
     ReduceDim rdim,
+    uint32_t cb_in,
+    uint32_t cb_scaler,
+    uint32_t cb_acc,
     ReduceInputPolicy in_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     typename PostOp = NoOp>
 ALWI void accumulate_reduce(
-    uint32_t cb_in,
-    uint32_t cb_scaler,
-    uint32_t cb_acc,
     ReduceInputBlockShape block_shape,
     uint32_t num_blocks,
     ReducePartialScaler partial = ReducePartialScaler::none(),
