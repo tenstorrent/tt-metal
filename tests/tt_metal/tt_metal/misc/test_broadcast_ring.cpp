@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <latch>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -61,6 +62,25 @@ TEST(BroadcastRing, ReaderStartsAtTailAndSeesSubsequentItems) {
     ASSERT_TRUE(reader.read(value));
     EXPECT_EQ(value, 2u);
     EXPECT_FALSE(reader.read(value));
+}
+
+TEST(BroadcastRing, WaitUntilNoReadersUnblocksAfterLastReaderIsDestroyed) {
+    BroadcastRing<uint32_t> ring(4);
+    std::optional<BroadcastRing<uint32_t>::Reader> reader(ring.make_reader());
+    std::latch waiter_started(1);
+    std::atomic<bool> wait_completed = false;
+
+    std::thread waiter([&] {
+        waiter_started.count_down();
+        ring.wait_until_no_readers();
+        wait_completed.store(true, std::memory_order_release);
+    });
+    waiter_started.wait();
+
+    EXPECT_FALSE(wait_completed.load(std::memory_order_acquire));
+    reader.reset();
+    waiter.join();
+    EXPECT_TRUE(wait_completed.load(std::memory_order_acquire));
 }
 
 TEST(BroadcastRing, ReadBatchIsOrderedAndBoundedByOutput) {

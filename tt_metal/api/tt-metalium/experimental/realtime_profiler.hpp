@@ -11,6 +11,12 @@
 
 namespace tt::tt_metal::experimental {
 
+struct ProgramRealtimeClockSync {
+    int64_t device_cycle_offset;  // Clock offset: a device timestamp maps to host time as
+                                  // host_ns = (timestamp - device_cycle_offset) / frequency
+    uint64_t sync_error_ns;       // Estimated error of the device-to-host mapping, in ns.
+};
+
 struct ProgramRealtimeRecord {
     uint32_t runtime_id;                               // Runtime ID. Currently truncated to 16 bits;
                                                        // widening tracked in #46103.
@@ -18,6 +24,7 @@ struct ProgramRealtimeRecord {
     uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
     uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
     double frequency;                                  // Device clock frequency (cycles per ns)
+    ProgramRealtimeClockSync clock_sync;               // Device-to-host clock mapping for this record
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
                                                        // MetalContext teardown or reinitialization.
 };
@@ -39,8 +46,8 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 // clang-format off
 /**
  * Register a callback to be invoked when real-time profiler data arrives from a device.
- * Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource
- * with other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock).
+ * Multiple callbacks can be registered; they are invoked concurrently, each on its own delivery thread. If a
+ * callback shares a resource with other callbacks, access it in a thread-safe way (e.g. with a lock).
  * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
  * is reported by ProgramRealtimeRecordBatch::dropped.
  *

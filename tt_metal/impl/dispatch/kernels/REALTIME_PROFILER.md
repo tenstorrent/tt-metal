@@ -41,7 +41,7 @@ dispatch_s            BRISC reader          NCRISC pusher          host
     |                      |                      |   (coalesced PCIe    |
     |                      |                      |    writes, ~420 ns) ->| hugepage
     |                      |                      |                      |-- read pages
-    |                      |                      |                      |   -> callbacks
+    |                      |                      |                      |   -> manager ring
 ```
 
 ## Double-Buffer Protocol
@@ -104,8 +104,8 @@ every record arrives with the device ring and host D2H FIFO never filling.
 
 ## Implementation Notes
 
-- The host side runs a receiver thread that drains device→host pages and
-  publishes decoded records onto a `BroadcastRing`; separate per-callback
-  consumer threads read from the ring and invoke the registered callbacks. A slow
-  callback only drops records for that consumer (tracked in `Consumer::dropped`);
-  it never stalls page draining or dispatch.
+- Each MeshDevice manager runs a receiver thread that drains device→host pages and
+  publishes decoded records onto its own `BroadcastRing`. A context-wide service
+  owns one delivery thread per consumer; that thread reads every attached manager
+  ring and serializes record and clock-sync hooks. A slow callback only drops
+  records for its own ring reader; it never stalls page draining or dispatch.
