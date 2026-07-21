@@ -93,12 +93,8 @@ void kernel_main() {
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
-    // Q tilize is the first op; configure HW for it, then full matmul init (PACK+DEST+sync).
-    // #50212's Reverse-startup + matmul_init left fp8 non-deterministic across repeated runs after
-    // prior fp8 sparse_sdpa programs on the same device (regression of #48401). mm_init is deprecated
-    // but still required here until the new short-init path covers DEST/pack for fp8.
-    compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-    mm_init(cb_q_in, cb_k_in, cb_out_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out_im);
+    matmul_init(cb_q_in, cb_k_in);  // one-time full matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
 
