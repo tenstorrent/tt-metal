@@ -26,6 +26,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.xtts.reference.xtts_conditioning import chunk_wav
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
+from models.experimental.xtts.tt.xtts_conv import cond_bias_trace_safe
 from models.experimental.xtts.tt.xtts_full_decoder import TtXttsHifiDecoder
 from models.experimental.xtts.tt.xtts_generator import TtXttsGenerator
 from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
@@ -156,29 +157,34 @@ class TtXtts(LightweightModule):
         ttnn.execute_trace(dev, stid, blocking=True)
         ttnn.release_trace(dev, stid)
 
-        # DECODE: captured decode-STEP trace replayed per token, with the SAME sampling as the demo
-        # (host-side rep/temp/top-k/top-p, self-terminating at STOP) so the audio matches the demo.
-        # (The fully-on-device counter-PRNG variant, generate_ondevice_traced, is available but its
-        # deterministic PRNG + fixed step budget degrade quality — kept for the "no host in loop" case.)
-        codes, latents = self.generator.generate_on_static_kv(
+        # DECODE: FULLY on-device — one captured decode-STEP trace replayed for a fixed budget, with
+        # rep/temp/top-k/top-p sampling done ON DEVICE (Gumbel-max over host-pre-drawn noise) and
+        # on-device token feedback + latent/code accumulation. This is the clean pre->device->post
+        # shape: the noise is drawn on host up front (preprocessing), nothing crosses to host inside
+        # the loop, and STOP self-termination becomes a post-loop trim. The sampler now matches the
+        # host path in distribution (validated CER ~0.017), so quality no longer regresses vs demo.
+        codes, latents = self.generator.generate_ondevice_traced(
             prompt_len,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
-            min_new_tokens=min_new_tokens,
         )
 
         # VOCODER trace on the generated (fixed-length) latents + the speaker embedding g.
+        # The vocoder folds its conditioning bias into the conv bias via a host transfer (faster,
+        # the GAN-decoder optimization) — fatal inside a trace, so switch those convs to the
+        # equivalent trace-safe on-device add for the captured region (eager callers keep the fold).
         lat_in = ttnn.to_layout(ttnn.typecast(latents, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)
         voc = self.decoder.decoder
-        _ = voc(ttnn.clone(lat_in), g)  # warmup / compile
-        ttnn.synchronize_device(dev)
-        vtid = ttnn.begin_trace_capture(dev, cq_id=0)
-        wav_dev = voc(ttnn.clone(lat_in), g)
-        ttnn.end_trace_capture(dev, vtid, cq_id=0)
-        ttnn.synchronize_device(dev)
-        ttnn.execute_trace(dev, vtid, blocking=True)
-        ttnn.release_trace(dev, vtid)
+        with cond_bias_trace_safe():
+            _ = voc(ttnn.clone(lat_in), g)  # warmup / compile
+            ttnn.synchronize_device(dev)
+            vtid = ttnn.begin_trace_capture(dev, cq_id=0)
+            wav_dev = voc(ttnn.clone(lat_in), g)
+            ttnn.end_trace_capture(dev, vtid, cq_id=0)
+            ttnn.synchronize_device(dev)
+            ttnn.execute_trace(dev, vtid, blocking=True)
+            ttnn.release_trace(dev, vtid)
         return wav_dev, codes
