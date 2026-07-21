@@ -413,9 +413,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         chunk_M_tiles = per_core_M * GRID_Y;
     }
 
-    // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); holds
-    // for every value the guard above picks and for the default 16 on all
-    // shipped models (emb a multiple of 512 => K_gate_tiles a multiple of 16).
+    // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound). The default 16 holds for
+    // shipped models with emb a multiple of 512, but NOT for gpt-oss (emb=2880 => K_gate_tiles=90,
+    // not a multiple of 16); and the adaptive L1 guard above only narrows in0_block_w_gu to a
+    // divisor when it actually fires (under L1 pressure). Clamp here on every path to the largest
+    // divisor of K_gate_tiles <= the current value, so the gate/up K-loop tiling is always exact
+    // (this is the same divisor set the L1 guard selects from; 1 always divides, so it terminates).
+    while (K_gate_tiles % in0_block_w_gu != 0) {
+        --in0_block_w_gu;
+    }
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
