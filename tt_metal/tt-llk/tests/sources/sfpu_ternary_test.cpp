@@ -135,6 +135,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
+static constexpr ckernel::DstSync DST_SYNC_MODE = ckernel::DstSync::SyncHalf;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint8_t PACK_FMT = resolve_ternary_format(UNPACK_A_IN);
