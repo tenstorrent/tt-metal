@@ -759,7 +759,11 @@
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
-    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests --ignore=models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py
+    exit_code=0
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py || exit_code=$?
+    pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/pcc || exit_code=$?
+    exit $exit_code
   model: sdxl
   skus:
     wh_n150:
@@ -767,6 +771,9 @@
       tier: 2
     wh_n300:
       timeout: 36
+      tier: 2
+    bh_p150b_civ2:
+      timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
