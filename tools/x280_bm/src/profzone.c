@@ -275,6 +275,7 @@ static void reader_run(
                 polls += NRISC;
                 continue;
             }
+            uint32_t prod_core0 = prod; /* batch the LIM publish: ONE fence + PROD/core (matches bulk path) */
             for (uint32_t r = 0; r < NRISC; r++) {
                 uint64_t L = c * NRISC + r;
                 uint32_t tail = tails[r];
@@ -331,9 +332,11 @@ static void reader_run(
                 total += run;
                 t_copy += rdcycle() - tc;
                 heads[L] = tail;
-                w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks */
-                fence_();                 /* ring data + sticky visible before PROD advances */
-                w32(PROD(hartid), prod);  /* publish to the relay */
+                w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks (kept per-risc) */
+            }
+            if (prod != prod_core0) {    /* published once per core: amortizes the fence across all 5 riscs */
+                fence_();                /* all riscs' data + stickies visible before PROD advances */
+                w32(PROD(hartid), prod); /* ONE batched publish for the whole core */
             }
         }
         if (r64(P_STOP) && (!pending || fullread)) { /* fullread: pending is always 1 -> stop on P_STOP alone */

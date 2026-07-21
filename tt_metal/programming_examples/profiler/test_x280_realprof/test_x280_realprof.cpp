@@ -203,7 +203,9 @@ int main(int argc, char** argv) {
     bool dualrelay = true;     // DEFAULT: one relay hart PER reader (2 D2H sockets, decouple the chip halves).
                                // Lifts the single-relay funnel -> the drain becomes NoC-read-bound, not
                                // relay-bound. --singlerelay reverts to one shared relay for A/B.
-    bool adaptive = false;     // --adaptive: per-core switch -- bulk read when the core is mostly full, else per-risc
+    bool adaptive = true;      // DEFAULT: per-core switch -- bulk read a core once it holds >= ADAPT_THRESH
+                               // (4*RING_CAP) pending words, else per-risc. Lowest no-stall knee (~830 vs ~940
+                               // per-risc) w/o bulk's constant NoC over-read. --noadaptive reverts to per-risc.
     int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
                                // -> M consumer threads (0 = old offline capture+demux path)
     int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
@@ -277,7 +279,9 @@ int main(int argc, char** argv) {
         } else if (a == "--singlerelay") {
             dualrelay = false;  // opt out: one shared relay hart (the old funnel) for A/B comparison
         } else if (a == "--adaptive") {
-            adaptive = true;
+            adaptive = true;  // default; kept explicit for clarity
+        } else if (a == "--noadaptive") {
+            adaptive = false;  // opt out: force plain per-risc drains (higher stall knee) for A/B
         } else if (a == "--mpmc") {
             mpmc = std::stoi(next());
         } else if (a == "--cwork") {
