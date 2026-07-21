@@ -1,0 +1,14 @@
+# Model weights — large (1.8GB) and CPML (non-commercial) licensed; never commit.
+# Download from HF coqui/XTTS-v2 (see reference/PROVENANCE.md).
+reference/weights/
+
+# Golden tensors — regenerable by running reference/xtts_gpt_ref.py against the checkpoint.
+golden/
+
+# Vendored coqui source — third-party (MPL-2.0), fetched as reading material, not our work.
+# Re-fetch from the pinned commit in reference/PROVENANCE.md if needed.
+reference/TTS/
+
+# Python caches
+__pycache__/
+*.pyc
