@@ -62,7 +62,7 @@ BindDFB(compute, ACC_DFB, "acc", DFBEndpointType::PRODUCER);
 BindDFB(compute, ACC_DFB, "acc", DFBEndpointType::CONSUMER);
 
 // Kernel side:
-experimental::DataflowBuffer cb_acc(dfb::acc);  // one wrapper drives both directions
+DataflowBuffer cb_acc(dfb::acc);  // one wrapper drives both directions
 ```
 
 The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yielding `dfb::acc_w` and `dfb::acc_r` aliasing the same DFB) also works.
@@ -110,8 +110,8 @@ KernelSpec reader{   // the kernel that actually needs the scratch
 };
 
 // Kernel side (both) — unchanged from legacy; base-pointer access, no FIFO ops:
-experimental::DataflowBuffer dfb_recip(dfb::recip);      // (A) one handle, both directions
-experimental::DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
+DataflowBuffer dfb_recip(dfb::recip);      // (A) one handle, both directions
+DataflowBuffer dfb_scratch(dfb::scratch);  // (B) same
 // ... read / write via base pointer as before ...
 ```
 
@@ -470,7 +470,7 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 **Recognition signal**: At a kernel call site for an LLK (`reduce_init`, `pack_tile`, etc.) or kernel-lib helper, the code does any of:
 
 - `.id`-extraction: `reduce_init(dfb::input.id, ...)`.
-- Temporary wrapper: `experimental::DataflowBuffer in_dfb(dfb::input); reduce_init(in_dfb.get_id(), ...)`.
+- Temporary wrapper: `DataflowBuffer in_dfb(dfb::input); reduce_init(in_dfb.get_id(), ...)`.
 - Typed-shim struct: a wrapper template (`BufferRef<T>` or similar) that holds a CB id and exposes `operator uint32_t`.
 
 **Why wrong**: Each of these reinvents an implicit conversion that `DFBAccessor` already provides. The `.id` form encodes the LLK's CB-id vocabulary into kernel code that should be DFB-centric; temporary wrappers add construction cost for no benefit; typed shims reproduce the implicit conversion locally and clutter the call site.
