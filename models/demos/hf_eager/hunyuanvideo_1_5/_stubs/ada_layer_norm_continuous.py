@@ -101,11 +101,13 @@ def build(device, torch_module):
 
         # emb = linear(silu(conditioning_embedding)), split into scale / shift.
         s = ttnn.silu(cond)  # (B, C_cond)
-        scale = ttnn.matmul(s, w_scale, compute_kernel_config=compute_config)
-        shift = ttnn.matmul(s, w_shift, compute_kernel_config=compute_config)
+        # Fold bias into the matmul epilogue (launch-bound path: fewer op launches).
         if b_scale is not None:
-            scale = ttnn.add(scale, b_scale)
-            shift = ttnn.add(shift, b_shift)
+            scale = ttnn.linear(s, w_scale, bias=b_scale, compute_kernel_config=compute_config)
+            shift = ttnn.linear(s, w_shift, bias=b_shift, compute_kernel_config=compute_config)
+        else:
+            scale = ttnn.matmul(s, w_scale, compute_kernel_config=compute_config)
+            shift = ttnn.matmul(s, w_shift, compute_kernel_config=compute_config)
 
         # (B, C) -> (B, 1, C) so it broadcasts over x's sequence dim.
         b_dim = int(scale.shape[0])

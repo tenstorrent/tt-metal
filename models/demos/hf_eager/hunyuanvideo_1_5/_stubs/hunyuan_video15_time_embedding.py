@@ -90,13 +90,16 @@ def build(device, torch_module):
         sin = ttnn.sin(a)
         proj = ttnn.concat([cos, sin] if flip else [sin, cos], dim=-1)  # (N, 256)
 
-        h = ttnn.matmul(proj, w1, compute_kernel_config=compute_config)
+        # Fold bias into the matmul epilogue (launch-bound path: fewer op launches).
         if b1 is not None:
-            h = ttnn.add(h, b1)
+            h = ttnn.linear(proj, w1, bias=b1, compute_kernel_config=compute_config)
+        else:
+            h = ttnn.matmul(proj, w1, compute_kernel_config=compute_config)
         h = ttnn.silu(h)
-        h = ttnn.matmul(h, w2, compute_kernel_config=compute_config)
         if b2 is not None:
-            h = ttnn.add(h, b2)
+            h = ttnn.linear(h, w2, bias=b2, compute_kernel_config=compute_config)
+        else:
+            h = ttnn.matmul(h, w2, compute_kernel_config=compute_config)
         return h
 
     return forward
