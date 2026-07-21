@@ -15,6 +15,7 @@ def test_reset_arg_sets_is_board_aware(monkeypatch):
 
     monkeypatch.delenv("TT_HW_PLANNER_RESET_ARGS", raising=False)
     monkeypatch.delenv("TT_HW_PLANNER_GALAXY", raising=False)
+    monkeypatch.setattr(P, "_enumerated_device_count", lambda: 0)
 
     # OBVIOUSLY non-galaxy (named small-chip PCIe board): the probe must NOT even run -> zero extra
     # commands, normal boards left untouched. (This probe would blow up if called.)
