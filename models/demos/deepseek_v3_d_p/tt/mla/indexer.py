@@ -570,7 +570,7 @@ class TtIndexer:
         # (block-cyclic-correct, cluster_axis=sp_axis), so every row already carries its true position; now
         # split those rows over TP so each chip scores only S/(sp·tp) of them — indexer_score + topk shrink
         # ~TP×. RoPE is per-row so the split is safe (no 2-D rope op needed). The score is told the TP axis via
-        # seq_subshard_axis below, so its EXACT block-cyclic geometry adds each device's tp_rank*Sq' sub-offset
+        # seq_shard_axes below, so its EXACT block-cyclic geometry adds each device's tp_rank*Sq' sub-offset
         # (rotation-safe). topk runs on the sub-rows; indices are all-gathered back over TP to the [1,1,S/sp,k]
         # contract so mla.py / sparse_sdpa are unchanged (both DeepSeek and GLM ride this one path).
         tpsp = self.tp_factor > 1
@@ -616,11 +616,10 @@ class TtIndexer:
             weights,
             chunk_start_idx=start_pos,
             program_config=cfg,
-            cluster_axis=self.sp_axis,
-            # TP×SP: name the TP axis the query was sub-sharded over so the score adds each device's
-            # tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat cluster_axis=None path,
-            # which is linear-approximate under a mid-slab start). None when the query stays SP-only.
-            seq_subshard_axis=self.tp_axis if tpsp else None,
+            # Seq shard axes, outermost (SP ring) first. TP×SP adds the TP axis so the score adds each
+            # device's tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat [] path, which is
+            # linear-approximate under a mid-slab start). SP-only ([sp]) when the query stays SP-sharded.
+            seq_shard_axes=[self.sp_axis, self.tp_axis] if tpsp else [self.sp_axis],
             cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
