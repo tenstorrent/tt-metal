@@ -41,11 +41,11 @@ N_FRAMES = 6  # number of diffusion latent frames to simulate
 
 
 def _build_reference_tokenizers(vv_config, ac_state, sem_state):
-    from vibevoice.modular.configuration_vibevoice import (
+    from modular.configuration_vibevoice import (
         VibeVoiceAcousticTokenizerConfig,
         VibeVoiceSemanticTokenizerConfig,
     )
-    from vibevoice.modular.modular_vibevoice_tokenizer import (
+    from modular.modular_vibevoice_tokenizer import (
         VibeVoiceAcousticTokenizerModel,
         VibeVoiceSemanticTokenizerModel,
     )
@@ -90,7 +90,7 @@ def _build_reference_tokenizers(vv_config, ac_state, sem_state):
 
 
 def test_fusion_semantic_branch_matches_hf_streaming():
-    from vibevoice.modular.modular_vibevoice_tokenizer import VibeVoiceTokenizerStreamingCache
+    from modular.modular_vibevoice_tokenizer import VibeVoiceTokenizerStreamingCache
 
     vv_config = load_vibevoice_model_config(MODEL_PATH)
     sd = load_vibevoice_state_dict(MODEL_PATH)

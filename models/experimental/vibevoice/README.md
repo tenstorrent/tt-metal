@@ -25,10 +25,10 @@ vibevoice/
 │   ├── config.py            # paths, HF repo id, transformers pin
 │   ├── model_utils.py       # resolve path + auto-download weights
 │   └── resource_utils.py    # download demo text/voices from upstream GitHub
-├── reference/
-│   ├── vibevoice/           # vendored 1.5B-only Python (from VibeVoice repo)
-│   ├── model_print.py
-│   └── run_inference.py
+├── reference/               # vendored 1.5B-only torch model (from VibeVoice repo)
+│   ├── modular/             # config + modeling (imported as `modular.*`)
+│   ├── processor/           # tokenizer/audio processor (`processor.*`)
+│   └── schedule/            # DPM solver (`schedule.*`)
 ├── resources/               # auto-downloaded demo assets (gitignored content)
 │   ├── voices/              # from github .../demo/voices
 │   └── text/                # from github .../demo/text_examples
@@ -58,13 +58,6 @@ The processor also pulls **Qwen/Qwen2.5-1.5B** tokenizer assets from the Hugging
 
 ```bash
 export PYTHONPATH=$(pwd)
-
-# Print architecture (downloads weights on first run)
-python models/experimental/vibevoice/reference/model_print.py
-
-# End-to-end reference TTS (CPU default; use --device cuda if available)
-python models/experimental/vibevoice/reference/run_inference.py \
-  --output_dir /tmp/vibevoice_out
 
 # PCC tests (auto-download weights; skipped if download fails)
 pytest models/experimental/vibevoice/tests/pcc/ -v
