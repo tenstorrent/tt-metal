@@ -16,9 +16,9 @@ os.chdir(HERE)
 import regime_a_bench as rb
 import regime_a_diag_suite as ds
 
-PK = [1, 2, 3, 4, 6, 8, 12]
-NS = [1, 2, 3, 4, 6]
-SM = [1, 2, 4]
+# Complete planner-supported ranges (deep-investigation mode): Pk 1..12, Ns 1..6, Sm 1..Mt, kb {1,2,4,8}.
+PK = list(range(1, 13))
+NS = list(range(1, 7))
 KB = [1, 2, 4, 8]
 kTB = 2048
 kL1 = 1440 * 1024
@@ -33,7 +33,9 @@ def rup(x, y):
 
 
 def feasible_geo(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb):
-    # Mirror device pick_plan() feasibility exactly (regime_a_matmul_config.cpp).
+    # Mirror device pick_plan() + build_plan() feasibility (config.cpp + plan.hpp).
+    if Sm > Mt or Pk > Kt:  # build_plan rejects empty m-/k-slices
+        return None
     cores = 8 * Pk * Ns * Sm
     if not (16 <= cores <= 104):
         return None
@@ -59,16 +61,27 @@ def feasible_geo(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb):
     return {"cores": cores, "Ktl": Ktl, "Mblk": Mblk, "Nband": Nband, "Nown": Nown, "Nbpc": Nbpc, "W": W}
 
 
-def enumerate_feasible(M, K, N):
+# Broad nsb candidate set for wide-N shapes (Nown can be up to ~24). Exhaustive when Nown is small (all
+# 1..Nown are <= these); a broad sample + the full-width value when large. Refine around the winner after.
+_NSB_BROAD = {1, 2, 3, 4, 6, 8, 9, 12, 16}
+
+
+def enumerate_feasible(M, K, N, nsb_set=None):
     Mt, Kt, Nt = M // 32, cdiv(K, 32), cdiv(N, 32)
     out = []
     for Pk in PK:
         for Ns in NS:
-            for Sm in SM:
+            for Sm in range(1, Mt + 1):  # Sm = 1..Mt (complete planner range)
                 for kb in KB:
                     Nband = cdiv(Nt, 8)
                     Nown = cdiv(Nband, max(Ns, 1))
-                    for nsb in range(1, Nown + 1):
+                    if nsb_set is not None:
+                        cands = sorted(n for n in nsb_set if 1 <= n <= Nown)
+                    elif Nown <= 10:
+                        cands = list(range(1, Nown + 1))  # exhaustive when small
+                    else:
+                        cands = sorted({n for n in _NSB_BROAD if n <= Nown} | {Nown})  # broad + full-width
+                    for nsb in cands:
                         g = feasible_geo(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb)
                         if g:
                             out.append(((Ns, Pk, Sm, kb, nsb), g))
