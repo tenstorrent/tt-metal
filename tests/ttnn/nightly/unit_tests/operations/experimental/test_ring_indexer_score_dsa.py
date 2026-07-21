@@ -61,10 +61,18 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     return q_dev, w_dev, k_local, k_gathered
 
 
-def _run_fused(heads, *, block_cyclic, num_links=1, k_dtype=ttnn.bfloat16):
+def _run_fused(
+    heads,
+    *,
+    block_cyclic,
+    num_links=1,
+    k_dtype=ttnn.bfloat16,
+    topology=ttnn.Topology.Linear,
+    fabric_config=ttnn.FabricConfig.FABRIC_1D,
+):
     """Run the one fused op and check vs the per-SP reference. num_links only changes fabric routing, never
     the gathered result -> same reference."""
-    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl(fabric_config)
     try:
         q_g, k_nat, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)
         k_host = _to_slab(k_nat, RING, CHUNK_GLOBAL) if block_cyclic else k_nat
@@ -78,7 +86,7 @@ def _run_fused(heads, *, block_cyclic, num_links=1, k_dtype=ttnn.bfloat16):
             k_local,
             ccl_semaphores,
             cluster_axis=SP_AXIS,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             num_links=num_links,
             ag_sub_device_id=subdevice_id,
             program_config=glx_config(heads),
@@ -100,6 +108,17 @@ def _run_fused(heads, *, block_cyclic, num_links=1, k_dtype=ttnn.bfloat16):
 def test_indexer_score_ring4_fused(case_id, heads, block_cyclic):
     """Base fused path, num_links=2 (the production Blackhole link count)."""
     _run_fused(heads, block_cyclic=block_cyclic, num_links=2)
+
+
+def test_indexer_score_ring4_fused_ring_topology():
+    """Exercise the distinct wraparound neighbor/threshold path under a genuine 1D ring fabric."""
+    _run_fused(
+        16,
+        block_cyclic=True,
+        num_links=1,
+        topology=ttnn.Topology.Ring,
+        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING,
+    )
 
 
 @pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic"])

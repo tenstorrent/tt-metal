@@ -32,12 +32,12 @@ _INPUT_DIMS = (None, 2)
 _BUF_DIMS = (1, None)
 
 
-def _open_ring4_ccl():
-    """Open the full 2x4 with FABRIC_1D, carve a 1x4 submesh, load a worker sub-device, make 2 ccl semaphores
+def _open_ring4_ccl(fabric_config=ttnn.FabricConfig.FABRIC_1D):
+    """Open the full 2x4 with the requested 1D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL semaphores
     (the two ring directions, as ring_attention_all_gather_async needs). Returns
     (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group)."""
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        fabric_config,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
