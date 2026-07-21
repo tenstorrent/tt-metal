@@ -49,10 +49,18 @@ TRANSCENDENTAL_OPS = [
 
 # Ops that support FastMode.
 SUPPORTED_FAST_MODE_OPS = [
-    MathOperation.Log1p,
-    MathOperation.Exp,
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
+]
+
+APPROX_CAPABLE_OPS = [
+    MathOperation.Exp,
+    MathOperation.Sqrt,
+    MathOperation.Rsqrt,
+    MathOperation.Reciprocal,
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Gelu,
 ]
 
 FORMATS = input_output_formats(
@@ -63,18 +71,30 @@ FORMATS = input_output_formats(
     ]
 )
 
-# (formats, approx, op, fast, dest) — fast varies only for fast-mode ops.
+
+def _get_approx_modes(mathop):
+    # approx=Yes only for ops with a real approx path; every op still runs approx=No.
+    if mathop in APPROX_CAPABLE_OPS:
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+def _get_fast_modes(mathop):
+    if mathop in SUPPORTED_FAST_MODE_OPS:
+        return [FastMode.No, FastMode.Yes]
+    return [FastMode.No]
+
+
+# (formats, approx, op, fast, dest)
 ACCURACY_PARAMS = list(
     (fmt, approx, op, fast, dest)
-    for fmt, approx, op, dest in product(
+    for fmt, op, dest in product(
         FORMATS,
-        [ApproximationMode.No, ApproximationMode.Yes],
         TRANSCENDENTAL_OPS,
         [DestAccumulation.No, DestAccumulation.Yes],
     )
-    for fast in (
-        [FastMode.No, FastMode.Yes] if op in SUPPORTED_FAST_MODE_OPS else [FastMode.No]
-    )
+    for approx in _get_approx_modes(op)
+    for fast in _get_fast_modes(op)
 )
 
 
