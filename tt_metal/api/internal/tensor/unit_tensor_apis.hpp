@@ -16,6 +16,8 @@ namespace tt::tt_metal {
 // ======================================================================================
 //                    Unit Tensor enqueue_read/write_tensor
 // ======================================================================================
+// Internal, unstable API - see tt_metal/api/internal/README.md.
+// Single-device (unit mesh) byte* enqueue helpers.
 
 void enqueue_read_tensor(
     distributed::MeshCommandQueue& queue,
