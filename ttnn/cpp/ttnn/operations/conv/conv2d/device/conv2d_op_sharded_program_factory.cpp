@@ -678,7 +678,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     //   • the relaxed subblock differs from the SBM subblock AND is larger: relaxed.out_subblock_h > 1
     //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
     //     (per_core_M) divisible by relaxed.out_subblock_h.
-    bool conv_tile_pack_row_major = false;
+    bool tile_pack_row_major = false;
     // In-place-pack class (formerly "caller_owns"): the deep-K packer_l1_acc + bias convs that pin used
     // to capture (rn50 DS2/DS3/L3a/L3b/L4a/L4b) now route through the matmul helper's in-place pack path
     // (TileRowMajor + packer_l1_acc + Interm — the helper does its own single reserve/push; pin has been
@@ -689,68 +689,44 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // is no longer a separate host define. The decision is finalized after get_cb_info (where
     // partials_cb_uses_output is known); see the pin_class_caller_owns block following the CB-info call.
     {
+        // Shared with get_cb_info() (via conv2d_utils) so the partials-CB alias decision is derived
+        // identically on the allocation path and the L1-usage prediction path — see the helper's banner.
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
-        const bool weights_df_supported =
-            (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
-        // M3: the l1_acc-OFF + ROW_MAJOR (untilize_out) Interm-target reload is now sized for in
-        // get_cb_info (matmul_partials_cb = 2*out_block_num_tiles when !packer_l1_acc), so it no longer
-        // overflows the partials CB. All four {l1_acc on,off}×{TILE,ROW_MAJOR} quadrants emit TileRowMajor.
-        const bool hard_eligible = height_sharded && !has_bias && weights_df_supported && !is_conv_1d_depthwise_conv;
-        if (hard_eligible) {
-            // Recompute the tuner's choice both ways: SBM (subblock_w_eq_per_core_n_required=true, what the
-            // host block_config already used) vs relaxed (=false, what TileRowMajor permits). Synthesize the
-            // compute config from fp32_dest_acc_en so DST capacity matches the kernel (dst_full_sync_en=false
-            // is the conv2d default). per_core_M = act_block_h_ntiles, per_core_N = weight_block_w_ntiles.
-            ttnn::DeviceComputeKernelConfig synth_config{};
-            synth_config.fp32_dest_acc_en = fp32_dest_acc_en;
-            synth_config.dst_full_sync_en = false;
-            namespace auto_tune = ttnn::operations::matmul::auto_tune;
-            const auto pick = [&](bool eq_required) {
-                return auto_tune::determine_largest_subblock({
-                    .per_core_M = act_block_h_ntiles,
-                    .per_core_N = weight_block_w_ntiles,
-                    .compute_kernel_config = synth_config,
-                    .subblock_w_eq_per_core_n_required = eq_required,
-                    .prefer_fast_path = true,
-                });
-            };
-            const auto sbm = pick(true);
-            const auto relaxed = pick(false);
-            const bool larger_volume =
-                (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w);
-            // ROI gate (production heuristic): TileRowMajor only earns its keep when the relaxed subblock is
-            // both taller than the SBM-stranded h==1 fallback AND a larger volume. Divisibility is a
-            // correctness requirement on every path (the tuner guarantees it).
-            const bool roi_ok = relaxed.out_subblock_h > 1 && larger_volume;
-            const bool divisible = act_block_h_ntiles % relaxed.out_subblock_h == 0;
-            if (divisible && roi_ok) {
-                conv_tile_pack_row_major = true;
-                out_subblock_h_ntiles = relaxed.out_subblock_h;
-                out_subblock_w_ntiles = relaxed.out_subblock_w;
-                // Re-derive every subblock-dependent quantity from the relaxed shape. These were computed
-                // from the SBM shape above; the relaxed shape satisfies the same TT_FATALs (vol <= DST cap
-                // via the tuner, weight_block_w % w == 0 via the tuner's divisibility, act_block_h % h == 0
-                // checked just above), so the SBM-shape validations remain correct for the relaxed shape.
-                weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-                out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
-                act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
-                act_subblock_h_ntiles = out_subblock_h_ntiles;
-                act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
-                log_info(
-                    tt::LogOp,
-                    "conv2d TileRowMajor (non-pin) ELIGIBLE: per_core_M={} per_core_N={} fp32_accum={} "
-                    "packer_l1_acc={} out_layout={} | SBM subblock={}x{} relaxed subblock={}x{} "
-                    "(auto-selected TileRowMajor; no bias, weights bf16/fp32)",
-                    act_block_h_ntiles,
-                    weight_block_w_ntiles,
-                    fp32_dest_acc_en,
-                    packer_l1_acc_en,
-                    untilize_out ? "ROW_MAJOR" : "TILE",
-                    sbm.out_subblock_h,
-                    sbm.out_subblock_w,
-                    relaxed.out_subblock_h,
-                    relaxed.out_subblock_w);
-            }
+        const auto trm = ttnn::operations::conv::auto_select_tile_pack_row_major(
+            height_sharded,
+            has_bias,
+            weights_df,
+            is_conv_1d_depthwise_conv,
+            fp32_dest_acc_en,
+            act_block_h_ntiles,
+            weight_block_w_ntiles);
+        if (trm.selected) {
+            tile_pack_row_major = true;
+            out_subblock_h_ntiles = trm.relaxed_out_subblock_h;
+            out_subblock_w_ntiles = trm.relaxed_out_subblock_w;
+            // Re-derive every subblock-dependent quantity from the relaxed shape. These were computed
+            // from the SBM shape above; the relaxed shape satisfies the same TT_FATALs (vol <= DST cap
+            // via the tuner, weight_block_w % w == 0 via the tuner's divisibility, act_block_h % h == 0
+            // guaranteed by the helper's divisibility gate), so the SBM-shape validations remain correct.
+            weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
+            out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
+            act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
+            act_subblock_h_ntiles = out_subblock_h_ntiles;
+            act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
+            log_info(
+                tt::LogOp,
+                "conv2d TileRowMajor (non-pin) ELIGIBLE: per_core_M={} per_core_N={} fp32_accum={} "
+                "packer_l1_acc={} out_layout={} | SBM subblock={}x{} relaxed subblock={}x{} "
+                "(auto-selected TileRowMajor; no bias, weights bf16/fp32)",
+                act_block_h_ntiles,
+                weight_block_w_ntiles,
+                fp32_dest_acc_en,
+                packer_l1_acc_en,
+                untilize_out ? "ROW_MAJOR" : "TILE",
+                trm.sbm_out_subblock_h,
+                trm.sbm_out_subblock_w,
+                trm.relaxed_out_subblock_h,
+                trm.relaxed_out_subblock_w);
         }
     }
 
@@ -901,7 +877,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // in-place-pack behavior from the template args, so there is no longer a separate host define.
     //
     // Engage only when the production no-bias TRM-relaxed path above did NOT already claim this conv
-    // (conv_tile_pack_row_major still false): that path re-derives a taller subblock, which is incompatible
+    // (tile_pack_row_major still false): that path re-derives a taller subblock, which is incompatible
     // with the byte-identical SBM-subblock requirement here.
     //
     // Scope: the INTERM-target members of the former pin class — the matmul packs its last K-block to the
@@ -941,8 +917,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // L1 is recovered); it is retained only for the SubblockMajor (!packer_l1_acc) bias+untilize path, whose
     // per-subblock FIFO does not fit the in-place read-modify-write model.
     const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
-    if (!conv_tile_pack_row_major && pin_class_caller_owns) {
-        conv_tile_pack_row_major = true;
+    if (!tile_pack_row_major && pin_class_caller_owns) {
+        tile_pack_row_major = true;
         log_debug(
             tt::LogOp,
             "conv2d CALLER_OWNS (default, was pin): per_core_M={} per_core_N={} out_subblock={}x{} "
@@ -1127,7 +1103,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // (pack_subblock_row_strided) on the dedicated-partials FIFO, and (ROW_MAJOR output) untilizes it with
     // plain `untilize` instead of reblock_and_untilize. Eligibility decided above; the relaxed
     // out_subblock_{h,w} were already folded into the compute compile args.
-    if (conv_tile_pack_row_major) {
+    if (tile_pack_row_major) {
         compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
         // The deep-K fuse_bias/untilize + packer_l1_acc INTERM-target convs (formerly the caller_owns /
         // pin class) no longer need a separate define: the matmul helper packs in place automatically for

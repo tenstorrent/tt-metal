@@ -280,9 +280,26 @@ std::vector<CBInfo> get_cb_info(
     // the !untilize_out / !single_output_block terms below — only the single-output-block TILE-out
     // bias+l1_acc case (rn50 DS2/DS3/L3a/L3b/L4a/L4b) needed the alias suppressed.
     const bool caller_owns_class_forces_dedicated = packer_l1_acc && enable_bias;
-    const bool can_alias_partials_onto_out = single_output_block && (partial_dtype == output_datatype) &&
-                                             !untilize_out && !is_1d_depthwise_conv &&
-                                             !caller_owns_class_forces_dedicated;
+    // TileRowMajor + software-reload (!packer_l1_acc) CANNOT alias partials onto OUT: the reload keeps
+    // partials subblock-major while the last K-block packs row-strided into the SAME L1, so the output
+    // write clobbers not-yet-reloaded partials (silent corruption). Mirrors the matmul factory's
+    // do_not_inplace_interm0_out_CB guard. SBM + !l1_acc and TRM + l1_acc stay aliasable (safe).
+    //
+    // The TileRowMajor decision is derived here (not plumbed in) via the SAME helper the sharded factory
+    // uses, so this alias decision is identical on the allocation path and the L1-usage prediction path
+    // (both call get_cb_info) — otherwise the post-op CB-size equality check would abort.
+    const bool tile_pack_row_major = ttnn::operations::conv::auto_select_tile_pack_row_major(
+                                         sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+                                         enable_bias,
+                                         weights_df,
+                                         is_1d_depthwise_conv,
+                                         fp32_dest_acc_en,
+                                         block_config.act_block_h_ntiles,
+                                         per_core_out_matrix_width_ntiles)
+                                         .selected;
+    const bool can_alias_partials_onto_out =
+        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv &&
+        !caller_owns_class_forces_dedicated && !(tile_pack_row_major && !packer_l1_acc);
     const uint32_t matmul_partials_num_pages =
         is_1d_depthwise_conv ? 0
         : can_alias_partials_onto_out

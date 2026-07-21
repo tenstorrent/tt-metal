@@ -357,13 +357,21 @@ ALWI void matmul_block(
     ASSERT(in0_cb_id != out_cb_id);
     ASSERT(in1_cb_id != out_cb_id);
     ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
-    // Unsupported (PR #47724): TileRowMajor + software-reload (non-l1_acc) with interm aliased
-    // onto out. A multi-K reload re-reserves a row-group in the SAME headroom-free CB it is
-    // reloading from → reserve-before-pop deadlock. TRM software-reload needs interm as its OWN
-    // region; packer_l1_acc TRM may alias (its single reserve does no reload). num_k_blocks == 1
-    // has no reload, so passing out_buf as the interm placeholder is fine there.
+    // Unsupported (PR #47724): TileRowMajor + software-reload (non-l1_acc) with interm and out on the
+    // SAME physical L1. The multi-K reload keeps partials subblock-major in interm while the last
+    // K-block packs row-strided into out; sharing L1 lets the row-strided write clobber not-yet-
+    // reloaded partials (silent value corruption). TRM software-reload needs interm as its OWN region;
+    // packer_l1_acc TRM may alias (single reserve, no reload) and num_k_blocks == 1 has no reload.
+    // Compare PHYSICAL L1 bases (fifo_limit - fifo_size), NOT CB indices: a factory can bind two
+    // DISTINCT CB indices to the SAME globally-allocated address (e.g. conv's partials-onto-out alias),
+    // which an index compare misses. Debug-only tripwire — the real guard is the factory refusing to
+    // alias this combo (matmul do_not_inplace_interm0_out_CB / conv can_alias_partials_onto_out).
     if constexpr (tile_order == OutputCBLayout::TileRowMajor && !packer_l1_acc) {
-        ASSERT(shape.num_k_blocks == 1 || interm_cb_id != out_cb_id);
+        const uint32_t interm_l1_base =
+            get_local_cb_interface(interm_cb_id).fifo_limit - get_local_cb_interface(interm_cb_id).fifo_size;
+        const uint32_t out_l1_base =
+            get_local_cb_interface(out_cb_id).fifo_limit - get_local_cb_interface(out_cb_id).fifo_size;
+        ASSERT(shape.num_k_blocks == 1 || interm_l1_base != out_l1_base);
     }
 
     // Reconfig and init are independent compile-time gates (see the InitMode /

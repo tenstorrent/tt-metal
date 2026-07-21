@@ -396,6 +396,57 @@ Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_m
     };
 }
 
+TilePackRowMajorDecision auto_select_tile_pack_row_major(
+    bool height_sharded,
+    bool has_bias,
+    tt::DataFormat weights_df,
+    bool is_1d_depthwise_conv,
+    bool fp32_dest_acc_en,
+    uint32_t per_core_M_ntiles,
+    uint32_t per_core_N_ntiles) {
+    TilePackRowMajorDecision decision;
+    // TileRowMajor is inert on bf8 (same packed-tile layout either way) and deadlocks with bias; the
+    // dest-reuse depthwise path has no partials CB. Width-sharded keeps SubblockMajor.
+    const bool weights_df_supported =
+        (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
+    const bool hard_eligible = height_sharded && !has_bias && weights_df_supported && !is_1d_depthwise_conv;
+    if (!hard_eligible) {
+        return decision;
+    }
+    // Recompute the tuner's choice both ways: SBM (subblock_w_eq_per_core_n_required=true, what the host
+    // block_config already used) vs relaxed (=false, what TileRowMajor permits). Synthesize the compute
+    // config from fp32_dest_acc_en so DST capacity matches the kernel (dst_full_sync_en=false is the
+    // conv2d default).
+    ttnn::DeviceComputeKernelConfig synth_config{};
+    synth_config.fp32_dest_acc_en = fp32_dest_acc_en;
+    synth_config.dst_full_sync_en = false;
+    namespace auto_tune = ttnn::operations::matmul::auto_tune;
+    const auto pick = [&](bool eq_required) {
+        return auto_tune::determine_largest_subblock({
+            .per_core_M = per_core_M_ntiles,
+            .per_core_N = per_core_N_ntiles,
+            .compute_kernel_config = synth_config,
+            .subblock_w_eq_per_core_n_required = eq_required,
+            .prefer_fast_path = true,
+        });
+    };
+    const auto sbm = pick(true);
+    const auto relaxed = pick(false);
+    decision.sbm_out_subblock_h = sbm.out_subblock_h;
+    decision.sbm_out_subblock_w = sbm.out_subblock_w;
+    decision.relaxed_out_subblock_h = relaxed.out_subblock_h;
+    decision.relaxed_out_subblock_w = relaxed.out_subblock_w;
+    // ROI gate: TileRowMajor only earns its keep when the relaxed subblock is both taller than the
+    // SBM-stranded h==1 fallback AND a larger volume. Divisibility is a correctness requirement on
+    // every path (the tuner guarantees it).
+    const bool larger_volume =
+        (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w);
+    const bool roi_ok = relaxed.out_subblock_h > 1 && larger_volume;
+    const bool divisible = per_core_M_ntiles % relaxed.out_subblock_h == 0;
+    decision.selected = divisible && roi_ok;
+    return decision;
+}
+
 static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     uint32_t block_height, uint32_t block_width, bool fp32_accum) {
     // Conv kernels emit OutputCBLayout::SubblockMajor at every matmul_block /
