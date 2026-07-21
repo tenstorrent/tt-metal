@@ -181,26 +181,11 @@ jobs:
             -f message="Update versions.json after ${DEPLOYED_VERSION} deploy" \
             -f content="$(echo "$payload" | base64 -w0)" \
             -f branch=gh-pages "${extra_args[@]}"
-      - name: Check OpenSearch ingest key
-        # Gate the indexer without exposing the write credential to the whole job.
-        # Only this trusted shell step and the indexer step below read the secret;
-        # the third-party deploy/artifact actions in this job never see it.
-        id: search-key
-        if: ${{ steps.deployment.outcome == 'success' }}
-        env:
-          DOCS_SEARCH_INGEST_API_KEY: ${{ secrets.DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT }}
-        run: |
-          if [ -n "${DOCS_SEARCH_INGEST_API_KEY}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Skipping OpenSearch indexing because DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT is not set."
-          fi
       - name: Index docs into OpenSearch
         # The indexer reads the built HTML from the artifact downloaded above.
         # Non-critical post-deploy enhancement: a transient ingest failure must
         # not mark an otherwise-successful docs deploy as failed.
-        if: ${{ steps.deployment.outcome == 'success' && steps.search-key.outputs.enabled == 'true' }}
+        if: ${{ steps.deployment.outcome == 'success' }}
         continue-on-error: true
         env:
           # Scoped to this step only (not job-level) so the OpenSearch write
@@ -212,7 +197,12 @@ jobs:
           DOCS_INDEX_VERSION: ${{ inputs.version }}
           DOCS_OUTPUT_DIR: gh_pages/${{ inputs.version }}
           DOC_SITE_BASE_URL: https://docs.tenstorrent.com/tt-metal/${{ inputs.version }}
-        run: python3 scripts/index_remote_search.py
+        run: |
+          if [ -z "${DOCS_SEARCH_INGEST_API_KEY}" ]; then
+            echo "::warning::Skipping OpenSearch indexing because DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT is not set."
+            exit 0
+          fi
+          python3 scripts/index_remote_search.py
       - name: Check the docs deployment is up
         if: ${{ github.ref == 'refs/heads/main' }}
         run: |
