@@ -316,8 +316,8 @@ struct FabricEriscDatamoverConfig {
     // Connection buffer index for the local tensix relay interface
     size_t tensix_relay_connection_buffer_index_id = 0;
 
-    // Shared ERISC1->ERISC0 terminal-copy queue for the opt-in Blackhole ring
-    // path. Zero when the path is disabled.
+    // Shared ERISC1->ERISC0 descriptor queue. Zero on topologies where the
+    // terminal-copy protocol is unavailable.
     size_t ring_terminal_offload_queue_base_address = 0;
 
     size_t datapath_usage_l1_address = 0;

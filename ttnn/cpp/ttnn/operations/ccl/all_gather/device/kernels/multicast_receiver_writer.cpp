@@ -151,8 +151,10 @@ void kernel_main() {
                                (receiver_cores_per_link == 1 ? bank_owned_num_banks / bank_owned_num_links : 1)
                          : (worker_pages + inputs_per_cb_page - 1) / inputs_per_cb_page;
     auto bank_owned_pages_in_batch = [&](uint32_t batch) __attribute__((always_inline)) {
-        const uint32_t run_in_bank =
-            receiver_cores_per_link > 1 ? batch / receiver_cores_per_link : batch % bank_owned_runs_per_bank;
+        // Each interleaved receiver core drains one bank, so its batch index is
+        // already the run index within that bank.  Only the single-receiver
+        // schedule interleaves several banks in this loop.
+        const uint32_t run_in_bank = batch % bank_owned_runs_per_bank;
         return std::min(inputs_per_cb_page, bank_owned_pages_per_bank - run_in_bank * inputs_per_cb_page);
     };
     constexpr uint32_t batches_per_window = receiver_credit_group_batches;

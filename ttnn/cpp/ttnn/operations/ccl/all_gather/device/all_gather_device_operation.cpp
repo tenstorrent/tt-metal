@@ -15,171 +15,12 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
-#include <cstdlib>
-#include <string_view>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::ccl {
-
-namespace {
-
-AllGatherReceiverPolicy read_receiver_policy_from_environment() {
-    AllGatherReceiverPolicy policy;
-
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_L1_MODE")) {
-        if (std::string_view(value) == "force_direct") {
-            policy.test_mode = ReceiverL1TestMode::ForceDirect;
-        } else if (std::string_view(value) == "force_receiver") {
-            policy.test_mode = ReceiverL1TestMode::ForceReceiver;
-        } else {
-            TT_FATAL(
-                std::string_view(value) == "auto",
-                "TTNN_ALL_GATHER_RECEIVER_L1_MODE must be auto, force_direct, or force_receiver; got '{}'",
-                value);
-        }
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_STAGE_MODE")) {
-        if (std::string_view(value) == "l1_sink") {
-            policy.stage_mode = ReceiverL1StageMode::L1Sink;
-        } else if (std::string_view(value) == "l1_overwrite") {
-            policy.stage_mode = ReceiverL1StageMode::L1Overwrite;
-        } else if (std::string_view(value) == "drain_only") {
-            policy.stage_mode = ReceiverL1StageMode::DrainOnly;
-        } else {
-            TT_FATAL(
-                std::string_view(value) == "combined",
-                "TTNN_ALL_GATHER_RECEIVER_STAGE_MODE must be combined, l1_sink, l1_overwrite, or drain_only; got '{}'",
-                value);
-        }
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_NOTIFY_MODE")) {
-        TT_FATAL(
-            std::string_view(value) == "fused" || std::string_view(value) == "split",
-            "TTNN_ALL_GATHER_RECEIVER_NOTIFY_MODE must be fused or split; got '{}'",
-            value);
-        policy.notify_mode =
-            std::string_view(value) == "split" ? ReceiverL1NotifyMode::Split : ReceiverL1NotifyMode::Fused;
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE")) {
-        TT_FATAL(
-            std::string_view(value) == "window" || std::string_view(value) == "per_slot" ||
-                std::string_view(value) == "pipelined",
-            "TTNN_ALL_GATHER_RECEIVER_CREDIT_MODE must be window, per_slot, or pipelined; got '{}'",
-            value);
-        policy.credit_mode = std::string_view(value) == "per_slot"    ? ReceiverL1CreditMode::PerSlot
-                             : std::string_view(value) == "pipelined" ? ReceiverL1CreditMode::Pipelined
-                                                                      : ReceiverL1CreditMode::Window;
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_CREDIT_GROUP_BATCHES")) {
-        if (std::string_view(value) != "auto") {
-            char* end = nullptr;
-            const unsigned long parsed = std::strtoul(value, &end, 10);
-            TT_FATAL(
-                end != value && *end == '\0' && parsed > 0 && parsed <= 256,
-                "TTNN_ALL_GATHER_RECEIVER_CREDIT_GROUP_BATCHES must be auto or an integer in [1, 256]; got '{}'",
-                value);
-            policy.credit_group_batches = static_cast<uint32_t>(parsed);
-        }
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION")) {
-        TT_FATAL(
-            std::string_view(value) == "0" || std::string_view(value) == "1",
-            "TTNN_ALL_GATHER_RECEIVER_ATTRIBUTION must be 0 or 1; got '{}'",
-            value);
-        policy.attribution_enabled = std::string_view(value) == "1";
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_ADDRESS_ATTRIBUTION")) {
-        TT_FATAL(
-            std::string_view(value) == "0" || std::string_view(value) == "1",
-            "TTNN_ALL_GATHER_ADDRESS_ATTRIBUTION must be 0 or 1; got '{}'",
-            value);
-        policy.address_attribution_enabled = std::string_view(value) == "1";
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_BANK_OWNED_LINKS")) {
-        TT_FATAL(
-            std::string_view(value) == "0" || std::string_view(value) == "1",
-            "TTNN_ALL_GATHER_BANK_OWNED_LINKS must be 0 or 1; got '{}'",
-            value);
-        policy.bank_owned_links = std::string_view(value) == "1";
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_BANK_OWNED_COALESCE")) {
-        if (std::string_view(value) == "source") {
-            policy.bank_owned_coalesce_mask = 1;
-        } else if (std::string_view(value) == "source_receiver") {
-            policy.bank_owned_coalesce_mask = 1 | 4;
-        } else if (std::string_view(value) == "source_local") {
-            policy.bank_owned_coalesce_mask = 1 | 2;
-        } else if (std::string_view(value) == "all") {
-            policy.bank_owned_coalesce_mask = 1 | 2 | 4;
-        } else {
-            TT_FATAL(
-                std::string_view(value) == "none",
-                "TTNN_ALL_GATHER_BANK_OWNED_COALESCE must be none, source, source_receiver, source_local, or all; got "
-                "'{}'",
-                value);
-        }
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY")) {
-        TT_FATAL(
-            std::string_view(value) == "divisor" || std::string_view(value) == "max_tail",
-            "TTNN_ALL_GATHER_BANK_OWNED_RUN_POLICY must be divisor or max_tail; got '{}'",
-            value);
-        policy.bank_owned_run_policy =
-            std::string_view(value) == "divisor" ? BankOwnedRunPolicy::Divisor : BankOwnedRunPolicy::MaxTail;
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_INTERLEAVED_BANK_RECEIVERS")) {
-        TT_FATAL(
-            std::string_view(value) == "0" || std::string_view(value) == "1",
-            "TTNN_ALL_GATHER_INTERLEAVED_BANK_RECEIVERS must be 0 or 1; got '{}'",
-            value);
-        policy.interleaved_bank_receivers = std::string_view(value) == "1";
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS")) {
-        if (std::string_view(value) == "1") {
-            policy.drain_risc_count = 1;
-        } else if (std::string_view(value) == "2") {
-            policy.drain_risc_count = 2;
-        } else {
-            TT_FATAL(
-                std::string_view(value) == "auto",
-                "TTNN_ALL_GATHER_RECEIVER_DRAIN_RISCS must be auto, 1, or 2; got '{}'",
-                value);
-        }
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_SLOTS")) {
-        if (std::string_view(value) != "auto") {
-            char* end = nullptr;
-            const unsigned long parsed = std::strtoul(value, &end, 10);
-            TT_FATAL(
-                end != value && *end == '\0' && parsed > 0 && parsed <= 256,
-                "TTNN_ALL_GATHER_RECEIVER_SLOTS must be auto or an integer in [1, 256]; got '{}'",
-                value);
-            policy.slot_count = static_cast<uint32_t>(parsed);
-        }
-    }
-    if (const char* value = std::getenv("TTNN_ALL_GATHER_RECEIVER_BATCH_ROWS")) {
-        if (std::string_view(value) == "1") {
-            policy.batch_rows = 1;
-        } else if (std::string_view(value) == "2") {
-            policy.batch_rows = 2;
-        } else if (std::string_view(value) == "4") {
-            policy.batch_rows = 4;
-        } else if (std::string_view(value) == "8") {
-            policy.batch_rows = 8;
-        } else {
-            TT_FATAL(
-                std::string_view(value) == "max",
-                "TTNN_ALL_GATHER_RECEIVER_BATCH_ROWS must be max, 1, 2, 4, or 8; got '{}'",
-                value);
-        }
-    }
-    return policy;
-}
-
-}  // namespace
 
 void AllGatherDeviceOperation::validate_on_program_cache_miss(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
@@ -566,6 +407,22 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     uint32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
+    AllGatherReceiverPolicy receiver_policy;
+    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+    const bool production_sparse_mla_ring = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
+                                            num_devices == 8 && gather_dim == 2 &&
+                                            (input_page_size == 704 || input_page_size == 1152);
+    if (production_sparse_mla_ring) {
+        receiver_policy.notify_mode = ReceiverL1NotifyMode::Fused;
+        receiver_policy.credit_mode = ReceiverL1CreditMode::Pipelined;
+        receiver_policy.credit_group_batches = 6;
+        receiver_policy.bank_owned_links = true;
+        receiver_policy.interleaved_bank_receivers = true;
+        receiver_policy.drain_risc_count = 2;
+        receiver_policy.slot_count = 12;
+        receiver_policy.batch_rows = 0;
+    }
+
     return {
         AllGatherParams{
             gather_dim,
@@ -579,7 +436,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             packet_size,
             subdevice_id,
             sub_core_grid,
-            read_receiver_policy_from_environment(),
+            receiver_policy,
             batch_slice_idx,
             valid_gather_extent},
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};

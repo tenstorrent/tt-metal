@@ -9,9 +9,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-#include <cstdlib>
 #include <set>
-#include <string_view>
 
 namespace ttnn::operations::ccl {
 
@@ -223,7 +221,7 @@ ReceiverL1Plan make_receiver_l1_plan(
     return plan;
 }
 
-bool auto_receiver_l1_path_is_preferred(const AllGatherParams& attrs, const Tensor& input) {
+bool auto_receiver_l1_path_is_preferred(const AllGatherParams& attrs, const Tensor& /*input*/) {
     const bool active_axis_is_ring =
         (attrs.axis_num_devices[0] > 1 && attrs.axis_topology[0] == tt::tt_fabric::Topology::Ring) ||
         (attrs.axis_num_devices[1] > 1 && attrs.axis_topology[1] == tt::tt_fabric::Topology::Ring);
@@ -241,18 +239,7 @@ bool auto_receiver_l1_path_is_preferred(const AllGatherParams& attrs, const Tens
         return false;
     }
 
-    // On the measured 8-device Blackhole 1D ring, the established unicast path
-    // beats receiver multicast for BF16 at 32K pages/device (4.363 vs
-    // 5.531 ms).  FP8 receiver wins at that production-sized point (3.245 vs
-    // 3.890 ms), but its 128-page p90 is worse.  Base the crossover on the
-    // selected height extent rather than the allocated buffer size: a cache
-    // prefix gather or one batch slice must not inherit a fast-path decision
-    // from unused rows or batches. Do not extrapolate the win to smaller or
-    // BF16 ring gathers; force_receiver remains available for explicit
-    // topology testing.
-    const uint32_t selected_height_pages =
-        attrs.valid_gather_extent.value_or(static_cast<uint32_t>(input.padded_shape()[2]));
-    return input.dtype() == ttnn::DataType::FP8_E4M3 && selected_height_pages >= 32768;
+    return attrs.receiver_policy.bank_owned_links;
 }
 
 bool use_receiver_l1_path(
@@ -605,9 +592,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const bool bank_owned_links = operation_attributes.receiver_policy.bank_owned_links;
     const uint32_t bank_owned_coalesce = operation_attributes.receiver_policy.bank_owned_coalesce_mask;
     const uint32_t num_dram_banks = input_tensor.device()->num_dram_channels();
-    TT_FATAL(
-        bank_owned_links || bank_owned_coalesce == 0,
-        "bank-owned coalescing requires TTNN_ALL_GATHER_BANK_OWNED_LINKS=1");
+    TT_FATAL(bank_owned_links || bank_owned_coalesce == 0, "bank-owned coalescing requires the bank-owned schedule");
     uint32_t bank_owned_pages_per_run = 1;
     if (bank_owned_links) {
         TT_FATAL(receiver_l1_mode, "bank-owned links require the receiver-L1 all-gather path");
@@ -822,9 +807,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
-    const char* ring_fast_env = std::getenv("TT_METAL_FABRIC_RING_TERMINAL_OFFLOAD_DEPTH");
     const bool ring_fast_control_atomics =
-        receiver_l1_mode && ring_fast_env != nullptr && std::string_view(ring_fast_env) != "0";
+        receiver_l1_mode && operation_attributes.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
+        operation_attributes.receiver_policy.interleaved_bank_receivers;
     std::vector<uint32_t> reader_compile_args = {
         input_page_size,                 // input tensor page size
         output_chunk_size,               // NOC write size = min(input, output)

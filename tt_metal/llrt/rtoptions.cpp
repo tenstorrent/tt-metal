@@ -95,7 +95,6 @@ enum class EnvVarID {
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_RING_TERMINAL_OFFLOAD_DEPTH,  // Cross-ERISC terminal-copy queue depth
     TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
@@ -640,10 +639,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (telemetry disabled)
         // Usage: export TT_METAL_FABRIC_BW_TELEMETRY=1
         case EnvVarID::TT_METAL_FABRIC_BW_TELEMETRY: this->enable_fabric_bw_telemetry = true; break;
-
-        case EnvVarID::TT_METAL_FABRIC_RING_TERMINAL_OFFLOAD_DEPTH:
-            this->fabric_ring_terminal_offload_depth = std::stoi(value);
-            break;
 
         // TT_METAL_FABRIC_TELEMETRY
         // Enable fabric telemetry data collection (supports structured spec).

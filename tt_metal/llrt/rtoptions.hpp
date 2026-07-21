@@ -299,8 +299,6 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
-    uint32_t fabric_ring_terminal_offload_depth = 0;
-
     /// When true, topology mapping prefers the SAT backend (same rule as TT_TOPOLOGY_SOLVER_ENGINE / Auto in
     /// solve_topology_mapping). Set from env at RunTimeOptions construction.
     bool topology_mapping_use_sat_engine_ = false;
@@ -732,8 +730,6 @@ public:
 
     bool get_topology_mapping_use_sat_engine() const { return topology_mapping_use_sat_engine_; }
     void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
-
-    uint32_t get_fabric_ring_terminal_offload_depth() const { return fabric_ring_terminal_offload_depth; }
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }

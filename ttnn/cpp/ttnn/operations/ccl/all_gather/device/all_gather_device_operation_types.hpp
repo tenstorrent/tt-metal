@@ -22,10 +22,9 @@ enum class ReceiverL1NotifyMode : uint8_t { Fused, Split };
 enum class ReceiverL1CreditMode : uint8_t { PerSlot, Window, Pipelined };
 enum class BankOwnedRunPolicy : uint8_t { Divisor, MaxTail };
 
-// Test and attribution controls are read once when the operation arguments are
-// built. Keeping the resolved policy in AllGatherParams makes it structural:
-// changing an environment-controlled experiment cannot reuse a program that
-// was compiled for a different receiver protocol or kernel schedule.
+// Resolved automatic choices live in AllGatherParams so the program-cache key
+// cannot reuse a program compiled for a different receiver protocol or kernel
+// schedule.
 struct AllGatherReceiverPolicy {
     ReceiverL1TestMode test_mode = ReceiverL1TestMode::Auto;
     ReceiverL1StageMode stage_mode = ReceiverL1StageMode::Combined;
@@ -38,7 +37,7 @@ struct AllGatherReceiverPolicy {
     bool bank_owned_links = false;
     uint32_t bank_owned_coalesce_mask = 0;
     BankOwnedRunPolicy bank_owned_run_policy = BankOwnedRunPolicy::MaxTail;
-    // Experimental bank-interleaved receiver fan-out. Each link owns one
+    // Bank-interleaved receiver fan-out. Each link owns one
     // receiver core and independent slot ring per DRAM bank assigned to that
     // link, and sender batches rotate across those banks by run index.
     bool interleaved_bank_receivers = false;

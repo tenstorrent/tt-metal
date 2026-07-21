@@ -292,10 +292,8 @@ def _write_run_manifest(
         )
         mesh_override = os.environ.get("DS_PERF_MESH_SHAPE", "").strip()
         mesh_prefix = f"DS_PERF_MESH_SHAPE={mesh_override} " if mesh_override else ""
-        receiver_mode = os.environ.get("TTNN_ALL_GATHER_RECEIVER_L1_MODE", "auto")
         reproducer = (
-            f"{mesh_prefix}TTNN_ALL_GATHER_RECEIVER_L1_MODE={receiver_mode} "
-            f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} "
+            f"{mesh_prefix}DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} "
             f"DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} {command} "
             f"-k '{variant} and {scenario} and {attn_mode}'"
         )
@@ -318,7 +316,7 @@ def _write_run_manifest(
             },
             "build": {"so_mtime": so_mtime},
             "all_gather_receiver_l1": {
-                "mode": os.environ.get("TTNN_ALL_GATHER_RECEIVER_L1_MODE", "auto"),
+                "selection": "automatic",
                 "observed_program_count": receiver_program_count,
             },
             "command": reproducer,
@@ -786,12 +784,6 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         forwards.append(_profile_forward(mesh_device, lambda start=start: _one_forward(start)))
 
     receiver_program_count = _receiver_program_count(forwards)
-    expected_receiver = os.environ.get("TTNN_EXPECT_RECEIVER_L1")
-    if expected_receiver is not None:
-        assert expected_receiver in ("0", "1"), "TTNN_EXPECT_RECEIVER_L1 must be 0 or 1"
-        assert (receiver_program_count > 0) == (
-            expected_receiver == "1"
-        ), f"expected receiver path={expected_receiver}, observed {receiver_program_count} receiver programs"
 
     dur_col = "DEVICE KERNEL DURATION [ns]"  # kept for downstream compatibility (holds RT critical-path ns)
     frame = pd.concat([_programs_to_frame(pp, dur_col) for pp in forwards], ignore_index=True)
