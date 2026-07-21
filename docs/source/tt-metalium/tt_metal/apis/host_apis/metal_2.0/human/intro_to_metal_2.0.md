@@ -1,6 +1,7 @@
 # Introduction to Metal 2.0 Migration
 
 > **This is a human-facing document!**
+> (It's a WIP and a little messy right now, apologies!)
 >
 > If you are an AI agent, please refer to `../ai/shared/migration_guide.md` instead.
 >
@@ -36,7 +37,6 @@ Things to remember:
 6. [Design Principles](#design-principles)
 7. [TTNN Framework Integration](#ttnn-framework-integration)
 8. [Complete Migration Example](#complete-migration-example)
-9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -510,7 +510,7 @@ The `TensorAccessorArgs<N>()` lines, the manual `next_compile_time_args_offset()
 
 The Metal 2.0 host API declares kernel arguments by name; the kernel-side API retrieves them by name. This replaces the legacy positional `get_arg_val<uint32_t>(N)` style.
 
-**The only `#include` a porter adds to a kernel is `experimental/kernel_args.h`.** That pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`). The generated headers are auto-included by the build system before the kernel source — **do not** `#include` them yourself.
+On the kernel side, Metal 2.0 adds a single new include, `experimental/kernel_args.h`, which pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`). The `args::` / `dfb::` / `sem::` / `tensor::` namespaces are generated per-kernel from the host-side declarations and auto-included by the build system before the kernel source.
 
 Suppose the host declared:
 
@@ -611,7 +611,7 @@ Argument naming extends the named-binding ethos to scalar values:
 
 The `args::` namespace generated from a `KernelSpec`'s schema gives the kernel one uniform retrieval API: `get_arg(args::name)`. The CTA/RTA/CRTA distinction is a host-only concern.
 
-Legacy `ProgramDescriptor` offered a hybrid: positional `compile_time_args` plus named `named_compile_time_args`. Many recent ops (matmul among them) use the named half. Named CTAs port 1:1; positional CTAs require explicit naming during port — pick names that reflect what the kernel actually does with the value.
+Legacy `ProgramDescriptor` offered a hybrid: positional `compile_time_args` plus named `named_compile_time_args`. Many recent ops (matmul among them) use the named half. In Metal 2.0 every CTA is named — legacy named CTAs carry over directly, and legacy positional CTAs each become a named one.
 
 ---
 
@@ -650,7 +650,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 
 A Metal 2.0 factory **does not** construct the `Program` itself, nor call `SetProgramRunArgs` directly — those are the framework adapter's responsibilities. On a cache miss the framework builds the `Program` from the spec and applies the run args; on a cache hit it refreshes only the tensor bindings and skips the rebuild. A practical consequence of TTNN's caching: most parameters that *could* vary between calls are treated as immutable, and the cache is invalidated when they change; the actually-mutable surface is usually just the tensor identities.
 
-> **A note on tensor types.** A factory sits between two tensor-type universes: **`ttnn::Tensor`** (TTNN's PyTorch-like wrapper; always device-resident inside a factory) and **`tt::tt_metal::MeshTensor`** (Metalium's native device-tensor type, which the Metal 2.0 API speaks). Extract the `MeshTensor` from each input at the top via `.mesh_tensor()` and work with references throughout. (You may also see `tt::tt_metal::Tensor` — that's the *same type* as `ttnn::Tensor`, a refactoring artifact; write `ttnn::Tensor` in code you author.)
+> **A note on tensor types.** A factory sits between two tensor-type universes: **`ttnn::Tensor`** (TTNN's PyTorch-like wrapper; always device-resident inside a factory) and **`tt::tt_metal::MeshTensor`** (Metalium's native device-tensor type, which the Metal 2.0 API speaks). A `ttnn::Tensor`'s underlying `MeshTensor` is obtained via `.mesh_tensor()` (as in the skeleton above); the Metal 2.0 API operates on the `MeshTensor`.
 
 ---
 
