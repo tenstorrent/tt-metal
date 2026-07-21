@@ -140,20 +140,32 @@ host-side (input tilization/copy, latent readback, CPU sampling head), which now
   batch-padding needed for B=1). Decode is **bf16-only** (flash-decode requirement).
   Decode PCC (0.99972) matches prefill bf16 PCC (0.99972) → the KV path is numerically
   equivalent to the parallel forward, as expected for causal attention.
+- 2026-07-21: **Compiler-fusion alignment** (from `tt-xla/CLAUDE_XTTS_FORGE_FUSIONS.md`).
+  The tt-mlir optimizer's only real GPT fusions are (1) attention → SDPA and (2) head-merge
+  → `concatenate_heads`; `linear(+bias)` and `linear(activation="gelu")` are base lowering,
+  not optimizer fusions. Mapped onto our TTNN core:
+  - SDPA: already used (prefill `_attn` sdpa path + decode `_attn_decode`). We pass the full
+    `scale=1/√head_dim=0.125`; the compiler *splits* it into two `head_dim^(-1/4)` factors —
+    mathematically identical. We use `is_causal=True` (built-in mask) vs the compiler's
+    explicit additive `[B,1,S,kvS]` mask; PCC confirms equivalence for B=1.
+  - Head-merge: replaced the manual `permute`+`reshape` in `_attn` with
+    `ttnn.transformer.concatenate_heads` (`[B,nh,S,dh]→[B,S,n_embd]`).
+  - MLP: folded the separate `ttnn.gelu(Tanh)` into `ttnn.linear(..., activation="gelu")`;
+    the fused activation matches our tanh `gelu_new` at PCC ~0.9999993.
+  - **Not** applied: QKV-split fusion — the emitted opt-1 IR keeps the QKV split as raw
+    slice/reshape/permute (no `split_query_key_value_and_split_heads`), so we stay faithful.
+  - PCC unchanged after fusions (bf16 0.99971, manual/fp32 0.99994); wall-clock neutral
+    (traced decode 12.44 vs 12.37 ms/token) — the fused ops were already cheap vs matmul+SDPA.
 
 ## Known bugs
-- **`TTNNGPTDecoder` breaks when `max_seq` >> actual sequence length** (found 2026-07-17 via
-  the full-pipeline integration). Symptom: with a tight cache the decode matches the
-  reference (teacher-forced 96%+, PCC 0.9997), but with an oversized cache the output is
-  garbage — e.g. same emb/prompt gives 96% agreement at `max_seq=256` and **0%** at
-  `max_seq=736` (first generated code 81 → 405). Root cause: the non-traced decode uses
-  `scaled_dot_product_attention_decode(..., cur_pos=[int])`; the large unused/zero cache
-  region beyond `cur_pos` is not masked cleanly, and the error grows with the number of
-  unused slots. Our decode PCC test only used a tight `max_seq`, so it never caught this.
-  **Fix:** switch `TTNNGPTDecoder` to a device **`cur_pos_tensor`** (as `TTNNGPTTracedDecoder`
-  already does) instead of the Python-int `cur_pos`; re-add a decode PCC test with a large
-  `max_seq` to guard against regression. Until fixed, callers must size `max_seq` close to
-  the real sequence length.
+- **BUG-1 (FIXED 2026-07-20):** decode returned garbage when `max_seq` was an **odd number of
+  32-tiles** (e.g. 736 = 23 tiles → PCC 0.63; 256 = 8 tiles worked by luck). Root cause was
+  **not** the int-vs-tensor `cur_pos` (the earlier hypothesis — disproven: the non-traced and
+  traced decoders failed bit-for-bit identically, and `SDPAProgramConfig` didn't help): it is
+  an `scaled_dot_product_attention_decode` kernel bug that mis-handles a KV-cache whose length
+  is an odd tile count. Fix: round the allocated cache seq-len up to a multiple of 64 (even
+  tile count) in both decoders. Regression test `test_gpt_decode_pcc_large_odd_max_seq`
+  (requests 736). Full write-up in `CLAUDE_XTTS_BUGS.md` (BUG-1).
 
 ## Open questions / TODO
 - [x] **KV-cached decode loop** (2026-07-17): `TTNNGPTDecoder` extends `TTNNGPTCore`;
