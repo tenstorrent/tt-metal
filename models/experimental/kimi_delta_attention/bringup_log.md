@@ -167,8 +167,16 @@ any D, no L1-scratch. Result: `conv1d_op` PCC 1.0; layer PCC byte-identical to t
   fixture applies fabric via `set_fabric`. `reduce_scatter_minimal_async` needs 3 semaphores (own set);
   `all_gather_async` needs 2 — used all-gather+sum for the all-reduce. `test_fabric_probe.py` is a kept
   board-health probe.
-- **Next:** real SP sequence-sharding + cross-span state-scan (currently SP is redundant-replicated);
-  then perf harness (realtime profiler, warm/cold/long) before/after; then fused chunk kernel.
+- **Fused-op trigger FIRED (measured).** Single-device recurrent layer wall-clock: **T=256 → 3.84 s,
+  T=640 → 4.73 s per forward** (7–15 ms/token, host-dispatch-bound token loop). A cold scenario (11
+  forwards) ≈ 52 s; × warm/cold/long × before/after = minutes/run → **dev-loop-breaking.** Per the
+  user's rule ("if slow, implement fused op immediately"), the chunked/fused prefill op moves ahead of
+  the perf harness. Token-by-token recurrence is unusable for prefill perf.
+- **Next (re-ordered):** (1) chunked KDA prefill op — composed ttnn, matmul-based (collapse the
+  640-iter token loop to ~10 chunk-iters; mirror experimental `chunk_gated_delta_rule_seq`, adapt
+  scalar→diagonal gate), validate PCC vs torch `naive_chunk_kda`; (2) wire it into the mesh layer;
+  (3) real SP sequence-sharding + state-scan; (4) perf harness before/after vs the ROOFLINE targets.
+  A true single fused C++ kernel is a larger follow-up; the composed chunked op is the dev-loop unblock.
 
 ## Backlog
 
