@@ -30,7 +30,10 @@ void kernel_main() {
 
     constexpr uint32_t WRITE_BATCH = 8;
 
-    const auto d = TensorAccessor(dst_args, dst_addr, full_stick_size);
+    // ``full_stick_size`` is the logical row width, not necessarily the
+    // interleaved buffer's aligned physical page pitch.
+    const uint32_t destination_page_size = dst_args.get_aligned_page_size();
+    const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
 
     cb_wait_front(cb_out, tiles_per_core);
     uint32_t l1_read_addr = get_read_ptr(cb_out);
@@ -49,9 +52,11 @@ void kernel_main() {
         }
     }
 
-    if (writes_pending > 0) {
-        noc_async_write_barrier();
-    }
+    // ``noc_async_writes_flushed`` only drains the command queue; it does not
+    // prove the NOC has finished reading this CB page.  Always fence before the
+    // pop, including the exact-multiple-of-WRITE_BATCH case where
+    // writes_pending is zero.
+    noc_async_write_barrier();
 
     cb_pop_front(cb_out, tiles_per_core);
 }

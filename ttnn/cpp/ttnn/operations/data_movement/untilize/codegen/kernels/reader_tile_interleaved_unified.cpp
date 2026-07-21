@@ -10,7 +10,8 @@
 //
 // CT args:
 //   Named:      seq_id, cb_id, batch
-//   Positional: TensorAccessorArgs (starts at index 0)
+//   Positional: TensorAccessorArgs (starts at index 0), optionally followed by
+//               an authoritative source-page pitch override
 //
 // RT args (flat uint32_t array, read as struct via get_arg_addr):
 //   [0] src_addr    — source buffer address
@@ -19,6 +20,17 @@
 //   [3..] sequencer-specific params (see SeqArgs structs in sequencers.h)
 #include "api/dataflow/dataflow_api.h"
 #include "sequencers.h"
+
+// A caller may supply an authoritative source-pitch override via the named CT
+// arg "src_page_pitch" (0 ⇒ absent). Otherwise the accessor itself remains the
+// authority; deriving the pitch from a separate dtype table is wrong whenever
+// that table and the allocated buffer ABI diverge.
+//
+// The override is a NAMED compile-time arg rather than an optional positional
+// one appended after the TensorAccessorArgs ABI. Probing the positional arg
+// count (kernel_compile_time_args.size()) is not portable across JIT backends —
+// tt-emule's minimal jit_hw shim exposes get_(named_)compile_time_arg_val but no
+// kernel_compile_time_args array — so a named arg is the backend-agnostic ABI.
 
 // ── RT arg structs ──────────────────────────────────────────────────
 // Laid out to match the Python builder's RT arg packing exactly.
@@ -89,14 +101,15 @@ struct ArgsConcat : ArgsBase {
 
 // ── Transport loop (written ONCE) ───────────────────────────────────
 // For simple sequencers (identity, repeat, slice, permute, transpose_wh):
-//   each page = noc_async_read_tile(next_page, accessor, l1)
+//   each page = bounded noc_async_read(accessor.get_noc_addr(next_page), l1)
 // PAD and CONCAT have different loop bodies (conditional reads / 2 accessors).
 
 template <typename Accessor, typename State, typename NextFn>
 FORCE_INLINE void read_pages(
     uint32_t cb_id,
     uint32_t BATCH,
-    uint32_t page_size,
+    uint32_t cb_page_size,
+    uint32_t source_read_size,
     const Accessor& accessor,
     uint32_t num_pages,
     State& state,
@@ -107,8 +120,9 @@ FORCE_INLINE void read_pages(
         cb_reserve_back(cb_id, batch);
         uint32_t l1_addr = get_write_ptr(cb_id);
         for (uint32_t t = 0; t < batch; t++) {
-            noc_async_read_tile(next_fn(state), accessor, l1_addr);
-            l1_addr += page_size;
+            const uint32_t source_page = next_fn(state);
+            noc_async_read(accessor.get_noc_addr(source_page), l1_addr, source_read_size);
+            l1_addr += cb_page_size;
         }
         noc_async_read_barrier();
         cb_push_back(cb_id, batch);
@@ -124,25 +138,33 @@ void kernel_main() {
     constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_id");
     constexpr uint32_t BATCH = get_named_compile_time_arg_val("batch");
 
-    // Positional CT args: TensorAccessorArgs only (index 0)
+    // Positional CT args: TensorAccessorArgs at index 0. An optional source-pitch
+    // override is carried by the named CT arg "src_page_pitch" (0 ⇒ absent).
     constexpr auto src_args = TensorAccessorArgs<0>();
 
     // RT args base (common header)
     const auto* base = reinterpret_cast<const ArgsBase*>(get_arg_addr(0));
-    const uint32_t page_size = get_tile_size(cb_id);
-    const auto s = TensorAccessor(src_args, base->src_addr, page_size);
+    constexpr uint32_t source_page_size_override = get_named_compile_time_arg_val("src_page_pitch");
+    const uint32_t source_page_size =
+        source_page_size_override != 0 ? source_page_size_override : src_args.get_aligned_page_size();
+    const uint32_t cb_page_size = get_local_cb_interface(cb_id).fifo_page_size << cb_addr_shift;
+    // The accessor pitch controls source page addressing. The transfer itself
+    // must fit the destination CB slot; keep the independent authorities even
+    // when their current standard tile sizes happen to match.
+    const uint32_t source_read_size = source_page_size < cb_page_size ? source_page_size : cb_page_size;
+    const auto s = TensorAccessor(src_args, base->src_addr, source_page_size);
 
     // ── IDENTITY ────────────────────────────────────────────────────
     if constexpr (SEQ_ID == SEQ_IDENTITY) {
         auto st = seq_identity_init(base->start_id);
-        read_pages(cb_id, BATCH, page_size, s, base->num_pages, st, seq_identity_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, base->num_pages, st, seq_identity_next);
     }
 
     // ── REPEAT ──────────────────────────────────────────────────────
     else if constexpr (SEQ_ID == SEQ_REPEAT) {
         const auto* a = reinterpret_cast<const ArgsRepeat*>(get_arg_addr(0));
         auto st = seq_repeat_init(a->start_id, a->num_repeats, a->lower_pages, a->rep_dim_pages);
-        read_pages(cb_id, BATCH, page_size, s, a->num_pages, st, seq_repeat_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_repeat_next);
     }
 
     // ── REPEAT_INTERLEAVE (per-element AABB replication) ─────────────
@@ -150,7 +172,7 @@ void kernel_main() {
     else if constexpr (SEQ_ID == SEQ_REPEAT_INTERLEAVE) {
         const auto* a = reinterpret_cast<const ArgsRepeat*>(get_arg_addr(0));
         auto st = seq_repeat_interleave_init(a->start_id, a->num_repeats, a->lower_pages, a->rep_dim_pages);
-        read_pages(cb_id, BATCH, page_size, s, a->num_pages, st, seq_repeat_interleave_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_repeat_interleave_next);
     }
 
     // ── SLICE ───────────────────────────────────────────────────────
@@ -163,7 +185,7 @@ void kernel_main() {
         tt_l1_ptr uint32_t* id_per_dim = num_padded + nd;
 
         auto st = seq_slice_init(a->start_id, nd, num_unpadded, num_padded, id_per_dim);
-        read_pages(cb_id, BATCH, page_size, s, a->num_pages, st, seq_slice_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_slice_next);
     }
 
     // ── PERMUTE ─────────────────────────────────────────────────────
@@ -173,14 +195,14 @@ void kernel_main() {
         // seq_permute_init reads them from RT arg indices starting at &num_dims + 1
         uint32_t rt_data_start = 4;  // index of first element after ArgsPermute header
         auto st = seq_permute_init(a->num_dims, rt_data_start);
-        read_pages(cb_id, BATCH, page_size, s, a->num_pages, st, seq_permute_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_permute_next);
     }
 
     // ── TRANSPOSE_WH ────────────────────────────────────────────────
     else if constexpr (SEQ_ID == SEQ_TRANSPOSE_WH) {
         const auto* a = reinterpret_cast<const ArgsTransposeWh*>(get_arg_addr(0));
         auto st = seq_transpose_wh_init(a->start_id, a->start_ht, a->start_wt, a->Ht, a->Wt, a->HtWt);
-        read_pages(cb_id, BATCH, page_size, s, a->num_pages, st, seq_transpose_wh_next);
+        read_pages(cb_id, BATCH, cb_page_size, source_read_size, s, a->num_pages, st, seq_transpose_wh_next);
     }
 
     // ── PAD (conditional source / fill) ─────────────────────────────
@@ -191,7 +213,7 @@ void kernel_main() {
         // Fill pad tile in scratch CB
         {
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(a->cb_pad));
-            for (uint32_t i = 0; i < a->tile_bytes / 4 + 1; ++i) {
+            for (uint32_t i = 0; i < a->tile_bytes / 4; ++i) {
                 ptr[i] = a->packed_pad_val;
             }
         }
@@ -224,11 +246,11 @@ void kernel_main() {
             for (uint32_t t = 0; t < batch; t++) {
                 uint32_t src_page = seq_pad_next(st);
                 if (st.is_data) {
-                    noc_async_read_tile(src_page, s, l1_addr);
+                    noc_async_read(s.get_noc_addr(src_page), l1_addr, source_read_size);
                 } else {
                     noc_async_read(pad_noc_addr, l1_addr, a->tile_bytes);
                 }
-                l1_addr += a->tile_bytes;
+                l1_addr += cb_page_size;
             }
             noc_async_read_barrier();
             cb_push_back(cb_id, batch);
@@ -240,7 +262,7 @@ void kernel_main() {
     // Different loop body: two TensorAccessors.
     else if constexpr (SEQ_ID == SEQ_CONCAT) {
         const auto* a = reinterpret_cast<const ArgsConcat*>(get_arg_addr(0));
-        const auto s1 = TensorAccessor(src_args, a->src_addr_1, page_size);
+        const auto s1 = TensorAccessor(src_args, a->src_addr_1, source_page_size);
 
         auto st = seq_concat_init(a->start_tensor, a->start_tensor_id, a->page_id_0, a->page_id_1, a->ppb_0, a->ppb_1);
 
@@ -253,11 +275,11 @@ void kernel_main() {
                 uint32_t read_tensor = st.curr_tensor;
                 uint32_t src_page = seq_concat_next(st);
                 if (read_tensor == 0) {
-                    noc_async_read_tile(src_page, s, l1_addr);
+                    noc_async_read(s.get_noc_addr(src_page), l1_addr, source_read_size);
                 } else {
-                    noc_async_read_tile(src_page, s1, l1_addr);
+                    noc_async_read(s1.get_noc_addr(src_page), l1_addr, source_read_size);
                 }
-                l1_addr += page_size;
+                l1_addr += cb_page_size;
             }
             noc_async_read_barrier();
             cb_push_back(cb_id, batch);
