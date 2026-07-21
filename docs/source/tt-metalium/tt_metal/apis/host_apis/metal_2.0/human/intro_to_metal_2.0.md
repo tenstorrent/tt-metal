@@ -445,14 +445,14 @@ SetProgramRunArgs(program, params); // temporary free function
 Metal 2.0 replaces Circular Buffers (CBs) with Dataflow Buffers (DFBs). Notes:
 
 1. **Construction from local accessor name.** You construct your DFB from its local accessor, not a magic-number `cb_id`. The accessor is auto-generated from the host-side DFB binding and lives in the `dfb::` namespace.
-2. **`experimental::CircularBuffer`-compatible APIs.** The kernel-side DFB APIs are drop-in-compatible with the Device 2.0 `experimental::CircularBuffer` wrapper methods and semantics on Gen1.
+2. **`CircularBuffer`-compatible APIs.** The kernel-side DFB APIs are drop-in-compatible with the Device 2.0 `CircularBuffer` wrapper methods and semantics on Gen1.
 3. **Direct use in LLK compute APIs (WH/BH).** The `dfb::my_dfb` accessor constants implicitly convert to `uint32_t`, so on WH/BH you can pass them directly to LLK compute APIs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.) that take a raw CB id — no `.id` extraction needed.
 
-**Legacy (Device 2.0 `experimental::CircularBuffer`):**
+**Legacy (Device 2.0 `CircularBuffer`):**
 
 ```cpp
 constexpr uint32_t cb_id = 0;
-experimental::CircularBuffer cb(cb_id);
+CircularBuffer cb(cb_id);
 
 cb.reserve_back(num_pages);
 uint32_t write_ptr = cb.get_write_ptr();
@@ -460,12 +460,12 @@ uint32_t write_ptr = cb.get_write_ptr();
 cb.push_back(num_pages);
 ```
 
-**Metal 2.0 (`experimental::DataflowBuffer`):**
+**Metal 2.0 (`DataflowBuffer`):**
 
 ```cpp
 // Host-side DFB binding declared accessor_name = "my_dfb".
 // Auto-generated from that: constexpr DFBAccessor dfb::my_dfb;
-experimental::DataflowBuffer dfb(dfb::my_dfb);
+DataflowBuffer dfb(dfb::my_dfb);
 
 dfb.reserve_back(num_entries);
 uint32_t write_ptr = dfb.get_write_ptr();
@@ -473,7 +473,7 @@ uint32_t write_ptr = dfb.get_write_ptr();
 dfb.push_back(num_entries);
 ```
 
-> **Implicit sync (Quasar).** On Gen2, you can elide the explicit `reserve_back` / `push_back` (or `wait_front` / `pop_front`) pattern entirely — pass the DFB directly to `experimental::Noc::async_read` / `async_write` and the hardware handles the FIFO sync. On Gen1 this is a no-op; the explicit FIFO pattern shown above remains the way.
+> **Implicit sync (Quasar).** On Gen2, you can elide the explicit `reserve_back` / `push_back` (or `wait_front` / `pop_front`) pattern entirely — pass the DFB directly to `Noc::async_read` / `async_write` and the hardware handles the FIFO sync. On Gen1 this is a no-op; the explicit FIFO pattern shown above remains the way.
 
 ---
 
@@ -587,9 +587,9 @@ auto a = TensorAccessor(tensor::input);
 
 // DFB — legacy: magic-number CB index passed via CTA.
 constexpr uint32_t cb_id = 0;
-experimental::CircularBuffer cb(cb_id);
+CircularBuffer cb(cb_id);
 // Metal 2.0: named handle from the binding.
-experimental::DataflowBuffer cb(dfb::my_dfb);
+DataflowBuffer cb(dfb::my_dfb);
 
 // Semaphore — legacy: ID forwarded as an RTA.
 uint32_t sem_id = get_arg_val<uint32_t>(2);
