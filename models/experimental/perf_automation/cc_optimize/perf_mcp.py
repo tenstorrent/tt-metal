@@ -189,11 +189,22 @@ _MATERIAL_GAP_MS = float(os.environ.get("PERF_MCP_MATERIAL_GAP_MS", "0.25"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
 _MAX_TRACE_FIX_RETRIES = int(os.environ.get("PERF_MCP_MAX_TRACE_FIX_RETRIES", "3"))
 _TRACE_SAFE_HINT = (
-    "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY failure of the kernel, NOT a math error "
-    "(check_pcc validates math separately). Make it trace-safe and retry the SAME rung: warm up the "
-    "kernel once so its program is cached before capture; keep shapes/tile-counts/args static "
-    "(compile-time, no runtime host fallback inside the op); ensure it emits profiler zone markers so "
-    "capture completes. This is a fixable implementation issue, not an exhausted rung"
+    "the kernel WEDGED trace capture — a TRACE-COMPATIBILITY defect in the kernel's LIFECYCLE, NOT a "
+    "math error (check_pcc validates math). The compute body is usually fine; the wedge is that the op "
+    "recompiles or re-allocates INSIDE trace capture. Fix the lifecycle: (1) build the generic_op "
+    "ProgramDescriptor / ttl op ONCE per shape and cache+reuse it — do NOT rebuild or call generic_op "
+    "fresh each call; (2) allocate the output buffer ONCE and reuse the same handle — never ttnn.zeros a "
+    "new output per call; (3) use override_runtime_args on the cached program instead of baking "
+    "buffer_address() into a freshly-built descriptor; (4) warm up the op once BEFORE begin_trace_capture "
+    "so compilation never lands in the traced region. VALIDATE IN ISOLATION FIRST: author a single-op "
+    "trace test (build inputs once -> warm-up -> begin/end_trace_capture -> execute_trace -> assert PCC vs "
+    "the stock op), run it STANDALONE and fix until it traces clean + PCC-passes, THEN wire it into the "
+    "model and call measure_candidate ONCE. This is a fixable implementation issue, not an exhausted rung"
+)
+_ISOLATE_FIRST = (
+    " Before integrating, VALIDATE IN ISOLATION: author a standalone single-op trace test (warm-up + "
+    "begin/end_trace_capture + execute_trace + PCC vs the stock op), run it STANDALONE, and fix it there "
+    "cheaply until it traces clean; only then wire it into the model and measure_candidate ONCE."
 )
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)
@@ -590,7 +601,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                 return (
                     False,
                     "tt-lang",
-                    "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
+                    "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _ISOLATE_FIRST,
                 )
             # tt-lang toolchain unavailable (commonly a Python-version mismatch): DO NOT halt the run
             # on an un-actionable 'install-required' target. Skip the tt-lang rung and fall through to
@@ -607,7 +618,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             return (
                 False,
                 "cpp",
-                "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it",
+                "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it." + _ISOLATE_FIRST,
             )
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (

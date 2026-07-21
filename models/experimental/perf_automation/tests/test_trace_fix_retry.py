@@ -38,7 +38,15 @@ def test_wedged_ttlang_keeps_rung_open_with_fix_feedback(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
     done, rung, reason = ladder(_op(), "MatmulDeviceOperation", _att("tt-lang", 1, wedged=True))
     assert (not done) and rung == "tt-lang"
-    assert ("trace-fix 1/%d" % NT) in reason and "trace-safe" in reason
+    assert ("trace-fix 1/%d" % NT) in reason
+    assert "override_runtime_args" in reason and "ISOLATION" in reason and "cache+reuse" in reason
+
+
+def test_author_reason_instructs_isolation_first(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
+    _, rung, reason = ladder(_op(), "MatmulDeviceOperation", [])
+    assert rung == "tt-lang"
+    assert "ISOLATION" in reason and "STANDALONE" in reason
 
 
 def test_wedged_ttlang_advances_after_budget(monkeypatch):
@@ -64,7 +72,7 @@ def test_wedged_cpp_keeps_rung_open_with_fix_feedback(monkeypatch):
 def test_trace_compat_feedback_enriches_custom_rung(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_load_target", lambda: {"rung": "tt-lang"})
     out = perf_mcp._trace_compat_feedback("boom")
-    assert "boom" in out and "trace-safe" in out
+    assert "boom" in out and "ISOLATION" in out and "override_runtime_args" in out
 
 
 def test_trace_compat_feedback_passthrough_for_knob(monkeypatch):
