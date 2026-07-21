@@ -234,7 +234,7 @@ def load_manifest(manifest_path: Path = MANIFEST_PATH) -> dict:
     if not manifest_path.is_file():
         raise FileNotFoundError(
             f"Golden manifest not found at {manifest_path}. "
-            "Run: python models/experimental/vibevoice/download_golden_audios.py"
+            "Call ensure_golden_audios(download=True) to fetch golden audio."
         )
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -308,7 +308,6 @@ def ensure_golden_audios(
     elif missing:
         names = ", ".join(e.wav_filename for e in missing)
         raise FileNotFoundError(
-            f"Missing golden audio under {root}: {names}. "
-            "Run download_golden_audios.py or ensure_golden_audios(download=True)."
+            f"Missing golden audio under {root}: {names}. " "Call ensure_golden_audios(download=True) to fetch them."
         )
     return root.resolve()

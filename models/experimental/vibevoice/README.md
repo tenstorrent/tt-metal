@@ -21,7 +21,6 @@ export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
 ```
 vibevoice/
 ├── README.md
-├── conftest.py              # pytest: reference/ on PYTHONPATH
 ├── common/
 │   ├── config.py            # paths, HF repo id, transformers pin
 │   ├── model_utils.py       # resolve path + auto-download weights
@@ -34,7 +33,9 @@ vibevoice/
 │   ├── voices/              # from github .../demo/voices
 │   └── text/                # from github .../demo/text_examples
 ├── weights/                 # auto-downloaded HF checkpoint (gitignored content)
-├── tests/pcc/
+├── tests/
+│   ├── conftest.py            # pytest: reference/ on PYTHONPATH + shared fixtures
+│   └── pcc/
 │   ├── lm_pcc_common.py       # shared LM PCC helpers, probes, diagnostics
 │   ├── test_lm_prefill_pcc.py # prefill hidden-state PCC (+ ISL sweep)
 │   ├── test_lm_decode_pcc.py  # full-LM decode after prefill (+ diagnostics)
@@ -106,7 +107,7 @@ python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_
 
 Prefill and decode hidden-state PCC vs a **bf16 HuggingFace Qwen2** reference (`PCC >= 0.99`).
 Shared helpers live in `tests/pcc/lm_pcc_common.py`; fixtures (`vv_config`, `lm_state`) are in
-`conftest.py`.
+`tests/conftest.py`.
 
 **Regression vs diagnostic:** only tests marked **regression** assert `PCC >= 0.99` and fail CI
 when drift appears. **Diagnostic** tests print probes/reports and always pass pytest unless setup
