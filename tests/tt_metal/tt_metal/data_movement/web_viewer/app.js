@@ -3,229 +3,17 @@
 
 // ── Configuration ──────────────────────────────────────────────────
 
+const FETCH_YAML_FROM_GITHUB = true;
+const GITHUB_YAML_BRANCH = "ryanzhu/dm-web";
+const GITHUB_RAW_BASE =
+    `https://raw.githubusercontent.com/tenstorrent/tt-metal/${GITHUB_YAML_BRANCH}/tests/tt_metal/tt_metal/data_movement`;
+
 const DATA_BASE_PATH = "../data";
 const KNOWN_ARCHITECTURES = ["blackhole", "wormhole_b0"];
-const GROUPS_YAML_PATH = "../python/test_mappings/web_viewer_groups.yaml";
+const LOCAL_GROUPS_YAML_PATH = "../python/test_mappings/web_viewer_groups.yaml";
+const LOCAL_TEST_INFO_YAML_PATH = "../python/test_mappings/test_information.yaml";
 const GITHUB_BASE =
     "https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_metal/tt_metal/data_movement";
-
-const TEST_GROUPS = [
-    {
-        group: "One from One",
-        directory: "one_from_one",
-        tags: ["read", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "One from One Packet Sizes 2.0.csv" },
-            { name: "Virtual Channels", csv: "One from One Virtual Channels.csv" },
-        ],
-    },
-    {
-        group: "One to One",
-        directory: "one_to_one",
-        tags: ["write", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "One to One Packet Sizes 2.0.csv" },
-            { name: "Virtual Channels", csv: "One to One Virtual Channels.csv" },
-        ],
-    },
-    {
-        group: "One from All",
-        directory: "one_from_all",
-        tags: ["read", "unicast", "L1", "multi_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "One from All Packet Sizes 2.0.csv" },
-            { name: "Virtual Channels", csv: "One from All Virtual Channels 2.0.csv" },
-        ],
-    },
-    {
-        group: "One to All",
-        directory: "one_to_all",
-        tags: ["write", "unicast", "multicast", "L1", "multi_core"],
-        tests: [
-            { name: "Unicast Packet Sizes", csv: "One to All Unicast Packet Sizes 2.0.csv" },
-            { name: "Multicast Packet Sizes", csv: "One to All Multicast Packet Sizes 2.0.csv" },
-            { name: "Multicast Linked Packet Sizes", csv: "One to All Multicast Linked Packet Sizes 2.0.csv" },
-            { name: "Multicast Schemes (Loopback Disabled)", csv: "Multicast Schemes (Loopback Disabled).csv" },
-        ],
-    },
-    {
-        group: "One Packet",
-        directory: "one_packet",
-        tags: ["read", "write", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Read Sizes", csv: "One Packet Read Sizes 2.0.csv" },
-            { name: "Write Sizes", csv: "One Packet Write Sizes 2.0.csv" },
-        ],
-    },
-    {
-        group: "All to All",
-        directory: "all_to_all",
-        tags: ["write", "unicast", "L1", "multi_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "All to All Packet Sizes 2.0.csv" },
-            { name: "Grid Sweep Packet Sizes", csv: "All to All Grid Sweep Packet Sizes 2.0.csv" },
-        ],
-    },
-    {
-        group: "All from All",
-        directory: "all_from_all",
-        tags: ["read", "unicast", "L1", "multi_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "All from All Packet Sizes.csv" },
-            { name: "Grid Sweep Packet Sizes", csv: "All from All Grid Sweep Packet Sizes 2.0.csv" },
-        ],
-    },
-    {
-        group: "Multi Interleaved",
-        directory: "multi_interleaved",
-        tags: ["read", "write", "unicast", "DRAM", "multi_core"],
-        tests: [
-            { name: "Sizes", csv: "Multi Interleaved Sizes.csv" },
-            { name: "Read Sizes", csv: "Multi Interleaved Read Sizes.csv" },
-            { name: "Write Sizes", csv: "Multi Interleaved Write Sizes.csv" },
-            { name: "Grid Sweep Sizes", csv: "Multi Interleaved Grid Sweep Sizes.csv" },
-            { name: "Grid Sweep Read Sizes", csv: "Multi Interleaved Read Grid Sweep Sizes.csv" },
-            { name: "Grid Sweep Write Sizes", csv: "Multi Interleaved Write Grid Sweep Sizes.csv" },
-        ],
-    },
-    {
-        group: "Atomic Semaphore",
-        directory: "atomics",
-        tags: ["write", "unicast", "L1", "multi_core", "atomics"],
-        tests: [
-            { name: "Adjacent Bandwidth Sweep", csv: "Atomic Semaphore Adjacent Bandwidth Sweep.csv" },
-            { name: "Non Adjacent Bandwidth Sweep", csv: "Atomic Semaphore Non Adjacent Bandwidth Sweep.csv" },
-        ],
-    },
-    {
-        group: "Core Bidirectional",
-        directory: "core_bidirectional",
-        tags: ["read", "write", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Packet Sizes (Same Kernel)", csv: "Core Bidirectional Packet Sizes Same Kernel.csv" },
-            { name: "Packet Sizes (Different Kernels)", csv: "Core Bidirectional Packet Sizes Different Kernels.csv" },
-        ],
-    },
-    {
-        group: "Direct Write",
-        directory: "direct_write",
-        tags: ["write", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Performance Comparison", csv: "Inline Direct Write Performance Comparison.csv" },
-            { name: "Address Pattern", csv: "Inline Direct Write Address Pattern.csv" },
-        ],
-    },
-    {
-        group: "DRAM Neighbour",
-        directory: "dram_neighbour",
-        tags: ["read", "unicast", "DRAM", "multi_core"],
-        tests: [
-            { name: "Pages Sweep (Closest)", csv: "Number of Pages Sweep for DRAM Closest Neighbour.csv" },
-            { name: "Banks Sweep (Closest)", csv: "Number of Banks Sweep for DRAM Closest Neighbour.csv" },
-            { name: "Pages Sweep (Single Row)", csv: "Number of Pages Sweep for Single Row DRAM.csv" },
-            { name: "Pages Sweep (One Hop)", csv: "Number of Pages Sweep for DRAM One Hop.csv" },
-            { name: "Pages Sweep (Loop Back)", csv: "Number of Pages Sweep for DRAM Loop Back.csv" },
-        ],
-    },
-    {
-        group: "DRAM Sharded Read",
-        directory: "dram_sharded",
-        tags: ["read", "unicast", "DRAM", "multi_core"],
-        tests: [
-            { name: "Tile Numbers", csv: "DRAM Sharded Read Tile Numbers 2.0.csv" },
-            { name: "Bank Numbers", csv: "DRAM Sharded Read Bank Numbers 2.0.csv" },
-        ],
-    },
-    {
-        group: "DRAM Unary",
-        directory: "dram_unary",
-        tags: ["read", "write", "unicast", "DRAM", "single_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "DRAM Packet Sizes 2.0.csv" },
-        ],
-    },
-    {
-        group: "DRAM Interleaved",
-        directory: "interleaved",
-        tags: ["read", "write", "unicast", "DRAM", "multi_core"],
-        tests: [
-            { name: "Page Numbers", csv: "DRAM Interleaved Page Numbers.csv" },
-            { name: "Read Numbers", csv: "DRAM Interleaved Page Read Numbers.csv" },
-            { name: "Write Numbers", csv: "DRAM Interleaved Page Write Numbers.csv" },
-        ],
-    },
-    {
-        group: "L1 Interleaved",
-        directory: "interleaved",
-        tags: ["read", "write", "unicast", "L1", "multi_core"],
-        tests: [
-            { name: "Page Numbers", csv: "L1 Interleaved Page Numbers.csv" },
-            { name: "Read Numbers", csv: "L1 Interleaved Page Read Numbers.csv" },
-            { name: "Write Numbers", csv: "L1 Interleaved Page Write Numbers.csv" },
-        ],
-    },
-    {
-        group: "Loopback",
-        directory: "loopback",
-        tags: ["read", "write", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Packet Sizes", csv: "Loopback Packet Sizes.csv" },
-        ],
-    },
-    {
-        group: "Noc Estimator",
-        directory: "noc_estimator_tests",
-        tags: ["read", "write", "unicast", "multicast", "L1", "DRAM", "multi_core"],
-        tests: [
-            { name: "L1 One to One", csv: "Noc Estimator - L1 One to One.csv" },
-            { name: "L1 One from One", csv: "Noc Estimator - L1 One from One.csv" },
-            { name: "L1 One to All", csv: "Noc Estimator - L1 One to All.csv" },
-            { name: "L1 One from All", csv: "Noc Estimator - L1 One from All.csv" },
-            { name: "L1 All to All", csv: "Noc Estimator - L1 All to All.csv" },
-            { name: "L1 All from All", csv: "Noc Estimator - L1 All from All.csv" },
-            { name: "L1 One to Row", csv: "Noc Estimator - L1 One to Row.csv" },
-            { name: "L1 Row to Row", csv: "Noc Estimator - L1 Row to Row.csv" },
-            { name: "L1 One to Column", csv: "Noc Estimator - L1 One to Column.csv" },
-            { name: "L1 Column to Column", csv: "Noc Estimator - L1 Column to Column.csv" },
-            { name: "DRAM Sharded One from One", csv: "Noc Estimator - DRAM Sharded One from One.csv" },
-            { name: "DRAM Sharded All from All", csv: "Noc Estimator - DRAM Sharded All from All.csv" },
-            { name: "DRAM Interleaved One from All", csv: "Noc Estimator - DRAM Interleaved One from All.csv" },
-            { name: "DRAM Interleaved All from All", csv: "Noc Estimator - DRAM Interleaved All from All.csv" },
-            { name: "DRAM Sharded One to One", csv: "Noc Estimator - DRAM Sharded One to One.csv" },
-            { name: "DRAM Sharded All to All", csv: "Noc Estimator - DRAM Sharded All to All.csv" },
-            { name: "DRAM Interleaved One to All", csv: "Noc Estimator - DRAM Interleaved One to All.csv" },
-            { name: "DRAM Interleaved All to All", csv: "Noc Estimator - DRAM Interleaved All to All.csv" },
-        ],
-    },
-    {
-        group: "PCIe Read",
-        directory: "pcie_read_bw",
-        tags: ["read", "unicast", "DRAM", "single_core"],
-        tests: [
-            { name: "Bandwidth Sweep", csv: "PCIe Read Bandwidth Sweep.csv" },
-        ],
-    },
-    {
-        group: "PCIe Write",
-        directory: "pcie_write_bw",
-        tags: ["write", "unicast", "DRAM", "single_core"],
-        tests: [
-            { name: "Bandwidth Sweep", csv: "PCIe Write Bandwidth Sweep.csv" },
-        ],
-    },
-    {
-        group: "Transaction ID",
-        directory: "transaction_id",
-        tags: ["read", "write", "unicast", "L1", "single_core"],
-        tests: [
-            { name: "Read After Write", csv: "Transaction ID - Read After Write 2.0.csv" },
-            { name: "Read After Write (One Packet)", csv: "Transaction ID - Read After Write One Packet 2.0.csv" },
-            { name: "Read After Write (One Packet Stateful)", csv: "Transaction ID - Read After Write One Packet Stateful 2.0.csv" },
-            { name: "Write After Read", csv: "Transaction ID - Write After Read 2.0.csv" },
-            { name: "Write After Read (One Packet Stateful)", csv: "Transaction ID - Write After Read One Packet Stateful 2.0.csv" },
-        ],
-    },
-];
 
 const INTERNAL_COLUMNS = new Set([
     "Run Host ID",
@@ -274,6 +62,8 @@ const SERIES_COLORS = [
 
 // ── State ──────────────────────────────────────────────────────────
 
+let testGroups = [];
+
 let state = {
     selectedGroup: null,
     selectedTest: null,
@@ -291,15 +81,57 @@ let state = {
 
 // ── YAML Loading ──────────────────────────────────────────────────
 
-async function loadGroupsYaml() {
-    try {
-        const resp = await fetch(GROUPS_YAML_PATH);
-        if (!resp.ok) return;
-        const text = await resp.text();
-        state.groupsYaml = jsyaml.load(text);
-    } catch {
-        // YAML not available
+async function loadYamlConfig() {
+    const groupsPath = FETCH_YAML_FROM_GITHUB
+        ? `${GITHUB_RAW_BASE}/python/test_mappings/web_viewer_groups.yaml`
+        : LOCAL_GROUPS_YAML_PATH;
+    const testInfoPath = FETCH_YAML_FROM_GITHUB
+        ? `${GITHUB_RAW_BASE}/python/test_mappings/test_information.yaml`
+        : LOCAL_TEST_INFO_YAML_PATH;
+
+    const [groupsResp, testInfoResp] = await Promise.all([
+        fetch(groupsPath).catch(() => null),
+        fetch(testInfoPath).catch(() => null),
+    ]);
+
+    if (groupsResp && groupsResp.ok) {
+        state.groupsYaml = jsyaml.load(await groupsResp.text());
     }
+
+    if (testInfoResp && testInfoResp.ok) {
+        const testInfo = jsyaml.load(await testInfoResp.text());
+        testGroups = buildTestGroups(testInfo.tests, state.groupsYaml || {});
+    }
+}
+
+function buildTestGroups(tests, groups) {
+    const dirMap = new Map();
+
+    for (const [, info] of Object.entries(tests)) {
+        if (!info.web_viewer_name || !info.directory) continue;
+
+        if (!dirMap.has(info.directory)) {
+            dirMap.set(info.directory, []);
+        }
+        dirMap.get(info.directory).push({
+            name: info.web_viewer_name,
+            csv: info.name + ".csv",
+        });
+    }
+
+    const result = [];
+    for (const [directory, testList] of dirMap) {
+        const groupEntry = groups[directory];
+        result.push({
+            group: groupEntry ? groupEntry.name : directory,
+            directory,
+            tags: groupEntry && groupEntry.tags ? groupEntry.tags : [],
+            tests: testList,
+        });
+    }
+
+    result.sort((a, b) => a.group.localeCompare(b.group));
+    return result;
 }
 
 function renderFAQ(group) {
@@ -462,7 +294,7 @@ async function probeArchitectures(test) {
 
 function getAllTags() {
     const tags = new Set();
-    for (const group of TEST_GROUPS) {
+    for (const group of testGroups) {
         for (const tag of group.tags) {
             tags.add(tag);
         }
@@ -474,7 +306,7 @@ function getAllTags() {
 
 function getFilteredGroups() {
     const query = state.searchQuery.toLowerCase();
-    return TEST_GROUPS.filter((group) => {
+    return testGroups.filter((group) => {
         if (query) {
             const groupMatch = group.group.toLowerCase().includes(query);
             const testMatch = group.tests.some((t) =>
@@ -953,7 +785,7 @@ function setupYAxisListeners() {
 // ── Init ───────────────────────────────────────────────────────────
 
 async function init() {
-    await loadGroupsYaml();
+    await loadYamlConfig();
     renderTagChips();
     renderTestList();
 
