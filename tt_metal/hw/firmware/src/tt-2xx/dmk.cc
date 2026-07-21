@@ -49,13 +49,7 @@ uint32_t _start() {
     uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
     uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
-        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-            // DM0 (ISR) and DM1 (remapper) are firmware coordinators: they are often
-            // present in enables and share kernel_text_offset with user DMs, but never
-            // enter this entry point, so they must not be chosen as thread_0.
-            if (j == 0 || j == 1) {
-                continue;
-            }
+        for (uint32_t j = 2; j < MaxDMProcessorsPerCoreType; j++) {
             if ((launch_msg->kernel_config.enables & (1u << j)) &&
                 launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;
