@@ -16,7 +16,7 @@ solver sweep infrastructure); feeds the per-solution validation in
 wrapper in [#49519](https://github.com/tenstorrent/tt-metal/issues/49519).
 
 Related:
-[`README_generate_rank_bindings_all_solutions.md`](README_generate_rank_bindings_all_solutions.md) ·
+[`README_generate_rank_bindings.md`](README_generate_rank_bindings.md) ·
 [`../../ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md).
 
 ---

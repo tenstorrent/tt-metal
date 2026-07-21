@@ -175,7 +175,7 @@ TEST(GenerateRankBindingsHelpersTest, AllWritersProduceThreeFilesInTempDir) {
 }
 
 // -----------------------------------------------------------------------------
-// Multi-solution helpers (see README_generate_rank_bindings_all_solutions.md)
+// Multi-solution helpers (see README_generate_rank_bindings.md)
 // -----------------------------------------------------------------------------
 
 TEST(GenerateRankBindingsHelpersTest, SolutionHash_IsStableAndOrderIndependent) {
