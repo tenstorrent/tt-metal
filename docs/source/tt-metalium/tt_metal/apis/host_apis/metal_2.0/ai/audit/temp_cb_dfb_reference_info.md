@@ -74,7 +74,7 @@ KernelSpec writer{   // any other co-resident kernel; this binding is pure paper
 };
 
 // Kernel side (both cases) — unchanged from legacy; base-pointer access, no FIFO ops:
-experimental::DataflowBuffer dfb_scratch(dfb::scratch);
+DataflowBuffer dfb_scratch(dfb::scratch);
 // ... read / write via base pointer as before ...
 ```
 
