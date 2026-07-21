@@ -1,7 +1,7 @@
 # Yolov8s
 
 ## Platforms:
-Wormhole (n150, n300)
+Wormhole (n150, n300), Blackhole (p150)
 
 ## Introduction
 YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
@@ -13,7 +13,9 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
 ## How to Run
-Use the following command(s) to run the model:
+
+### Accuracy (PCC vs Torch)
+Runs TT-NN against the Ultralytics reference on a random **640x640** input (needs a device); asserts PCC ≥ 0.99:
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
 ```
@@ -30,6 +32,13 @@ pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
 ```
+
+#### Device (kernel) perf:
+- Reports on-device kernel throughput (`AVG DEVICE KERNEL SAMPLES/S`) via the Tracy profiler.
+```
+pytest --disable-warnings models/demos/yolov8s/tests/perf/test_perf_yolov8s.py::test_perf_device_yolov8s
+```
+> Needs a profiler-enabled build (the default for `build_metal.sh`; use `--disable-profiler` to turn off). The expected-perf threshold is Wormhole-calibrated with a hard assert, so on Blackhole the measured samples/s is still reported but the assertion may not match.
 
 ### Demo
 Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_type>` folder.

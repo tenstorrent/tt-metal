@@ -1,7 +1,7 @@
 # YOLOv8l
 
 ## Platforms
-Wormhole (n150, n300, multi-device / T3K).
+Wormhole (n150, n300, multi-device / T3K), Blackhole (p150).
 
 ## Introduction
 YOLOv8l is the large Ultralytics YOLOv8 detection variant run on TT-NN with trace + 2 CQ. Demo/perf flows support **640x640** and **1280x1280**.
@@ -27,11 +27,16 @@ Also available for **1280x1280**:
 pytest --disable-warnings models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l_1280
 ```
 
-### 2) Trace + 2 CQ performance smoke
-Single device (640/1280):
+### 2) Trace + 2 CQ performance smoke (throughput / FPS)
+Single device — the test runs **both** 640 and 1280; select one with `-k`:
 
 ```bash
+# both resolutions
 pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_inference
+# only 640x640
+pytest --disable-warnings "models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_inference" -k 640
+# only 1280x1280
+pytest --disable-warnings "models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_inference" -k 1280
 ```
 
 Multi-device / mesh (data-parallel, 1x8; effective batch 8):
@@ -39,6 +44,13 @@ Multi-device / mesh (data-parallel, 1x8; effective batch 8):
 ```bash
 pytest --disable-warnings models/demos/yolov8l/tests/perf/test_e2e_performant.py::test_run_yolov8l_trace_2cqs_dp_inference
 ```
+
+Device (kernel) perf — reports `AVG DEVICE KERNEL SAMPLES/S` via the Tracy profiler (needs a profiler-enabled build, the default for `build_metal.sh`):
+
+```bash
+pytest --disable-warnings models/demos/yolov8l/tests/perf/test_perf_yolov8l.py::test_perf_device_yolov8l
+```
+> Only `b1_1280` is enabled by default (uncomment `b1_640` in the test for 640x640). On Blackhole the expected-perf threshold is auto-relaxed via the `is_wormhole_b0()` guard, so it reports without a hard fail.
 
 ### 3) End-to-end demo (images on disk)
 Outputs under `models/demos/yolov8l/demo/runs/<model_type>/`.
