@@ -56,10 +56,17 @@ FORMATS = [
 # REINIT_MODE C++ selector: 0 = plain init, 1 = reinit_short, 2 = reinit_minimal.
 _REINIT_DEFINE = {"none": 0, "short": 1, "minimal": 2}
 
-# CLOBBER_OP C++ selector: op run between init and reinit to overwrite the reduce
-# MOP / addrmods, so the reinit path must actually restore them (reconfig-escape guard).
-# 0 = none, 1 = eltwise binary (ELWADD, clobbers the MOP + addrmods like matmul/sub_exp).
-_CLOBBER_DEFINE = {"none": 0, "eltwise": 1}
+# CLOBBER_OP C++ selector: op run between init and reinit to overwrite the reduce config,
+# so the reinit path must actually restore it (reconfig-escape guard).
+#   0 = none.
+#   1 = eltwise binary (ELWADD) init — clobbers ALL addrmods (incl. ADDR_MOD_3) + the MOP;
+#       paired with reinit_short (which reprograms the MOP and all addrmods).
+#   2 = scramble ADDR_MOD_1/2/6 only, preserving ADDR_MOD_3 + MOP; paired with reinit_minimal
+#       (which restores only 1/2/6 and relies on 3/MOP being intact, as matmul/sub_exp do).
+_CLOBBER_DEFINE = {"none": 0, "eltwise": 1, "minimal_safe": 2}
+
+# The clobber must match the reinit's restore contract, or the reduce hangs.
+_CLOBBER_FOR_REINIT = {"short": "eltwise", "minimal": "minimal_safe"}
 
 
 def _dest_acc(output_format):
@@ -205,7 +212,9 @@ def test_reduce_block_max_reinit(formats, block_ct_dim, reinit):
         pytest.skip(
             "compile-time reduce_block_max_row reinit is a Blackhole-only lib path"
         )
-    _run_reduce_block_max(formats, block_ct_dim, reinit=reinit, clobber="eltwise")
+    _run_reduce_block_max(
+        formats, block_ct_dim, reinit=reinit, clobber=_CLOBBER_FOR_REINIT[reinit]
+    )
 
 
 @parametrize(
@@ -221,5 +230,9 @@ def test_reduce_block_max_reinit_runtime(formats, block_ct_dim, reinit):
             "runtime reduce_block_max_row reinit_minimal is a Blackhole-only lib path"
         )
     _run_reduce_block_max(
-        formats, block_ct_dim, use_runtime=True, reinit=reinit, clobber="eltwise"
+        formats,
+        block_ct_dim,
+        use_runtime=True,
+        reinit=reinit,
+        clobber=_CLOBBER_FOR_REINIT[reinit],
     )

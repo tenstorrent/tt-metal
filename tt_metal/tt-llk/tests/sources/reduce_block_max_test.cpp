@@ -109,18 +109,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "params.h"
 
 // CLOBBER_OP selector: an op run between reduce init and reinit that overwrites the
-// reduce MOP / addrmods, so the reinit path must actually restore them (reconfig-escape
-// guard). 0 = none, 1 = eltwise binary init (reprograms addr_mods + MOP, exactly like the
-// matmul / sub_exp that precede the reduce in the SDPA inner loop).
-static inline void clobber_reduce_config(const ckernel::TensorShape& tensor_shape)
+// reduce config, so the reinit path must actually restore it (reconfig-escape guard).
+//   0 = none.
+//   1 = eltwise binary (ELWADD) init: reprograms ALL of ADDR_MOD_0..3 + the MOP — the
+//       full escape that reinit_short (reprogram MOP + reconfigure all addrmods) restores.
+//   2 = scramble ONLY ADDR_MOD_1/2/6, preserving ADDR_MOD_3 + the MOP — the narrow escape
+//       reinit_minimal expects (it restores 1/2/6 and relies on 3 + MOP being intact, as
+//       the real SDPA predecessors matmul / sub_exp / copy_tile_custom leave them).
+static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorShape& tensor_shape)
 {
     if constexpr (CLOBBER_OP == 1)
     {
-        // ELWADD reprograms the addr_mods + MOP (the reduce state the reinit restores).
         // ELWADD requires LoFi (HiFi is multiply-only); fidelity is irrelevant here since
         // the op is never executed, only its init reconfigures the clobbered registers.
         _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
             tensor_shape, 0 /* acc_to_dest */);
+    }
+    else if constexpr (CLOBBER_OP == 2)
+    {
+        // Overwrite ADDR_MOD_1/2/6 with plainly wrong (zeroed) values; leave ADDR_MOD_3 and
+        // the reduce MOP intact, matching reinit_minimal's contract. reinit_minimal must then
+        // restore 1/2/6 for the reduce to produce the correct row-max.
+        ckernel::addr_mod_t {.srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}}.set(
+            ckernel::ADDR_MOD_1);
+        ckernel::addr_mod_t {.srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}}.set(
+            ckernel::ADDR_MOD_2);
+        ckernel::addr_mod_t {.srca = {.incr = 0, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 0}}.set(
+            ckernel::ADDR_MOD_6);
     }
 }
 
