@@ -193,8 +193,10 @@ def test_generalized_moe_gate(ungrouped, topk, seed):
         f"({score_sum} vs {SCALE}): {dev_scores.tolist()}"
     )
 
-    # (3) The top score is the largest (descending sort) and strictly positive — the selection produced
-    # a well-formed ranked result rather than an all-zero / degenerate tile.
+    # (3) The first kept score is strictly positive — a well-formed selection, not an all-zero /
+    # degenerate tile. (The kept scores are NOT expected to be monotonic: they are the UNBIASED scores
+    # gathered at the experts the gate ranked by the BIAS-corrected key, so their unbiased values need
+    # not come out in descending order.)
     assert (
         dev_scores[0] > 0.0
     ), f"top normalized score is not positive: {dev_scores.tolist()}"

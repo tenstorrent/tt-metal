@@ -39,8 +39,9 @@ static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 // 32x32 bf16 tile with 4 faces; the gate operates on face 0.
 static constexpr std::uint32_t NUM_FACES = 4;
 
-// Raw uint16 device DataFormat underlying value (indices are copied bit-exact).
-static constexpr std::uint32_t UINT16_FORMAT = 9;
+// uint16 device DataFormat underlying value (indices are copied bit-exact); derived from the
+// named enum rather than hardcoded, matching the other index-carrying test sources (topk_test.cpp).
+static constexpr std::uint32_t UINT16_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
 
 #ifdef LLK_TRISC_UNPACK
 
