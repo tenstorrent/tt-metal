@@ -27,6 +27,8 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "perf.h"
+#include "profiler.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -46,65 +48,86 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
-    if constexpr (unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+        ZONE_SCOPED("INIT")
+        if constexpr (unpack_to_dest)
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
 
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-        }
-        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+            {
+                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+            }
+            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+            {
+                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+            }
+            else
+            {
+                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+            }
         }
         else
         {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
-    }
-    else
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    }
 
-    buffer_descriptor_u bd_val = {0};
+        buffer_descriptor_u bd_val = {0};
 
-    bd_val.f.l1_addr_16B = params.buffer_A[0] / 16;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
+        bd_val.f.l1_addr_16B = params.buffer_A[0] / 16;
+        bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
+        bd_val.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val.f.z_dim       = num_faces;
 
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+        td_val.buf_desc        = bd_val;
+        td_val.buf_desc_id     = buf_desc_id;
+        td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
-    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-    if constexpr (unpack_to_dest)
-    {
-        _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, BLOCK_CT_DIM);
-        for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
-        {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE);
-            _llk_unpack_dest_dvalid_section_done_<dest_sync>();
-        }
-    }
-    else
-    {
-        if constexpr (is_fp32_dest_acc_en)
-        {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
-        }
-        else
+        _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+        if constexpr (unpack_to_dest)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+                buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, BLOCK_CT_DIM);
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
-        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
+        else
+        {
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+            }
+            else
+            {
+                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+            }
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+                buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
+        }
+        PROFILER_SYNC();
+    }
+    {
+        ZONE_SCOPED("TILE_LOOP")
+        if constexpr (unpack_to_dest)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -125,31 +148,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     if constexpr (!unpack_to_dest)
     {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        {
+            ZONE_SCOPED("INIT")
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-        for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
-        {
-            for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+            DataFormat math_format     = static_cast<DataFormat>(formats.math);
+            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+            if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
             {
-                _llk_math_eltwise_unary_datacopy_(block_ct);
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
             }
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+            else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+            }
+            else
+            {
+                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+            }
+
+            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
+                num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+            PROFILER_SYNC();
+        }
+        {
+            ZONE_SCOPED("TILE_LOOP")
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+                    {
+                        _llk_math_eltwise_unary_datacopy_(block_ct);
+                    }
+                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                }
+            }
+            PROFILER_SYNC();
         }
     }
 }
@@ -227,39 +262,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    if constexpr (unpack_to_dest)
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-    }
-    else
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    }
-
-    tdma_descriptor_t tdma_desc;
-    std::uint32_t const buf_desc_id = 31;
-
-    buffer_descriptor_u bd_val = {0};
-
-    bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
-
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
-
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-
-    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
 
     // Single op, RAW addressing (inc_mode=0): input_addr = DEST row 0, l1_addr = first
     // 16 datums of the result buffer (absolute 16B addr). buffer_addr unused in raw mode.
     // Tests whether the raw input_addr/l1_addr path writes DEST row 0 -> L1 base.
+    // GPR descriptors + the pack_row lambda live at function scope so both the INIT config
+    // zone and the TILE_LOOP packing zone can see them (the profiler zone RAII objects only
+    // bound the measurement window, not variable lifetime).
     rv_pacr_gpr0_u g0     = {};
     g0.f.clr_dvalid       = 0;
     g0.f.input_addr       = 0;                         // first DEST row (source)
@@ -279,9 +289,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     g2.f.inc_mode       = 0; // RAW: use GPR0.input_addr / GPR0.l1_addr directly
     g2.f.inc_input_idx  = 0;
     g2.f.inc_output_idx = 0;
-
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
 
     // Multi-tile, row-major. FULL_CT_DIM tiles per tile-row; tiles 0..N-2 are packed
     // full-width (32 cols, all faces), the LAST tile is narrow (skip face 1 -> faces 0,2
@@ -317,35 +324,76 @@ void run_kernel(RUNTIME_PARAMETERS params)
         (void)rv_res;
     };
 
-    // PASS 1: narrow last tile FIRST. Column group g=0 (faces 0,2 -> cols 0-15) is always
-    // needed; column group g=1 (faces 1,3 -> cols 16-31) is only needed when the kept width
-    // exceeds 16. So skip faces 1,3 iff LAST_TILE_W_DATUMS <= 16 (reads only faces 0,2).
-    // Each op writes a full 16-datum face-row; when the kept width is not a multiple of 16
-    // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
-    // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
-    // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned: no spill).
-    constexpr bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
-    constexpr std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
-    for (std::uint32_t row = 0; row < last_row_end; row++)
     {
-        if (!last_needs_g1 && row == 16)
+        ZONE_SCOPED("INIT")
+        if constexpr (unpack_to_dest)
         {
-            row += 16; // width<=16: g=0 only -> skip faces 1,3 (rows 16-31) -> jump to face 2
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
         }
-        pack_row(last_t, row);
-    }
+        else
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
 
-    // PASS 2: full tiles 0..N-2 (all four faces, 32 cols each). These overwrite any spill
-    // the narrow tile left in the leading columns.
-    for (std::uint32_t t = 0; t < last_t; t++)
+        tdma_descriptor_t tdma_desc;
+        std::uint32_t const buf_desc_id = 31;
+
+        buffer_descriptor_u bd_val = {0};
+
+        bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
+        bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
+        bd_val.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val.f.z_dim       = num_faces;
+
+        tdma_desc.buf_desc        = bd_val;
+        tdma_desc.buf_desc_id     = buf_desc_id;
+        tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+
+        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
+        _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+        _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
+        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
+        PROFILER_SYNC();
+    }
     {
-        for (std::uint32_t row = 0; row < 64; row++)
+        ZONE_SCOPED("TILE_LOOP")
+        // PASS 1: narrow last tile FIRST. Column group g=0 (faces 0,2 -> cols 0-15) is always
+        // needed; column group g=1 (faces 1,3 -> cols 16-31) is only needed when the kept width
+        // exceeds 16. So skip faces 1,3 iff LAST_TILE_W_DATUMS <= 16 (reads only faces 0,2).
+        // Each op writes a full 16-datum face-row; when the kept width is not a multiple of 16
+        // (8 or 24) the upper spill datums of the boundary face-row land in the NEXT output
+        // row's leading columns -- packing the narrow tile before the full tiles lets tile 0
+        // overwrite that spill (for widths 16 and 32 the boundary write is face-aligned: no spill).
+        constexpr bool last_needs_g1         = (LAST_TILE_W_DATUMS > 16);
+        constexpr std::uint32_t last_row_end = last_needs_g1 ? 64u : 48u;
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            pack_row(t, row);
-        }
-    }
+            for (std::uint32_t row = 0; row < last_row_end; row++)
+            {
+                if (!last_needs_g1 && row == 16)
+                {
+                    row += 16; // width<=16: g=0 only -> skip faces 1,3 (rows 16-31) -> jump to face 2
+                }
+                pack_row(last_t, row);
+            }
 
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            // PASS 2: full tiles 0..N-2 (all four faces, 32 cols each). These overwrite any spill
+            // the narrow tile left in the leading columns.
+            for (std::uint32_t t = 0; t < last_t; t++)
+            {
+                for (std::uint32_t row = 0; row < 64; row++)
+                {
+                    pack_row(t, row);
+                }
+            }
+
+            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

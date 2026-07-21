@@ -26,9 +26,11 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -36,7 +38,9 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LAST_TILE_W_DATUMS,
+    LOOP_FACTOR,
     NUM_FACES,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -96,8 +100,21 @@ NARROW_RV_FORMATS = input_output_formats(
 
 
 @pytest.mark.quasar
-@parametrize(formats=NARROW_RV_FORMATS, last_tile_width=LAST_TILE_WIDTHS)
-def test_pack_untilize_narrow_rv_quasar(formats, last_tile_width):
+@parametrize(
+    formats=NARROW_RV_FORMATS,
+    last_tile_width=LAST_TILE_WIDTHS,
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
+)
+def test_pack_untilize_narrow_rv_quasar(
+    formats,
+    last_tile_width,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
+):
     dest_acc = DestAccumulation.No
     dest_sync_mode = DestSync.Half
     input_dimensions = INPUT_DIMS
@@ -111,6 +128,48 @@ def test_pack_untilize_narrow_rv_quasar(formats, last_tile_width):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+
+    num_faces = 4
+
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    # Shared config across the correctness (TestConfig) and perf (PerfConfig) paths.
+    # LOOP_FACTOR repeats the steady-state unpack/math/pack work; it is 1 for correctness
+    # (single untilized matrix, identical to the original behavior) and larger for perf.
+    test_config_kwargs = {
+        "test_name": "sources/quasar/pack_untilize_narrow_rv_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
+            generate_input_dim(input_dimensions, input_dimensions),
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
+            DEST_SYNC(dest_sync_mode),
+            UNPACKER_ENGINE_SEL(),
+            TEST_FACE_DIMS(),
+            NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
+            LAST_TILE_W_DATUMS(last_tile_width),
+            LOOP_FACTOR(loop_factor),
+        ],
+        "runtimes": [],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_A,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+        ),
+        "unpack_to_dest": False,
+        "dest_acc": dest_acc,
+    }
+
+    if is_perf:
+        PerfConfig(run_types=run_types, **test_config_kwargs).run(perf_report)
+        return
 
     # Full untilize of the NUM_TILES-wide input (32 rows x NUM_TILES*32 cols, row-major).
     # The device output is the same row-major layout but the LAST tile keeps only its
@@ -131,34 +190,12 @@ def test_pack_untilize_narrow_rv_quasar(formats, last_tile_width):
     )
     narrow_len = TILE_HEIGHT * matrix_w
 
-    num_faces = 4
     configuration = TestConfig(
-        "sources/quasar/pack_untilize_narrow_rv_quasar_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(dest_sync_mode),
-            UNPACKER_ENGINE_SEL(),
-            TEST_FACE_DIMS(),
-            NUM_FACES(num_faces),
-            TILE_COUNT(tile_cnt_A),
-            LAST_TILE_W_DATUMS(last_tile_width),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_A,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-        ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
     )
 
     res_from_L1 = configuration.run().result

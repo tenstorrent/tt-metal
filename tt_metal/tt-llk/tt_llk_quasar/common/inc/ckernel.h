@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#define TT_ALWAYS_INLINE    inline __attribute__((always_inline))
-#define NOINLINE            __attribute__((noinline))
-#define NOCLONE             __attribute__((noclone))
-#define tt_l1_ptr           __attribute__((rvtt_l1_ptr))
-#define tt_reg_ptr          __attribute__((rvtt_reg_ptr))
+#define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define NOINLINE         __attribute__((noinline))
+#define NOCLONE          __attribute__((noclone))
+#define tt_l1_ptr        __attribute__((rvtt_l1_ptr))
+#define tt_reg_ptr       __attribute__((rvtt_reg_ptr))
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
@@ -37,10 +37,10 @@ constexpr std::uint8_t TENSIX_PERF_SEMAPHORE = p_stall::SEMAPHORE_2;
 constexpr std::uint8_t MATH_SEMAPHORE        = 1;
 constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 32; // base address for semaphores in PC buffer. FIXME: must be kept in sync with SEM_COUNT parameter... ugly...
 constexpr std::uint8_t STREAM_SEMAPHORE      = 5;  // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE                = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t PARAM_ITERATIONS                       = 0;
-constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE           = p_stall::SEMAPHORE_6;
-constexpr std::uint8_t PACK_STREAM_SEMAPHORE                  = 6;
+constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
+constexpr std::uint8_t PARAM_ITERATIONS        = 0;
+constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE = p_stall::SEMAPHORE_6;
+constexpr std::uint8_t PACK_STREAM_SEMAPHORE        = 6;
 
 volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
 volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;
@@ -98,6 +98,14 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
     p_reg[0]                                 = data;
 }
 
+inline std::uint64_t read_wall_clock()
+{
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
+    std::uint32_t timestamp_low     = t6dbg->WALL_CLOCK_0;
+    std::uint32_t timestamp_high    = t6dbg->WALL_CLOCK_1_AT;
+    return (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
+}
+
 //
 //
 // inline void wait_math_semaphores()
@@ -151,6 +159,11 @@ inline void tensix_sync()
 
     // Now read -- this read will block until we're idle
     *fooptr = pc_buf_base[1];
+}
+
+inline void invalidate_data_cache()
+{
+    asm volatile("fence" ::: "memory");
 }
 
 inline void mop_sync()
@@ -293,7 +306,7 @@ template <std::uint32_t bitmask>
 inline void set_ttsync_enables(std::uint32_t thread_id = 0xdeadface)
 {
     static_assert((bitmask & ~TRACK_ALL) == 0, "The given bitmask targets bits outside the allowable range");
-    auto t6dbg = RISCV_DEBUG_REGS;
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
 
     if (thread_id > 3)
     {
