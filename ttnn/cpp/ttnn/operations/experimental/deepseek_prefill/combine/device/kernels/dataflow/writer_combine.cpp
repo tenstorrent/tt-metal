@@ -266,11 +266,17 @@ void kernel_main() {
 
     DPRINT_COMBINE("Fabric setup complete\n");
 
-#ifndef FABRIC_2D
     // [debug] Open the detailed flow-control logging window on each connected eth router. window_id =
     // 100 + chip*10 + sender_index so a dumped trace file ties back to this sender without host-side mapping.
-    // FABRIC_1D only: uses the direction-array connections (the FABRIC_2D path is not instrumented).
     const uint32_t combine_window_id = 100 + src_chip_id * 10 + combine_sender_index;
+#ifdef FABRIC_2D
+    // 2D: connections live in the RoutingPlaneConnectionManager; instrument every active connection's router.
+    for (uint32_t i = 0; i < fabric_connections.active_count(); i++) {
+        auto& edm_sender = fabric_connections.get(i).sender;
+        tt::tt_fabric::start_detailed_logging(edm_sender.edm_noc_x, edm_sender.edm_noc_y, combine_window_id);
+    }
+#else
+    // 1D: connections live in the direction-indexed array.
     for (uint32_t d = 0; d < 4; d++) {
         if (directions[d]) {
             tt::tt_fabric::start_detailed_logging(
@@ -366,9 +372,17 @@ void kernel_main() {
     // so the exit-sem signal cannot reach peers ahead of the last data writes.
     noc_async_write_barrier();
 
-#ifndef FABRIC_2D
     // [debug] Close the detailed logging window on each connected eth router (after the barrier above, so the
-    // last data packet has departed L1). The router finalizes its trace to DRAM on seeing this.
+    // last data packet has departed L1). The router finalizes its trace to DRAM on seeing this. Mirrors the
+    // open above; the connections are still live here (closed further below).
+#ifdef FABRIC_2D
+    // 2D: connections live in the RoutingPlaneConnectionManager; instrument every active connection's router.
+    for (uint32_t i = 0; i < fabric_connections.active_count(); i++) {
+        auto& edm_sender = fabric_connections.get(i).sender;
+        tt::tt_fabric::stop_detailed_logging(edm_sender.edm_noc_x, edm_sender.edm_noc_y);
+    }
+#else
+    // 1D: connections live in the direction-indexed array.
     for (uint32_t d = 0; d < 4; d++) {
         if (directions[d]) {
             tt::tt_fabric::stop_detailed_logging(fabric_connections[d].edm_noc_x, fabric_connections[d].edm_noc_y);
