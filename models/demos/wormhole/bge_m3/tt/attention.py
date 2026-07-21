@@ -328,9 +328,10 @@ class BgeM3Attention(LightweightModule):
             and head_fold
             and sdpa_mask is None
             and sdpa_scale == 1.0
-            and tuple(q.shape) == (6, 32, 4096, 64)
-            and tuple(k.shape) == (6, 16, 8192, 64)
-            and tuple(v.shape) == (6, 16, 8192, 64)
+            and tuple(q.shape)[1:] == (32, 4096, 64)
+            and tuple(k.shape)[1:] == (16, 8192, 64)
+            and tuple(v.shape)[1:] == (16, 8192, 64)
+            and tuple(q.shape)[0] == tuple(k.shape)[0] == tuple(v.shape)[0]
             and q.dtype == ttnn.bfloat8_b
             and k.dtype == ttnn.bfloat4_b
             and v.dtype == ttnn.bfloat8_b
@@ -348,7 +349,10 @@ class BgeM3Attention(LightweightModule):
             # random softmax — real activations have flatter softmax that BF8
             # score quantization destroys. q256/k2048 hits 21.48ms/call but only
             # via BF8 score (bf16-score q256 OOMs), so it is not shippable.
-            _ecfg = EncoderSDPAConfig(fp32_dest_acc_en=False)
+            # batch = runtime local batch (q.shape[0]); work-split is batch-general
+            # so the JIT SDPA fires for any DP batch (e.g. B3/chip in 4-chip DP),
+            # not just B6. Fixes the stock B3 chunking anomaly (804->~565ms).
+            _ecfg = EncoderSDPAConfig(batch=int(q.shape[0]), fp32_dest_acc_en=False)
             context = bge_encoder_sdpa_experimental(q, k, v, output_mem_config=self.config.score_memcfg, config=_ecfg)
         else:
             context = ttnn.transformer.scaled_dot_product_attention(
