@@ -376,6 +376,7 @@ ProgramDescriptor build_ring_program_descriptor(
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     std::vector<uint32_t> reader_ct = common_ct;
+    reader_ct.push_back(1u);  // fused_ring on
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
@@ -407,10 +408,8 @@ ProgramDescriptor build_ring_program_descriptor(
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
 
-    KernelDescriptor::Defines reader_defines;
-    reader_defines.emplace_back("FUSED_RING", "1");  // enables the reader's fine-grained per-band all-gather gate
-
     std::vector<uint32_t> writer_ct = common_ct;
+    writer_ct.push_back(1u);  // fused_ring on
     const uint32_t out_elem_bytes = out.element_size();
     writer_ct.push_back(T * out_elem_bytes);  // row-major page = one output row (no pooling)
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
@@ -422,27 +421,25 @@ ProgramDescriptor build_ring_program_descriptor(
     compute_ct.push_back(1u);  // apply_relu (DSA)
     compute_ct.push_back(0u);  // fuse_single off
     compute_ct.push_back(0u);  // fused_stream_k off
+    compute_ct.push_back(1u);  // fused_ring on
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};
     reader_kernel.kernel_source = kdir + "reader_indexer_score.cpp";
     reader_kernel.core_ranges = core_ranges;
     reader_kernel.compile_time_args = reader_ct;
-    reader_kernel.defines = reader_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source = kdir + "writer_indexer_score.cpp";
     writer_kernel.core_ranges = core_ranges;
     writer_kernel.compile_time_args = writer_ct;
-    writer_kernel.defines = {{"FUSED_RING", "1"}};  // read the reordered band-visit perm from rt args
     writer_kernel.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source = kdir + "compute_indexer_score.cpp";
     compute_kernel.core_ranges = core_ranges;
     compute_kernel.compile_time_args = compute_ct;
-    compute_kernel.defines = {{"FUSED_RING", "1"}};  // read the reordered band-visit perm from rt args
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

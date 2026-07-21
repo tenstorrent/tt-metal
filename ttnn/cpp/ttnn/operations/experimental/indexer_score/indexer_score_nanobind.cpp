@@ -238,15 +238,15 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("cluster_axis"),
         nb::arg("topology"),
         nb::arg("num_links") = 1,
-        nb::arg("ag_sub_device_id") = std::nullopt,
-        nb::arg("chunk_start_idx") = std::nullopt,
+        nb::arg("ag_sub_device_id") = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("program_config") = IndexerScoreProgramConfig{},
-        nb::arg("compute_kernel_config") = std::nullopt,
-        nb::arg("cache_batch_idx") = std::nullopt,
-        nb::arg("kv_len") = std::nullopt,
-        nb::arg("seq_subshard_axis") = std::nullopt,
-        nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("kv_len") = nb::none(),
+        nb::arg("seq_subshard_axis") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

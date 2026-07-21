@@ -300,9 +300,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t gate_scale_bits = (static_cast<uint32_t>(gate_scale_bf16) << 16) | gate_scale_bf16;
 
     std::vector<uint32_t> reader_ct = common_ct;
+    reader_ct.push_back(0u);  // fused_ring off
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);  // q placeholder when synthesize_gate
+    // Keep the reader CT layout identical to the fused factory. This accessor is unused when fused_ring is off.
+    tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     // multicast: on/off per direction (q_mcast_on covers q and w) then the 6 semaphore ids.
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
@@ -336,6 +339,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
 
     std::vector<uint32_t> writer_ct = common_ct;
+    writer_ct.push_back(0u);                             // fused_ring off
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
     const uint32_t out_row_elems = block_pool ? nblocks : T;
@@ -351,6 +355,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // bfp8 q falls back). GLM/DSv32 and bfp8-q MSA fall back, byte-identical.
     compute_ct.push_back(fuse_single ? 1u : 0u);
     compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
+    compute_ct.push_back(0u);                        // fused_ring off
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(

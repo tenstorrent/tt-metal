@@ -180,6 +180,34 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         Sq,
         chunk_local);
 }
+
+// Semaphore addresses are hashed, but different mesh devices can allocate the same L1 addresses. Re-check
+// ownership on both misses and hits so foreign fused inputs cannot cache-hit and access unrelated device memory.
+void validate_fused_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!attrs.fused_ring.has_value()) {
+        return;
+    }
+    TT_FATAL(t.k_local.has_value(), "indexer_score fused: k_local (all-gather input) is required");
+    const auto& k_local = *t.k_local;
+    TT_FATAL(
+        k_local.storage_type() == StorageType::DEVICE && k_local.buffer() != nullptr,
+        "indexer_score fused: k_local must be allocated on device");
+    TT_FATAL(
+        k_local.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "indexer_score fused: k_local must use interleaved memory");
+    TT_FATAL(k_local.device() == t.q.device(), "indexer_score fused: k_local must be on the same mesh device as q");
+
+    const auto& semaphores = attrs.fused_ring->ag_semaphore;
+    TT_FATAL(
+        semaphores.size() >= 2,
+        "indexer_score fused: ag_multi_device_global_semaphore needs >= 2 global semaphores (got {})",
+        semaphores.size());
+    for (const auto& semaphore : semaphores) {
+        TT_FATAL(
+            semaphore.device() == t.q.device(),
+            "indexer_score fused: all-gather semaphores must belong to the same mesh device as q");
+    }
+}
 }  // namespace
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
@@ -198,6 +226,26 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     // apply_relu / num_groups / block_size pick the compile-time kernel path, so they MUST be hashed (else
     // DSA vs MSA, or pooled vs unpooled, would collide). Hash via the SP/TP accessors so the key is identical
     // to the pre-consolidation (cluster_axis, seq_subshard_axis) form.
+    // The fused descriptor embeds the AG semaphore addresses in worker runtime arguments, while num_links,
+    // topology, and sub-device selection shape worker allocation/routing. The fused override only rebuilds
+    // consumer kernels, so all of that state must participate in the cache key to prevent a stale AG program.
+    std::vector<uint32_t> fused_semaphore_addresses;
+    uint32_t fused_num_links = 0;
+    ttnn::ccl::Topology fused_topology = ttnn::ccl::Topology::Linear;
+    bool fused_has_sub_device = false;
+    uint32_t fused_sub_device = 0;
+    if (attrs.fused_ring.has_value()) {
+        const auto& fused = *attrs.fused_ring;
+        fused_num_links = fused.num_links;
+        fused_topology = fused.topology;
+        fused_has_sub_device = fused.ag_sub_device_id.has_value();
+        fused_sub_device = fused_has_sub_device ? static_cast<uint32_t>(**fused.ag_sub_device_id) : 0u;
+        fused_semaphore_addresses.reserve(fused.ag_semaphore.size());
+        for (const auto& semaphore : fused.ag_semaphore) {
+            fused_semaphore_addresses.push_back(static_cast<uint32_t>(semaphore.address()));
+        }
+    }
+
     return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
         attrs.apply_relu,
         attrs.num_groups,
@@ -217,9 +265,14 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
-        // Fused ring selects a different program factory + the reader's FUSED_RING binary, so it MUST be hashed
+        // Fused ring selects a different program factory and compile-time kernel paths, so it MUST be hashed
         // (else a fused and an unfused dispatch with otherwise-identical shapes would collide on one program).
         attrs.has_fused_ring(),
+        fused_num_links,
+        fused_topology,
+        fused_has_sub_device,
+        fused_sub_device,
+        fused_semaphore_addresses,
         tensor_args);
 }
 
@@ -228,6 +281,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     // chunk_start, cache slot, kv_len are hash-excluded runtime values -> re-checked on hits.
     validate_runtime_values(attrs, tensor_args);
     validate_chunk_start(attrs, tensor_args);
+    validate_fused_runtime_values(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -259,16 +313,13 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_static(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
+    validate_fused_runtime_values(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
     // K shard k_local [B,1,sll,D] (the all-gather INPUT), single-head, matching head dim, tile-aligned.
     if (attrs.has_fused_ring()) {
         const auto& fused = *attrs.fused_ring;
-        TT_FATAL(tensor_args.k_local.has_value(), "indexer_score fused: k_local (all-gather input) is required");
         const auto& kl = *tensor_args.k_local;
-        TT_FATAL(
-            kl.storage_type() == StorageType::DEVICE && kl.buffer() != nullptr,
-            "indexer_score fused: k_local must be allocated on device");
         const auto& kls = kl.logical_shape();
         const auto& ks = k.logical_shape();
         TT_FATAL(ks.rank() == 4, "indexer_score fused: gathered k must be rank 4");  // guard before indexing ks below
@@ -295,16 +346,15 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
             kls[2]);
         const uint32_t ring_size = program::ring_size_for(attrs, q);  // shared with the fused factory
         TT_FATAL(
+            ring_size <= 32,
+            "indexer_score fused: ring_size {} exceeds the reader's maximum supported ring size 32",
+            ring_size);
+        TT_FATAL(
             ks[2] == ring_size * kls[2],
             "indexer_score fused: gathered k seq {} must equal ring_size ({}) * k_local seq ({})",
             ks[2],
             ring_size,
             kls[2]);
-        // The all-gather helper reads two direction semaphores (forward/backward); require both present.
-        TT_FATAL(
-            fused.ag_semaphore.size() >= 2,
-            "indexer_score fused: ag_multi_device_global_semaphore needs >= 2 global semaphores (got {})",
-            fused.ag_semaphore.size());
         // Only Linear/Ring assign non-zero gather targets; other topologies would leave the reader's per-band
         // gate waiting on semaphores that never advance (hang).
         TT_FATAL(

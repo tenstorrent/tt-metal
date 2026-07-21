@@ -22,7 +22,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
-#include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
+#include "indexer_score_common.hpp"                             // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
 
 // qk subblock height (head rows per DEST pass).
@@ -40,6 +40,8 @@ constexpr bool apply_relu = get_compile_time_arg_val(num_common_ct_args + 3) != 
 constexpr bool fuse_single = get_compile_time_arg_val(num_common_ct_args + 4) != 0;
 // Fused + no mcast: stream k (waited incrementally in the matmul). Fused + mcast: k is one block, waited whole.
 constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5) != 0;
+// Fused ring visits bands in the arrival-order permutation supplied in runtime args.
+constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -465,13 +467,12 @@ void kernel_main() {
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         const uint32_t group = row_group0 + phase * group_stride;
         for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
-#ifdef FUSED_RING
-            // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to reader/writer
-            // so the cb_k / cb_out FIFOs stay in lockstep. Permutation offsets at rt slots 10.. (see factory).
-            const uint32_t band = get_arg_val<uint32_t>(10 + band_i);
-#else
-            const uint32_t band = band_i;
-#endif
+            uint32_t band = band_i;
+            if constexpr (fused_ring_enabled) {
+                // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to
+                // reader/writer so the cb_k / cb_out FIFOs stay in lockstep. Permutation starts at rt slot 10.
+                band = get_arg_val<uint32_t>(10 + band_i);
+            }
             if constexpr (stream_heads) {
                 if (band >= num_bands) {
                     drain_phantom_band_q();  // q-mcast rendezvous only; no compute/output
@@ -519,7 +520,8 @@ void kernel_main() {
                                 k.wait_front(c_end * head_dim_tiles);  // streamed: wait k cols [0, c_end)
                             }
                             for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(head_base, r, c, n, r * k_tiles_per_unit + c);
+                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(
+                                    head_base, r, c, n, r * k_tiles_per_unit + c);
                             }
                         }
                     }
