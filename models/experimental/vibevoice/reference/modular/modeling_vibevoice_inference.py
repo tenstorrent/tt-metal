@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union, Callable
 from tqdm import tqdm
+import inspect
 import torch
 import torch.nn as nn
 
@@ -126,8 +127,13 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
         """
         Tie the weights between the input embeddings and the output embeddings.
         """
-        # Tie lm_head.weight to language_model.embed_tokens.weight
-        if not getattr(self.config, "tie_word_embeddings", False):
+        # Tie lm_head.weight to language_model.embed_tokens.weight. The authoritative flag is on
+        # decoder_config (the checkpoint omits lm_head.weight precisely because it is tied); the
+        # top-level config.tie_word_embeddings is unset (None) and is falsy on transformers 4.57+/5.x.
+        tie = getattr(self.config, "tie_word_embeddings", None)
+        if tie is None:
+            tie = getattr(self.config.decoder_config, "tie_word_embeddings", False)
+        if not tie:
             return
 
         if hasattr(self, "lm_head") and hasattr(self.model.language_model, "embed_tokens"):
@@ -280,14 +286,17 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
                 pad_token_id=tokenizer.pad_token_id,
             )
 
-        generation_config, model_kwargs = self._prepare_generation_config(
-            generation_config,
-            True,
+        # transformers 4.51.3 accepts a positional `use_model_defaults`; 4.57+/5.x dropped it.
+        _pgc_kwargs = dict(
             speech_start_id=tokenizer.speech_start_id,
             speech_end_id=tokenizer.speech_end_id,
             speech_diffusion_id=tokenizer.speech_diffusion_id,
             **kwargs,
         )
+        if "use_model_defaults" in inspect.signature(self._prepare_generation_config).parameters:
+            generation_config, model_kwargs = self._prepare_generation_config(generation_config, True, **_pgc_kwargs)
+        else:
+            generation_config, model_kwargs = self._prepare_generation_config(generation_config, **_pgc_kwargs)
         generation_config.speech_start_id = tokenizer.speech_start_id
         generation_config.speech_end_id = tokenizer.speech_end_id
         generation_config.speech_diffusion_id = tokenizer.speech_diffusion_id
@@ -316,7 +325,16 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
         )
 
         max_cache_length = generation_config.max_length - 1
-        self._prepare_cache_for_generation(generation_config, model_kwargs, None, batch_size, max_cache_length, device)
+        # transformers 4.51.3: (..., assistant_model, batch_size, max_cache_length, device);
+        # 4.57+/5.x: (..., generation_mode, batch_size, max_cache_length) — device dropped.
+        if "generation_mode" in inspect.signature(self._prepare_cache_for_generation).parameters:
+            self._prepare_cache_for_generation(
+                generation_config, model_kwargs, generation_config.get_generation_mode(), batch_size, max_cache_length
+            )
+        else:
+            self._prepare_cache_for_generation(
+                generation_config, model_kwargs, None, batch_size, max_cache_length, device
+            )
         model_kwargs["cache_position"] = torch.arange(input_ids_length, device=device, dtype=torch.long)
         for k, v in model_kwargs.items():
             if isinstance(v, torch.Tensor):
@@ -539,7 +557,7 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
             if not kwargs.get("refresh_negative", True):
                 negative_model_inputs = self.prepare_inputs_for_generation(negative_input_ids, **negative_model_kwargs)
                 # Forward negative pass through the model
-                if negative_model_inputs["inputs_embeds"] is None and inputs_embeds is not None:
+                if negative_model_inputs.get("inputs_embeds") is None and inputs_embeds is not None:
                     negative_model_inputs["inputs_embeds"] = inputs_embeds
                     negative_model_inputs["input_ids"] = None
 
@@ -635,7 +653,7 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
                         negative_input_ids, **negative_model_kwargs
                     )
                     # Forward negative pass through the model
-                    if negative_model_inputs["inputs_embeds"] is None and inputs_embeds is not None:
+                    if negative_model_inputs.get("inputs_embeds") is None and inputs_embeds is not None:
                         negative_model_inputs["inputs_embeds"] = inputs_embeds
                         negative_model_inputs["input_ids"] = None
 
