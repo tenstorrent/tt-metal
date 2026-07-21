@@ -23,6 +23,7 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_SYNC,
     DISABLE_SRC_ZERO_FLAG,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -86,6 +87,7 @@ def _run_sfpu_ternary(formats, dest_acc, mathop, input_dimensions=[64, 64]):
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
@@ -220,6 +222,7 @@ def test_ttnn_where(
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
@@ -322,6 +325,7 @@ def test_ttnn_where_mcw(
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
         ],
         runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
