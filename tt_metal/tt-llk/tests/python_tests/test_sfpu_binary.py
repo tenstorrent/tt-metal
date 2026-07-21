@@ -9,15 +9,20 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
+    TILE_DIMENSIONS,
     BinarySFPUGolden,
     BroadcastGolden,
     get_golden_generator,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, MathOperation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -25,12 +30,32 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
     MATH_OP,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TemplateParameter,
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
+
+
+def _skip_fp32_no_dest_acc(formats, dest_acc):
+    """32-bit (Float32) inputs need a 32-bit dest, i.e. dest_acc=Yes."""
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+
+def _skip_bh_float16_no_dest_acc(formats, dest_acc):
+    """Blackhole can't run Float16 SFPU input without a 32-bit dest intermediate."""
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
 
 
 @parametrize(
@@ -72,17 +97,8 @@ def test_sfpu_binary_float(
     mathop,
     bcast_dim,
 ):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # POW/XLOGY are only covered on the float formats: under Bfp8_b the coarse
     # quantization pushes small operands to values that produce -inf/NaN (log/pow),
@@ -124,17 +140,8 @@ def test_sfpu_binary_float(
 def test_sfpu_binary_div(formats, dest_acc):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
     # split out from the float sweep since the reciprocal path is precision-sensitive.
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -354,17 +361,8 @@ def test_sfpu_binary_int_shift_int32_min_unsupported(
 def test_sfpu_binary_float_extended(formats, dest_acc, mathop):
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
     # dedicated production BinaryOp; driven through the same in-DST harness as add/sub.
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # fmod/remainder divide by b via a reciprocal; Bfp8_b's coarse quantization blows up
     # the quotient for small divisors (mirrors the pow/xlogy Bfp8_b skip above).
@@ -396,77 +394,54 @@ def test_sfpu_binary_bitwise(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop)
 
 
+# Ops whose kernel interprets DST as unsigned; run them under UInt32 (the rest are Int32).
+_UINT32_BINARY_OPS = {
+    MathOperation.SfpuMaxUint32,
+    MathOperation.SfpuMinUint32,
+    MathOperation.SfpuRemainderUint32,
+}
+
+# int/uint binary ops sharing the same driver: dest_acc=Yes, single-format, and a per-op
+# uniform positive stimuli range. Ranges keep operands (and results) non-negative and small
+# enough to round-trip the sign-magnitude Dst packer plus any int->fp32 reciprocal the
+# kernel uses. mathop -> (low, high).
+_INT_BINARY_STIMULI = {
+    # trunc/floor division < 2**24: exact int->fp32 reciprocal, trunc == floor, and the
+    # sign-magnitude pack path can't round-trip the negatives these kernels would emit.
+    MathOperation.SfpuDivInt32: (1.0, 8_000_000.0),
+    MathOperation.SfpuDivInt32Floor: (1.0, 8_000_000.0),
+    # binary-GCD on raw int32 bits (exact): strictly positive within the 31-bit budget.
+    MathOperation.SfpuGcd: (1.0, 100_000.0),
+    # lcm abs()es both operands and assumes |a|, |b| < 2**15.
+    MathOperation.SfpuLcm: (1.0, 20_000.0),
+    # int32 multiply low-32: operands < ~46340 so the product stays < 2**31 (non-negative).
+    MathOperation.SfpuMulInt32: (1.0, 40_000.0),
+    # int32/uint32 max/min via SFPSWAP: non-negative so signed/unsigned agree and round-trip.
+    MathOperation.SfpuMaxInt32: (0.0, 1_000_000.0),
+    MathOperation.SfpuMinInt32: (0.0, 1_000_000.0),
+    MathOperation.SfpuMaxUint32: (0.0, 1_000_000.0),
+    MathOperation.SfpuMinUint32: (0.0, 1_000_000.0),
+    # remainder/fmod: non-negative operands, divisor >= 1 so every convention agrees;
+    # kept < 2**24 for the exact int->fp32 reciprocal the quotient uses.
+    MathOperation.SfpuRemainderInt32: (1.0, 10_000.0),
+    MathOperation.SfpuFmodInt32: (1.0, 10_000.0),
+    MathOperation.SfpuRemainderUint32: (1.0, 10_000.0),
+}
+
+
 @parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuDivInt32],
+    mathop=list(_INT_BINARY_STIMULI),
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_div_int32(formats, dest_acc, mathop):
-    # int32 truncating division via calculate_div_int32. Positive-only stimuli < 2**24
-    # (exact int->fp32 reciprocal, and the sign-magnitude pack path can't round-trip the
-    # two's-complement negatives these divide kernels emit); there trunc == floor.
+def test_sfpu_binary_int_uniform(mathop, dest_acc):
+    int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
+    formats = InputOutputFormat(int_format, int_format)
+    low, high = _INT_BINARY_STIMULI[mathop]
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=8_000_000.0
-        ),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuDivInt32Floor],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_div_int32_floor(formats, dest_acc, mathop):
-    # int32 floor-division. Positive-only stimuli < 2**24 (exact int->fp32 reciprocal, and
-    # the sign-magnitude pack path can't round-trip negative quotients); there floor ==
-    # trunc and every value round-trips.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=8_000_000.0
-        ),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuGcd],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_gcd(formats, dest_acc, mathop):
-    # Binary-GCD directly on int32 bit patterns (exact, no float conversion); keep a
-    # moderate strictly-positive range within the kernel's 31-bit budget.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=100_000.0
-        ),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuLcm],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_lcm(formats, dest_acc, mathop):
-    # lcm(a, b) = |a / gcd(a, b) * b| via binary-GCD + fp32 reciprocal. The kernel abs()es
-    # both operands and assumes |a|, |b| < 2**15, so keep stimuli strictly positive < 2**15.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=20_000.0
-        ),
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
     )
 
 
@@ -521,8 +496,7 @@ def _mask_stimuli_spec():
 def test_sfpu_binary_mask(formats, dest_acc, mathop):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
     # Crafted stimuli so the mask carries real zeros.
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -541,32 +515,13 @@ def test_sfpu_binary_mask(formats, dest_acc, mathop):
 def test_sfpu_binary_atan2(formats, dest_acc, mathop):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
     # (and the |y|>=|x| / x<0 branches) are exercised; minimax approximation matched under PCC.
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuMulInt32],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_mul_int32(formats, dest_acc, mathop):
-    # int32 multiply, low 32 bits. Plain INT32 stores two's-complement, so only non-negative
-    # products round-trip the sign-magnitude packer; keep operands < ~46340 (product < 2**31).
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=40_000.0
-        ),
     )
 
 
@@ -580,78 +535,6 @@ def test_sfpu_binary_eq_ne_int(formats, dest_acc, mathop):
     # Reuse the paired eq/ne stimuli so ~50% of positions compare equal — the equal branch
     # a plain random int sweep would essentially never hit.
     sfpu_binary(formats, dest_acc, mathop, spec_A=_eq_ne_stimuli_spec())
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuMaxInt32, MathOperation.SfpuMinInt32],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_max_min_int32(formats, dest_acc, mathop):
-    # int32 elementwise max/min via SFPSWAP (no float conversion). The sign-magnitude dest
-    # only round-trips non-negative results, so keep both operands non-negative.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=0.0, high=1_000_000.0
-        ),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.UInt32]),
-    mathop=[MathOperation.SfpuMaxUint32, MathOperation.SfpuMinUint32],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_max_min_uint32(formats, dest_acc, mathop):
-    # uint32 max/min (unsigned SFPSWAP). Stimuli are non-negative, so the signed and
-    # unsigned interpretations coincide and every value round-trips the packer.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=0.0, high=1_000_000.0
-        ),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    mathop=[MathOperation.SfpuRemainderInt32, MathOperation.SfpuFmodInt32],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_remainder_fmod_int32(formats, dest_acc, mathop):
-    # int32 remainder / fmod. Both operands non-negative with divisor >= 1, so the result
-    # is non-negative and convention-agnostic (trunc/floor/unsigned all agree == a % b);
-    # kept < 2**24 for the exact int->fp32 reciprocal the quotient uses.
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=10_000.0
-        ),
-    )
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.UInt32]),
-    mathop=[MathOperation.SfpuRemainderUint32],
-    dest_acc=[DestAccumulation.Yes],
-)
-def test_sfpu_binary_remainder_uint32(formats, dest_acc, mathop):
-    # uint32 remainder; non-negative operands with divisor >= 1 (see int32 variant).
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=1.0, high=10_000.0
-        ),
-    )
 
 
 def _isclose_stimuli_spec():
@@ -678,8 +561,7 @@ def _isclose_stimuli_spec():
 def test_sfpu_binary_isclose(formats, dest_acc, mathop):
     # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0, b = tile1. torch default
     # tolerances (fixed in the C++ dispatch); crafted stimuli give a non-constant 0/1 mix.
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -712,8 +594,7 @@ def _eq_ne_stimuli_spec():
 def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -742,8 +623,7 @@ def test_sfpu_binary_logsigmoid(formats, dest_acc, mathop):
     # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
     # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -797,6 +677,10 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         else golden_tensor.view(input_dimensions)
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
         formats,
@@ -806,7 +690,11 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
             APPROX_MODE(),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -847,7 +735,9 @@ def sfpu_binary(
     twos_complement=False,
 ):
 
-    input_dimensions = [64, 32]
+    # FP32 destination tiles occupy twice the register space. Keep four full destination
+    # blocks for those formats and four blocks of eight tiles for the remaining formats.
+    input_dimensions = [128, 128] if formats.input_format.is_32_bit() else [256, 128]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -861,7 +751,12 @@ def sfpu_binary(
     # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
     # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
     if src_A_override is not None:
-        src_A = src_A_override.to(src_A.dtype).flatten()
+        override = src_A_override.to(src_A.dtype).flatten()
+        if src_A.numel() % override.numel() != 0:
+            raise ValueError(
+                "SFPU binary override must contain a whole number of tile pairs"
+            )
+        src_A = override.repeat(src_A.numel() // override.numel())
 
     golden_src = src_A
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
@@ -878,20 +773,27 @@ def sfpu_binary(
         )
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        golden_src,
-        0,  # src1_idx: use tile 0
-        1,  # src2_idx: use tile 1
-        0,  # dst_idx: write to tile 0
-        32,  # num_iterations: 32 rows
-        input_dimensions,  # [64, 32] = 2 tiles
-        (
-            DataFormat.Float16_b
-            if formats.input_format == DataFormat.Bfp8_b
-            else formats.input_format
-        ),
-    ).flatten()
+    golden_format = (
+        DataFormat.Float16_b
+        if formats.input_format == DataFormat.Bfp8_b
+        else formats.input_format
+    )
+    elements_per_pair = 2 * 32 * 32
+    golden_tensor = torch.cat(
+        [
+            generate_golden(
+                mathop,
+                golden_src[offset : offset + elements_per_pair],
+                0,
+                1,
+                0,
+                32,
+                [64, 32],
+                golden_format,
+            ).flatten()
+            for offset in range(0, golden_src.numel(), elements_per_pair)
+        ]
+    )
 
     # ONLY Blackhole needs this for some reason
     if (
@@ -902,6 +804,10 @@ def sfpu_binary(
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
         formats,
@@ -911,7 +817,11 @@ def sfpu_binary(
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -1030,17 +940,8 @@ def test_sfpu_binary_bcast(
     mathop,
     dest_acc,
 ):
-    if dest_acc == DestAccumulation.No and formats.input_format == DataFormat.Float32:
-        pytest.skip(reason="Float32 inputs with dest_acc=No are not supported")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
     # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.

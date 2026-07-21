@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 
@@ -22,6 +23,41 @@ bool is_fabric_2d() {
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
+}
+
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size) {
+    // NOTE: ideally query the below which are currently not publicly accessible.
+    // FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
+    // tt_metal/fabric/erisc_datamover_builder.hpp
+    constexpr size_t max_packet_payload_wormhole = 7616;
+    constexpr size_t max_packet_payload_blackhole = 15232;
+    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/fabric/fabric_edm_packet_header.hpp
+    constexpr size_t max_scatter_write_chunks = 4;
+
+    if (page_size == 0) {
+        return;
+    }
+    size_t hw_max_packet_size = 0;
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: hw_max_packet_size = max_packet_payload_wormhole; break;
+        case tt::ARCH::BLACKHOLE: hw_max_packet_size = max_packet_payload_blackhole; break;
+        default: return;  // no known hardware max for this arch: skip the check
+    }
+
+    // Ideal = the most whole pages that fit in one hardware packet (capped by scatter-write chunks),
+    // or the full hardware packet when a single page is larger than any packet.
+    const size_t pages_per_packet = std::min<size_t>(hw_max_packet_size / page_size, max_scatter_write_chunks);
+    const size_t ideal_packet_size = (pages_per_packet == 0) ? hw_max_packet_size : pages_per_packet * page_size;
+
+    if (packet_size != ideal_packet_size) {
+        log_warning(
+            tt::LogOp,
+            "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to maximize "
+            "throughput.",
+            packet_size,
+            page_size,
+            ideal_packet_size);
+    }
 }
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
@@ -74,6 +110,29 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     }
 
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+}
+
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    // Whether the fabric wraps this axis into a ring/torus.
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    bool axis_can_wrap;
+    if (fabric_is_2d) {
+        if (axis == 1) {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+        } else {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+        }
+    } else {
+        axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+    }
+
+    // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
+    const bool axis_is_ring = axis_can_wrap && get_boundary_mode(tensor, tt::tt_fabric::Topology::Torus, axis) ==
+                                                   tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+    return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 
 tt::tt_fabric::Topology get_usable_topology(

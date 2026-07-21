@@ -73,7 +73,7 @@ _SUBTORUS_Y4_ENV = {
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            48_248_396,  # Re-centered 2026-07-09 for two stacked speedups now in the tree -- BOTH
+            50_810_785,  # Re-centered 2026-07-20 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (drop the separate output buffer + per-layer fill;
             # measured 50.61 ms alone) AND #47536 (update_padded_kv_cache RM/fp8; measured 51.29 ms
             # alone). The combined 2x4-2link number can't be measured on the galaxy, so the target is
@@ -111,7 +111,7 @@ _SUBTORUS_Y4_ENV = {
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            63_200_000,  # Re-centered 2026-06-25 for two stacked speedups now in the tree -- BOTH
+            65_161_594,  # Re-centered 2026-06-25 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (measured 64.30 ms alone) AND #47536
             # (update_padded_kv_cache RM/fp8; measured 64.80 ms alone). The combined 2x4-2link number
             # can't be measured on the galaxy, so the target is the midpoint of the plausible combined

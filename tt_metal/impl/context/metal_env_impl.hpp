@@ -90,6 +90,22 @@ public:
     // Teardown fabric-layer objects (control plane, system mesh, distributed context).
     void teardown_fabric_objects();
 
+    // Register this env as a MetalContext (silicon: default slot; mock: non-default slot) so that legacy
+    // fabric code reached during control-plane / system-mesh / mesh-device construction (which still calls
+    // the bare MetalContext::instance()) resolves to this env instead of implicitly creating a default
+    // silicon context that opens a second real PCIe device and self-deadlocks on its CHIP_IN_USE lock
+    // (GitHub #50041, #50043). Idempotent; returns the env-owned context id (created on first call). The
+    // context lifetime is tied to the env (uplift of mesh-device-level cleanup, GitHub #21500).
+    int ensure_context_registered(MetalEnv& env);
+
+    // True once ensure_context_registered has created the env-owned context.
+    bool has_registered_context() const { return registered_context_id_.has_value(); }
+
+    // Destroy the env-owned context created by ensure_context_registered, if any. Must be called from
+    // MetalEnv::~MetalEnv() while MetalEnv::impl_ is still valid (MetalContext::teardown() reaches back
+    // through *env_ -> impl_), not from ~MetalEnvImpl where impl_ has already been nulled by reset().
+    void teardown_registered_context();
+
     // Returns true if set_fabric_config changed state requiring a reinit.
     bool consume_force_reinit();
 
@@ -105,6 +121,11 @@ private:
     std::unique_ptr<Hal> hal_;
 
     std::atomic<int> use_count_{0};
+
+    // MetalContext id registered lazily for this env (see ensure_context_registered). Stored as a raw int
+    // to avoid pulling metal_context.hpp into this header; wrapped back into a ContextId at the
+    // metal_context.cpp boundary. Torn down by teardown_registered_context() from MetalEnv::~MetalEnv().
+    std::optional<int> registered_context_id_ = std::nullopt;
 
     // --- Fabric config state ---
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
