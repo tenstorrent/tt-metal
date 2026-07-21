@@ -178,7 +178,13 @@ def main() -> None:
         l1_small_size=int(args.l1_small_size),
     )
 
-    out_test.write_text(content, encoding="utf-8")
+    if str(out_test).startswith(str(Path(_REPO_ROOT).resolve())):
+        # check required to comply with ❗Cycode: SAST violation: 'Unsanitized dynamic input in file path'.
+        out_test.write_text(content, encoding="utf-8")
+
+    else:
+        raise RuntimeError(f"out_test resolved to {out_test}, but the output must be in the {_REPO_ROOT}")
+
     print(f"Wrote pytest: {out_test}")
     print(f"Records selected: {len(record_ids)} / {len(records)} (only={only})")
     print(f"Harness imported from: {harness_dir}")
