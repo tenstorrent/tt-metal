@@ -90,6 +90,7 @@ on:
 permissions:
   packages: write
   contents: write
+  id-token: write
 
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
