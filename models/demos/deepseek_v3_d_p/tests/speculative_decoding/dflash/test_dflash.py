@@ -2,28 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: Tenstorrent DFlash drafter (``TtDFlashDrafter``) vs the REAL z-lab HF ``DFlashDraftModel``.
+"""PCC: Tenstorrent DFlash drafter (``TtDFlashDrafter``) vs z-lab HF ``DFlashDraftModel``.
 
-This is the sign-off validation of the *validator* — it compares the device's context-KV build to the
-ground truth produced by the actual HF drafter's forward (NOT our torch golden). It jointly validates
-the compute graph, the weights, and the RoPE (the device's deepseek-yarn vs the trained model's own
-rope), against the production model rather than a re-derivation.
-
-How the ground truth is obtained: the real ``Qwen3DFlashAttention`` builds K/V as
-``[k_proj(target_hidden) | k_proj(noise)]`` (context ++ noise), applies k_norm + RoPE to the whole
-thing, and stores it in ``past_key_values``. The CONTEXT part is the first ``ctx_len`` positions — and
-because k_norm/RoPE are per-position, that slice equals exactly what prefill builds. So we run the real
-forward (via the ``hf_context_kv`` fixture), slice ``key_cache[:, :, :ctx_len, :]`` per layer, and PCC
-the device K/V against it.
-
-K vs V isolates the failure mode: V is matmul-only (v_proj, no norm/rope) so it should be ~1.0; K adds
-k_norm + RoPE, so if V passes but K drops, the culprit is the rope (device deepseek-yarn ≠ trained rope)
-or k_norm — not the weights/matmul.
-
-The HF reference drafter, its config, and its weights (shared with the device, gated on ``use_pretrained``)
-are built by the fixtures in ``conftest.py``. This file only feeds a SYNTHETIC context feature and PCCs.
-Requires (host): torch + transformers; ``$DFLASH_HF_MODEL`` = a dir with ``config.json`` (+ safetensors for
-the pretrained axis); and a Blackhole mesh for the device side. Skips cleanly if the model can't be built.
+This is the validation of the *validator* — it compares the device's context-KV build to the
+ground truth produced by the actual HF drafter's forward.
 
     DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash MESH_DEVICE=8x4 \
     pytest models/demos/deepseek_v3_d_p/tests/speculative_decoding/dflash/test_dflash.py -svv
@@ -31,7 +13,6 @@ the pretrained axis); and a Blackhole mesh for the device side. Skips cleanly if
 
 import pytest
 import torch
-import tracy
 from loguru import logger
 
 import ttnn
@@ -65,7 +46,7 @@ _FABRIC_1D = {
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_dflash_device_vs_hf_pcc(
+def test_dflash_pcc(
     mesh_device,
     device_params,
     num_links,
@@ -77,10 +58,6 @@ def test_dflash_device_vs_hf_pcc(
     drafter_state_dict,
     hf_context_kv,
 ):
-    # random / pretrained weights come from the conftest ``use_pretrained`` fixture ([random, pretrained]).
-    # The HF reference model, cfg, and weights come from the conftest fixtures — the SAME weights feed both
-    # the HF reference (via hf_context_kv) and the device drafter (drafter_state_dict). Here we just feed a
-    # synthetic context feature and PCC the device K/V.
     logger.info(f"fc_mode={fc_mode}  weights={'pretrained' if use_pretrained else 'random'}  ctx_len={ctx_len}")
     cfg = drafter_cfg
     sd = drafter_state_dict
@@ -91,7 +68,6 @@ def test_dflash_device_vs_hf_pcc(
     assert cfg.num_key_value_heads % tp == 0, f"num_kv_heads {cfg.num_key_value_heads} not divisible by tp {tp}"
     H = cfg.hidden_size
 
-    # One synthetic context feature, fed identically to both sides.
     gen = torch.Generator().manual_seed(0)
     ctx = torch.randn(1, ctx_len, cfg.target_feature_size, generator=gen, dtype=torch.float32)
 
@@ -116,7 +92,6 @@ def test_dflash_device_vs_hf_pcc(
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_shard)
 
     drafter.reset()
-    tracy.signpost("dflash start")
     for j, tid in enumerate(cfg.target_layer_ids):
         h_j = ctx[:, :, j * H : (j + 1) * H].to(torch.bfloat16).reshape(1, 1, ctx_len, H)
         h_tt = ttnn.from_torch(
@@ -130,7 +105,6 @@ def test_dflash_device_vs_hf_pcc(
         drafter.tap(h_tt, tid)
     drafter.write_kv_cache()
     ttnn.synchronize_device(mesh_device)
-    tracy.signpost("dflash end")
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1) → full
     # [num_layers, kv_heads, ctx_len, head_dim] directly (the host[:num_layers] slice is then a no-op).
