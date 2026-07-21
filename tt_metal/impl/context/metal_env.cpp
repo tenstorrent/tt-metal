@@ -126,13 +126,26 @@ namespace {
 // Decide whether to register Blackhole DRAM programmable cores (the "DRAM-core" / tensor-prefetcher
 // path) in the HAL. Queryable afterwards via Hal::has_programmable_core_type(HalProgrammableCoreType::DRAM).
 //
-// Two independent constraints, both about the application owning the right DRAM RISC core:
+// A tri-state env var (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES) overrides the auto-detect:
+//   =1 → force enable, =0 → force disable, unset → auto-detect (below).
+//
+// Two independent constraints for auto-detect, both about the application owning the right DRAM RISC core:
 //   - Firmware must support it (arch + firmware-bundle floor) -- resolved by check_firmware_capabilities.
 //   - Topology: with DRAM harvesting the specific core the application must write to for GCB credits can
 //     differ per device, which breaks our programming model that the cores look identical on every
 //     device. A single device has no cross-device consistency to break, and an unharvested multi-device
 //     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
-bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster) {
+bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
+    const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
+    if (override.has_value()) {
+        log_info(
+            tt::LogMetal,
+            "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES={} — {} DRAM programmable cores",
+            *override ? "1" : "0",
+            *override ? "force enabling" : "force disabling");
+        return *override;
+    }
+
     FirmwareCapabilityRequest req;
     req.dram_programmable_cores = true;
     FirmwareCapabilityResult res;
@@ -191,7 +204,7 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_));
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_));
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());

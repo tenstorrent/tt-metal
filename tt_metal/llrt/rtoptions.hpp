@@ -293,6 +293,12 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
+    // Tri-state override for Blackhole DRAM programmable cores in the HAL:
+    //   nullopt = auto-detect (firmware + topology), the default
+    //   true    = force enable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1)
+    //   false   = force disable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0)
+    std::optional<bool> blackhole_dram_programmable_cores_override;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -715,6 +721,10 @@ public:
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
+    std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
+        return blackhole_dram_programmable_cores_override;
+    }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
