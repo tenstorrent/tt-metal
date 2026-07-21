@@ -415,7 +415,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;
-    std::vector<CoreRange> termination_master_core_ranges;
     if (num_mux_cores_per_direction_per_link) {
         uint32_t core_id = 0;
         for (uint32_t link = 0; link < num_links; link++) {
@@ -427,10 +426,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                     const auto& worker_core = all_cores[core_id++];
                     sender_worker_core_ranges.emplace_back(worker_core);
-
-                    if (worker == 0) {
-                        termination_master_core_ranges.emplace_back(worker_core);
-                    }
                 }
             }
         }
@@ -561,7 +556,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     }
 
     // KERNEL CREATION
-    std::vector<size_t> mux_termination_signal_addresses;
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
@@ -570,29 +564,17 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto num_full_size_channels = num_workers_per_direction;
-    constexpr auto num_header_only_channels = 0;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        0,
+    // Transient Fabric Mux V2: one mux core per (link, direction), serving num_workers_per_direction
+    // client channels (one channel per sender worker). The V2 mux auto-terminates once all of its
+    // clients close their connections, so no explicit termination signalling is required. The mux
+    // kernels themselves are created per-core in the loop below via add_fabric_mux_v2_to_program (each
+    // needs the src/dst fabric node ids + link for the direction it forwards to).
+    tt::tt_fabric::FabricMuxV2Config mux_config(
+        static_cast<uint8_t>(num_workers_per_direction),
+        static_cast<uint8_t>(num_buffers_full_size_channels),
         buffer_size_bytes_full_size_channel,
         mux_base_l1_address);
-    auto mux_kernel_id = 0;
-    if (num_mux_cores_per_direction_per_link) {
-        // Fabric mux kernel
-        mux_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-            mux_core_range_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-    }
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
         ring_index,
@@ -657,15 +639,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Wt,
         normalized_dim);
 
-    // Positional args: fabric_mux, routing info, TensorAccessorArgs
+    // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
+    // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
     std::vector<uint32_t> writer_compile_args;
-    if (num_mux_cores_per_direction_per_link) {
-        append_fabric_mux_connection_ct_args(
-            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-            mux_kernel_config,
-            num_workers_per_direction,
-            writer_compile_args);
-    }
 
     writer_compile_args.insert(writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
@@ -713,29 +689,20 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     auto mux_core_iter = mux_core_range_set.ranges().cbegin();
-    auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            CoreCoord termination_master_logical_core = CoreCoord{0, 0};
             CoreCoord mux_virtual_core = CoreCoord{0, 0};
             if (mux_connection_valid(dir) && num_mux_cores_per_direction_per_link) {
                 auto mux_logical_core = *((mux_core_iter++)->begin());
                 mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
 
-                std::vector<uint32_t> mux_rt_args = {};
+                // Create the V2 mux kernel on this core, forwarding toward this direction's neighbor
+                // (forward_coord when dir==1, backward_coord when dir==0).
                 const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-                if (dir) {  // forward
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                } else {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link, program, {mux_logical_core});
-                }
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-
-                termination_master_logical_core = *((termination_master_core_iter++)->begin());
+                const auto dst_node_id =
+                    mesh_device->get_fabric_node_id(dir ? forward_coord.value() : backward_coord.value());
+                tt::tt_fabric::add_fabric_mux_v2_to_program(
+                    program, mux_config, mux_logical_core, src_node_id, dst_node_id, link);
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -804,9 +771,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
-                CoreCoord termination_master_virtual_core =
-                    mesh_device->worker_core_from_logical_core(termination_master_logical_core);
-
                 // Writer RT args
                 std::vector<uint32_t> writer_rt_args;
                 if (normalized_dim == 0) {
@@ -849,16 +813,19 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     };
                 }
                 if (num_mux_cores_per_direction_per_link) {
-                    append_fabric_mux_connection_rt_args(
-                        mux_connection_valid(dir),
+                    // V2 fabric mux client connection: this worker is channel `worker` on its
+                    // direction's mux. Two per-worker semaphores (flow control + teardown) back the
+                    // connection; append_client_connection_rt_args serializes exactly the client args
+                    // the device-side FabricMuxV2Sender::build_from_args expects.
+                    const auto flow_control_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                    const auto teardown_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                    mux_config.append_client_connection_rt_args(
                         mux_virtual_core,
-                        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        mux_kernel_config,
-                        core,
-                        worker,
-                        worker == 0,
-                        termination_master_virtual_core,
-                        program,
+                        static_cast<uint8_t>(worker),
+                        tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
+                            .flow_control_sem_id = flow_control_sem_id,
+                            .teardown_sem_id = teardown_sem_id,
+                        },
                         writer_rt_args);
                 }
                 if (!num_mux_cores_per_direction_per_link) {
