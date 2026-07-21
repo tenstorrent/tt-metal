@@ -314,6 +314,28 @@ def _derive_topology_env(args, model_dir):
 
 _MIN_FREE_BYTES = 20 * 1024**3
 _STALE_TMP_AGE = 3600
+_RUNS_KEEP_FULL = int(os.environ.get("PERF_MCP_RUNS_KEEP_FULL", "3") or "3")
+_RUNS_KEEP_TOTAL = int(os.environ.get("PERF_MCP_RUNS_KEEP_TOTAL", "20") or "20")
+
+
+def _prune_runs(perf_dir: Path) -> None:
+    runs_dir = Path(perf_dir) / "runs"
+    if not runs_dir.is_dir():
+        return
+    try:
+        dirs = sorted(
+            (p for p in runs_dir.glob("2*") if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        return
+    for stale in dirs[_RUNS_KEEP_TOTAL:]:
+        shutil.rmtree(stale, ignore_errors=True)
+    for old in dirs[_RUNS_KEEP_FULL:_RUNS_KEEP_TOTAL]:
+        tracy = old / "profiles" / "tracy_out"
+        if tracy.is_dir():
+            shutil.rmtree(tracy, ignore_errors=True)
 
 
 def _lowest_free_bytes():
@@ -376,6 +398,10 @@ def cmd_optimize(args) -> int:
         return 1
     if os.environ.get("PERF_MCP_SUPERVISED") != "1":
         _sweep_stale_perf_mcp()
+        try:
+            _prune_runs(_repo_root() / PERF_DIR)
+        except Exception:
+            pass
     _ok, _low, _cul = _disk_gate()
     if not _ok:
         print(_out_of_disk_msg(_low))
