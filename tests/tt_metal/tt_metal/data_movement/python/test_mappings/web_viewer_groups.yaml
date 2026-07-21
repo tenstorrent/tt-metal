@@ -54,7 +54,7 @@ all_to_all:
 
 all_from_all:
   name: All from All
-  tags: [read, unicast, L1, multi_core]
+  tags: [read, unicast, L1, multi_core, foo_tag]
 
 multi_interleaved:
   name: Multi Interleaved
