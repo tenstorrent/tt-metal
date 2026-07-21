@@ -704,14 +704,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->enable_2_erisc_mode = false;
             break;
 
-        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
-        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
-        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
-            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
-            break;
-
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
         // Default: false (uses MGD 1.0)
@@ -798,6 +790,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
             break;
 
+        case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: break;
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================

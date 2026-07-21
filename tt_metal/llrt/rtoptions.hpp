@@ -696,6 +696,9 @@ public:
     std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
         return blackhole_dram_programmable_cores_override;
     }
+    bool get_enable_blackhole_dram_programmable_cores() const {
+        return blackhole_dram_programmable_cores_override.value_or(false);
+    }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
