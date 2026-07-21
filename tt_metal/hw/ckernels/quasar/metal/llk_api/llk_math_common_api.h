@@ -83,8 +83,12 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  *
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = p_cleardvalid::FPU/SFPU
  **/
-template <std::uint8_t SET_DEST_DVALID, DstSync DST = DstSync::SyncFull>
+template <std::uint8_t SET_DEST_DVALID, DstSync DST = DstSync::SyncFull, typename Blocked_ = void>
 inline void llk_math_set_dvalid() {
+    static_assert(
+        sizeof(Blocked_) == 0,
+        "llk_math_set_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which are "
+        "currently used in tt-metal.");
     // Fixed: forward the DST (sync-mode) template arg. _llk_math_set_dvalid_ takes <SET_DEST_DVALID, DST>
     // (DST has no default there), so the old single-arg forward failed to instantiate -- this wrapper was
     // effectively uncallable. DST controls whether both dest banks are cleared (SyncFull) or one (SyncHalf).

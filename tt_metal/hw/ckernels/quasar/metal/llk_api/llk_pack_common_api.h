@@ -95,8 +95,12 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
  * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
  **/
-template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
+template <DstSync DST, bool IS_FP32_MATH_DEST_EN, typename Blocked_ = void>
 inline void llk_pack_dest_dvalid_section_done() {
+    static_assert(
+        sizeof(Blocked_) == 0,
+        "llk_pack_dest_dvalid_section_done belongs to the dest-dvalid sync scheme, should not be mixed with semaphores "
+        "which are currently used in tt-metal.");
     _llk_pack_dest_dvalid_section_done_<DST, IS_FP32_MATH_DEST_EN>();
 }
 
@@ -106,7 +110,12 @@ inline void llk_pack_dest_dvalid_section_done() {
  *        Pairs with llk_unpack_setup_dest_dvalid() on T0 — see its comment for why this is required. Call ONCE
  *        in init, before any section_done. Mirrors unpack_tilize_quasar_test.cpp:162-163.
  */
+template <typename Blocked_ = void>
 inline void llk_pack_setup_dest_dvalid() {
+    static_assert(
+        sizeof(Blocked_) == 0,
+        "llk_pack_setup_dest_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which "
+        "are currently used in tt-metal.");
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
 }
 
@@ -116,7 +125,12 @@ inline void llk_pack_setup_dest_dvalid() {
  *        MATH<->PACK semaphore, not dvalid) is not left waiting on the tilize's stale UNPACK dvalid bit
  *        (root cause of the fused-conv tilize->matmul hang: PACK stuck at the first matmul pack).
  */
+template <typename Blocked_ = void>
 inline void llk_pack_teardown_dest_dvalid() {
+    static_assert(
+        sizeof(Blocked_) == 0,
+        "llk_pack_teardown_dest_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores "
+        "which are currently used in tt-metal.");
     auto cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
     cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
 }
@@ -127,8 +141,9 @@ inline void llk_pack_teardown_dest_dvalid() {
 // the unpacker is provably <=1 DEST bank ahead -> cannot lap. PACR reads DEST via SEC{pack::TRISC_ID}.
 
 /** @brief PACK-side init: point PACK's DEST section base at bank 0. Pair with the MATH SEMINIT + UNPACK init. */
-template <DstSync DST>
+template <DstSync DST, typename Blocked_ = void>
 inline void llk_pack_tilize_dest_sync_init() {
+    static_assert(sizeof(Blocked_) == 0, "unpack_to_dest = true is not supported.");
     if constexpr (DST == DstSync::SyncHalf) {
         _reset_dest_register_offset_();
         _set_dest_section_base_<ckernel::pack::TRISC_ID>(_get_dest_buffer_base_());
@@ -136,14 +151,17 @@ inline void llk_pack_tilize_dest_sync_init() {
 }
 
 /** @brief Block the packer until UNPACK has published a full DEST bank (token > 0). Call before packing. */
+template <typename Blocked_ = void>
 inline void llk_pack_tilize_dest_wait() {
+    static_assert(sizeof(Blocked_) == 0, "unpack_to_dest = true is not supported.");
     _llk_sync_wait_<p_stall::STALL_TDMA, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);
 }
 
 /** @brief Free the just-packed DEST bank back to UNPACK (drain the packs first via STALLWAIT PACK0) and flip
  *         PACK to the other bank. @tparam EN_32BIT_DEST must equal the unpack side's (== DST_ACCUM_MODE). */
-template <DstSync DST, bool EN_32BIT_DEST>
+template <DstSync DST, bool EN_32BIT_DEST, typename Blocked_ = void>
 inline void llk_pack_tilize_dest_release() {
+    static_assert(sizeof(Blocked_) == 0, "unpack_to_dest = true is not supported.");
     _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_MATH);
     if constexpr (DST == DstSync::SyncHalf) {
         _llk_sync_advance_dest_section_<ckernel::pack::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();

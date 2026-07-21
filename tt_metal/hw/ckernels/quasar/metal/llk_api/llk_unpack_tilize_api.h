@@ -28,6 +28,8 @@ inline void llk_unpack_tilize_init(
     const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
+    static_assert(!unpack_to_dest, "unpack_to_dest = true is not supported.");
+
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     // unpack_to_dest routes the tilized tile straight into DEST (UNP_DEST) instead of SrcA (UNP_A); the
     // internal init programs the same UNPACK_TILIZE strides for both (see llk_unpack_tilize.h:94).
@@ -56,6 +58,8 @@ inline void llk_unpack_tilize_block(
     const std::uint32_t input_tile_index = 0,
     const std::uint32_t col_tile_offset = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
+
+    static_assert(!unpack_to_dest, "unpack_to_dest = true is not supported.");
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
@@ -87,8 +91,11 @@ inline void llk_unpack_tilize_block(
  * @param input_tile_index Block-start tile index (encodes the row offset via block_c_tiles stride).
  * @param t                Tile position within the block row.
  */
+template <typename Blocked_ = void>
 inline void llk_unpack_tilize_to_dest(
     const std::uint32_t operand, const std::uint32_t input_tile_index, const std::uint32_t t) {
+    static_assert(sizeof(Blocked_) == 0, "unpack_to_dest = true is not supported.");
+
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
@@ -108,8 +115,9 @@ inline void llk_unpack_tilize_to_dest(
  * @tparam BLOCK_CT_DIM Number of tiles unpacked per @ref llk_unpack_tilize_block_to_dest call (MOP inner loop).
  * @param operand       The input dataflow buffer identifier.
  */
-template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
+template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, typename Blocked_ = void>
 inline void llk_unpack_tilize_block_to_dest_init(const std::uint32_t operand) {
+    static_assert(sizeof(Blocked_) == 0, "unpack_to_dest = true is not supported.");
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     // TZINIT probe removed: CONFIRMED FULL_CT=4 srcz=2 dstz=64 soff0=8 (match the LLK reference) via dprint_tr1.
@@ -131,11 +139,14 @@ inline void llk_unpack_tilize_block_to_dest_init(const std::uint32_t operand) {
  * @param col_tile_offset  Column-tile offset of this chunk within the row (steps L1 by num_faces_c_dim each).
  * @param dest_tile_idx    DEST slot for the first tile of this chunk.
  */
+template <typename Blocked_ = void>
 inline void llk_unpack_tilize_block_to_dest(
     const std::uint32_t operand,
     const std::uint32_t input_tile_index,
     const std::uint32_t col_tile_offset,
     const std::uint32_t dest_tile_idx) {
+    static_assert(sizeof(Blocked_) == 0, "unpack_to_dest = true is not supported.");
+
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
