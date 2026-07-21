@@ -29,7 +29,7 @@ ttml::autograd::TensorPtr SingleHeadAttention::operator()(
     auto key = (*k_linear)(x);
     auto value = (*v_linear)(x);
 
-    // TODO(nuked-op sdpa): restore real call
+    // TODO(sdpa): restore real call
     auto attention = query;
     static_cast<void>(key);
     static_cast<void>(value);

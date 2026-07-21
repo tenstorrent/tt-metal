@@ -145,7 +145,7 @@ def _golden_function(tensor, shape, **_):
 ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
 
 
-# upsample nuked for agent evaluation — golden function removed.
+# upsample not available in this build — golden function removed.
 
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
 SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs

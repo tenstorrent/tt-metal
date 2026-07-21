@@ -189,11 +189,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     slice/slice_nanobind.cpp
     transpose/transpose_nanobind.cpp
     reshard/reshard_nanobind.cpp
-    pool_generic/generic_pools_nanobind.cpp
-    conv2d/conv2d_nanobind.cpp
     matmul/matmul_nanobind.cpp
     binary/binary_nanobind.cpp
-    fold/fold_nanobind.cpp
     to_memory_config/to_memory_config_nanobind.cpp
     reshape_view/reshape_nanobind.cpp
     untilize/untilize_nanobind.cpp

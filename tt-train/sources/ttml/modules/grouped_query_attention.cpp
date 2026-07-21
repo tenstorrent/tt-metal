@@ -46,7 +46,7 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    // TODO(nuked-op sdpa): restore real call
+    // TODO(sdpa): restore real call
     auto attention = query_with_heads;
     static_cast<void>(key_with_heads);
     static_cast<void>(value_with_heads);
@@ -103,7 +103,7 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const auto k_cache_to_process = ttml::autograd::create_tensor(k_cache_slice);
     const auto v_cache_to_process = ttml::autograd::create_tensor(v_cache_slice);
 
-    // TODO(nuked-op sdpa): restore real call
+    // TODO(sdpa): restore real call
     auto attention = query_with_heads;
     static_cast<void>(k_cache_to_process);
     static_cast<void>(v_cache_to_process);

@@ -488,8 +488,7 @@ from ttnn.operations.matmul import (
     matmul_select_program_factory,
 )
 
-# normalization ops (softmax/layer_norm/rms_norm/group_norm) nuked for agent
-# evaluation — their Python configs/helpers are reimplemented with the op.
+# normalization ops (softmax/layer_norm/rms_norm/group_norm) not available in this build — their Python configs/helpers are reimplemented with the op.
 
 from ttnn.operations.embedding import (
     EmbeddingsType,
@@ -505,7 +504,7 @@ from ttnn.operations.reduction import (
 
 from ttnn.operations.ccl import Topology, get_usable_topology, DispatchAlgorithm, WorkerMode
 
-# conv2d nuked for agent evaluation — Conv2d*/Conv1dConfig Python API removed.
+# conv2d not available in this build — Conv2d*/Conv1dConfig Python API removed.
 
 from ttnn.operations.pool import (
     prepare_grid_sample_grid,
@@ -518,13 +517,8 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride
 
-from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
-
-transformer.SparseKVFormat = SparseKVFormat
-
-IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 
