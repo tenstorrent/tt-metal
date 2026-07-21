@@ -14,6 +14,7 @@ import torch.nn as nn
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from trace_manifest_validation import format_report, validate_manifest
+from tracer_op_specs import resolve_within_repo
 from unet_vgg19 import UNetVGG19
 
 
@@ -116,7 +117,7 @@ def main():
 
     torch.manual_seed(args.seed)
 
-    out_dir = Path(args.out)
+    out_dir = resolve_within_repo(args.out)
     tensors_dir = out_dir / "tensors"
     tensors_dir.mkdir(parents=True, exist_ok=True)
 

@@ -28,9 +28,28 @@ replay on device today (the rest are valid to appear in a manifest but skipped).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+# Repo root, derived from this file's location (tools/bringup/ -> tools -> repo
+# root) so path confinement is independent of the current working directory.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def repo_root() -> Path:
+    return _REPO_ROOT
+
+
+def resolve_within_repo(user_path: Any) -> Path:
+    # this check is added to comply with the "❗Cycode: SAST violation: 'Unsanitized dynamic input in file path'."
+    # check.
+    base = str(_REPO_ROOT)
+    resolved = os.path.abspath(os.path.join(base, os.fspath(user_path)))
+    if os.path.commonpath([base, resolved]) != base:
+        raise ValueError(f"path escapes repo root: {user_path!r} (resolved {resolved}, allowed base {base})")
+    return Path(resolved)
 
 
 @dataclass(frozen=True)
@@ -189,7 +208,7 @@ def record_from_mapping(raw: Mapping[str, Any], idx: int) -> Record:
 
 def load_manifest(manifest_path: Any) -> List[Record]:
     """Load a manifest JSON file into a list of ``Record`` objects."""
-    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    data = json.loads(resolve_within_repo(manifest_path).read_text(encoding="utf-8"))
     records = data.get("records", []) if isinstance(data, dict) else []
     return [record_from_mapping(r, i) for i, r in enumerate(records)]
 

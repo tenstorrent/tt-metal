@@ -12,8 +12,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+
+# Ensure sibling tool modules resolve regardless of cwd (this file may be run as
+# a script from anywhere).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from tracer_op_specs import resolve_within_repo
 
 
 def _parse_only(value: Optional[str]) -> Optional[List[str]]:
@@ -126,8 +134,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    manifest_path = Path(args.manifest).resolve()
-    out_test = Path(args.out_test).resolve()
+    manifest_path = resolve_within_repo(args.manifest)
+    out_test = resolve_within_repo(args.out_test)
     out_test.parent.mkdir(parents=True, exist_ok=True)
 
     # Absolute path to the bringup tools directory (where tracer_test_harness.py

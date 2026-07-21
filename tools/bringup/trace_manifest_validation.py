@@ -34,6 +34,7 @@ from tracer_op_specs import (
     is_int,
     is_valid_shape,
     record_from_mapping,
+    resolve_within_repo,
     shared_validate_record,
     validate_record_mapping,
 )
@@ -177,7 +178,11 @@ def validate_manifest(
             to avoid importing torch). Defaults to a ``torch.load``-based loader.
     """
     report = Report()
-    manifest_path = Path(manifest_path)
+    try:
+        manifest_path = resolve_within_repo(manifest_path)
+    except ValueError as exc:
+        report.error("manifest", str(exc))
+        return report
 
     if not manifest_path.exists():
         report.error("manifest", f"file not found: {manifest_path}")
@@ -228,8 +233,8 @@ def validate_manifest(
 def print_resolved(manifest_path: Path, limit: int) -> None:
     """Print resolved artifact paths for the first ``limit`` records."""
     try:
-        data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(resolve_within_repo(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
         return
     records = data.get("records", []) if isinstance(data, dict) else []
 
