@@ -1,0 +1,15 @@
+started_at_utc=20260720T154501Z
+repo=/home/mvasiljevic/tt-metal
+codex_home=/home/mvasiljevic/codex-runs/05-full-model-qwen_qwen2_5_coder_32b_instruct_-20260720T154501Z/codex_home
+codex_bin=/home/mvasiljevic/.local/bin/codex
+hf_model=Qwen/Qwen2.5-Coder-32B-Instruct
+model_dir=models/autoports/qwen_qwen2_5_coder_32b_instruct
+runner=app-server
+approval_policy=never
+sandbox=danger-full-access
+prompt_files:
+- .agents/prompts/model_bringup_multigoal/05-full-model.txt
+stage_1_objective_chars=3695
+stage_1_skills=autofix,full-model,stage-review,tt-device-usage,tt-enable-tracing
+stage_1_missing_skills=
+stage_1_thread_id=019f8033-bdd8-72e2-ab07-c3d77e0457da
