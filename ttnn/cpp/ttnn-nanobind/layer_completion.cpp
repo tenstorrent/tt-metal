@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Standalone nanobind module (`_layer_completion`) for the pipelined-prefill layer-completion
-// aggregation feature. Deliberately NOT part of the ttnn module/API: this machinery is used only by
-// the deepseek_v3_d_p pipelined-prefill runner, so it ships as its own .so next to the runner (see
-// __init__.py) and links only TT::Metalium. Binds the host-local ring (LayerCompletionQueue), the
-// per-host router (LayerCompletionRouter), and the test-only scheduler stand-in consumer
-// (LayerCompletionConsumer).
+// aggregation feature. Exposed via ttnn._experimental.layer_completion. Binds the host-local ring
+// (LayerCompletionQueue), the per-host router (LayerCompletionRouter), and the test-only scheduler
+// stand-in consumer (LayerCompletionConsumer).
 
 #include <cstdint>
 #include <optional>
@@ -34,7 +32,7 @@ NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-par
     using tt::tt_metal::internal::LayerCompletionRouter;
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
 
-    mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer. Not a ttnn API.";
+    mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer.";
 
     nb::class_<LayerCompletionQueue>(mod, "LayerCompletionQueue")
         .def_static(
