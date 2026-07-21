@@ -32,6 +32,7 @@ skus:
       - cloud-virtual-machine
       - P100
       - in-service
+      - pipeline-functional
 
   wh_galaxy:
     runs_on:
