@@ -47,6 +47,15 @@ class TtSampler:
             torch.full((1, vocab_size), NEG_INF), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
         self._one = ttnn.from_torch(torch.ones((1, 1)), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # Counter-PRNG constants for the trace-compatible Gumbel draw (pick_dev): a GLSL-style hash
+        # frac(sin(step*A + idx*B) * C) driven by a per-step counter, in place of ttnn.rand (which
+        # replays identical noise inside a trace). ``_arange_b`` = idx * B, precomputed.
+        self._arange_b = ttnn.from_torch(
+            torch.arange(vocab_size, dtype=torch.float32).reshape(1, vocab_size) * 78.233,
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
         self.reset()
 
     def reset(self):
@@ -99,3 +108,46 @@ class TtSampler:
         if self.rep != 1.0:
             self._mark(token)
         return token
+
+    def _apply_penalty_temp_topk(self, logits):
+        """Shared rep-penalty -> temperature -> top-k/top-p logit shaping (returns ``[1, V]``)."""
+        L = ttnn.typecast(ttnn.reshape(logits, [1, self.v]), ttnn.bfloat16)
+        if self.rep != 1.0:
+            pos = ttnn.gt(L, 0.0)
+            penalized = ttnn.where(pos, ttnn.multiply(L, 1.0 / self.rep), ttnn.multiply(L, self.rep))
+            L = ttnn.where(ttnn.gt(self.seen, 0.5), penalized, L)
+        if self.temperature != 1.0:
+            L = ttnn.multiply(L, 1.0 / self.temperature)
+        if self.top_k:
+            vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]
+            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])
+            thr = kth
+            if self._nucleus:
+                probs = ttnn.softmax(vals, dim=-1)
+                excl = ttnn.subtract(ttnn.cumsum(probs, dim=-1), probs)
+                keep = ttnn.lt(excl, self.top_p)
+                pos_inf = ttnn.add(ttnn.multiply(vals, 0.0), -NEG_INF)
+                nuc = ttnn.min(ttnn.where(keep, vals, pos_inf), dim=-1, keepdim=True)
+                thr = ttnn.maximum(nuc, kth)
+            L = ttnn.where(ttnn.ge(L, thr), L, self._neg)
+        return L
+
+    def pick_dev(self, logits, step_t):
+        """Fully-on-device sample for the TRACED decode loop: same rep/temp/top-k/top-p shaping,
+        but the Gumbel noise comes from a counter-based PRNG (``step_t``: a ``[1, 1]`` fp32 tensor
+        holding the decode step) instead of ``ttnn.rand`` — so it is trace-capturable and varies
+        every step. Returns the sampled id as a DEVICE ``[1, 1]`` uint32 tensor (no host readback)
+        and updates the ``seen`` mask on device. Greedy when ``temperature <= 0``."""
+        L = self._apply_penalty_temp_topk(logits)
+        Lf = ttnn.typecast(L, ttnn.float32)
+        if self.temperature > 0.0:
+            # U = frac(sin(step*12.9898 + idx*78.233) * 43758.5453) in (0,1); g = -log(-log(U)).
+            h = ttnn.add(ttnn.multiply(step_t, 12.9898), self._arange_b)  # [1,1] broadcasts over [1,V]
+            u = ttnn.clamp(ttnn.frac(ttnn.multiply(ttnn.sin(h), 43758.5453)), 1e-4, 1.0 - 1e-3)
+            g = ttnn.multiply(ttnn.log(ttnn.multiply(ttnn.log(u), -1.0)), -1.0)
+            Lf = ttnn.add(Lf, g)
+        tok = ttnn.argmax(ttnn.to_layout(Lf, ttnn.ROW_MAJOR_LAYOUT), dim=-1)  # device
+        tok = ttnn.reshape(ttnn.typecast(tok, ttnn.uint32), [1, 1])
+        if self.rep != 1.0:
+            self.seen = ttnn.scatter(self.seen, 1, tok, self._one)  # mark on device (no host int)
+        return tok
