@@ -12,6 +12,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <ttnn/distributed/distributed_configs.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -52,7 +53,8 @@ Tensor empty(
     const DataType& dtype,
     const Layout& layout,
     MeshDevice* device,
-    const MemoryConfig& memory_config);
+    const MemoryConfig& memory_config,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper = std::nullopt);
 
 template <typename BufferType>
 Tensor from_buffer(
