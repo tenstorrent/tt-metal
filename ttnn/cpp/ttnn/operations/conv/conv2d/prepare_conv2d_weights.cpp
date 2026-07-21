@@ -1228,15 +1228,16 @@ static Conv2dBlockConfig get_opt_block_config(
     }
 
     auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, parallel_config);
+    if (require_input_channel_partition && conv_config.override_output_sharding_config) {
+        validate_input_channel_partition_grid(parallel_config, conv_config.core_grid.value());
+    }
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config,
         output_compute_grid_size,
         out_channels,
         parallel_config.shard_orientation,
         mm_conv,
-        require_input_channel_partition,
-        require_input_channel_partition && conv_config.override_output_sharding_config ? conv_config.core_grid
-                                                                                       : std::nullopt);
+        require_input_channel_partition);
 
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
@@ -1563,15 +1564,16 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     auto output_compute_grid_size =
         get_output_compute_grid_size(device->compute_with_storage_grid_size(), conv_config, parallel_config);
+    if (require_input_channel_partition && conv_config.override_output_sharding_config) {
+        validate_input_channel_partition_grid(parallel_config, conv_config.core_grid.value());
+    }
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config,
         output_compute_grid_size,
         out_channels,
         parallel_config.shard_orientation,
         mm_conv,
-        require_input_channel_partition,
-        require_input_channel_partition && conv_config.override_output_sharding_config ? conv_config.core_grid
-                                                                                       : std::nullopt);
+        require_input_channel_partition);
 
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);

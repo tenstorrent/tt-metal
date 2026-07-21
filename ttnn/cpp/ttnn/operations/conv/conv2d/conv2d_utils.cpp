@@ -168,6 +168,13 @@ CoreCoord get_output_compute_grid_size(
     return output_compute_grid_size;
 }
 
+void validate_input_channel_partition_grid(
+    const ParallelConfig& input_parallel_config, const CoreRangeSet& requested_output_grid) {
+    TT_FATAL(
+        requested_output_grid == input_parallel_config.grid,
+        "1D depthwise BLOCK_SHARDED convolution cannot override the output grid independently of the input grid");
+}
+
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
     uint32_t padded_num1 = tt::round_up(num1, divisor);
@@ -269,16 +276,11 @@ ParallelConfig determine_output_parallel_config(
     uint32_t out_channels,
     ShardOrientation block_shard_orientation,
     bool is_mm_conv,
-    bool require_input_channel_partition,
-    const std::optional<CoreRangeSet>& input_partition_grid_constraint) {
+    bool require_input_channel_partition) {
     if (require_input_channel_partition) {
         TT_FATAL(
             input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED,
             "Preserving the input channel partition requires BLOCK_SHARDED layout");
-        TT_FATAL(
-            !input_partition_grid_constraint.has_value() ||
-                input_partition_grid_constraint.value() == input_parallel_config.grid,
-            "1D depthwise BLOCK_SHARDED convolution cannot override the output grid independently of the input grid");
         return input_parallel_config;
     }
 
@@ -910,15 +912,16 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
     auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, parallel_config);
+    if (require_tile_aligned_channels && conv_config.override_output_sharding_config) {
+        validate_input_channel_partition_grid(parallel_config, conv_config.core_grid.value());
+    }
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config,
         output_compute_grid_size,
         out_channels,
         parallel_config.shard_orientation,
         is_mm_conv,
-        require_tile_aligned_channels,
-        require_tile_aligned_channels && conv_config.override_output_sharding_config ? conv_config.core_grid
-                                                                                     : std::nullopt);
+        require_tile_aligned_channels);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
@@ -1163,15 +1166,16 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         conv_config.act_block_h_override);
 
     auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
+    if (require_tile_aligned_channels && conv_config.override_output_sharding_config) {
+        validate_input_channel_partition_grid(input_parallel_config, conv_config.core_grid.value());
+    }
     const ParallelConfig output_parallel_config = determine_output_parallel_config(
         input_parallel_config,
         output_compute_grid_size,
         out_channels,
         shard_orientation,
         is_mm_conv /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/,
-        require_tile_aligned_channels,
-        require_tile_aligned_channels && conv_config.override_output_sharding_config ? conv_config.core_grid
-                                                                                     : std::nullopt);
+        require_tile_aligned_channels);
 
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
