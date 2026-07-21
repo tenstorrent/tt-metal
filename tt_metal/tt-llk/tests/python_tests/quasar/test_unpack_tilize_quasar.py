@@ -75,17 +75,13 @@ def generate_unpack_tilize_combinations(
         out_fmt = fmt.output_format
 
         dest_acc_modes = (
-            # disable dest accumulation for now
-            # (DestAccumulation.Yes,)
-            # if in_fmt.is_32_bit()
-            # else (
-            #     (DestAccumulation.No,)
-            #     if in_fmt in [DataFormat.Float16, DataFormat.Int16]
-            #     else (DestAccumulation.No, DestAccumulation.Yes)
-            # )
             (DestAccumulation.Yes,)
             if in_fmt.is_32_bit()
-            else (DestAccumulation.No,)
+            else (
+                (DestAccumulation.No,)
+                if in_fmt in [DataFormat.Float16, DataFormat.Int16]
+                else (DestAccumulation.No, DestAccumulation.Yes)
+            )
         )
         # 32-bit tilize uses unpack_to_dest (UNP_DEST)
         unpacker_engines = (
@@ -97,6 +93,14 @@ def generate_unpack_tilize_combinations(
         for dest_acc in dest_acc_modes:
             for dest_sync in (DestSync.Half, DestSync.Full):
                 for unpacker_sel in unpacker_engines:
+                    # Dest accumulation (32-bit dest) is only supported on SrcA
+                    # (UNP_A); see the static_assert in
+                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
+                    if (
+                        dest_acc == DestAccumulation.Yes
+                        and unpacker_sel == UnpackerEngine.UnpB
+                    ):
+                        continue
                     for tile_dims in UNPACK_TILIZE_TILE_SIZES:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                             continue
