@@ -275,3 +275,89 @@ def test_quasar_conv2d(
         shard_layout=shard_layout,
         reshard_if_not_optimal=reshard_if_not_optimal,
     )
+
+
+def _launch_quasar_conv2d(device, *, full_inner_dim):
+    torch.manual_seed(0)
+    batch_size, in_channels, out_channels, input_height, input_width = 1, 256, 256, 14, 14
+    kernel_size, stride, padding = (3, 3), (1, 1), (1, 1)
+
+    torch_input_nhwc = torch.randn((batch_size, input_height, input_width, in_channels), dtype=torch.bfloat16)
+    torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16)
+    torch_bias = torch.randn((1, 1, 1, out_channels), dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16)
+    tt_bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16)
+
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        reshard_if_not_optimal=True,
+        full_inner_dim=full_inner_dim,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        packer_l1_acc=True,
+    )
+
+    out, _, _ = ttnn.experimental.quasar.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=(1, 1),
+        groups=1,
+        device=device,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+        dtype=ttnn.bfloat16,
+    )
+    ttnn.synchronize_device(device)
+    return out
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_conv2d_program_cache(mesh_device):
+    device = mesh_device
+    grid = device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    sticks = 14 * 14
+    if sticks / max_cores > 2048:
+        pytest.skip(
+            f"conv activation = {sticks} sticks over {max_cores} cores = {sticks // max_cores}/core; "
+            f"run on the full Quasar part."
+        )
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    before = device.num_program_cache_entries()
+    _launch_quasar_conv2d(device, full_inner_dim=False)
+    after_first = device.num_program_cache_entries()
+    assert (
+        after_first == before + 1
+    ), f"first launch should add exactly one program-cache entry, added {after_first - before}"
+
+    _launch_quasar_conv2d(device, full_inner_dim=False)
+    after_repeat = device.num_program_cache_entries()
+    assert (
+        after_repeat == after_first
+    ), f"identical relaunch should reuse the cached program, added {after_repeat - after_first}"
+
+    _launch_quasar_conv2d(device, full_inner_dim=True)
+    after_toggle = device.num_program_cache_entries()
+    assert (
+        after_toggle == after_repeat + 1
+    ), f"flipping full_inner_dim must produce a distinct cache entry, added {after_toggle - after_repeat}"
