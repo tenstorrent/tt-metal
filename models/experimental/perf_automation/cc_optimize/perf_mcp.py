@@ -577,7 +577,7 @@ def _tp_candidate(open_op: dict, op_code: str) -> bool:
     oc = (op_code or "").lower()
     if "matmul" not in oc and "linear" not in oc:
         return False
-    return (open_op.get("bound_by") or "").lower() in ("memory", "dram", "both")
+    return (open_op.get("bound_by") or "").lower() == "memory"
 
 
 def _rung_state(matches, kind):
@@ -608,8 +608,11 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
     grid_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "grid")
     dtype_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "dtype")
+    fidelity_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "fidelity")
+    shard_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "shard")
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
+    fidelity = (open_op.get("fidelity") or "").lower()
     bound = (open_op.get("bound_by") or "").lower()
     is_matmul = "matmul" in (op_code or "").lower()
     # BOX (0) HOST / dispatch bucket (GAP-A) — NOT a device op, so the matmul ladder (grid/dtype/
@@ -632,15 +635,27 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # BOX (1) KNOBS — exhaust the cheap levers IN ORDER before any kernel. A knob is satisfied when
     # the profile tag shows it applied, OR a record_kernel_attempt of that knob-kind is on file (so a
     # PCC-failed/ineffective knob can be marked 'tried' and not loop forever).
-    #  (1a) full core grid — applying a full-grid program_config sets grid=full
     if grid and grid != "full" and grid_tries < _MAX_KNOB_RETRIES:
         return (False, "knob:grid", f"occupy the FULL core grid (grid={grid}) via a full-grid program_config")
-    #  (1b) lower the weight dtype on a memory-bound matmul (the dominant cheap lever there)
-    if is_matmul and bound == "memory" and wdtype in ("fp32", "bf16", "fp16") and dtype_tries < _MAX_KNOB_RETRIES:
+    if bound == "compute" and fidelity_tries < _MAX_KNOB_RETRIES:
+        return (
+            False,
+            "knob:fidelity",
+            f"lower the math fidelity (now {fidelity or 'unknown'}) HiFi4->HiFi2->LoFi on this compute-bound op; "
+            "record_kernel_attempt(...,'fidelity',...) to mark it tried (even on a PCC revert / no-gain)",
+        )
+    if is_matmul and bound == "memory" and wdtype not in ("bf8_b", "bf4_b") and dtype_tries < _MAX_KNOB_RETRIES:
         return (
             False,
             "knob:dtype",
-            f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
+            f"lower the weight dtype (now {wdtype or 'unknown'}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
+        )
+    if bound == "memory" and shard_tries < _MAX_KNOB_RETRIES:
+        return (
+            False,
+            "knob:shard",
+            "shard this memory-bound op's weights/activations into L1 (height/width shard) to cut DRAM reads; "
+            "record_kernel_attempt(...,'shard',...) to mark it tried (even on a no-gain)",
         )
     if _is_kernel_able(op_code):
         _tr = _trace_on()
@@ -722,7 +737,11 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "reducible work, record 'structural' with note='none: <evidence you checked>' to mark it tried.",
         )
     # every box ticked -> genuine irreducible residual -> DONE for this op
-    return (True, "done", "checklist complete (grid+dtype+tt-lang+C++ + structural assessment) -> irreducible")
+    return (
+        True,
+        "done",
+        "checklist complete (grid+fidelity+dtype+shard+tt-lang+C++ + structural assessment) -> irreducible",
+    )
 
 
 class _Run:
@@ -1742,6 +1761,8 @@ def record_kernel_attempt(
     _KNOB_KINDS = {
         "grid",
         "dtype",
+        "fidelity",
+        "shard",
         "knob",
         "fusion",
         "fuse",
@@ -1837,8 +1858,8 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
     NEGATIVE knowledge of what NOT to do, e.g. 'don't bf16 Q/K/V', 'packer_l1_acc must be True'); it
     NEVER lets you skip a rung or stop early. You must still check_pcc + measure_candidate +
     record_kernel_attempt for the rung exactly as termination_check requires. If nothing matches,
-    improvise from principles (cc does not yet auto-distill the win back into the catalog — that
-    write-back currently happens only on the FSM path).
+    improvise from principles, then persist the win yourself with distill_knob (the write-back is a
+    manual agent call on the cc engine).
 
     op_class: one of matmul|attention|reduction|eltwise|datamove|embedding|conv_pool|ccl|
     host_fallback|other (pass next_target.op_class). grid + bound_by (pass next_target.grid +
@@ -1968,8 +1989,6 @@ def distill_knob(
 
 @mcp.tool()
 def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
-    if blocking:
-        return None
     for b in prof.get("buckets") or []:
         if b.get("id") != "host_overhead":
             continue
@@ -2143,8 +2162,8 @@ def termination_check() -> dict:
             "catalogued knob (heed its negative knowledge); improvise from scratch ONLY if nothing "
             "matches — a recalled knob still requires check_pcc + measure + record_kernel_attempt (it "
             "never skips a rung). Ladder ORDER: "
-            "knob:grid -> knob:dtype -> tt-lang -> cpp. record_kernel_attempt for EACH rung (knobs too: "
-            "kind='grid'/'dtype'; kernels: 'tt-lang'/'cpp'). A later rung does NOT clear an op while an "
+            "knob:grid -> knob:fidelity -> knob:dtype -> knob:shard -> tt-lang -> cpp. record_kernel_attempt for EACH rung (knobs too: "
+            "kind='grid'/'fidelity'/'dtype'/'shard'; kernels: 'tt-lang'/'cpp'). A later rung does NOT clear an op while an "
             "earlier rung is untried. WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs "
             "had no match), call distill_knob to persist it for reuse; if the win re-used a provisional "
             "lever from another model, pass its id to distill_knob to graduate it. Re-run "

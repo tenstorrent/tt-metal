@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 
-_LEVEL_COLS = ("grid", "dtype", "tt-lang", "cpp", "host")
+_LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "tt-lang", "cpp", "host")
 _HOST_KINDS = {"trace", "2cq", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
 
 _REPORT_NAME = "RUN_REPORT.md"
@@ -71,7 +71,7 @@ def module_optimize_block(
 
 def _level_of(kind: str) -> str:
     k = (kind or "").lower()
-    if k in ("grid", "dtype", "tt-lang", "cpp"):
+    if k in ("grid", "dtype", "fidelity", "shard", "tt-lang", "cpp"):
         return k
     if k in _HOST_KINDS:
         return "host"
@@ -373,6 +373,6 @@ def render_summary(
 
     lines.append("")
     lines.append(
-        f"levels: grid -> dtype -> {_disp_level('tt-lang')} -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
+        f"levels: grid -> fidelity -> dtype -> shard -> {_disp_level('tt-lang')} -> cpp -> host   |   ✓win = beat baseline, ·try = measured no-gain, ·wedge = wedged/crashed when tried, — = not attempted"
     )
     return "\n".join(lines)

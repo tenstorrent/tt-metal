@@ -226,6 +226,10 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
                 "gap_ms": gap,
                 "gap_pct": (round(100.0 * gap / ideal, 1) if ideal else None),
                 "bound_by": o.get("bound_by"),
+                "grid": o.get("grid"),
+                "fidelity": o.get("fidelity"),
+                "memory": o.get("memory"),
+                "weight_dtype": o.get("weight_dtype"),
                 "at_floor": at_floor,
             }
         )

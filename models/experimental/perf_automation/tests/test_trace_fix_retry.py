@@ -7,7 +7,7 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 perf_mcp = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(perf_mcp)
-ladder = perf_mcp._op_ladder_status
+_ladder_raw = perf_mcp._op_ladder_status
 
 
 def _op(grid="full", wdtype="bf8_b", bound="memory"):
@@ -16,6 +16,13 @@ def _op(grid="full", wdtype="bf8_b", bound="memory"):
 
 def _att(kind, n=1, wedged=False):
     return [{"op_signature": "MatmulDeviceOperation", "kernel_kind": kind, "wedged": wedged} for _ in range(n)]
+
+
+_KDONE = _att("shard", perf_mcp._MAX_KNOB_RETRIES)
+
+
+def ladder(op, op_code, attempts):
+    return _ladder_raw(op, op_code, _KDONE + list(attempts))
 
 
 def test_rung_state_clean_true_when_measured():
