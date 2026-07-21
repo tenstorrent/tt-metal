@@ -108,12 +108,12 @@ def _score_take(wav_np, text, codes):
         return 1.0 - diversity, f"diversity {diversity:.3f} (fallback; no CER)"
 
 
-def _generate_one(tt, wrapped, cond_mel, spk_wav_tt, args):
+def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, args):
     """One full device generation + vocode + onset post-processing. Returns (wav_np, codes, dt)."""
     t0 = time.time()
     wav_dev, codes = tt.inference(
         wrapped,
-        cond_mel,
+        cond_wav,
         spk_wav_tt,
         max_new_tokens=args.max_tokens,
         temperature=args.temperature,
@@ -126,7 +126,7 @@ def _generate_one(tt, wrapped, cond_mel, spk_wav_tt, args):
     return _postprocess(wav_np), codes, time.time() - t0
 
 
-def _take_on_device(sd, ref_decoder_full, wrapped, cond_mel, spk_wav, args, seed_offset):
+def _take_on_device(sd, ref_decoder_full, wrapped, cond_wav, spk_wav, args, seed_offset):
     """Open a FRESH device, build the model, run one generation, close the device. The fp32
     HiFi-GAN vocoder exhausts L1_SMALL when several full generations share one device, so
     best-of-N isolates each take on its own device (same reason the tests use a per-test
@@ -141,7 +141,7 @@ def _take_on_device(sd, ref_decoder_full, wrapped, cond_mel, spk_wav, args, seed
             # distinct-but-reproducible-ish seed per take (ttnn sampling isn't bit-exact across
             # runs regardless, so takes differ even without this).
             ttnn.manual_seed(args.seed + seed_offset, device=device)
-        return _generate_one(tt, wrapped, cond_mel, spk_wav_tt, args)
+        return _generate_one(tt, wrapped, cond_wav, spk_wav_tt, args)
     finally:
         ttnn.close_device(device)
 
@@ -229,8 +229,8 @@ def main():
     sd = load_xtts_state_dict()
 
     # Inputs: reference audio (22.05 kHz for conditioning, 16 kHz for the speaker encoder) + text.
+    # The 80-mel is now computed ON DEVICE (TtConditioningMel), so the device path takes the raw wav.
     wav = _load_audio_22k(args.ref_audio, args.ref_seconds)
-    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s] (chunk-averaged on device)
     g = math.gcd(SPK_SR, MEL_SR)
     # Speaker path is capped independently — the device mel frontend can't reshape very long audio.
     spk_src = wav[0].numpy()[: MEL_SR * args.spk_seconds]
@@ -268,7 +268,7 @@ def main():
     # the lowest-CER take. A single take (default) is just one open/generate/close.
     wav_tt, codes, best_score, best_detail = None, None, None, None
     for i in range(n):
-        wav_i, codes_i, dt = _take_on_device(sd, reference.decoder_full, wrapped, cond_mel, spk_wav, args, i)
+        wav_i, codes_i, dt = _take_on_device(sd, reference.decoder_full, wrapped, wav, spk_wav, args, i)
         n_codes = codes_i.shape[1]
         stopped = n_codes < args.max_tokens
         score, detail = _score_take(wav_i, args.text, codes_i) if n > 1 else (0.0, "")
@@ -290,7 +290,8 @@ def main():
     if args.write_torch_ref:
         # A/B on the SAME codes the best device take produced (teacher-forced), so the two WAVs
         # are the same utterance — not an independent greedy run (which would collapse). Runs on
-        # host (CPU torch), so no device is needed here.
+        # host (CPU torch), so no device is needed here (torch reference uses the host wav_to_mel).
+        cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s] for the torch reference
         wav_ref = reference.wav_from_codes(wrapped, cond_mel, spk_wav, codes[0].tolist())
         ref_path = args.output.replace(".wav", "_reference.wav")
         sf.write(ref_path, wav_ref.reshape(-1).numpy(), OUTPUT_SAMPLE_RATE)
