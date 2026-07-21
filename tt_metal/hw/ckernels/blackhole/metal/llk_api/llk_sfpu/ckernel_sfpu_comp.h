@@ -179,59 +179,54 @@ inline void calculate_comp_int() {
     }
 }
 
-// The uint16/uint32 comparison-to-zero kernels below are intentionally kept as raw TTI on
-// Blackhole. The pure-SFPI rewrite (DataLayout::U16/U32 + v_if) has only been done and perf-
-// validated on Wormhole so far (see the WH copy of this file); Blackhole stays on the existing
-// TTI path until the same conversion is measured here. The tt-llk functional tests still route
-// through these kernels on BH, so they keep validating the TTI implementation for correctness.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
-    constexpr int check = ((COMP_MODE == SfpuType::equal_zero) ? SFPSETCC_MOD1_LREG_EQ0 : SFPSETCC_MOD1_LREG_NE0);
+    // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
+    // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // load in conditional uint16 value
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
-        // initially put 0 into output
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        // if (REG0 == 0)
-        TTI_SFPSETCC(0, 0, 0, check);
-        // load in (int) 1
-        TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x0001);
-        // end_if
-        TTI_SFPENCC(0, 0, 0, 0);
-        // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
+        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+            vUInt r = 0;
+            v_if(v == 0) { r = 1; }
+            v_endif;
+            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
+        } else {
+            vUInt r = 1;
+            v_if(v == 0) { r = 0; }
+            v_endif;
+            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
+        }
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
-    int scalar = -5;  // used for shift operation
-    _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
+    // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
+    // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
+    // (only a compare against the all-zero word), so a plain unsigned compare works.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPLZ(0, 0, 1, 4);    // result in lreg1 is leading zero count
-        TTI_SFPSHFT(0, 2, 1, 0);  // 32 >> 5 = 1 else 0
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        vUInt r = 0;
+        v_if(v == 0) { r = 1; }
+        v_endif;
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        // initially put 0 into output
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        // if (REG0 != 0)
-        TTI_SFPSETCC(0, 0, 0, SFPSETCC_MOD1_LREG_NE0);
-        // load in (int) 1
-        TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x0001);
-        // end_if
-        TTI_SFPENCC(0, 0, 0, 0);
-        // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        vUInt r = 1;
+        v_if(v == 0) { r = 0; }
+        v_endif;
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
