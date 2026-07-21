@@ -38,24 +38,27 @@
 
 namespace ckernel {
 
-#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
-// Batched unpack-to-dest tilize (tt-metal #49445): the LLK-intended tilize-to-DEST unpacks a whole tile-row
-// into DISTINCT DEST slots with ONE section_done per DEST section — unlike the single-tile UNP_DEST path,
-// which lands every tile in DEST slot 0 with a per-tile section_done and mis-orders the tilized data (PCC~0).
-// A conv tilize block is one 32-row tile-row of `block_width` column-tiles; when block_width exceeds the DEST
-// tile capacity the row is split into equal compile-time column chunks that each fit DEST.
-
+#ifdef ARCH_QUASAR
 // DEST tile capacity in the CURRENT sync/accum mode: full DEST holds DEST_REGISTER_FULL_SIZE/(NUM_FACES*
 // FACE_R_DIM) full tiles in fp16 (== DEST_NUM_TILES_FP16); half-sync holds half, and 32-bit dest (accum)
 // halves it again. Derived from ckernel_trisc_common.h constants (pulled in by the unpack/math/pack LLK
 // headers this file includes) rather than ckernel_defs.h's DEST_NUM_TILES_FP16, which the compute-API build
-// does not transitively include.
+// does not transitively include. Used by BOTH the UNPACK_TO_DEST batched tilize (compile-time column-chunk
+// width) and the default per-tile datacopy tilize (wide-row chunk size in tilize_block, to keep every DEST
+// section within one non-wrapping capacity — see tilize_block's Quasar branch).
 constexpr uint32_t qsr_tilize_dest_tile_cap() {
     constexpr uint32_t full_tiles =
         ckernel::trisc::DEST_REGISTER_FULL_SIZE / (ckernel::trisc::NUM_FACES * ckernel::trisc::FACE_R_DIM);
     uint32_t cap = (DST_SYNC_MODE == DstSync::SyncFull) ? full_tiles : (full_tiles >> 1);
     return DST_ACCUM_MODE ? (cap >> 1) : cap;
 }
+
+#ifdef QSR_TILIZE_UNPACK_TO_DEST
+// Batched unpack-to-dest tilize (tt-metal #49445): the LLK-intended tilize-to-DEST unpacks a whole tile-row
+// into DISTINCT DEST slots with ONE section_done per DEST section — unlike the single-tile UNP_DEST path,
+// which lands every tile in DEST slot 0 with a per-tile section_done and mis-orders the tilized data (PCC~0).
+// A conv tilize block is one 32-row tile-row of `block_width` column-tiles; when block_width exceeds the DEST
+// tile capacity the row is split into equal compile-time column chunks that each fit DEST.
 
 // Largest column-chunk width that (a) fits DEST and (b) divides block_width evenly, so every chunk reuses the
 // same compile-time MOP (no tail re-program). Degenerates to 1 (per-tile) only for block widths sharing no
@@ -68,7 +71,8 @@ constexpr uint32_t qsr_tilize_chunk_width(uint32_t block_width) {
     }
     return c;
 }
-#endif
+#endif  // QSR_TILIZE_UNPACK_TO_DEST
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -357,6 +361,63 @@ ALWI void tilize_block(
     return;
 #endif
 
+#ifdef ARCH_QUASAR
+    // Quasar per-tile datacopy tilize (TT_METAL_QSR_TILIZE_UNPACK_TO_DEST OFF). A WIDE tile-row faults with
+    // ERROR_TRISC1 0x19 (RISC IB interrupt on MATH) once the per-tile MATH datacopy -> PACK advances the DEST
+    // section past its half-capacity: after `cap` tiles the section base wraps and the next tile's datacopy
+    // laps the packer in the reused DEST bank. It is a clean width cutoff — a block of <= cap tiles is one
+    // non-wrapping DEST section and is safe (e.g. avg_pool2d C512 -> 8 tiles PASS), a wider block faults
+    // (C2048 -> 64 tiles FAULT at the first wrap ~tile cap). Fix: split a wide row into cap-sized column
+    // chunks and, BETWEEN chunks, return the MATH+PACK dest sync to the clean kernel-start phase
+    // (llk_math_pack_sync_init drains outstanding packs, re-seeds the MATH_PACK semaphore, and resets the MATH
+    // dest-section base to bank 0; llk_pack_init/llk_pack_dest_init reset the packer side). Each chunk then
+    // runs exactly like the first (already-passing) chunk and never crosses the wrap, so 0x19 cannot recur.
+    // `cap` tracks the sync/accum mode: SyncHalf bf16 -> 8 (matches the observed cutoff), 32-bit dest -> 4.
+    // Clamp to the empirically known-safe 8 (avg_pool2d C512 = 8 tiles PASS) so we never exceed the confirmed
+    // safe width even if a mode reports a larger DEST capacity; the clamp still shrinks to 4 for 32-bit dest
+    // (matches the conv's t=4 fault boundary). WIDTH-DRIVEN: for block <= chunk_cap this is a single chunk with
+    // NO re-init -> byte-identical to the previous single-block path, so the already-passing narrow cases (and
+    // the pool/conv tilize_block callers whose block already fits) stay unchanged. WH/BH take #else, unchanged.
+    constexpr uint32_t qsr_tilize_dest_cap = qsr_tilize_dest_tile_cap();
+    constexpr uint32_t chunk_cap = (qsr_tilize_dest_cap < 8u) ? qsr_tilize_dest_cap : 8u;
+    for (uint32_t c0 = 0; c0 < block; c0 += chunk_cap) {
+        const uint32_t this_chunk = ((block - c0) < chunk_cap) ? (block - c0) : chunk_cap;
+        if (c0 > 0) {
+            // Re-sync DEST/pack to the clean phase before each subsequent chunk (mirrors
+            // tilizeA_B_reduce_init_short's per-iteration re-init; NO hw_configure, which would corrupt engine
+            // state per [[reference_quasar_compute_hw_startup_once]]). The pack-sync drain also serializes the
+            // chunk boundary (small perf cost, correctness-safe).
+            MATH((llk_math_pack_sync_init()));
+            PACK((llk_pack_init(ocb)));
+            PACK((llk_pack_dest_init()));
+        }
+        // Unpack this chunk's tiles into SrcA. The column offset c0 preserves the FULL-row stride programmed
+        // once by tilize_init (full_ct_dim = block) while addressing columns [c0, c0+this_chunk) — identical
+        // tiling to the single wide unpack, issued cap tiles at a time.
+        UNPACK((llk_unpack_tilize_block(icb, this_chunk, input_tile_index, c0 /*col_tile_offset*/)));
+
+        for (uint32_t t = 0; t < this_chunk; t++) {
+            // Acquire dst
+            MATH((llk_math_wait_for_dest_available()));
+            PACK((llk_packer_wait_for_math_done()));
+
+            MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+            PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, c0 + t + output_tile_index)));
+            // PER-TILE FPU dest-dvalid clear (the fix for ERROR_TRISC1 0x19 at t~4). The MOVA2D datacopy sets
+            // the FPU dest-dvalid but its terminal CLEARDVALID clears SrcA only, and llk_math_dest_section_done
+            // only SEMPOSTs MATH_PACK + advances the bank — NEITHER clears the FPU dest client. So the ~4-deep
+            // FPU dest-dvalid ring laps after ~4 tiles -> IB interrupt. The reduce/pool path avoids this by
+            // folding the clear inline per op; here we do it explicitly per tile. _llk_math_set_dvalid_ is the
+            // ONLY place that pulses the FPU-dest CLEARDVALID. Safe wrt PACK: the dvalid is a sync bit, the DEST
+            // data persists, and PACK reads via the MATH_PACK semaphore (posted by dest_section_done below),
+            // not the dvalid; the sem also bounds the next MOVA2D so it can't overwrite before PACK reads.
+            MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
+            // Release dest
+            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        }
+    }
+#else
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
@@ -364,29 +425,15 @@ ALWI void tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-#ifndef ARCH_QUASAR
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/, icb)));
         PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
-#else
-        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
-        // PER-TILE FPU dest-dvalid clear (the fix for ERROR_TRISC1 0x19 at t~4). The MOVA2D datacopy sets the
-        // FPU dest-dvalid but its terminal CLEARDVALID clears SrcA only, and llk_math_dest_section_done only
-        // SEMPOSTs MATH_PACK + advances the bank — NEITHER clears the FPU dest client. So the ~4-deep FPU
-        // dest-dvalid ring laps after ~4 tiles -> IB interrupt. The reduce/pool path avoids this by folding the
-        // clear inline per op; here we do it explicitly per tile. _llk_math_set_dvalid_ is the ONLY place that
-        // pulses the FPU-dest CLEARDVALID. Safe wrt PACK: the dvalid is a sync bit, the DEST data persists, and
-        // PACK reads via the MATH_PACK semaphore (posted by dest_section_done below), not the dvalid; the sem
-        // also bounds the next MOVA2D so it can't overwrite before PACK reads. (Prior one-shot scrub before the
-        // loop only delayed the lap to t=4 — the clear must be PER TILE.)
-        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
-#endif
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
+#endif
 }
 
 // clang-format off
