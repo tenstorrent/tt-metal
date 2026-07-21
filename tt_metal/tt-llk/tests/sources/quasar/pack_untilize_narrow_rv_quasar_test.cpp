@@ -307,6 +307,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t last_t            = FULL_CT_DIM - 1;
 
     // Pack one DEST face-row (16 datums) of tile t to its untilized output slot.
+    //
+    // Both input_addr and l1_addr are recomputed in software every op ON PURPOSE — the
+    // RV_PACR HW auto-increment (inc_mode=1 + inc_input_idx/inc_output_idx) cannot express
+    // this mapping. Per the RTL (ws-tensix tt_pack_row.sv): inc_input/output_idx advance a
+    // tile-INDEX counter by a hardcoded +1 (l.987/993), and that index maps to addresses by
+    // fixed geometry only — source row = idx (l.565, 16x1x1) and output = idx<<tile_size (l.698,
+    // contiguous 16-datum steps). That yields a plain linear tilized->linear walk. It cannot do
+    // (a) the face de-interleave (remap: output row order is a bit-permutation of input rows),
+    // (b) the custom matrix_w row stride (not a whole tile), or (c) the two-pass overwrite. HW
+    // untilize=1 would do the de-interleave but forces full-tile geometry + face-granular stride
+    // (the very thing this demo works around). So the software recompute is fundamental here.
     auto pack_row = [&](std::uint32_t t, std::uint32_t row)
     {
         g0.f.input_addr = t * 64 + row; // DEST row of tile t
