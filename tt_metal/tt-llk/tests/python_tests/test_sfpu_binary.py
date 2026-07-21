@@ -7,6 +7,7 @@ from enum import Enum
 
 import pytest
 import torch
+from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -917,6 +918,7 @@ def _golden_sfpu_binary_bcast(
     return tilize(golden_rm, stimuli_format=stimuli_format)
 
 
+@skip_for_quasar
 @parametrize(
     formats=input_output_formats(
         [
