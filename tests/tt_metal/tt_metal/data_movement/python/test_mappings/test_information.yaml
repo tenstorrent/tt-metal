@@ -817,7 +817,7 @@ tests:
   321:
     name: "All from All Packet Sizes"
     directory: "all_from_all"
-    web_viewer_name: "foo name"
+    web_viewer_name: "Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
