@@ -32,6 +32,25 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
   PREFILL_PRODUCER_CHECK_PCC     "1" to read KV back and PCC vs golden per slot (default 0)
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
+Env — real KV migration issued BY the producer (needs a live migration_endpoint the runner has
+  already driven to WORKER_READY). The producer submits + migrates + writes the DONE sentinel; it does
+  NOT validate KV — the RUNNER does that on-device via validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1),
+  which polls the sentinel and PCCs each pair (src vs golden, dst vs golden, and/or dst==src). The
+  producer attaches a MigrationLayerClient and issues migrate() per resident source slot after prefill +
+  ack drain (Python client exposes no burst API, so no overlap with prefill like the C++ scheduler):
+  PREFILL_PRODUCER_ISSUE_MIGRATION  "1" to attach a MigrationLayerClient and migrate each resident
+                                    slot's KV after prefill (default 0 = no migration).
+  PREFILL_MIGRATION_LAYER_BY_LAYER  "1" (default) issues one migrate() per layer; "0" one over all layers.
+  PREFILL_MIGRATION_DEST_ENDPOINT_ID  destination endpoint id for migrate() (default 1). Equal to the
+                                    endpoint's OWN id => loopback (routed to the internal B worker);
+                                    a different id => cross-endpoint (requires the pairing/connect).
+  PREFILL_MIGRATION_DST_SLOT_OFFSET  dst_slot = src_slot + offset (default = PREFILL_NUM_USERS, i.e.
+                                    src slots [0,N) migrate to dst slots [N,2N); the runner's KV table
+                                    must have >= 2N slots).
+  PREFILL_MIGRATION_TIMEOUT_MS      per-migration wait_complete timeout (default 3600000).
+  MIGRATION_DONE_FILE               path of the DONE sentinel the runner polls (default /tmp/migration_done.sentinel).
+  Queues + client come from the runner's migration env: PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and
+  PREFILL_MIGRATION_CLIENT_DIR (resolved via runners.migration).
 Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHUNK_SIZE /
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
@@ -70,6 +89,14 @@ GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+
+# Real KV migration issued by the producer (opt-in). See the module docstring's migration env block.
+ISSUE_MIGRATION = os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "0") == "1"
+MIGRATION_DEST_ENDPOINT_ID = int(os.environ.get("PREFILL_MIGRATION_DEST_ENDPOINT_ID", "1"))
+MIGRATION_TIMEOUT_MS = int(os.environ.get("PREFILL_MIGRATION_TIMEOUT_MS", "3600000"))
+
+# Prefill migrations default to per-layer issuance (see _issue_migrations); set "0" for single-shot.
+MIGRATION_LAYER_BY_LAYER = os.environ.get("PREFILL_MIGRATION_LAYER_BY_LAYER", "1") == "1"
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -665,6 +692,92 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
     return pool[:num_tokens]
 
 
+def _attach_migration_client():
+    """Attach a MigrationLayerClient to the migration endpoint's queues to ISSUE real slot->slot
+    KV migrations from the producer.
+
+    Reuses runners.migration's queue-name / client-import resolution (PREFILL_MIGRATION_{CMD,TABLE,
+    RESP}_QUEUE + PREFILL_MIGRATION_CLIENT_DIR). Does NOT send SET_TABLE / device map / wait_ready:
+    the runner already drove the endpoint to WORKER_READY (migration.publish_table_and_wait_ready)
+    and released its setup client, leaving the cmd queue free for us — exactly the handoff the C++
+    PrefillScheduler relies on. Returns the client (do NOT call shutdown() on it: the endpoint's
+    lifetime is owned by the launcher, not this producer)."""
+    from models.demos.common.prefill.runners.migration import _import_migration_client, _resolve_queue_names
+
+    cmd_q, table_q, resp_q = _resolve_queue_names()
+    ml = _import_migration_client().MigrationLayerClient(cmd_q, table_q, resp_q)
+    logger.info(f"[producer] migration client attached: cmd={cmd_q} table={table_q} resp={resp_q}")
+    return ml
+
+
+def _issue_migrations(
+    ml, stats: "RunStats", *, dest_endpoint_id: int, dst_slot_offset: int, timeout_ms: int, layer_by_layer: bool = True
+) -> int:
+    """Migrate every resident source slot's KV to slot (src + dst_slot_offset), blocking on completion.
+
+    `layer_by_layer=True` (prefill default) issues one single-shot migrate() PER LAYER
+    ([L, L+1) x [0, real_len)) — the per-layer granularity the C++ PrefillScheduler streams into a
+    burst as each layer-ack lands. The Python client binds no burst API, so these are N independent
+    migrations rather than one aggregated burst, and (unlike the scheduler) they run after the ack
+    drain rather than overlapping prefill. `layer_by_layer=False` issues one migrate() over the whole
+    [0, NUM_LAYERS) rectangle (fewer round-trips; the decode default once wired).
+
+    `real_len` is the slot's resident non-pad token count (min(chunks_pushed*CHUNK_SIZE, actual_isl)),
+    matching the KV the runner wrote. dest_endpoint_id == the endpoint's own id => loopback (internal B
+    worker); a different id => cross-endpoint (needs the pairing/connect out of band). Must run while
+    the runner is alive (before any SHUTDOWN sentinel): the endpoint reads source KV from device DRAM.
+    Returns the number of slots migrated."""
+    migrated = 0
+    next_uuid = 1
+    for src_slot, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
+        real_len = min(chunks_pushed * CHUNK_SIZE, actual_isl)
+        if real_len <= 0:
+            continue
+        dst_slot = src_slot + dst_slot_offset
+        layer_ranges = [(layer, layer + 1) for layer in range(NUM_LAYERS)] if layer_by_layer else [(0, NUM_LAYERS)]
+        logger.info(
+            f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} pos=[0,{real_len}) "
+            f"{'layer-by-layer' if layer_by_layer else 'single-shot'} ({len(layer_ranges)} migration(s))"
+        )
+        for layer_start, layer_end in layer_ranges:
+            uuid = next_uuid
+            next_uuid += 1
+            token = ml.migrate(
+                uuid=uuid,
+                remote_endpoint_id=dest_endpoint_id,
+                src_slot=src_slot,
+                dst_slot=dst_slot,
+                layer_start=layer_start,
+                layer_end_exclusive=layer_end,
+                pos_start=0,
+                pos_end_exclusive=real_len,
+            )
+            ml.wait_complete(token, timeout_ms)  # self-polls when no poll thread is running
+        logger.success(f"[producer] MIGRATE slot {src_slot} -> {dst_slot} complete ({len(layer_ranges)} migration(s))")
+        migrated += 1
+    logger.info(f"[producer] migrations complete: {migrated} slot(s)")
+    return migrated
+
+
+def _write_migration_done_sentinel(stats: "RunStats", *, dst_slot_offset: int) -> list:
+    """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — that the runner's
+    validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1) polls for. This is the SAME handshake the
+    llm-engine scheduler/driver used (prefill_scheduler_driver wrote this file after migrating). Once it
+    appears, the runner PCC-validates each pair ON-DEVICE: src vs golden + dst vs golden (burst), and/or
+    dst==src (PREFILL_MIGRATE_PAIRWISE=1). Returns the (src, dst) pairs written."""
+    done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
+    pairs = []
+    for src_slot, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
+        if min(chunks_pushed * CHUNK_SIZE, actual_isl) <= 0:
+            continue
+        pairs.append((src_slot, src_slot + dst_slot_offset))
+    with open(done_file, "w") as f:
+        for s, d in pairs:
+            f.write(f"{s} {d}\n")
+    logger.success(f"[producer] wrote migration DONE sentinel {done_file} ({len(pairs)} pair(s)): {pairs}")
+    return pairs
+
+
 def main() -> None:
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
@@ -682,6 +795,11 @@ def main() -> None:
     # Read the KV table + attach the LayerAck channel BEFORE pushing (the runner publishes them at setup).
     kv_table = _read_kv_chunk_table(timeout_s)
     ack_channel = _connect_layer_ack_channel(timeout_s)
+
+    # Opt-in: attach a migration client so we can issue real slot->slot migrations after prefill.
+    # Attach here (post-connect) so it fails fast if the endpoint isn't up, before we push chunks.
+    ml = _attach_migration_client() if ISSUE_MIGRATION else None
+    dst_slot_offset = int(os.environ.get("PREFILL_MIGRATION_DST_SLOT_OFFSET", str(cfg.num_users)))
 
     trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
     token_pool = _load_token_pool(trace_dir, cfg.chunks_max * CHUNK_SIZE)
@@ -711,7 +829,25 @@ def main() -> None:
     # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
-    # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
+    # Migrate over the migration layer now that the KV is fully resident, then hand the (src, dst) pairs
+    # to the runner. Like the llm-engine scheduler driver, the producer does NOT validate KV — the runner
+    # does that ON-DEVICE (src vs golden, dst vs golden, and/or dst==src) in validate_after_prefill once
+    # PREFILL_VALIDATE_MIGRATION=1 sees the sentinel. Migrates every resident slot (multi-user)
+    # src -> src+dst_slot_offset.
+    if ml is not None:
+        _issue_migrations(
+            ml,
+            stats,
+            dest_endpoint_id=MIGRATION_DEST_ENDPOINT_ID,
+            dst_slot_offset=dst_slot_offset,
+            timeout_ms=MIGRATION_TIMEOUT_MS,
+            layer_by_layer=MIGRATION_LAYER_BY_LAYER,
+        )
+        # Same handshake the llm-engine driver used: write the (src, dst) pairs; the runner validates.
+        _write_migration_done_sentinel(stats, dst_slot_offset=dst_slot_offset)
+
+    # Pre-existing producer-only golden PCC (PREFILL_PRODUCER_CHECK_PCC), for standalone/non-migration
+    # runs. NOT part of the migration flow — migration KV is validated by the runner, not here.
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
