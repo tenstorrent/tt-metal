@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      build-ttnn-import-artifact:
+        required: false
+        type: boolean
+        default: false
+        description: "Upload a lean artifact (build/lib *.so + runtime) so consumers can import ttnn in-place via TT_FROM_PRECOMPILED_DIR"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
         #        Fow now enabling an opt-out. But this should get removed.
@@ -83,6 +88,13 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       ref:
         required: false
         type: string
@@ -176,6 +188,11 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
+      ttnn-import-artifact-id:
+        description: "ID of the lean artifact (build/lib *.so + runtime) for importing ttnn in-place without a wheel"
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.ttnn_import_artifact_id || '' }}
   workflow_dispatch:
     inputs:
       tracy:
@@ -246,6 +263,13 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       wheel-ref:
         required: false
         type: string
@@ -272,7 +296,7 @@ jobs:
 
   # Parse platform dropdown to extract distro/version/toolchain
   parse-platform:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
@@ -390,6 +414,7 @@ jobs:
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      ttnn_import_artifact_id: ${{ steps.upload_ttnn_import.outputs.artifact-id }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
@@ -398,7 +423,7 @@ jobs:
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
       CCACHE_S3_READONLY: "false"
-      CCACHE_S3_DEBUG: "true"
+      CCACHE_S3_DEBUG: "false"
     container:
       # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
       # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
@@ -533,6 +558,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: Create ccache tmpdir
         run: |
@@ -692,6 +718,28 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      - name: Stage ttnn-import libs
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        run: |
+          # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime). strip --strip-unneeded
+          # drops the symbol table + debug, keeping the dynamic symbols needed to import ttnn.
+          mkdir -p /work/ttnn-import/build/lib
+          cp -a /work/build/lib/*.so* /work/ttnn-import/build/lib/
+          find /work/ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-unneeded {} +
+          cp -a /work/runtime /work/ttnn-import/runtime
+          echo "Lean ttnn-import tree size:"; du -sh /work/ttnn-import /work/ttnn-import/build/lib
+
+      - name: ☁️ Upload ttnn-import artifact
+        id: upload_ttnn_import
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        timeout-minutes: 10
+        with:
+          name: ttnn-import-${{ inputs.build-type }}
+          path: /work/ttnn-import
+          compression-level: 1
+          if-no-files-found: error
+
       - name: "Tar files"
         if: ${{ inputs.publish-artifact }}
         run: |
@@ -762,3 +810,4 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
       runs-on: ${{ inputs['runs-on'] }}
+      checkout-filter: ${{ inputs.checkout-filter }}

@@ -225,7 +225,9 @@ def prefill_sdpa_program_config(head_dim, seq_len):
     )
 
 
-def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0):
+def chunked_prefill_sdpa(
+    tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0, num_kv_heads=None
+):
     """Chunked causal prefill SDPA over a paged KV cache.
 
     Splits the Q sequence into chunks of ``PREFILL_CHUNK_SIZE`` (<=32768) and runs
@@ -240,11 +242,38 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
         page_table: int32 [batch, num_pages] (row ``user_id`` is this user's blocks).
         user_id: which page_table row maps this user's logical->physical blocks.
         head_dim: layer head_dim (512 for global layers; sizes the SDPA grid).
-    Returns:
-        [1, num_local_heads, seq_len, head_dim] attention output (TILE layout).
+        base_offset: absolute position (in the full sequence) of ``tt_q``'s first
+            row. Non-zero for generator-level multi-chunk prefill: chunk N's Q sits
+            at ``N*chunk_size`` and must attend the full prior prefix already in the
+            paged cache. Added to each internal Q-chunk offset so the op's causal
+            mask covers ``[0, base_offset + local_end)``. Must be a multiple of the
+            program's ``q_chunk_size`` (128); generator chunk sizes are >=128 powers
+            of two so this holds.
+        num_kv_heads: this layer's local KV-head count. Only needed when the paged
+            cache is HMA-shared with a different-shaped layer (vLLM hybrid kv-cache
+            groups): the cache's declared (num_kv_heads, block_size, head_dim) then
+            belongs to another layer's view (e.g. sliding head_dim=256) while this
+            full-attention layer needs head_dim=512. We pass the effective block_size
+            / num_kv_heads geometry override to the op so it reinterprets the shared
+            buffer — the same override paged_fill_cache / the decode SDPA already use.
+            When the cache matches this layer's own view (Option A / single pool) no
+            override is passed and behavior is byte-identical to before.
     """
     seq_len = tt_q.shape[-2]
     nh = tt_q.shape[1]
+    # Geometry override: reconcile an HMA-shared paged buffer whose declared shape is
+    # another layer's view. eff_bs / num_kv_heads recover this layer's block layout
+    # (Q drives head_dim). Only forwarded when they differ from the cache's declared
+    # shape, so the non-shared (Option A) path takes the op's legacy branch unchanged.
+    block_size_override = None
+    num_kv_heads_override = None
+    if num_kv_heads is not None:
+        eff_bs = effective_block_size(k_cache, head_dim, num_kv_heads)
+        cache_block_size = k_cache.padded_shape[2]
+        cache_num_kv_heads = k_cache.padded_shape[1]
+        if eff_bs != cache_block_size or num_kv_heads != cache_num_kv_heads:
+            block_size_override = eff_bs
+            num_kv_heads_override = num_kv_heads
     # head_dim=512 needs more L1/core, so use a smaller grid + 128 chunks (the
     # validated config); sliding-size head_dim uses the full grid.
     if head_dim >= 512:
@@ -294,10 +323,12 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
             k_cache,
             v_cache,
             user_pt,
-            chunk_start_idx=start,
+            chunk_start_idx=base_offset + start,
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
+            block_size=block_size_override,
+            num_kv_heads=num_kv_heads_override,
         )
         q_chunk.deallocate(True)
         if pad:

@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
-#include <limits>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -622,6 +621,15 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
+// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
+// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
+// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
+// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
+// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
+// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
+// enforced at program finalize.
+constexpr uint32_t max_runtime_args_tensix = 4096;
+
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 // num_unique_rt_args and num_common_rt_args are user-visible arg counts (excluding any watcher count words).
 void Kernel::validate_runtime_args_size(
@@ -631,14 +639,14 @@ void Kernel::validate_runtime_args_size(
 
     // The enforced ceiling is no longer the conservative public floor (kernel_types.hpp:max_runtime_args).
     // Large unique RTAs are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, so they are no longer
-    // bounded by a single dispatch page. The RTA/CRTA region offset is stored in a uint16_t launch-message
-    // field (dev_msgs.h rta_offset_t), which caps the region at uint16_t max bytes.
+    // bounded by a single dispatch page.
     switch (this->get_kernel_programmable_core_type()) {
         case HalProgrammableCoreType::TENSIX:
             // The TENSIX kernel-config L1 size is device-dependent (derived from the allocator at program
-            // finalize, not available from the HAL here), so bound only by the uint16_t RTA offset field.
-            // The actual L1 fit is enforced later against the kernel-config ring buffer.
-            expected_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
+            // finalize, not available from the HAL here), so bound by the dispatch-core-independent
+            // large-unicast cap (see max_runtime_args_tensix above). The actual L1 fit is enforced later
+            // against the kernel-config ring buffer.
+            expected_max_rt_args = max_runtime_args_tensix;
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
@@ -790,8 +798,12 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
         .programmable_core_type = get_kernel_programmable_core_type(),
     };
 
-    if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-        result.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
+    const auto& kernel_config = config();
+    if (const auto* compute_config = std::get_if<ComputeConfig>(&kernel_config)) {
+        result.math_fidelity = compute_config->math_fidelity;
+    } else if (
+        const auto* quasar_compute_config = std::get_if<experimental::quasar::QuasarComputeConfig>(&kernel_config)) {
+        result.math_fidelity = quasar_compute_config->math_fidelity;
     }
 
     if (device != nullptr) {

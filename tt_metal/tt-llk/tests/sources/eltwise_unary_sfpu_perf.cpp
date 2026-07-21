@@ -43,6 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const bool UNPACK_TRANSPOSE_FACES       = params.UNPACK_TRANSPOSE_FACES;
     const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
+
+    const auto& buffer_A = params.buffer_A;
 #endif
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
@@ -52,8 +54,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 
-        _llk_unpack_A_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
-            UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+        // acc_to_dest must be false to allow unpack_to_dest (the static assert in
+        // llk_unpack_A forbids both together) — matches the functional kernel.
+        _llk_unpack_A_init_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
+            UNPACK_TRANSPOSE_FACES,
+            UNPACK_TRANSPOSE_WITHIN_FACE,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -82,8 +90,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
-                        PERF_ADDRESS(PERF_INPUT_A, /* tile_idx */ i), formats.unpack_A_src, formats.unpack_A_dst);
+                    // Accuracy-merge: read input from the runtime operand address
+                    // (StimuliConfig layout) instead of the fixed PERF_INPUT_A, so
+                    // the harness's stimuli line up with what the kernel consumes.
+                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest (see init) */, reuse_dest_type, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -119,7 +130,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT>();
+        // CLAMP_NEGATIVE must match the accuracy harness (which passes it): for
+        // approx exp it selects the clamped approx-exp branch in sfpu_operations.
+        // Omitting it defaulted to false -> a different approx path -> mismatch.
+        test_utils::
+            call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT, CLAMP_NEGATIVE>();
         PROFILER_SYNC();
     }
     {
@@ -216,7 +231,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             is_fp32_dest_acc_en,
                             ITERATIONS,
                             FAST_MODE,
-                            STABLE_SORT>(block_tile, formats.math);
+                            STABLE_SORT,
+                            CLAMP_NEGATIVE>(block_tile, formats.math);
                     }
                 }
             }
@@ -250,7 +266,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             is_fp32_dest_acc_en,
                             ITERATIONS,
                             FAST_MODE,
-                            STABLE_SORT>(block_tile, formats.math);
+                            STABLE_SORT,
+                            CLAMP_NEGATIVE>(block_tile, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -278,6 +295,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_Res          = params.buffer_Res;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -308,7 +326,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                            block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
                     }
                 }
             }
@@ -328,7 +346,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                            block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
                     }
                     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                 }

@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -52,14 +51,15 @@ void kernel_main() {
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
         cb_out0.wait_front(num_tiles_block_c);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            CoreLocalMem<uint32_t> src(l1_read_addr);
             noc.async_write(
-                src, s, block_size, {.offset_bytes = 0}, {.page_id = curr_stick_id, .offset_bytes = offset});
+                cb_out0,
+                s,
+                block_size,
+                {.offset_bytes = k * block_row_size},
+                {.page_id = curr_stick_id, .offset_bytes = offset});
 
-            l1_read_addr += block_row_size;
             curr_stick_id++;
 
             // Block write

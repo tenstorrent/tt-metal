@@ -10,6 +10,8 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -78,6 +80,22 @@ struct BinaryNgDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // Re-apply ALL per-dispatch state to the cached program on every program-cache hit — the
+    // descriptor-era analog of the legacy override_runtime_arguments().  compute_program_hash
+    // EXCLUDES the tensor volume, so one cached program is reused across differently-shaped and
+    // differently-allocated (incl. in-place, out=x) calls; this re-derives every per-core runtime
+    // arg AND every tensor-backed circular-buffer base address for the CURRENT tensors, via the same
+    // shared builder create_descriptor() uses.  Correct by construction — no address inference, so
+    // in-place / mixed-aliasing / matmul(X,X)-style cases can't be mis-patched.  An op that defines
+    // this MUST NOT also define get_dynamic_runtime_args (the adapter static_asserts it); override
+    // supersedes both it and resolve_bindings, which this op no longer uses.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& c,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng

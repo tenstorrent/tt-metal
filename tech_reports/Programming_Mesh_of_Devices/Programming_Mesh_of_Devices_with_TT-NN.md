@@ -592,6 +592,8 @@ The Collective Communication Library (CCL) provides a set of operations for effi
 
 ### 5.1 CCL Operations
 
+For tips on getting the best performance out of CCL ops (Fabric initialization, trace mode, op-specific parameters, pre-allocated buffers, and custom packet size), see [CCL Performance Tuning Tips](./CCL_Performance_Best_Practices.md).
+
 CCL supports several collective operations, including:
 
 1. All-Gather (Ring, Line)

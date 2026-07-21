@@ -228,21 +228,16 @@ void MetalContext::initialize(
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
-    bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    bool are_fd_kernels_on_same_core = get_cluster().arch() == tt::ARCH::QUASAR && num_hw_cqs == 1;
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
-        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, are_fd_kernels_on_same_core, rtoptions());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
-        CoreType::ETH,
-        num_hw_cqs,
-        hal(),
-        is_galaxy_cluster,
-        /*are_fd_kernels_on_same_core=*/false,
-        rtoptions());
+    const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
+    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+        const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout(core_type);
+        dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
+            core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
+    }
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
@@ -267,7 +262,6 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        TT_FATAL(hal().get_arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
@@ -508,9 +502,7 @@ void MetalContext::register_handlers_locked() {
 
 void MetalContext::teardown_dispatch_state() {
     for (auto& mem_map : dispatch_mem_map_) {
-        if (mem_map) {
-            mem_map.reset();
-        }
+        mem_map.reset();
     }
     device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
@@ -716,8 +708,13 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
+    // Source the mock flag from rtoptions (the centralized env-var/programmatic parsing)
+    // rather than re-detecting env vars here. get_target_device() == Mock is true for both
+    // env-var and programmatic mock, and -- crucially -- false for Emule (which sets the same
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH but functionally executes kernels and must not skip
+    // firmware init) and for Simulator.
     std::string mock_cluster_desc_path =
-        env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
+        rtoptions().get_target_device() == tt::TargetDevice::Mock ? rtoptions().get_mock_cluster_desc_path() : "";
     context_descriptor_ = std::make_shared<ContextDescriptor>(
         env_,
         this,

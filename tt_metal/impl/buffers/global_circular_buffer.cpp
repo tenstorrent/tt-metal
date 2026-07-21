@@ -189,6 +189,26 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     this->initialize_dram_sender_state_block(mesh_device, max_num_receivers_per_sender);
 }
 
+namespace {
+// Per-sender bank-local recv_index_base. Senders are ordered [bank b s0, bank b s1, bank b+1 s0,
+// ...] (sender_logical.x == bank_id); recv_index_base resets to 0 on a bank change and accumulates
+// within a bank (dual senders share a bank). Returns one value per sender in mapping order. Single
+// source for both the L1 state-block stamping and the experimental receiver_slab_indices accessor.
+std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
+    std::vector<uint32_t> bases(mapping.size(), 0);
+    uint32_t recv_index_base = 0;
+    uint32_t prev_bank = std::numeric_limits<uint32_t>::max();
+    for (size_t s = 0; s < mapping.size(); ++s) {
+        const uint32_t bank = static_cast<uint32_t>(mapping[s].first.x);
+        recv_index_base = (bank == prev_bank) ? recv_index_base : 0u;
+        prev_bank = bank;
+        bases[s] = recv_index_base;
+        recv_index_base += mapping[s].second.num_cores();
+    }
+    return bases;
+}
+}  // namespace
+
 void GlobalCircularBuffer::initialize_dram_sender_state_block(
     distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender) {
     const auto context_id = mesh_device->impl().get_context_id();
@@ -220,6 +240,7 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     hdr->num_receivers = max_num_receivers_per_sender;
     hdr->buffer_address = buffer_address;
     hdr->fifo_size_per_receiver = size_;
+    hdr->max_num_receivers = max_num_receivers_per_sender;
 
     auto* noc_xy_words = reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock));
 
@@ -235,23 +256,18 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     const std::vector<uint8_t> pages_sent_zero_bytes(2 * sizeof(uint32_t) * max_num_receivers_per_sender, 0);
     const uint64_t pages_sent_write_addr = dram_l1_noc_offset + static_cast<uint64_t>(pages_sent_drisc_l1_base_);
     auto& cluster = metal_ctx.get_cluster();
-    // Per-sender bank-local slab offset: senders are ordered [bank b sender 0, bank b
-    // sender 1, bank b+1 sender 0, ...] (sender_logical.x == bank_id). When two senders
-    // share a bank, the second reads slabs that start where the first's receivers end.
-    uint32_t recv_index_base = 0;
-    uint32_t prev_bank = std::numeric_limits<uint32_t>::max();
+    // Per-sender bank-local slab offset (see recv_index_bases_per_sender): senders are ordered
+    // [bank b sender 0, bank b sender 1, bank b+1 sender 0, ...] (sender_logical.x == bank_id);
+    // when two senders share a bank, the second reads slabs that start where the first's end.
+    const std::vector<uint32_t> recv_index_bases = recv_index_bases_per_sender(sender_receiver_core_mapping_);
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const auto& [sender_logical, _receivers] = sender_receiver_core_mapping_[s];
         const auto& recv_phys = receiver_coords_per_sender_[s];
         const uint32_t this_num_receivers = static_cast<uint32_t>(recv_phys.size());
 
-        const uint32_t bank = static_cast<uint32_t>(sender_logical.x);
-        recv_index_base = (bank == prev_bank) ? recv_index_base : 0;
-        prev_bank = bank;
-
         // Per-sender header fields (the rest of block_bytes is constant across senders).
         hdr->num_receivers = this_num_receivers;
-        hdr->recv_index_base = recv_index_base;
+        hdr->recv_index_base = recv_index_bases[s];
         hdr->num_receivers_and_remote_pages_sent_ptr =
             remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
@@ -261,7 +277,6 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
             noc_xy_words[2 * i + 0] = valid ? static_cast<uint32_t>(c.x) : 0u;
             noc_xy_words[2 * i + 1] = valid ? static_cast<uint32_t>(c.y) : 0u;
         }
-        recv_index_base += this_num_receivers;
         for (IDevice* dev : devices) {
             const CoreCoord virtual_core = dev->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
             cluster.write_core(
@@ -437,6 +452,7 @@ struct GlobalCircularBufferDramSenderInternals {
     static DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
     static DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
     static const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
+    static std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb);
 };
 
 GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
@@ -467,6 +483,25 @@ DeviceAddr GlobalCircularBufferDramSenderInternals::sender_state_drisc_l1_base(c
 const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInternals::receiver_coords_per_sender(
     const GlobalCircularBuffer& gcb) {
     return gcb.receiver_coords_per_sender_;
+}
+
+std::vector<std::vector<uint32_t>> GlobalCircularBufferDramSenderInternals::receiver_slab_indices(
+    const GlobalCircularBuffer& gcb) {
+    // Order-agnostic: just the bank-local slab index (recv_index_base + r) each receiver reads.
+    // The caller maps (bank, slab index) -> a global position using the tensor's shard
+    // distribution; that ordering is not a GCB concept, so it is not applied here. This is always
+    // well-defined regardless of bank density/uniformity.
+    const auto& mapping = gcb.sender_receiver_core_mapping();
+    const std::vector<uint32_t> bases = recv_index_bases_per_sender(mapping);
+    std::vector<std::vector<uint32_t>> slab(mapping.size());
+    for (size_t s = 0; s < mapping.size(); ++s) {
+        const uint32_t n = mapping[s].second.num_cores();
+        slab[s].resize(n);
+        for (uint32_t r = 0; r < n; ++r) {
+            slab[s][r] = bases[s] + r;
+        }
+    }
+    return slab;
 }
 
 }  // namespace global_circular_buffer_dram_sender
@@ -503,21 +538,21 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
             continue;
         }
 
-        // Dual mode launches two senders per *every* bank (the prefetcher's enumerate_dram_senders
-        // does the same unconditionally), so a single-receiver bank can't be supported — splitting
-        // one receiver across two senders is impossible, and silently collapsing it to one sender
-        // would desync the GCB's sender count from the prefetcher's. Reject it with a clear message.
-        TT_FATAL(
-            n >= 2,
-            "DRAM bank {} has a single receiver, but dual_senders_per_bank requires at least 2 receivers per "
-            "bank. Use dual_senders_per_bank=false for this topology.",
-            bank_id);
+        // A single receiver cannot be split across two senders. Since the prefetcher always
+        // provisions both senders per bank and routes PREFETCH only to the senders this GCB
+        // actually maps, we can map just the primary sender for such a bank and leave the
+        // secondary parked — same as the single-sender path. Dual- and single-sender banks may
+        // therefore coexist in one dual-mode GCB.
+        const std::vector<CoreCoord> sender_cores = mesh_device->impl().dram_sender_logical_cores(bank_id);
+        if (n == 1) {
+            mapping.emplace_back(sender_cores.at(0), receivers);
+            continue;
+        }
 
         // Two sender cores per bank: split the bank's ordered receivers ceil/floor.
         // select_from_corerangeset indices are inclusive and traverse row-wise (matching
         // corerange_to_cores used elsewhere), so the receiver-table / bank-local slab
         // order is preserved.
-        const std::vector<CoreCoord> sender_cores = mesh_device->impl().dram_sender_logical_cores(bank_id);
         const uint32_t first_count = (n + 1) / 2;
         mapping.emplace_back(sender_cores.at(0), select_from_corerangeset(receivers, 0, first_count - 1, true));
         mapping.emplace_back(sender_cores.at(1), select_from_corerangeset(receivers, first_count, n - 1, true));
@@ -527,13 +562,16 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 
 }  // namespace
 
-GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
+GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
-    auto mapping = build_dram_sender_mapping(&mesh_device, bank_to_receivers, dual_senders_per_bank);
+    bool support_multi_receiver_shards) {
+    // Multi-receiver shards (legacy interleaved layout) force one sender per bank; the
+    // receiver-contiguous layout that disallows them is what lets a bank use two senders.
+    auto mapping = build_dram_sender_mapping(
+        &mesh_device, bank_to_receivers, /*dual_senders_per_bank=*/!support_multi_receiver_shards);
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
         &mesh_device, mapping, size, buffer_type);
 }
@@ -556,6 +594,10 @@ DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb) {
 
 const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb) {
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_coords_per_sender(gcb);
+}
+
+std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_slab_indices(gcb);
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -475,8 +475,9 @@ def generate_input_dim(
     srcB: tuple[int],
     block_ct_dim: int = None,
     block_rt_dim: int = None,
+    tile_dimensions: tuple[int, int] = (32, 32),
 ):
-    num_rows, num_cols = 32, 32
+    num_rows, num_cols = tile_dimensions
     validate_tile_dimensions(srcA[0], num_rows)
     validate_tile_dimensions(srcA[1], num_cols)
     validate_tile_dimensions(srcB[0], num_rows)
@@ -973,6 +974,26 @@ class NUM_ROWS_TO_PACK(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t NUM_ROWS_TO_PACK;", "I"
+
+
+@dataclass
+class EMA_ALPHA_BETA(TemplateParameter):
+    """Alpha/beta smoothing weights for the EMA entry, as raw fp32 bit patterns.
+
+    ``_load_alpha_beta_`` loads each as the fp32 representation into LREG5 (alpha)
+    and LREG6 (beta); the kernel computes ``EMA_new = alpha*EMA_old + beta*input``.
+    Emitting the bit patterns keeps the C++ and torch golden exactly aligned.
+    """
+
+    alpha_bits: int = 0x3E800000  # 0.25f
+    beta_bits: int = 0x3F400000  # 0.75f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t EMA_ALPHA_BITS = {self.alpha_bits}u;",
+            f"constexpr std::uint32_t EMA_BETA_BITS = {self.beta_bits}u;",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass

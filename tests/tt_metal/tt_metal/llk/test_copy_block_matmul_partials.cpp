@@ -56,6 +56,9 @@ struct CopyBlockMatmulPartialsConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
+    // Compute kernel exercised by the test. Defaults to the copy_block_matmul_partials / pack_tile_block
+    // kernel; the copy_block / pack_block variant points this at eltwise_copy_pack_block.cpp.
+    std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp";
 };
 
 static std::vector<uint32_t> generate_copy_block_stimulus(
@@ -112,6 +115,13 @@ void run_single_core_copy_block_matmul_partials(
         .data_format_metadata = data_format,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -121,15 +131,16 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -139,13 +150,7 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -153,11 +158,32 @@ void run_single_core_copy_block_matmul_partials(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    {
+        // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
+        // consumes it, so the Metal 2.0 host API requires an explicit unpack_modes entry.
+        // UnpackToSrc is unpack via SrcA/B, ~19-bit precision.
+        experimental::ComputeUnpackModes unpack_modes{};
+        if (test_config.fp32_dest_acc_en) {
+            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}};
+        }
+        if (mesh_device->arch() == tt::ARCH::QUASAR) {
+            compute_hw_config = experimental::ComputeGen2Config{
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+                .unpack_modes = unpack_modes,
+            };
+        } else {
+            compute_hw_config = experimental::ComputeGen1Config{
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+                .unpack_modes = unpack_modes,
+            };
+        }
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
+        .source = test_config.compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
@@ -174,18 +200,7 @@ void run_single_core_copy_block_matmul_partials(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
-                // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
-                // Default is unpack via SrcA/B, ~19-bit precision.
-                .unpack_to_dest_mode = test_config.fp32_dest_acc_en
-                                           ? experimental::ComputeHardwareConfig::
-                                                 UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                                           : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -215,23 +230,23 @@ void run_single_core_copy_block_matmul_partials(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_buffer->address()},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.reader_ublock},
-                   {"reader_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_buffer->address()},
+                 {"src_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", test_config.reader_ublock},
+                 {"reader_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_dram_buffer->address()},
-                   {"dst_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.writer_ublock},
-                   {"writer_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_dram_buffer->address()},
+                 {"dst_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", test_config.writer_ublock},
+                 {"writer_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -247,6 +262,10 @@ void run_single_core_copy_block_matmul_partials(
     EXPECT_EQ(src_vec, result_vec);
 }
 
+// Compute kernel exercising the uniform copy_block + pack_block surface (shared by the
+// TensixComputeCopyPackBlock* cases below); the default kernel is the struct member initializer.
+constexpr const char* kBlockKernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_pack_block.cpp";
+
 }  // namespace unit_tests::compute::matmul_partials
 
 ////////////////////////////////////////////////////////////////////////////
@@ -255,6 +274,9 @@ void run_single_core_copy_block_matmul_partials(
 // These tests aim to cover usage of these API calls:
 // - copy_block_matmul_partials
 // - pack_tile_block
+// and the uniform op_block surface that supersedes them:
+// - copy_block
+// - pack_block
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
@@ -299,6 +321,52 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
                 .compute_ublock = 1,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en};
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
+                this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
+        }
+    }
+}
+
+// Same coverage as TensixComputeCopyBlockMultiple, but exercises the uniform op_block surface
+// (copy_block + pack_block) directly instead of the deprecated copy_block_matmul_partials /
+// pack_tile_block. The golden is an identity copy, so results must match bit-for-bit.
+TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .reader_ublock = 8,
+                .writer_ublock = 8,
+                .compute_ublock = 4,  // compute_ublock must be <= get_dest_max_tiles (4 for SyncHalf+FP32)
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .compute_kernel = unit_tests::compute::matmul_partials::kBlockKernel};
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
+                this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
+        }
+    }
+}
+
+// copy_block + pack_block with a single tile per block (compute bottleneck shape).
+TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockComputeBottleneck) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .reader_ublock = 8,
+                .writer_ublock = 8,
+                .compute_ublock = 1,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .compute_kernel = unit_tests::compute::matmul_partials::kBlockKernel};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {

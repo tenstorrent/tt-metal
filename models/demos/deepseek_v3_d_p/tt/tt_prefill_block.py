@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Union
 
@@ -16,6 +18,25 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+
+# Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
+# Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
+# ABSOLUTE times inflate vs an un-instrumented run — trust the MLA:FFN ratio and the per-layer shape,
+# NOT the totals. When off (default) there is no sync and no timing, so normal runs are unperturbed.
+# Keyed by global layer_idx -> {"mla": [seconds...], "ffn": [seconds...]} (one entry per forward call).
+_BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
+_BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
+
+
+def reset_block_timings() -> None:
+    """Drop all recorded per-layer MLA/FFN samples (e.g. to exclude a warmup iteration)."""
+    _BLOCK_TIMINGS.clear()
+
+
+def get_block_timings() -> dict[int, dict[str, list[float]]]:
+    """Per-layer {"mla": [s...], "ffn": [s...]} host-timing samples recorded since the last reset."""
+    return _BLOCK_TIMINGS
+
 
 # Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
 # col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
@@ -413,6 +434,9 @@ class TtPrefillBlock(LightweightModule):
         return_kv_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
         Args:
@@ -440,6 +464,14 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
+        # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
+        # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
+        # Skip kv_only layers (they run no FFN and return early below).
+        _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_start = time.perf_counter()
+
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
@@ -451,10 +483,18 @@ class TtPrefillBlock(LightweightModule):
             actual_start=actual_start,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
+            indexer_indices=indexer_indices,
+            return_indexer_indices=return_indexer_indices,
+            index_kv_cache=index_kv_cache,
         )
         kv_intermediates = None
-        if return_kv_intermediates:
+        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        if return_kv_intermediates and return_indexer_indices:
+            mla_out, kv_intermediates, mla_indices = mla_out
+        elif return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
+        elif return_indexer_indices:
+            mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
@@ -466,15 +506,19 @@ class TtPrefillBlock(LightweightModule):
         # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
         if on_layer_complete is not None:
             assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.mla.layer_num,
-                actual_end,
-                seq_len_local * self.mla.sp_factor,
-                self.mla.sp_axis,
-            )
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
             ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.mla.layer_idx)
 
@@ -482,10 +526,15 @@ class TtPrefillBlock(LightweightModule):
             # KV cache filled (by MLA), migration callback fired. The block
             # output is unused (no FFN, no further layers). Return (None, None)
             # so the transformer can short-circuit.
+            if return_indexer_indices:
+                return None, None, None
             return None, None
 
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_mla = time.perf_counter()
         if return_kv_intermediates:
             # post-MLA residual (x + mla_out), TP-sharded on hidden.
             kv_intermediates["post_mla_residual"] = ttnn.clone(x)
@@ -509,11 +558,21 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_norm_out)
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_ffn = time.perf_counter()
+            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
+            rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
 
         if return_kv_intermediates:
+            if return_indexer_indices:
+                return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        if return_indexer_indices:
+            return x, kv_cache, mla_indices
         return x, kv_cache
 
     def _moe_path(

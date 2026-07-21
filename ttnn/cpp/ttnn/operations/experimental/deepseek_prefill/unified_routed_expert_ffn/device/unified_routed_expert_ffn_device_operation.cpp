@@ -5,6 +5,7 @@
 #include "unified_routed_expert_ffn_device_operation.hpp"
 
 #include <initializer_list>
+#include <tuple>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -25,13 +26,25 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
-    // x is restricted to BFLOAT8_B — the only dtype the existing callers
-    // (TtRoutedExpert typecasts the dispatched buffer to BF8_B before this
-    // op) and tests exercise. The kernel CB-size config can also accept
-    // BFLOAT16, but that path is untested; reintroduce when a real caller
-    // + PCC test for BF16 lands.
-    TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
-    TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
+    // x layout/dtype depends on x_is_row_major:
+    //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
+    //   true: x is ROW_MAJOR BFLOAT16 (the dispatch output) — the reader streams
+    //     sticks and the compute kernel tilizes them to bf8_b before the matmul,
+    //     fusing the standalone to_layout. Off preserves the pre-fusion path for
+    //     standalone / Wormhole callers.
+    if (op.x_is_row_major) {
+        TT_FATAL(
+            t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "x must be BFLOAT16 when x_is_row_major, got {}",
+            t.x.dtype());
+        TT_FATAL(
+            t.x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "x must be ROW_MAJOR when x_is_row_major, got {}",
+            t.x.layout());
+    } else {
+        TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
+        TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
+    }
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");
     TT_FATAL(t.x.logical_shape().rank() >= 2, "x must have rank >= 2, got rank {}", t.x.logical_shape().rank());
     // For rank > 2, all leading dims must be 1 — we treat x as effectively
@@ -61,6 +74,16 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     TT_FATAL(op.chunk_M_tiles > 0, "chunk_M_tiles must be > 0");
+    // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
+    // buffer spanning many experts, so its allocated M only bounds m_tiles from
+    // above — the reader/writer index into x at the region offset.
+    TT_FATAL(op.m_tiles > 0, "m_tiles must be > 0");
+    TT_FATAL(
+        op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
+    // read_x_at_offset needs expert_region_offsets to locate this expert's x
+    // rows in the shared buffer (the reader fetches start[global_id]).
+    TT_FATAL(
+        !op.read_x_at_offset || t.expert_region_offsets.has_value(), "read_x_at_offset requires expert_region_offsets");
 
     // Weight tensors share x's storage / layout / memory contract — fail
     // host-side if the caller forgot to upload one, picked the wrong layout,
@@ -150,8 +173,15 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
         TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "optional_output must be TILE layout");
         TT_FATAL(is_dram_interleaved(out), "optional_output must be DRAM-interleaved");
+        // Output dtype must match x EXCEPT in row-major mode: there x is bf16
+        // ROW_MAJOR but the tilized output is bf8_b TILE (for downstream
+        // combine), so the two legitimately differ. The tilize/down-matmul packs
+        // to the output's dtype regardless.
         TT_FATAL(
-            out.dtype() == t.x.dtype(), "optional_output dtype ({}) must match x dtype ({})", out.dtype(), t.x.dtype());
+            op.x_is_row_major || out.dtype() == t.x.dtype(),
+            "optional_output dtype ({}) must match x dtype ({})",
+            out.dtype(),
+            t.x.dtype());
         const auto& out_shape = out.padded_shape();
         TT_FATAL(
             out_shape.rank() == x_shape.rank(),
@@ -189,6 +219,61 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 out_shape[-2] == x_shape[-2], "optional_output M ({}) must match x M ({})", out_shape[-2], x_shape[-2]);
         }
+    }
+
+    // Optional expert biases (gpt-oss). All-or-none: gate/up/down together or
+    // none. gate/up bias last dim == gate/up N (hidden); down bias last dim ==
+    // down N (emb). Same device / TILE / DRAM-interleaved contract as weights.
+    const int bias_count = static_cast<int>(t.gate_bias.has_value()) + static_cast<int>(t.up_bias.has_value()) +
+                           static_cast<int>(t.down_bias.has_value());
+    TT_FATAL(
+        bias_count == 0 || bias_count == 3,
+        "gate/up/down biases must all be provided together or all omitted (got {} of 3)",
+        bias_count);
+    if (bias_count == 3) {
+        for (const auto& [name, b, expected_n] :
+             std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, uint32_t>>{
+                 {"gate_bias", *t.gate_bias, static_cast<uint32_t>(gate_shape[-1])},
+                 {"up_bias", *t.up_bias, static_cast<uint32_t>(up_shape[-1])},
+                 {"down_bias", *t.down_bias, static_cast<uint32_t>(down_shape[-1])}}) {
+            TT_FATAL(b.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+            TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
+            TT_FATAL(is_dram_interleaved(b), "{} must be DRAM-interleaved", name);
+            // Exact LOGICAL shape: a single row of exactly `expected_n` columns. The
+            // padded-width check below is necessary (the kernel/reader address tiles by
+            // padded width) but not sufficient: shapes like (2, N) or (1, N-1) tile-pad
+            // to the same width and would otherwise be accepted and silently mis-applied
+            // (the reader loads only tile-row 0 and the compute kernel row-broadcasts it).
+            const auto& lshape = b.logical_shape();
+            TT_FATAL(
+                static_cast<uint32_t>(lshape[-1]) == expected_n && lshape.volume() == expected_n,
+                "{} logical shape {} must be a single row of its projection N ({})",
+                name,
+                lshape,
+                expected_n);
+            TT_FATAL(
+                static_cast<uint32_t>(b.padded_shape()[-1]) == expected_n,
+                "{} padded last dim ({}) must match its projection N ({})",
+                name,
+                b.padded_shape()[-1],
+                expected_n);
+        }
+        // All three bias CBs are configured from the gate-bias dtype (and the compute
+        // kernel reuses one unpack format across gate/up), so the three biases must share
+        // a single dtype; a mixed-dtype call would read the wrong byte counts/formats.
+        TT_FATAL(
+            t.up_bias->dtype() == t.gate_bias->dtype() && t.down_bias->dtype() == t.gate_bias->dtype(),
+            "gate/up/down biases must share one dtype (got gate={}, up={}, down={})",
+            t.gate_bias->dtype(),
+            t.up_bias->dtype(),
+            t.down_bias->dtype());
+        // Bias fusion is implemented only for the SwiGLU-OAI activation (gpt-oss):
+        // the kernel adds gate/up bias before the clamp and down bias after the
+        // down matmul. The SiLU path has no bias branch.
+        TT_FATAL(
+            op.activation == RoutedExpertActivation::SwiGluOai,
+            "unified_routed_expert_ffn: expert biases are only supported with RoutedExpertActivation::SwiGluOai "
+            "(got the SiLU path).");
     }
 }
 
@@ -229,17 +314,27 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
+    uint32_t m_tiles,
+    bool read_x_at_offset,
+    bool x_is_row_major,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
-    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation) {
+    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation,
+    const std::optional<ttnn::Tensor>& gate_bias,
+    const std::optional<ttnn::Tensor>& up_bias,
+    const std::optional<ttnn::Tensor>& down_bias) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
+            .m_tiles = m_tiles,
             .local_expert_id = local_expert_id,
+            .read_x_at_offset = read_x_at_offset,
+            .x_is_row_major = x_is_row_major,
             .activation = activation,
+            .fuse_bias = gate_bias.has_value(),
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,
@@ -249,7 +344,10 @@ ttnn::Tensor unified_routed_expert_ffn(
             .counts = counts,
             .global_expert_idx_table = global_expert_idx_table,
             .optional_output = optional_output,
-            .expert_region_offsets = expert_region_offsets});
+            .expert_region_offsets = expert_region_offsets,
+            .gate_bias = gate_bias,
+            .up_bias = up_bias,
+            .down_bias = down_bias});
 }
 
 }  // namespace ttnn::prim

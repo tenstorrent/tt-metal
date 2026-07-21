@@ -1179,9 +1179,14 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
         });
     }
 
-    // Semaphores
+    // Semaphores.  The cores->coordinator channel uses two separate semaphores so a fast
+    // reader's next-row readiness increment can never be miscounted as a sub-stage
+    // confirmation: on one shared counter it could overshoot the coordinator's exact-match
+    // wait and deadlock the op at Ht >= 2.  Readiness -> ready sem; per-pair confirmations
+    // -> done sem.
     constexpr uint32_t coordinator_to_cores_semaphore_id = 0;
-    constexpr uint32_t cores_to_coordinator_semaphore_id = 1;
+    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
+    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = coordinator_to_cores_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -1189,7 +1194,13 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
         .initial_value = 0,
     });
     desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = cores_to_coordinator_semaphore_id,
+        .id = cores_to_coordinator_ready_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_core_set,
+        .initial_value = 0,
+    });
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = cores_to_coordinator_done_semaphore_id,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = all_core_set,
         .initial_value = 0,
@@ -1237,7 +1248,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
          static_cast<uint32_t>(end_core_physical_coord.x),
          static_cast<uint32_t>(end_core_physical_coord.y),
          coordinator_to_cores_semaphore_id,
-         cores_to_coordinator_semaphore_id,
+         cores_to_coordinator_ready_semaphore_id,
+         cores_to_coordinator_done_semaphore_id,
          static_cast<uint32_t>(core_range.num_cores()),
          input_buffer,
          value_buffer,
@@ -1289,7 +1301,6 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     writer_compile_time_args.push_back(W_tile_bytes);
     writer_compile_time_args.push_back(W_index_bytes);
 
-
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
@@ -1309,7 +1320,7 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
                  static_cast<uint32_t>(coordinator_core_physical_coord.x),
                  static_cast<uint32_t>(coordinator_core_physical_coord.y),
                  coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_semaphore_id});
+                 cores_to_coordinator_ready_semaphore_id});
             writer_desc.emplace_runtime_args(
                 core,
                 {value_buffer,
@@ -1317,7 +1328,7 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
                  static_cast<uint32_t>(coordinator_core_physical_coord.x),
                  static_cast<uint32_t>(coordinator_core_physical_coord.y),
                  coordinator_to_cores_semaphore_id,
-                 cores_to_coordinator_semaphore_id});
+                 cores_to_coordinator_done_semaphore_id});
         }
     }
 

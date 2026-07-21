@@ -31,7 +31,7 @@ on:
 
 jobs:
   define-models:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       models-to-run: ${{ steps.compute-models.outputs.models-to-run }}
     steps:
@@ -45,7 +45,6 @@ jobs:
 
           # Initialize models JSON with all false
           models_json='{
-            "stable-diffusion-xl": false,
             "stable-diffusion-1-4": false,
             "distilbert": false,
             "vgg": false,
@@ -91,7 +90,7 @@ jobs:
 
   generate-matrix:
     needs: define-models
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
     steps:
@@ -133,9 +132,9 @@ jobs:
           # Define which models belong to each matrix group
           group_models='{
             "N300 WH B0 not yet ported": ["non-civ2"],
-            "N300 WH B0 Set 1": ["stable-diffusion-xl", "stable-diffusion-1-4", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "vit"],
+            "N300 WH B0 Set 1": ["stable-diffusion-1-4", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "vit"],
             "N300 WH B0 Set 2": ["metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0", "ops-perf-tests"],
-            "P150 BH": ["stable-diffusion-xl", "stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "vit", "panoptic-deeplab", "ops-perf-tests"]
+            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "vit", "panoptic-deeplab", "ops-perf-tests"]
           }'
 
           # Original matrix definition
@@ -227,16 +226,6 @@ jobs:
             pytest models/demos/vision/classification/mnist/tests -m models_device_performance_bare_metal
             pytest models/demos/vision/segmentation/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: stable_diffusion_xl tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "stable_diffusion_xl"
-          commands: |
-            pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
-            ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal' || '' }}
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion-xl'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: stable_diffusion_1_4 tests
@@ -408,7 +397,6 @@ jobs:
           device_perf_model_name: "ops-perf-tests"
           commands: |
             pytest tests/ttnn/perf_tests/operations/conv -m models_device_performance_bare_metal --timeout=300
-            ${{ matrix.test-info.arch == 'blackhole' && 'SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py::test_sdpa_perf_check -svv' || '' }}
             ${{ matrix.test-info.arch == 'blackhole' && 'INDEXER_SCORE_PERF_CHECKS=1 pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_math_util -svv' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ops-perf-tests'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}

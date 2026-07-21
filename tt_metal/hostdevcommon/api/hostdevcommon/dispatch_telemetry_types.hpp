@@ -18,12 +18,14 @@ constexpr uint32_t pack(const char (&s)[5]) {
 
 }  // namespace detail
 
+namespace dispatch_telemetry_types {
 // Increment only when breaking changes occur
 constexpr uint32_t DISPATCH_TELEMETRY_VERSION = 1;
 
 /**
  * @brief Expected signature for validating that a telemetry buffer contains dispatch telemetry data.
  */
+constexpr uint32_t SMC_TELEMETRY_SIGNATURE = detail::pack("SMC_");
 constexpr uint32_t DISPATCH_CORE_TELEMETRY_SIGNATURE = detail::pack("DISP");
 constexpr uint32_t PREFETCH_CORE_TELEMETRY_SIGNATURE = detail::pack("PREF");
 
@@ -109,4 +111,44 @@ struct __attribute__((packed, aligned(4))) DispatchTelemetryControl {
     uint32_t launched_work_start_stream_sem[RESERVED_SUB_DEVICE_SPACE] = {0};
 };
 
+constexpr uint32_t INVALID_SMC_DISPATCH_CORE_COORDS = UINT32_MAX;
+// Packed virtual dispatch-core coordinates. These are consumed by host telemetry readers and are not NOC coords.
+struct __attribute__((packed)) SMCDispatchCoreCoords {
+    uint32_t prefetch_xy = INVALID_SMC_DISPATCH_CORE_COORDS;
+    uint32_t dispatch_xy = INVALID_SMC_DISPATCH_CORE_COORDS;
+    uint32_t dispatch_s_xy = INVALID_SMC_DISPATCH_CORE_COORDS;
+};
+
+constexpr uint32_t smc_dispatch_core_x(uint32_t xy) { return xy >> 16; }
+
+constexpr uint32_t smc_dispatch_core_y(uint32_t xy) { return xy & 0xFFFF; }
+
+constexpr uint32_t pack_smc_dispatch_core_xy(uint16_t x, uint16_t y) {
+    return (static_cast<uint32_t>(x) << 16) | static_cast<uint32_t>(y);
+}
+
+constexpr uint32_t MAX_DISPATCH_CORES_PER_CQ = sizeof(SMCDispatchCoreCoords) / sizeof(uint32_t);
+constexpr uint32_t RESERVED_CQ_SPACE = 3;
+static_assert(MAX_NUM_HW_CQS <= RESERVED_CQ_SPACE, "Max number of hardware CQs exceeds reserved space");
+
+// flags enum
+enum class SMCDispatchTelemetryFlags : uint8_t {
+    NONE = 0,
+    SLOW_DISPATCH_ENABLED = 1 << 0,
+};
+
+// Stored on device but data is host read/write only, so types can be any size
+struct __attribute__((packed)) SMCDispatchTelemetryControl {
+    uint32_t version = DISPATCH_TELEMETRY_VERSION;
+    uint32_t signature = SMC_TELEMETRY_SIGNATURE;
+    uint8_t flags = 0;
+    uint32_t dispatch_telemetry_addr = 0;
+    uint8_t num_hw_cqs = RESERVED_CQ_SPACE;
+    SMCDispatchCoreCoords cq_dispatch_core_coords[RESERVED_CQ_SPACE];
+    struct __attribute__((packed)) SDTelemetry {
+        // Reserved for future use
+    } sd_telemetry[RESERVED_CQ_SPACE];
+};
+
+}  // namespace dispatch_telemetry_types
 }  // namespace tt::tt_metal

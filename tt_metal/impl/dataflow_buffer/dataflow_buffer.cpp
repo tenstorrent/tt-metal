@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal::experimental::dfb {
 
@@ -142,9 +143,10 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
 std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
+    // IDs are drawn from [1, 31]; id 0 is implicitly reserved (NOC_V2_TRID_STATIC).
     TT_FATAL(
         next_id_ + count <= 32,
-        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only 32 are available",
+        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only [1, 31] are available",
         count,
         next_id_);
     std::vector<uint8_t> ids;
@@ -1759,13 +1761,19 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 }
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
             const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
             const DataFormat data_format = dfb->config.data_format;
+            // Populate this DFB's CB-indexed JIT metadata only when a format was specified.
+            // A format-less DFB has no compute consumer, so its JIT slot is intentionally left
+            // at the defaults instead of deriving a tile size from DataFormat::Invalid.
+            if (data_format == DataFormat::Invalid) {
+                continue;
+            }
             const auto& tile_opt = dfb->config.tile;
             const auto& unpack_geom = dfb->config.unpack_face_geometry;
             build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
