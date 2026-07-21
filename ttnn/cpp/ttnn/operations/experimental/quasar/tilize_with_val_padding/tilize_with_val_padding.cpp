@@ -97,8 +97,9 @@ ttnn::Tensor tilize_with_val_padding(
 
     TT_FATAL(
         tile == tt::tt_metal::Tile{},
-        "Custom tile is not supported for tilize_with_val_padding, please use `tt::tt_metal::to_tile_layout` on host "
-        "tensor instead.");
+        "Custom tile is not supported for tilize_with_val_padding (See: #50508). Please transfer the tensor to host "
+        "and "
+        "use `tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
@@ -154,8 +155,9 @@ ttnn::Tensor tilize_with_val_padding(
     tt::tt_metal::Tile tile) {
     TT_FATAL(
         tile == tt::tt_metal::Tile{},
-        "Custom tile is not supported for tilize_with_val_padding, please use `tt::tt_metal::to_tile_layout` on host "
-        "tensor instead.");
+        "Custom tile is not supported for tilize_with_val_padding (See: #50508). Please transfer the tensor to host "
+        "and "
+        "use `tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
@@ -208,8 +210,9 @@ ttnn::Tensor tilize_with_zero_padding(
 
     TT_FATAL(
         tile == tt::tt_metal::Tile{},
-        "Custom tile is not supported for tilize_with_zero_padding, please use `tt::tt_metal::to_tile_layout` on host "
-        "tensor instead.");
+        "Custom tile is not supported for tilize_with_zero_padding (See: #50508). Please transfer the tensor to host "
+        "and "
+        "use `tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
 
     auto padded_shape = input_tensor.padded_shape();
 

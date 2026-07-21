@@ -55,7 +55,8 @@ ttnn::Tensor tilize(
     tt::tt_metal::Tile tile) {
     TT_FATAL(
         tile == tt::tt_metal::Tile{},
-        "Custom tile is not supported for tilize, please use `tt::tt_metal::to_tile_layout` on host tensor instead.");
+        "Custom tile is not supported for tilize (See: #50508). Please transfer the tensor to host and use "
+        "`tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);

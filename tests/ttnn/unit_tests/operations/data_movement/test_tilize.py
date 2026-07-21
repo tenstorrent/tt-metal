@@ -922,3 +922,14 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)])
+def test_tilize_rejects_custom_tile(device, expect_error, tile_shape):
+    tt_input = ttnn.from_torch(
+        torch.rand((32, 32), dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Custom tile is not supported"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile(tile_shape))

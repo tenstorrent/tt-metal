@@ -1022,6 +1022,19 @@ def test_to_layout_custom_tile_host_roundtrip(tile_shape):
     assert_equal(torch_input_tensor, ttnn.to_torch(round_tripped))
 
 
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)])
+@pytest.mark.parametrize("shape", [(32, 32), (30, 50)])  # aligned -> tilize; unaligned -> tilize_with_val_padding
+def test_to_layout_rejects_custom_tile_on_device(device, expect_error, tile_shape, shape):
+    input_tensor = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Custom tile is not supported"):
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile(tile_shape))
+
+
 def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
     input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
 
