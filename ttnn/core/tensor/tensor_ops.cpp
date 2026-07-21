@@ -44,7 +44,9 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
 }
 
 Tensor create_device_tensor(
-    const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device, std::optional<TensorTopology> tensor_topology) {
+    const TensorSpec& tensor_spec,
+    distributed::MeshDevice* mesh_device,
+    std::optional<TensorTopology> tensor_topology) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -83,6 +85,19 @@ Tensor create_device_tensor(
 
     return output;
 }
+
+Tensor create_device_tensor(
+    const TensorSpec& tensor_spec,
+    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    std::optional<TensorTopology> tensor_topology) {
+    // TODO: Plumb sub_device_id through MeshTensor::allocate_on_device
+    // to use local L1 allocators instead of the global allocator.
+    // For now, delegate to the standard create_device_tensor.
+    // See tech_reports/SubDevices/SubDevices.md Section 1.2
+    return create_device_tensor(tensor_spec, mesh_device, tensor_topology);
+}
+
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -466,5 +481,17 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
 }
 
 std::string to_string(const Tensor& tensor) { return tensor_impl::to_string(tensor); }
+
+Tensor create_device_tensor(
+    const TensorSpec& tensor_spec,
+    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    std::optional<TensorTopology> tensor_topology) {
+    // TODO: Plumb sub_device_id through MeshTensor::allocate_on_device
+    // to use local L1 allocators instead of the global allocator.
+    // For now, delegate to the standard create_device_tensor.
+    // See tech_reports/SubDevices/SubDevices.md Section 1.2
+    return create_device_tensor(tensor_spec, mesh_device, tensor_topology);
+}
 
 }  // namespace tt::tt_metal

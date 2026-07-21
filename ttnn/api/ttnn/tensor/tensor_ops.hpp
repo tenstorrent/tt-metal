@@ -22,7 +22,18 @@ class TensorSpec;
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-Tensor create_device_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device, std::optional<TensorTopology> tensor_topology = std::nullopt);
+Tensor create_device_tensor(
+    const TensorSpec& tensor_spec,
+    distributed::MeshDevice* mesh_device,
+    std::optional<TensorTopology> tensor_topology = std::nullopt);
+
+// Overload with sub_device_id for local L1 allocator support.
+// See tech_reports/SubDevices/SubDevices.md Section 1.2
+Tensor create_device_tensor(
+    const TensorSpec& tensor_spec,
+    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    std::optional<TensorTopology> tensor_topology = std::nullopt);
 
 tt::tt_metal::Tensor to_device(
     const tt::tt_metal::Tensor& input_tensor,
