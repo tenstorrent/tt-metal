@@ -118,7 +118,8 @@ ttnn::Tensor untilize(
                 supported_by_codegen(normalized_input, output_mem_config),
                 "ttnn.untilize(implementation='codegen') invoked for a case not supported by the codegen "
                 "implementation (requires TILE-layout, interleaved (non-sharded) input and output, dtype "
-                "bfloat16 or bfloat8_b, and a width within the multi-tile-row L1 chunking threshold)");
+                "bfloat16 or bfloat8_b (bfloat8_b additionally requires a tile-aligned logical shape), and a "
+                "width within the L1 chunking threshold)");
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
         }
         if (selector == ImplementationSelector::Auto && supported_by_codegen(normalized_input, output_mem_config) &&
