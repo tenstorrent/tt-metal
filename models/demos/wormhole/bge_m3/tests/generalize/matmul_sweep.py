@@ -21,14 +21,14 @@ divisibility) up front so the run isn't just a wall of failures.
 
 Examples
   # BGE-M3 MLP Wi shape (M=12*8192, K=1024, N=4096), all impls, default sweep
-  python tests/generalize/matmul_sweep.py --M 98304 --K 1024 --N 4096
+  python models/demos/wormhole/bge_m3/tests/generalize/matmul_sweep.py --M 98304 --K 1024 --N 4096
 
   # Just minimal_matmul, wider block sweep, save CSV
-  python tests/generalize/matmul_sweep.py --M 98304 --K 4096 --N 1024 \
-      --impl minmatmul --csv tests/generalize/out/mlpwo.csv
+  python models/demos/wormhole/bge_m3/tests/generalize/matmul_sweep.py --M 98304 --K 4096 --N 1024 \
+      --impl minmatmul --csv models/demos/wormhole/bge_m3/tests/generalize/out/mlpwo.csv
 
   # Fixed fidelity/dtype, cap the number of configs tried
-  python tests/generalize/matmul_sweep.py --M 8192 --K 8192 --N 8192 \
+  python models/demos/wormhole/bge_m3/tests/generalize/matmul_sweep.py --M 8192 --K 8192 --N 8192 \
       --dtypes bfloat8_b --fidelities LoFi --max-configs 40
 """
 

@@ -1,4 +1,4 @@
-# tests/generalize
+# models/demos/wormhole/bge_m3/tests/generalize
 
 Generalized, reusable device sweeps decoupled from any specific model.
 
@@ -38,15 +38,15 @@ writes partial results. `Ctrl-C` also writes partial results.
 ### Examples
 ```bash
 # BGE-M3 MLP Wi shape, all impls, default sweep
-python tests/generalize/matmul_sweep.py --M 98304 --K 1024 --N 4096
+python models/demos/wormhole/bge_m3/tests/generalize/matmul_sweep.py --M 98304 --K 1024 --N 4096
 
 # One impl, custom minmatmul block grid, save CSV
-python tests/generalize/matmul_sweep.py --M 98304 --K 4096 --N 1024 \
+python models/demos/wormhole/bge_m3/tests/generalize/matmul_sweep.py --M 98304 --K 4096 --N 1024 \
     --impl minmatmul --m-blocks 8 16 24 32 --k-blocks 8 16 32 \
-    --csv tests/generalize/out/mlpwo.csv
+    --csv models/demos/wormhole/bge_m3/tests/generalize/out/mlpwo.csv
 
 # Pin dtype/fidelity, cap total configs tried
-python tests/generalize/matmul_sweep.py --M 8192 --K 8192 --N 8192 \
+python models/demos/wormhole/bge_m3/tests/generalize/matmul_sweep.py --M 8192 --K 8192 --N 8192 \
     --dtypes bfloat8_b --fidelities LoFi --max-configs 40
 ```
 
