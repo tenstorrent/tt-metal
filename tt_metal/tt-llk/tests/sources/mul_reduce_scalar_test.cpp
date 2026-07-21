@@ -28,10 +28,6 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
-// The reduce phase reuses DEST as source, so the whole tile (4 faces) is live.
-static constexpr std::uint32_t NUM_FACES = 4;
-// Scaler multiplier applied to the reduction (matches the Compute API default).
-static constexpr float REDUCE_SCALER = 1.0f;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -39,6 +35,9 @@ static constexpr float REDUCE_SCALER = 1.0f;
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common.h"
 #include "params.h"
+
+// 32x32 tile has 4 faces; the reduce phase reuses the whole tile as source.
+static constexpr std::uint32_t NUM_FACES = 4;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -75,6 +74,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_fill.h"
+
+// Scaler multiplier applied to the reduction (matches the Compute API default).
+static constexpr float REDUCE_SCALER = 1.0f;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
