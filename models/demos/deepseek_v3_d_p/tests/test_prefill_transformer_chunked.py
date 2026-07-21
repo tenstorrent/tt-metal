@@ -26,6 +26,7 @@ import gc
 import json
 import os
 import statistics
+import sys
 import time
 from pathlib import Path
 
@@ -53,6 +54,22 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Larger KV cache for the no-PCC perf sweep only (up to 100k ISL = 20 chunks). Kept separate from
 # SEQ_CACHE so the PCC tests and the _PADDED_FULL_55K split (which assert against 55*1024) are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
+
+# Read the TTNN device profiler after each layer to avoid profiler-buffer overflows during long
+# runs. Off by default (normal runs are unaffected); enable with TT_PREFILL_READ_PROFILER=1. Plumbed
+# into every transformer.forward() in this file.
+READ_PROFILER = os.environ.get("TT_PREFILL_READ_PROFILER", "0") == "1"
+
+# Override logger level (only when reading the profiler)
+if READ_PROFILER:
+    logger.configure(
+        handlers=[
+            {
+                "sink": sys.stderr,
+                "level": "INFO",
+            }
+        ]
+    )
 
 
 def _resolve_trace_dir(variant) -> Path:
@@ -338,6 +355,7 @@ def run_chunked_transformer_padded(
             actual_end=valid_end,
             cache_user_id=0,
             return_intermediates=True,
+            read_profiler=READ_PROFILER,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -550,6 +568,7 @@ def run_chunked_transformer(
             cache_user_id=0,
             return_intermediates=True,
             index_kv_cache=tt_index_kv_cache,
+            read_profiler=READ_PROFILER,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -1091,6 +1110,7 @@ def run_chunked_transformer_no_pcc(
             actual_end=CHUNK,
             cache_user_id=0,
             return_intermediates=False,
+            read_profiler=READ_PROFILER,
         )
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_tokens)
@@ -1123,6 +1143,7 @@ def run_chunked_transformer_no_pcc(
                 actual_end=kv_actual + CHUNK,
                 cache_user_id=0,
                 return_intermediates=False,
+                read_profiler=READ_PROFILER,
             )
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(tt_tokens)
@@ -1221,7 +1242,7 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
 @pytest.mark.parametrize(
     "n_chunks",
     [1, 2, 5, 10, 11, 20],
-    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20"],
+    ids=["chunks1", "chunks2", "chunks5", "chunks_ten", "chunks_eleven", "chunks20"],
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(

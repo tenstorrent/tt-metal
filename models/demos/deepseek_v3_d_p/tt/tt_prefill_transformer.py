@@ -423,6 +423,7 @@ class TtPrefillTransformer(LightweightModule):
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
+                logger.warning(f"Reading TTNN profiler after layer {i} to avoid buffer overflow")
                 ttnn.ReadDeviceProfiler(self.mesh_device)
         # GLM-5.2 reuse: free the last full layer's held top-k indices after the final layer.
         if reuse and indexer_indices is not None:
