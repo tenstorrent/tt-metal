@@ -11,6 +11,7 @@
 
 namespace ttnn::operations::experimental::quasar {
 
+// Public Python API: ttnn.experimental.quasar.typecast.
 Tensor typecast(
     const Tensor& input,
     const DataType& output_dtype,

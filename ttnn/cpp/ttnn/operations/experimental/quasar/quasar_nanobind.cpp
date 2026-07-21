@@ -25,6 +25,7 @@
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/reallocate/reallocate_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/to_device/to_device_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/typecast/typecast_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -78,6 +79,9 @@ void bind_quasar(nb::module_& mod) {
 
     // to_device (thin host->device transfer wrapper).
     detail::bind_to_device(m_quasar);
+
+    // typecast.
+    detail::bind_typecast(m_quasar);
 
     // NOTE: halo and binary_ng have no python binding (internal device backends).
 }
