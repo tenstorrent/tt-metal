@@ -58,7 +58,7 @@ class TtMoe(LightweightModule):
 
     Layout Flow:
         - Dispatch: ROW_MAJOR → ROW_MAJOR
-        - Routed Expert: TILE_LAYOUT → TILE_LAYOUT (convert before/after)
+        - Routed Expert: ROW_MAJOR → TILE_LAYOUT
         - Combine: ROW_MAJOR → ROW_MAJOR
         - Shared Expert: TILE_LAYOUT → TILE_LAYOUT
         - Split Connection: ROW_MAJOR (elementwise ops)
@@ -410,6 +410,16 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
+        # Persistent, model-wide output buffer for the fused (ROW_MAJOR) routed-expert path. The
+        # routed expert writes each expert's region into it while the overlapped combine reads the
+        # same buffer.
+        self.routed_expert_output = None
+        if self.overlap_routed_expert_with_combine:
+            self.routed_expert_output = self.tt_ccl.get_routed_expert_output_buffer(
+                shape=(1, 1, max_dispatch_buffer_token_size, emb_dim),
+                dtype=routed_expert_activations_dtype,
+            )
+
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
@@ -426,6 +436,7 @@ class TtMoe(LightweightModule):
             activation=ttnn.RoutedExpertActivation.Silu,
             subdevice_id=self.compute_sd_id if self.overlap_routed_expert_with_combine else None,
             global_semaphore=self.routed_expert_global_semaphore if self.overlap_routed_expert_with_combine else None,
+            output_buffer=self.routed_expert_output,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -512,8 +523,8 @@ class TtMoe(LightweightModule):
         # with a shortened dispatch loop. In other gate modes padded tokens keep real
         # expert indices, so dispatch must process the full range -> padding_config=None.
         padding_config = None
-        # if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
-        #     padding_config = self.gate.build_padding_config(actual_isl, padding_side)
+        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+            padding_config = self.gate.build_padding_config(actual_isl, padding_side)
 
         scores, indices, gate_logits = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
@@ -622,30 +633,9 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 3: Routed experts (enabled)
         # ========================================
-        # Dispatch output is (1, 1, max_dispatch_buffer_token_size, emb_dim) — a flat token
-        # buffer with two leading singleton dims. The routed expert's extract/insert ops
-        # treat it as effectively 2D (rows, emb_dim) and accept the leading singleton dims
-        # directly, so no squeeze is needed; the buffer keeps its rank end-to-end and comes
-        # back out the same shape, ready for combine without re-adding batch dims.
-
-        # The routed expert consumes a shared TILE buffer that it writes in place,
-        # so the concurrent combine can read the same buffer (overlap path) and the
-        # buffer keeps its rank end-to-end. Tile the ROW_MAJOR dispatch buffer up
-        # front here rather than relying on TtRoutedExpert's fused ROW_MAJOR path:
-        # that path returns a fresh output instead of writing the shared buffer,
-        # which the routed-expert/combine overlap depends on.
-        dispatched_buffer_tiled = ttnn.to_layout(
-            dispatched_buffer,
-            ttnn.TILE_LAYOUT,
-            dtype=self.routed_expert.activations_dtype,
-        )
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
-
-        # Free the original ROW_MAJOR DRAM buffer before entering routed_expert for clear state.
-        # When return_intermediates=True, keep it so the PCC check can compare against the
-        # bfloat16 torch reference (the tiled buffer may be bfloat8_b).
-        if not return_intermediates:
-            dispatched_buffer = ttnn.deallocate(dispatched_buffer)
+        # The routed expert consumes the ROW_MAJOR dispatch buffer directly: on Blackhole it
+        # tilizes and bf8-packs x internally (main removed the standalone to_layout in #49744);
+        # on Wormhole it tiles it internally for the extract loop.
 
         # Overlap the routed expert with the combine
         signpost("routed_expert_and_combine_start")
@@ -660,20 +650,20 @@ class TtMoe(LightweightModule):
             # Overlap: routed expert (compute sub-device) and combine (dm sub-device) run
             # concurrently, synchronized by the routed-expert global semaphore.
             combined_output = self.combine_module(
-                dispatched_buffer_tiled,
+                self.routed_expert_output,
                 metadata,
                 tt_expert_token_counts,
                 tt_expert_region_offsets,
             )
             expert_outputs = self.routed_expert(
-                dispatched_buffer_tiled,
+                dispatched_buffer,
                 tt_expert_token_counts,
                 tt_expert_region_offsets,
             )
         else:
             # No overlap: combine must read the buffer only AFTER routed_expert has written it.
             expert_outputs = self.routed_expert(
-                dispatched_buffer_tiled,
+                dispatched_buffer,
                 tt_expert_token_counts,
                 tt_expert_region_offsets,
             )
@@ -691,6 +681,12 @@ class TtMoe(LightweightModule):
             self.mesh_device.reset_sub_device_stall_group()
             self.mesh_device.clear_loaded_sub_device_manager()
         signpost("routed_expert_and_combine_end")
+
+        # Free the dispatch buffer now that the routed expert and combine have consumed it.
+        # When return_intermediates=True, keep it so the PCC check can compare against the
+        # bfloat16 torch reference.
+        if not return_intermediates:
+            dispatched_buffer = ttnn.deallocate(dispatched_buffer)
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)

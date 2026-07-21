@@ -132,7 +132,8 @@ ttnn::Tensor unified_routed_expert_moe(
     // increments it once its output is written, and the combine waits on it before consuming
     // that expert's region.
     const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

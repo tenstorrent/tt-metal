@@ -135,6 +135,9 @@ class TT_CCL:
         # Lazily created once per mesh (in L1_SMALL). See get_routed_expert_global_semaphore.
         self.routed_expert_global_semaphore = None
 
+        # Persistent routed-expert output buffers (the fused ROW_MAJOR path's destination).
+        self.routed_expert_output_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -228,16 +231,13 @@ class TT_CCL:
         replicated across the mesh. A single buffer is reused at a stable address by every
         shared-expert reduce_scatter — all layers share the same shape and run sequentially, so one
         buffer for the whole model is safe."""
-        import torch
-
         if self.shared_rs_intermediate is None:
-            self.shared_rs_intermediate = ttnn.from_torch(
-                torch.zeros([2] + list(input_tensor.shape)),
-                device=self.mesh_device,
-                layout=input_tensor.layout,
+            self.shared_rs_intermediate = ttnn.empty(
+                [2] + list(input_tensor.shape),
                 dtype=input_tensor.dtype,
+                layout=input_tensor.layout,
+                device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
         return self.shared_rs_intermediate
 
@@ -258,6 +258,23 @@ class TT_CCL:
                 self.mesh_device, cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
             )
         return self.routed_expert_global_semaphore
+
+    def get_routed_expert_output_buffer(self, shape, dtype=ttnn.bfloat8_b):
+        """Lazily allocate (once per mesh, per shape) and return the persistent output buffer the
+        fused (ROW_MAJOR) routed expert writes into. Allocated uninitialized directly on the mesh
+        (no torch host tensor, no host->device copy) exactly like the composite's own ttnn::empty --
+        each device gets its own `shape` region. Safe to leave uninitialized: it is an output the
+        routed expert overwrites, and combine reads only the written rows. TILE, interleaved DRAM."""
+        key = (tuple(shape), dtype)
+        if key not in self.routed_expert_output_buffers:
+            self.routed_expert_output_buffers[key] = ttnn.empty(
+                shape,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self.routed_expert_output_buffers[key]
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis

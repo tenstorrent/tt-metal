@@ -1159,6 +1159,7 @@ def test_kimi_prefill_transformer(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,

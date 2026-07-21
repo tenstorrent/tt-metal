@@ -584,6 +584,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             1,
             # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
@@ -640,6 +641,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             # 4x4 sub-torus: Ring-4 on the SP axis (dim 0), Linear on the 4-wide TP axis (dim 1).
@@ -656,6 +658,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             # 4x4 full 2D sub-torus: Ring-4 on BOTH axes (dim 0 = SP/Y, dim 1 = TP/X). Both axes have
@@ -963,6 +966,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,

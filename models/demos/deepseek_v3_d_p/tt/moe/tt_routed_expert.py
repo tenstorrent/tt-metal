@@ -258,6 +258,7 @@ class TtRoutedExpert(LightweightModule):
         activation: "ttnn.RoutedExpertActivation",
         subdevice_id=None,
         global_semaphore: GlobalSemaphore | None = None,
+        output_buffer: ttnn.Tensor | None = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -315,6 +316,7 @@ class TtRoutedExpert(LightweightModule):
         self.activation = activation
         self.subdevice_id = subdevice_id
         self.global_semaphore = global_semaphore
+        self.output_buffer = output_buffer
 
         # Optional per-expert projection biases (gpt-oss). Only supported with
         # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
@@ -521,6 +523,7 @@ class TtRoutedExpert(LightweightModule):
                 down_biases=self.down_biases,
                 global_semaphore=self.global_semaphore,
                 subdevice_id=self.subdevice_id,
+                output=self.output_buffer,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

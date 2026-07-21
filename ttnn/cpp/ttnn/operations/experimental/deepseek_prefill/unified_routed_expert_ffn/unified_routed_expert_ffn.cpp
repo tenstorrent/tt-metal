@@ -110,7 +110,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
     const std::optional<std::vector<ttnn::Tensor>>& down_biases,
     const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::Tensor>& optional_output) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -158,20 +159,24 @@ ttnn::Tensor unified_routed_expert_moe(
     //     chain; chunks cover disjoint rows and experts touch disjoint regions,
     //     so no expert can disturb another. No allocation, no up-front fill.
     //   * ROW_MAJOR bf16 buffer -> the FFN tilizes x and packs bf8 internally, so
-    //     input and output differ in both layout and dtype and cannot alias. One
-    //     shared TILE bf8 output is allocated once for all experts; each writes
-    //     its own region. Left uninitialized (no fill): downstream `combine`
-    //     reads only written rows (bounded per expert to
+    //     input and output differ in both layout and dtype and cannot alias. A
+    //     shared TILE bf8 output holds every expert's region. When `optional_output`
+    //     is provided (a persistent, model-wide buffer supplied by the caller so it
+    //     exists before the overlapped combine is enqueued) it is used directly;
+    //     otherwise one is allocated here. Left uninitialized (no fill): downstream
+    //     `combine` reads only written rows (bounded per expert to
     //     [offset, offset + ceil_tile(count))).
     const bool x_is_row_major = dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR;
     const ttnn::Tensor output =
-        x_is_row_major ? ttnn::empty(
-                             dispatched_buffer.logical_shape(),
-                             tt::tt_metal::DataType::BFLOAT8_B,
-                             tt::tt_metal::Layout::TILE,
-                             dispatched_buffer.device(),
-                             tt::tt_metal::MemoryConfig{
-                                 tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM})
+        x_is_row_major ? (optional_output.has_value()
+                              ? *optional_output
+                              : ttnn::empty(
+                                    dispatched_buffer.logical_shape(),
+                                    tt::tt_metal::DataType::BFLOAT8_B,
+                                    tt::tt_metal::Layout::TILE,
+                                    dispatched_buffer.device(),
+                                    tt::tt_metal::MemoryConfig{
+                                        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}))
                        : dispatched_buffer;
     const uint32_t m_tiles = (max_dispatched_tokens_per_expert + 31) / 32;
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
