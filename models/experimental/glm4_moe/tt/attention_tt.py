@@ -1136,23 +1136,38 @@ class Glm4MoeAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         """Prefill forward: process entire prompt sequence.
 
         Args:
-            x: [1, 1, seq_len, hidden_size=5120]
-            rot_mats: (cos, sin) rotation matrices for RoPE
-            user_id: batch index for KV cache fill
-            page_table: page table tensor for paged KV cache
+            x: [1, 1, seq_len, hidden_size=5120]. For batched multi-user prefill,
+               ``seq_len = batch_size * S_per_user`` (concat along the token axis).
+            rot_mats: (cos, sin) rotation matrices for RoPE (length = S_per_user)
+            user_id: batch index for KV cache fill (int), or list of slot indices
+                when ``batch_size > 1``
+            page_table: page table tensor for paged KV cache ([B, W] when batched)
             chunk_page_table: page table for chunked prefill
             chunk_start_idx: starting index for chunked prefill
             kv_cache: [keys, values] external KV cache tensors
+            batch_size: number of users concatenated in ``x`` (1 = single-user)
 
         Returns:
             Output tensor [1, 1, seq_len, hidden_size=5120]
         """
-        seq_len = x.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        batch_size = max(1, int(batch_size))
+        total_seq = int(x.shape[-2])
+        assert total_seq % 128 == 0 and total_seq > 0, "Seqlen must be divisible by 128"
+        if batch_size > 1:
+            if total_seq % batch_size != 0:
+                raise ValueError(f"batched prefill: total_seq={total_seq} not divisible by batch_size={batch_size}")
+            seq_len_per_user = total_seq // batch_size
+            if seq_len_per_user % 128 != 0:
+                raise ValueError(f"batched prefill: per-user seq {seq_len_per_user} must be divisible by 128")
+        else:
+            seq_len_per_user = total_seq
+        # Matmul / O-proj see the flat concatenated length.
+        seq_len = total_seq
 
         import os as _os
         import sys
@@ -1235,6 +1250,11 @@ class Glm4MoeAttention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv = ttnn.reshape(xqkv, [1, 1, seq_len, -1])
 
+        # Batched prefill: un-concat into [B, 1, S_per_user, H] before head split
+        # so RoPE / SDPA / KV fill see a true batch dim (tt_transformers pattern).
+        if batch_size > 1:
+            xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len_per_user, -1])
+
         ttnn.deallocate(x)
 
         # 3. Split into Q, K, V heads (prefill)
@@ -1245,7 +1265,7 @@ class Glm4MoeAttention(LightweightModule):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # q: [1, 12, seq_len, 128], k: [1, 1, seq_len, 128], v: [1, 1, seq_len, 128]
+        # single-user: q [1,12,S,128]; batched: q [B,12,S_per_user,128]
 
         ttnn.deallocate(xqkv)
         _sync("after split heads")
@@ -1256,13 +1276,12 @@ class Glm4MoeAttention(LightweightModule):
 
         _sync("after QK norm")
 
-        # 5. Partial RoPE (prefill mode)
+        # 5. Partial RoPE (prefill mode) — cos/sin length = S_per_user
         if _dbg_prefill:
             print(
                 f"      [ATTN PREFILL] RoPE: cos.shape={list(rot_mats[0].shape)}, "
                 f"sin.shape={list(rot_mats[1].shape)}, q.shape={list(q.shape)}, "
-                f"k.shape={list(k.shape)} — NOTE: cos/sin always sliced from [0:seq_len], "
-                f"not from chunk_start_idx (Bug 2: wrong positions for chunks > 0)",
+                f"k.shape={list(k.shape)}, batch_size={batch_size}, S_per_user={seq_len_per_user}",
                 flush=True,
                 file=sys.stderr,
             )
@@ -1292,30 +1311,59 @@ class Glm4MoeAttention(LightweightModule):
         if fill_page_table is not None:
             block_size = keys.shape[2]
             page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            if _dbg_prefill:
-                print(
-                    f"      [ATTN PREFILL] KV cache fill: paged_fill_cache, "
-                    f"fill_page_table.shape={list(fill_page_table.shape)}, "
-                    f"block_size={block_size}, page_len={page_len}, "
-                    f"k_fill.shape={list(k_fill.shape)}, v_fill.shape={list(v_fill.shape)}, "
-                    f"keys.shape={list(keys.shape)}, user_id={user_id}",
-                    flush=True,
-                    file=sys.stderr,
-                )
-            ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
+            if batch_size > 1:
+                # One paged_fill_cache call per user (kernel uses scalar batch_idx).
+                valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+                if _dbg_prefill:
+                    print(
+                        f"      [ATTN PREFILL] KV cache fill batched: slots={valid_slots}, "
+                        f"page_table.shape={list(fill_page_table.shape)}, "
+                        f"k_fill.shape={list(k_fill.shape)}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                for slot_idx in valid_slots:
+                    k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
+                    v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
+                    k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                    v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+                    ttnn.experimental.paged_fill_cache(keys, k_user_sliced, fill_page_table, batch_idx=int(slot_idx))
+                    ttnn.experimental.paged_fill_cache(values, v_user_sliced, fill_page_table, batch_idx=int(slot_idx))
+            else:
+                k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+                v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+                if _dbg_prefill:
+                    print(
+                        f"      [ATTN PREFILL] KV cache fill: paged_fill_cache, "
+                        f"fill_page_table.shape={list(fill_page_table.shape)}, "
+                        f"block_size={block_size}, page_len={page_len}, "
+                        f"k_fill.shape={list(k_fill.shape)}, v_fill.shape={list(v_fill.shape)}, "
+                        f"keys.shape={list(keys.shape)}, user_id={user_id}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
-            if _dbg_prefill:
-                print(
-                    f"      [ATTN PREFILL] KV cache fill: fill_cache (non-paged), "
-                    f"user_id={user_id}, batch_idx={user_id % self.batch_size_per_device_group}",
-                    flush=True,
-                    file=sys.stderr,
-                )
-            ttnn.fill_cache(keys, k_fill, user_id % self.batch_size_per_device_group)
-            ttnn.fill_cache(values, v_fill, user_id % self.batch_size_per_device_group)
+            if batch_size > 1:
+                valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+                for slot_idx in valid_slots:
+                    ttnn.fill_cache(
+                        keys, k_fill[slot_idx : slot_idx + 1], int(slot_idx) % self.batch_size_per_device_group
+                    )
+                    ttnn.fill_cache(
+                        values, v_fill[slot_idx : slot_idx + 1], int(slot_idx) % self.batch_size_per_device_group
+                    )
+            else:
+                if _dbg_prefill:
+                    print(
+                        f"      [ATTN PREFILL] KV cache fill: fill_cache (non-paged), "
+                        f"user_id={user_id}, batch_idx={user_id % self.batch_size_per_device_group}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                ttnn.fill_cache(keys, k_fill, user_id % self.batch_size_per_device_group)
+                ttnn.fill_cache(values, v_fill, user_id % self.batch_size_per_device_group)
 
         _sync("after KV cache fill")
 
@@ -1324,6 +1372,8 @@ class Glm4MoeAttention(LightweightModule):
         ttnn.deallocate(q)
 
         if chunk_start_idx is not None:
+            if batch_size > 1:
+                raise NotImplementedError("Chunked SDPA is not supported with batched multi-user prefill")
             if _dbg_prefill:
                 print(
                     f"      [ATTN PREFILL] SDPA: chunked mode, chunk_start_idx={chunk_start_idx}, "
@@ -1341,11 +1391,29 @@ class Glm4MoeAttention(LightweightModule):
         else:
             if _dbg_prefill:
                 print(
-                    f"      [ATTN PREFILL] SDPA: local mode (NO cross-chunk attention), "
-                    f"q.shape={list(q_8b.shape)}, k.shape={list(k_8b.shape)}, v.shape={list(v_8b.shape)}",
+                    f"      [ATTN PREFILL] SDPA: local mode, "
+                    f"q.shape={list(q_8b.shape)}, k.shape={list(k_8b.shape)}, v.shape={list(v_8b.shape)}, "
+                    f"batch_size={batch_size}",
                     flush=True,
                     file=sys.stderr,
                 )
+            # One-shot shape probe for batched-prefill complexity investigation.
+            if batch_size > 1 and not getattr(Glm4MoeAttention, "_batched_sdpa_shape_logged", False):
+                Glm4MoeAttention._batched_sdpa_shape_logged = True
+                print(
+                    f"      [ATTN PREFILL] SDPA shape probe: batch_size={batch_size} "
+                    f"seq_len_per_user={seq_len_per_user} total_seq={seq_len} "
+                    f"q.shape={list(q_8b.shape)} k.shape={list(k_8b.shape)} v.shape={list(v_8b.shape)} "
+                    f"q.padded={list(q_8b.padded_shape)} k.padded={list(k_8b.padded_shape)}",
+                    flush=True,
+                    file=sys.stderr,
+                )
+            _time_sdpa = _os.environ.get("GLM4_MOE_TIME_SDPA", "0") != "0"
+            if _time_sdpa:
+                import time as _time
+
+                ttnn.synchronize_device(self.mesh_device)
+                _t0 = _time.perf_counter()
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q_8b,
                 k_8b,
@@ -1353,6 +1421,16 @@ class Glm4MoeAttention(LightweightModule):
                 is_causal=True,
                 scale=self.scale,
             )
+            if _time_sdpa:
+                ttnn.synchronize_device(self.mesh_device)
+                _dt = _time.perf_counter() - _t0
+                _lid = getattr(self, "layer_idx", "?")
+                print(
+                    f"      [ATTN PREFILL] SDPA timed: layer={_lid} {_dt*1000:.1f}ms "
+                    f"B={batch_size} S={seq_len_per_user} T={seq_len} q={list(q_8b.shape)}",
+                    flush=True,
+                    file=sys.stderr,
+                )
 
         ttnn.deallocate(q_8b)
         ttnn.deallocate(k_8b)
@@ -1361,12 +1439,16 @@ class Glm4MoeAttention(LightweightModule):
         _sync("after SDPA")
 
         # 8. Reshape and concat heads
-        attn_output = ttnn.reshape(attn_output, [1, self.n_local_heads, -1, self.head_dim])
+        # Batched: keep [B, H, S, D] through concat_heads, then flatten to [1,1,B*S,H].
+        if batch_size == 1:
+            attn_output = ttnn.reshape(attn_output, [1, self.n_local_heads, -1, self.head_dim])
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # -> [1, 1, seq_len, 1536]
+        if batch_size > 1:
+            attn_output = ttnn.reshape(attn_output, [1, 1, seq_len, -1])
+        # -> [1, 1, seq_len, 1536]  (seq_len = B*S when batched)
 
         _sync("after concat_heads")
 
@@ -1423,19 +1505,27 @@ class Glm4MoeAttention(LightweightModule):
         _sync("before all_reduce")
 
         # 10. All-reduce on cluster_axis=0 (TP reduction for row-parallel O projection)
-        # NOTE: Prefill runs outside trace — do NOT pass ccl to avoid async CCL ops
-        # conflicting with the existing captured trace's semaphore state.
-        # Use host-side reduce: rs_ag also hangs on first CCL call during prefill
-        # on TG mesh (no prior kernel compilation from decode warmup).
-        # Host reduce is slow but prefill is one-time per prompt.
+        # Prefill runs outside trace — do NOT pass ccl (async CCL can conflict with
+        # captured-trace semaphore state). Match dense-MLP / MoE TG prefill: device
+        # reduce_scatter + all_gather (rs_ag). Host was previously hardcoded here as a
+        # hang workaround and dominated prefill wall time (PCIe D2H/H2D every layer).
+        # Override: GLM4_MOE_ATTN_PREFILL_REDUCE_IMPL={rs_ag,host,native,...}
+        # Default: rs_ag on TG; otherwise follow GLM4_MOE_REDUCE_IMPL.
+        _attn_pf_impl = os.environ.get("GLM4_MOE_ATTN_PREFILL_REDUCE_IMPL", "").strip().lower()
+        if not _attn_pf_impl:
+            _attn_pf_impl = "rs_ag" if self.TG else None
         output = _simple_all_reduce(
             output,
             self.mesh_device,
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            impl="host",
+            impl=_attn_pf_impl,
         )
-        print(f"      [ATTN PREFILL] host all_reduce done", flush=True, file=sys.stderr)
+        print(
+            f"      [ATTN PREFILL] all_reduce done (impl={_attn_pf_impl or _REDUCE_IMPL})",
+            flush=True,
+            file=sys.stderr,
+        )
 
         return output
 
@@ -1459,6 +1549,7 @@ class Glm4MoeAttention(LightweightModule):
         prefetch_qkv_out_mc=None,
         prefetch_oproj_in_mc=None,
         prefetch_oproj_out_mc=None,
+        batch_size: int = 1,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1469,6 +1560,7 @@ class Glm4MoeAttention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
         else:
             return self.forward_decode(

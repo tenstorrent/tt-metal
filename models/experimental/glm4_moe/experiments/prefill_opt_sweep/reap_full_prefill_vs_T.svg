@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560">
+  <rect width="900" height="560" fill="#fafafa"/>
+  <text x="450" y="32" text-anchor="middle" font-family="DejaVu Sans,Helvetica,Arial" font-size="16" font-weight="700">REAP batched prefill vs T (ISL×B)</text>
+  <text x="450" y="52" text-anchor="middle" font-family="DejaVu Sans,Helvetica,Arial" font-size="12" fill="#555">old PCM0 (red dashed) vs new PCM1/4096 (blue)</text>
+  <!-- axes -->
+  <line x1="80" y1="480" x2="860" y2="480" stroke="#333" stroke-width="1.5"/>
+  <line x1="80" y1="480" x2="80" y2="70" stroke="#333" stroke-width="1.5"/>
+  <text x="470" y="540" text-anchor="middle" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">T = ISL × batch (log2)</text>
+  <text x="22" y="280" transform="rotate(-90 22 280)" text-anchor="middle" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">prefill_s (log10)</text>
+  <!-- grid / ticks: T = 2^9 .. 2^15 ; y = 1..10000 -->
+  <!-- x: log2(T) from 9..15 ’ map 80..860 ; y: log10(s) from 0..4.1 ’ map 480..70 -->
+  <g font-family="DejaVu Sans,Helvetica,Arial" font-size="10" fill="#444">
+    <text x="80" y="498" text-anchor="middle">512</text>
+    <text x="191" y="498" text-anchor="middle">1k</text>
+    <text x="303" y="498" text-anchor="middle">2k</text>
+    <text x="414" y="498" text-anchor="middle">4k</text>
+    <text x="526" y="498" text-anchor="middle">8k</text>
+    <text x="637" y="498" text-anchor="middle">16k</text>
+    <text x="749" y="498" text-anchor="middle">32k</text>
+    <text x="70" y="480" text-anchor="end">1</text>
+    <text x="70" y="380" text-anchor="end">10</text>
+    <text x="70" y="280" text-anchor="end">100</text>
+    <text x="70" y="180" text-anchor="end">1k</text>
+    <text x="70" y="80" text-anchor="end">10k</text>
+  </g>
+  <g stroke="#ddd" stroke-width="1">
+    <line x1="80" y1="380" x2="860" y2="380"/><line x1="80" y1="280" x2="860" y2="280"/>
+    <line x1="80" y1="180" x2="860" y2="180"/><line x1="80" y1="80" x2="860" y2="80"/>
+  </g>
+  <!-- old points (T,s): (512,22.37)(1024,50.2)(2048,177/173.9)(4096,692.7/683/678.8)(8192,2721.9/2701.5/2692.2)(16384,10794.9/10748.3) -->
+  <!-- x = 80 + (log2(T)-9)/6 * 780 ; y = 480 - log10(s)/4.1 * 410 -->
+  <polyline fill="none" stroke="#c44e52" stroke-width="2" stroke-dasharray="6 4"
+    points="80,337 191,310 303,261 414,204 526,151 637,96"/>
+  <g fill="#c44e52">
+    <circle cx="80" cy="337" r="4"/><circle cx="191" cy="310" r="4"/><circle cx="303" cy="261" r="4"/>
+    <circle cx="414" cy="204" r="4"/><circle cx="526" cy="151" r="4"/><circle cx="637" cy="96" r="4"/>
+  </g>
+  <!-- new: (512,3.98)(1024,8.99)(2048,14.83/10.99)(4096,20.36/19.02/19.50)(8192,37.4/36.2/36.3)(16384,74/70/69/70.5)(32768,149.5/139.8/140.9) -->
+  <polyline fill="none" stroke="#4c72b0" stroke-width="2.2"
+    points="80,402 191,370 303,349 414,332 526,303 637,268 749,230"/>
+  <g fill="#4c72b0">
+    <circle cx="80" cy="402" r="4"/><circle cx="191" cy="370" r="4"/><circle cx="303" cy="349" r="4"/>
+    <circle cx="414" cy="332" r="4"/><circle cx="526" cy="303" r="4"/><circle cx="637" cy="268" r="4"/>
+    <circle cx="749" cy="230" r="4"/>
+  </g>
+  <g font-family="DejaVu Sans,Helvetica,Arial" font-size="12">
+    <line x1="620" y1="90" x2="660" y2="90" stroke="#c44e52" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="670" y="94" fill="#c44e52">old (PCM0)</text>
+    <line x1="620" y1="112" x2="660" y2="112" stroke="#4c72b0" stroke-width="2.2"/>
+    <text x="670" y="116" fill="#4c72b0">new (PCM1/4096)</text>
+  </g>
+</svg>

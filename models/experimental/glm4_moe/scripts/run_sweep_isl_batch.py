@@ -16,10 +16,14 @@ Usage (from tt-metal repo root, PYTHONPATH=repo root, venv activated):
   python models/experimental/glm4_moe/scripts/run_sweep_isl_batch.py [--dry-run] [--out-dir DIR]
 
 Child runs use ``os.environ`` merged with ``_glm4_moe_sweep_env`` (same keys **replace**
-parent exports): native reduce, bf4 experts, ring CCL×4, DRAM shard, EP L1, SDPA L1, etc.
+parent exports): native reduce, bf4 experts, ring CCL×4, DRAM shard, EP L1, SDPA L1,
+MoE sparse prefill PCM=1 / CHUNK=4096 (batched production path), etc.
 — aligned with common ``debug_run_full_tt_greedy.py`` runs. Override CCL via
 ``--ccl-num-links`` / ``--ccl-topology``; edit ``_glm4_moe_sweep_env`` for other MoE
-knobs.
+knobs. For tiny serial / A/B vs legacy, set
+``GLM4_MOE_MOE_SPARSE_PREFILL_PCM=0`` and ``..._CHUNK_TOKENS=0`` in the parent env
+*before* calling this script only if you also remove those keys from
+``_glm4_moe_sweep_env`` (sweep env replaces parent).
 """
 
 from __future__ import annotations
@@ -74,7 +78,8 @@ def _glm4_moe_sweep_env(
 
     native device EP reduce, bf4 experts, ring CCL with 4 links (Opt5 wiring), DRAM-sharded
     QKV, packer L1 acc, EP L1 for decode-sized MoE, SDPA L1, router fast path, distributed
-    QK norm toggle.
+    QK norm toggle, MoE sparse prefill PCM=1 + CHUNK=4096 (validated batched speedups:
+    ~4.8× @ 128×4, ~28× @ 512×8 vs legacy PCM0/CHUNK0).
 
     CCL: pass ``ccl_num_links`` / ``ccl_topology`` to override the defaults (4 / ring).
     """
@@ -91,6 +96,13 @@ def _glm4_moe_sweep_env(
         "GLM4_MOE_EP_L1": "1",
         "GLM4_MOE_SDPA_L1": "1",
         "GLM4_MOE_PREFILL_CHUNK_SIZE": str(prefill_chunk),
+        # Equal-length multi-user concat prefill (falls back when ISL×B exceeds budget).
+        "GLM4_MOE_BATCHED_PREFILL": "1",
+        "GLM4_MOE_BATCHED_PREFILL_MAX_TOKENS": "16384",
+        # Production MoE sparse prefill (breaks O(T²) batched path). Do not set
+        # GLM4_MOE_ATTN_PREFILL_REDUCE_IMPL=host — keep rs_ag default in attention_tt.
+        "GLM4_MOE_MOE_SPARSE_PREFILL_PCM": "1",
+        "GLM4_MOE_MOE_SPARSE_PREFILL_CHUNK_TOKENS": "4096",
     }
     if ccl_num_links is not None:
         d["GLM4_MOE_CCL_NUM_LINKS"] = str(max(1, int(ccl_num_links)))

@@ -284,6 +284,20 @@ def _decode_rope_embedding_lookup(
     return cos, sin
 
 
+def _tg_dp_batch_mapper(device, *, tensor_batch_dim: int = 0):
+    """Shard a host tensor's batch axis across Galaxy DP (mesh axis 1).
+
+    Use ``tensor_batch_dim=0`` for tensors shaped ``[B]`` / ``[B, ...]``
+    (positions, page_table). Use ``tensor_batch_dim=1`` for ``[1, B]``
+    (rot_idxs) — sharding dim 0 there would try to split a size-1 axis
+    across DP and hit ``chunks.size() == sharded_mesh_size``.
+    """
+    mesh_shape = list(device.shape)
+    dims: list = [None, None]
+    dims[1] = int(tensor_batch_dim)
+    return ttnn.ShardTensor2dMesh(device, dims=tuple(dims), mesh_shape=mesh_shape)
+
+
 def _prepare_decode_positions_tt(
     *,
     device,
@@ -300,14 +314,15 @@ def _prepare_decode_positions_tt(
     batch = int(positions.shape[0])
 
     if is_mesh_device and dp_shard_axis is not None:
-        mesh_shape = list(device.shape)
-        pos_dims = [None, None]
-        pos_dims[dp_shard_axis] = 0
-        pos_mapper = ttnn.ShardTensor2dMesh(device, dims=tuple(pos_dims), mesh_shape=mesh_shape)
+        # positions: [B] → shard dim 0; rot_idxs: [1, B] → shard dim 1
+        pos_mapper = _tg_dp_batch_mapper(device, tensor_batch_dim=0)
+        rot_idxs_mapper = _tg_dp_batch_mapper(device, tensor_batch_dim=1)
     elif is_mesh_device:
         pos_mapper = ttnn.ReplicateTensorToMesh(device)
+        rot_idxs_mapper = pos_mapper
     else:
         pos_mapper = None
+        rot_idxs_mapper = None
 
     tt_positions = ttnn.from_torch(
         positions.view(-1).contiguous().to(torch.int32),
@@ -326,7 +341,7 @@ def _prepare_decode_positions_tt(
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=pos_mapper,
+        mesh_mapper=rot_idxs_mapper,
     )
 
     return tt_positions, rot_idxs
@@ -1599,17 +1614,14 @@ class Glm4MoeTT:
         # Positions/cos/sin use active batch (must match attention's q/k batch)
         active = batch
 
-        # DP sharding for TG mesh
+        # DP sharding for TG mesh: [B] on dim 0, [1, B] rot_idxs on dim 1
         dp_batch_mapper = mapper
+        dp_rot_idxs_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if active > 1 and active % dp_size == 0:
-                mesh_shape = list(self.device.shape)
-                dp_batch_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
+                dp_batch_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=0)
+                dp_rot_idxs_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=1)
 
         # 1. Copy MTP embedding (host-side lookup + upload)
         actual_batch = int(main_token_ids.shape[0])
@@ -1651,7 +1663,7 @@ class Glm4MoeTT:
             mtp_rot_idxs_t,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=dp_batch_mapper,
+            mesh_mapper=dp_rot_idxs_mapper,
         )
         ttnn.copy_host_to_device_tensor(host_rot_idxs, state.mtp_rot_idxs_tt)
 
@@ -1672,17 +1684,14 @@ class Glm4MoeTT:
         batch = int(state.batch)
         active = batch
 
-        # DP sharding for TG mesh
+        # DP sharding for TG mesh: [B] on dim 0, [1, B] rot_idxs on dim 1
         dp_batch_mapper = mapper
+        dp_rot_idxs_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if active > 1 and active % dp_size == 0:
-                mesh_shape = list(self.device.shape)
-                dp_batch_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
+                dp_batch_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=0)
+                dp_rot_idxs_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=1)
 
         # 1. Copy MTP positions
         mtp_pos_padded = mtp_positions.view(-1).contiguous().to(torch.int32)
@@ -1710,7 +1719,7 @@ class Glm4MoeTT:
             mtp_rot_idxs_t,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=dp_batch_mapper,
+            mesh_mapper=dp_rot_idxs_mapper,
         )
         ttnn.copy_host_to_device_tensor(host_rot_idxs, state.mtp_rot_idxs_tt)
 
@@ -1986,18 +1995,16 @@ class Glm4MoeTT:
         # page_table, positions) across DP groups so each group gets only its subset.
         # Required because attention slices QKV per DP group: Q/K have
         # logical batch = batch_per_group (not full batch).
+        # [B] / [B,...] shard dim 0; [1,B] rot_idxs shard dim 1 (see _tg_dp_batch_mapper).
         dp_shard_axis = None
         dp_batch_mapper = mapper  # replicate by default
+        dp_rot_idxs_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if active > 1 and active % dp_size == 0:
                 dp_shard_axis = 1
-                mesh_shape = list(self.device.shape)
-                dp_batch_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
+                dp_batch_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=0)
+                dp_rot_idxs_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=1)
 
         # Create persistent input tensors (BEFORE trace capture AND warm-up).
         page_table_tt = ttnn.from_torch(
@@ -2083,7 +2090,7 @@ class Glm4MoeTT:
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=dp_batch_mapper,
+                mesh_mapper=dp_rot_idxs_mapper,
             )
 
         # Prefetcher shorthand variables — set before compile warmup so warmup
@@ -2599,16 +2606,14 @@ class Glm4MoeTT:
         # On TG with multi-user batch, batch-dimension inputs (positions, rot_idxs,
         # page_table) were sharded across DP groups during trace capture.
         # Must use the same sharding here for copy_host_to_device_tensor.
-        dp_batch_mapper = mapper  # for page_table (dim=0), positions (dim=0), rot_idxs (dim=0)
+        # page_table/positions: [B,...] → dim 0; rot_idxs: [1,B] → dim 1.
+        dp_batch_mapper = mapper
+        dp_rot_idxs_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if batch > 1 and batch % dp_size == 0:
-                mesh_shape = list(self.device.shape)
-                dp_batch_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
+                dp_batch_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=0)
+                dp_rot_idxs_mapper = _tg_dp_batch_mapper(self.device, tensor_batch_dim=1)
 
         # Update embedding: in-trace mode just updates tokens_tt (device does lookup);
         # fallback mode does host lookup + copy to pre-allocated embed buffer.
@@ -2646,7 +2651,7 @@ class Glm4MoeTT:
             rot_idxs_t,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=dp_batch_mapper,
+            mesh_mapper=dp_rot_idxs_mapper,
         )
         ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt)
 
@@ -2728,8 +2733,9 @@ class Glm4MoeTT:
     ) -> torch.Tensor:
         """Compute logits for the last prompt token for each request and fill KV caches.
 
-        Processes each request independently (B loop). For long prompts (>16K tokens),
-        uses chunked prefill to avoid activation memory OOM.
+        Default: process each request independently (B loop). With
+        ``GLM4_MOE_BATCHED_PREFILL=1`` and equal padded lengths (within a token
+        budget), concatenates users into one forward (Flash / tt_transformers style).
 
         Args:
             tokens: [B, S] int32
@@ -2763,6 +2769,27 @@ class Glm4MoeTT:
 
         # Prefill chunk size (default 128K; override with GLM4_MOE_PREFILL_CHUNK_SIZE; lower to reduce peak activation memory).
         PREFILL_CHUNK_SIZE = int(os.environ.get("GLM4_MOE_PREFILL_CHUNK_SIZE", "131072") or "131072")
+
+        # Optional multi-user concat prefill (equal padded lengths only).
+        if (
+            os.environ.get("GLM4_MOE_BATCHED_PREFILL", "").strip() == "1"
+            and int(batch) > 1
+            and all(int(pl) > 0 for pl in prompt_lens)
+        ):
+            int_lens = [int(pl) for pl in prompt_lens]
+            padded_lens = [((pl + pad_multiple - 1) // pad_multiple) * pad_multiple for pl in int_lens]
+            padded_lens = [min(p, int(self.max_seq_len)) for p in padded_lens]
+            s_max = max(padded_lens)
+            token_budget = int(os.environ.get("GLM4_MOE_BATCHED_PREFILL_MAX_TOKENS", "16384") or "16384")
+            if len(set(padded_lens)) == 1 and s_max <= PREFILL_CHUNK_SIZE and int(batch) * s_max <= token_budget:
+                return self._prefill_batched(
+                    tokens=tokens,
+                    prompt_lens=int_lens,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    s_max=s_max,
+                    pad_multiple=pad_multiple,
+                )
 
         out_logits: list[torch.Tensor] = []
 
@@ -2903,6 +2930,132 @@ class Glm4MoeTT:
 
         return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
 
+    def _prefill_batched(
+        self,
+        *,
+        tokens: torch.Tensor,
+        prompt_lens: list[int],
+        page_table: torch.Tensor,
+        kv_cache: list,
+        s_max: int,
+        pad_multiple: int,
+    ) -> torch.Tensor:
+        """Multi-user concat prefill: one forward for B equal-padded prompts.
+
+        Tokens are laid out as [1,1,B*S_max,H]. Attention un-concats to [B,...]
+        for RoPE / SDPA / per-slot ``paged_fill_cache``; MoE stays flat on B*S.
+        """
+        batch = int(tokens.shape[0])
+        hidden = int(self.hparams.hidden_size)
+        vocab = int(self.hparams.vocab_size)
+        is_mesh = _is_mesh_device(self.device)
+        head_dim = int(self.hparams.head_dim)
+
+        logger.info("Batched prefill: B={}, S_max={}, prompt_lens={}", batch, s_max, prompt_lens)
+
+        # Concat tokens [1, B*S_max]
+        input_concat = torch.zeros((1, batch * s_max), dtype=torch.int32)
+        for i in range(batch):
+            pl = int(prompt_lens[i])
+            offset = i * s_max
+            input_concat[0, offset : offset + pl] = tokens[i, :pl].to(torch.int32).cpu()
+
+        page_table_all = page_table[:batch, :].to(torch.int32)
+        page_table_tt = ttnn.from_torch(
+            page_table_all,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+        )
+
+        rope_slices_owned = True
+        if int(s_max) == int(self.rope["cos_prefill"].shape[2]) and head_dim == int(self.rope["cos_prefill"].shape[3]):
+            cos_matrix = self.rope["cos_prefill"]
+            sin_matrix = self.rope["sin_prefill"]
+            rope_slices_owned = False
+        else:
+            cos_matrix = ttnn.slice(self.rope["cos_prefill"], [0, 0, 0, 0], [1, 1, s_max, head_dim])
+            sin_matrix = ttnn.slice(self.rope["sin_prefill"], [0, 0, 0, 0], [1, 1, s_max, head_dim])
+
+        # Host embedding (same TG hang workaround as serial path)
+        embed_parts = []
+        for i in range(batch):
+            pl = int(prompt_lens[i])
+            row = torch.zeros((s_max, hidden), dtype=torch.bfloat16)
+            if pl > 0:
+                row[:pl] = self.embed_w_cpu[tokens[i, :pl].long()]
+            embed_parts.append(row)
+        embed_torch = torch.cat(embed_parts, dim=0)  # [B*S_max, H]
+        x = ttnn.from_torch(
+            embed_torch.unsqueeze(0).unsqueeze(0),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
+        )
+
+        rot_mats = (cos_matrix, sin_matrix, self.rope["trans_matrix_prefill"])
+        user_slots = list(range(batch))
+
+        for layer_idx in range(self.num_layers_to_run):
+            dl = self.decoder_layers[layer_idx]
+            x_next = dl.forward(
+                x,
+                None,
+                rot_mats,
+                page_table_tt,
+                kv_cache[layer_idx],
+                mode="prefill",
+                user_id=user_slots,
+                batch_size=batch,
+            )
+            ttnn.deallocate(x, force=False)
+            x = x_next
+
+        out_logits: list[torch.Tensor] = []
+        for i in range(batch):
+            offset = i * s_max
+            pos = offset + int(prompt_lens[i]) - 1
+            x_last = ttnn.slice(x, [0, 0, pos, 0], [1, 1, pos + 1, hidden])
+            x_last = _sharded_rms_norm(x_last, self.final_norm, int(self.hparams.hidden_size))
+            logits_tt = ttnn.linear(x_last, self.lm_head_w)
+
+            if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+                shards = ttnn.get_device_tensors(logits_tt)
+                num_shards = len(shards)
+                tp_size = self.lm_head_tp_size
+                if num_shards == tp_size:
+                    tp_shards = list(shards)
+                elif num_shards > tp_size:
+                    dp_stride = num_shards // tp_size
+                    tp_shards = [shards[i * dp_stride] for i in range(tp_size)]
+                else:
+                    tp_shards = list(shards)
+                logits_shards = [ttnn.to_torch(t.cpu())[..., : int(t.shape[-1])] for t in tp_shards]
+                logits_torch = torch.cat(logits_shards, dim=-1)[..., :vocab]
+                logits_flat = logits_torch.reshape(-1, vocab)
+            else:
+                logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+                logits_torch = logits_torch[..., :vocab]
+                logits_flat = logits_torch.reshape(-1, vocab)
+            out_logits.append(logits_flat.to(dtype=torch.float32).cpu())
+            ttnn.deallocate(logits_tt, force=False)
+            ttnn.deallocate(x_last, force=False)
+
+        ttnn.deallocate(x, force=False)
+        if rope_slices_owned:
+            ttnn.deallocate(cos_matrix, force=False)
+            ttnn.deallocate(sin_matrix, force=False)
+        ttnn.deallocate(page_table_tt, force=False)
+
+        if self.tt_ccl is not None:
+            self.tt_ccl.reset_sem_counters()
+
+        return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
+
     def _prefill_chunked(
         self,
         *,
@@ -2916,7 +3069,7 @@ class Glm4MoeTT:
         user_id: int,
         chunk_size: int,
     ) -> ttnn.Tensor:
-        """Run prefill in chunks for long sequences to avoid activation OOM.
+        """Run prefill in chunks for long sequences to avoid activation memory OOM.
 
         Processes chunk_size tokens at a time through all layers, writing KV cache
         incrementally. Returns the full hidden state [1,1,padded_len,hidden].

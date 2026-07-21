@@ -293,11 +293,14 @@ class Glm4MoeDecoderLayer:
         prefetch_oproj_out_mc=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        user_id: int | list | tuple = 0,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         """Forward pass for one decoder layer.
 
         Args:
             x: Hidden states [1,1,B,hidden] (decode) or [1,1,S,hidden] (prefill).
+                For batched prefill, S = batch_size * S_per_user (concat tokens).
             current_pos: Position indices for KV cache update.
             rot_mats: RoPE rotation matrices (cos, sin, trans_mat or tuple).
             page_table: Paged KV cache page table.
@@ -305,6 +308,8 @@ class Glm4MoeDecoderLayer:
             mode: "decode" or "prefill".
             active_batch: True logical batch size (avoids relying on x.shape which
                 may be tile-padded by ttnn ops).
+            user_id: Prefill KV slot index, or list of slots when batch_size > 1.
+            batch_size: Prefill multi-user concat factor (1 = single-user).
 
         Returns:
             Updated hidden states, same shape as input.
@@ -344,6 +349,8 @@ class Glm4MoeDecoderLayer:
                 kv_cache,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                user_id=user_id,
+                batch_size=batch_size,
             )
 
     def _forward_decode(
@@ -515,8 +522,10 @@ class Glm4MoeDecoderLayer:
         kv_cache: list[ttnn.Tensor],
         chunk_page_table: ttnn.Tensor = None,
         chunk_start_idx: int = None,
+        user_id: int | list | tuple = 0,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
-        """Prefill forward: batch=1, seq_len in dim=2."""
+        """Prefill forward: seq_len in dim=2; batch_size>1 means concat multi-user."""
         w = self.layer_weights
         device = self.device
         hparams = self.hparams
@@ -534,11 +543,15 @@ class Glm4MoeDecoderLayer:
                 print(f"  [DEBUG DL{_lid} PREFILL] {label} OK", flush=True, file=_sys.stderr)
 
         # Prefill timing debug (lighter than DEBUG_SYNC — no device sync, just wall-clock)
+        # Set GLM4_MOE_TIME_LAYER=1 to synchronize before/after major stages (accurate).
+        _time_layer = os.environ.get("GLM4_MOE_TIME_LAYER", "0") != "0"
         _pf_times = {}
 
         def _pf_mark(label):
-            if _dbg_prefill:
-                _pf_times[label] = time.time()
+            if _dbg_prefill or _time_layer:
+                if _time_layer:
+                    ttnn.synchronize_device(device)
+                _pf_times[label] = time.perf_counter()
 
         _pf_mark("start")
 
@@ -581,11 +594,13 @@ class Glm4MoeDecoderLayer:
             h,
             current_pos,
             rot_mats,
+            user_id=user_id,
             mode="prefill",
             page_table=page_table,
             kv_cache=kv_cache,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         _pf_mark("attn_end")
 
@@ -672,7 +687,7 @@ class Glm4MoeDecoderLayer:
 
         _pf_mark("end")
 
-        if _dbg_prefill:
+        if _dbg_prefill or _time_layer:
 
             def _dt(a, b):
                 if a in _pf_times and b in _pf_times:
@@ -685,7 +700,7 @@ class Glm4MoeDecoderLayer:
                 f"total={total}, pre_norm={_dt('pre_norm_start','pre_norm_end')}, "
                 f"attn={_dt('attn_start','attn_end')}, "
                 f"post_norm={_dt('post_norm_start','post_norm_end')}, "
-                f"mlp={_dt('mlp_start','mlp_end')}",
+                f"mlp={_dt('mlp_start','mlp_end')}" + (" [synced]" if _time_layer else ""),
                 flush=True,
                 file=_sys.stderr,
             )

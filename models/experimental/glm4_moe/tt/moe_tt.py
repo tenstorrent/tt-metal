@@ -440,6 +440,18 @@ def moe_sparse_experts_forward_tt(
 
     Default path for GLM-4.7-REAP on Galaxy: each device holds 3 experts,
     tokens are replicated, local experts compute contributions, then all-reduce.
+
+    Prefill sparse matmul is L1-bounded in ``per_core_M`` (= num token-blocks).
+    Without chunking, batched prefill sets ``per_core_M = T / block`` and scales
+    poorly (near O(T^2) wall time). Mirror glm4_moe_lite: chunk tokens so each
+    call processes at most ``PCM`` blocks (env ``GLM4_MOE_MOE_SPARSE_PREFILL_PCM``).
+
+    Adaptive defaults when env knobs are unset (validated WH Galaxy):
+    - ``total_tokens > 256`` → PCM=1, CHUNK=4096 (batched / large-T path)
+    - else → PCM=0, CHUNK=0 (legacy full-T; better for tiny serial / single-user)
+
+    Explicit env values are always honored. Force legacy with PCM=0 and
+    CHUNK_TOKENS=0; force chunking with PCM≥1 and/or CHUNK_TOKENS>0.
     """
     packer_l1_acc = _env_bool("GLM4_MOE_PACKER_L1_ACC", default=False)
     sparse_fidelity = _parse_math_fidelity(
@@ -459,49 +471,139 @@ def moe_sparse_experts_forward_tt(
     tokens_per_device = int(input_shape[0]) * int(input_shape[2])
     hidden_size = int(rt.hidden_size)
     num_devices = _get_num_devices(device)
+    unpadded_total_tokens = tokens_per_device
 
     hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, hidden_size))
     topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, int(rt.num_experts_per_tok)))
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, int(rt.num_experts_per_tok)))
 
     total_tokens = tokens_per_device
-
-    # Pad to sparsity block alignment.
     block = int(rt.sparsity_block_size)
-    pad_tokens = (-total_tokens) % block
 
-    # Convert topk tensors to ROW_MAJOR *before* padding so the untilize
-    # operates on the smaller unpadded [1,1,T,K] tensor, and the subsequent
-    # pad runs on ROW_MAJOR layout — avoiding TILE-layout FillPadDeviceOperation.
+    # Prefill PCM / chunk knobs (Flash-equivalent; GLM4_MOE_* prefix for REAP).
+    # Adaptive when unset: chunk large T (batched), legacy for tiny single-user.
+    # PCM=0 disables PCM-based chunk caps (legacy full-T when CHUNK also 0).
+    _ADAPTIVE_CHUNK_TOKEN_THRESHOLD = 256
+    _pcm_env = os.environ.get("GLM4_MOE_MOE_SPARSE_PREFILL_PCM")
+    _prefill_chunk_env = os.environ.get("GLM4_MOE_MOE_SPARSE_PREFILL_CHUNK_TOKENS")
+    _sparse_chunk_env = os.environ.get("GLM4_MOE_MOE_SPARSE_CHUNK_TOKENS")
+    if _pcm_env is None or not str(_pcm_env).strip():
+        # Unset → adaptive: chunk large T (batched), legacy for tiny serial.
+        prefill_pcm = 1 if total_tokens > _ADAPTIVE_CHUNK_TOKEN_THRESHOLD else 0
+    else:
+        prefill_pcm = int(str(_pcm_env).strip() or "1")
+
+    if _prefill_chunk_env is not None and str(_prefill_chunk_env).strip():
+        chunk_total_tokens = int(str(_prefill_chunk_env).strip())
+    elif _sparse_chunk_env is not None and str(_sparse_chunk_env).strip():
+        chunk_total_tokens = int(str(_sparse_chunk_env).strip() or "0")
+    else:
+        # CHUNK unset: 4096 when chunking (PCM>0), else 0 (legacy full-T).
+        chunk_total_tokens = 4096 if prefill_pcm > 0 else 0
+
+    # Pad to sparsity block (and optionally PCM chunk) alignment before chunking so
+    # all chunks share the same per_core_M and avoid per-unique-T kernel recompiles.
+    if prefill_pcm > 1 and total_tokens > block:
+        chunk_align = block * prefill_pcm
+        tentative_pad = (-total_tokens) % chunk_align
+        # Only use chunk-align padding when overhead is ≤ 25% of total tokens.
+        pad_tokens = tentative_pad if tentative_pad <= total_tokens // 4 else (-total_tokens) % block
+    else:
+        pad_tokens = (-total_tokens) % block
+
+    if pad_tokens:
+        # Pad hidden_states in ROW_MAJOR to avoid FillPad on TILE input.
+        # tilize_with_val_padding can leave a stale logical H, so pad+to_layout.
+        hs_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(hidden_states, force=False)
+        hs_padded_rm = ttnn.pad(hs_rm, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+        ttnn.deallocate(hs_rm, force=False)
+        hidden_states = ttnn.to_layout(hs_padded_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(hs_padded_rm, force=False)
+
+        # Keep topk in TILE for slicing across chunks (Flash-style); convert to RM after.
+        topk_expert_indices = ttnn.pad(topk_expert_indices, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
+        topk_expert_weights = ttnn.pad(topk_expert_weights, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+
+        total_tokens += pad_tokens
+        tokens_per_device += pad_tokens
+
+    debug = os.environ.get("GLM4_MOE_MOE_SPARSE_DEBUG", "").strip() == "1"
+    if debug:
+        print(
+            "[glm4_moe][moe_sparse] "
+            f"tokens_per_device={tokens_per_device} total_tokens={total_tokens} "
+            f"hidden={hidden_size} k={int(rt.num_experts_per_tok)} "
+            f"prefill_pcm={prefill_pcm} chunk_total_tokens={chunk_total_tokens}",
+            flush=True,
+        )
+
+    # Cap chunk size so each call processes at most `prefill_pcm` blocks (L1 bounded).
+    # MoE is token-wise (no cross-token deps), so chunking + concat is correct.
+    if prefill_pcm > 0 and total_tokens > block:
+        max_tokens_per_call = block * prefill_pcm
+        if total_tokens > max_tokens_per_call:
+            chunk_total_tokens = max_tokens_per_call
+    if chunk_total_tokens > 0 and total_tokens > chunk_total_tokens:
+        if debug:
+            print(
+                "[glm4_moe][moe_sparse] "
+                f"chunking enabled: chunk_total_tokens={chunk_total_tokens} total_tokens={total_tokens}",
+                flush=True,
+            )
+        per_device_chunk = max(block, chunk_total_tokens)
+        per_device_chunk = (per_device_chunk // block) * block
+        per_device_chunk = max(block, per_device_chunk)
+
+        out_chunks: list[ttnn.Tensor] = []
+        for start in range(0, tokens_per_device, per_device_chunk):
+            end = min(start + per_device_chunk, tokens_per_device)
+            hs_chunk = ttnn.slice(hidden_states, [0, 0, start, 0], [1, 1, end, hidden_size])
+            idx_chunk = ttnn.slice(
+                topk_expert_indices,
+                [0, 0, start, 0],
+                [1, 1, end, int(rt.num_experts_per_tok)],
+            )
+            w_chunk = ttnn.slice(
+                topk_expert_weights,
+                [0, 0, start, 0],
+                [1, 1, end, int(rt.num_experts_per_tok)],
+            )
+            out_chunks.append(
+                moe_sparse_experts_forward_tt(
+                    device=device,
+                    hidden_states=hs_chunk,
+                    topk_expert_indices=idx_chunk,
+                    topk_expert_weights=w_chunk,
+                    moe_w=moe_w,
+                    rt=rt,
+                    memory_config=memory_config,
+                    skip_final_reduce=skip_final_reduce,
+                )
+            )
+
+        ttnn.deallocate(hidden_states, force=False)
+        ttnn.deallocate(topk_expert_indices, force=False)
+        ttnn.deallocate(topk_expert_weights, force=False)
+
+        if len(out_chunks) == 1:
+            out = out_chunks[0]
+        else:
+            out = ttnn.concat(out_chunks, dim=2)
+            for c in out_chunks:
+                ttnn.deallocate(c, force=False)
+        # Drop PCM/block padding so callers see the original token count.
+        if int(out.shape[2]) != unpadded_total_tokens:
+            out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, unpadded_total_tokens, hidden_size])
+        return out
+
+    # Convert topk to ROW_MAJOR for scatter / moe_expert_token_remap.
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices, force=False)
     ttnn.deallocate(topk_expert_weights, force=False)
 
-    if pad_tokens:
-        # hidden_states: untilize → tilize_with_val_padding (multicore).
-        # Replaces single-core TILE FillPadDeviceOperation with multicore
-        # TilizeWithValPaddingDeviceOperation that auto-zeros the padded rows.
-        _hs_mc = hidden_states.memory_config()
-        hidden_rm = ttnn.untilize(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
-        ttnn.deallocate(hidden_states, force=False)
-        hidden_states = ttnn.tilize_with_val_padding(
-            hidden_rm,
-            [1, 1, tokens_per_device + pad_tokens, hidden_size],
-            0.0,
-            memory_config=_hs_mc,
-            use_multicore=True,
-        )
-        ttnn.deallocate(hidden_rm, force=False)
-
-        topk_indices_rm = ttnn.pad(topk_indices_rm, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
-        topk_weights_rm = ttnn.pad(topk_weights_rm, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-
-        total_tokens += pad_tokens
-        tokens_per_device += pad_tokens
-
     # Build local expert routing weights and sparsity via scatter + moe_expert_token_remap.
-
     weights_zero = _get_scatter_zero_tensor(
         device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
     )
@@ -523,7 +625,16 @@ def moe_sparse_experts_forward_tt(
     ttnn.deallocate(topk_indices_rm, force=False)
 
     # Expert compute: sparse matmul.
+    # With default PCM=1 chunking, prefill leaves num_blocks <= prefill_pcm (often 1),
+    # so we reuse decode program configs instead of per_core_M = full T.
     num_blocks = total_tokens // block
+    # Guard: ensure logical H matches the padded token count before blocking reshape.
+    if int(hidden_states.shape[2]) != total_tokens:
+        hidden_states = ttnn.reshape(
+            hidden_states,
+            (1, 1, total_tokens, hidden_size),
+            (1, 1, total_tokens, hidden_size),
+        )
     expert_input = ttnn.reshape(hidden_states, shape=(1, num_blocks, block, hidden_size))
 
     if num_blocks > 1:
