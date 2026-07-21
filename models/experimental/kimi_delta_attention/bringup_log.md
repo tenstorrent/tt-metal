@@ -196,11 +196,19 @@ N chunks × per-chunk.
 | **total** | **217 276** | **116 538** | **1.87×** |
 
 (T=256: 87 871 → 47 709 µs, 1.84×.) **Distribution validated as a win** (TP shards matmul ~4×).
-**Caveat:** absolutes are inflated by the **un-fused token-loop** (~4500 tiny kernels/forward, each
-paying fixed launch overhead — the "other"/matmul groups are dominated by per-kernel overhead, not
-algorithmic FLOPs; cf. ROOFLINE ideal ~44µs compute). The measurement makes the case for the fused
-chunk op (task 14): collapsing the loop to a handful of kernels removes that overhead. The relative
-TP-sharding benefit is the trustworthy signal; absolute vs the roofline waits on fusion.
+
+**Gap to roofline, quantified (after TP=4, T=640, per chip):**
+| | measured | ideal | gap | util (target) |
+|---|---|---|---|---|
+| compute (matmul+other) | 90.2 ms | 88 µs HiFi4 / 44 µs HiFi2 | **~1030×** | **0.10%** (60%) |
+| collective | 26.4 ms | 49 µs (LoudBox roofline) | **~540×** | **0.19%** (40%) |
+
+Achieved 0.147 GFLOP/s vs 152 TFLOP/s HiFi4 peak. **Root cause: launch-bound, not FLOP-bound** —
+the token-loop issues **~9000 device kernels/forward** (640 steps × ~14 ops + projections) at ~10 µs
+fixed launch overhead each → ~90 ms is almost entirely launch overhead. The FLOP roofline is ~1000×
+away *because* of un-fusion. Fused chunk op (task 14) collapses ~9000 kernels → a handful, removing
+that overhead; it's the precondition for reaching the 60%/40% targets. TP-sharding benefit (relative)
+is the trustworthy signal now; absolute-vs-roofline waits on fusion.
 
 ## Backlog
 
