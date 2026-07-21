@@ -237,6 +237,12 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        env:
+          # Cap PyTorch/ATen host-side OpenMP threads and use passive waiting to prevent
+          # libgomp from burning CPU in busy-wait barriers during host reference-tensor ops.
+          OMP_NUM_THREADS: 2
+          MKL_NUM_THREADS: 2
+          OMP_WAIT_POLICY: passive
         run: |
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
             --backend sysfs \
@@ -252,6 +258,11 @@ jobs:
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
           PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          # Cap PyTorch/ATen host-side OpenMP threads and use passive waiting to prevent
+          # libgomp from burning CPU in busy-wait barriers during host reference-tensor ops.
+          OMP_NUM_THREADS: 2
+          MKL_NUM_THREADS: 2
+          OMP_WAIT_POLICY: passive
         run: |
           # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
           # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
