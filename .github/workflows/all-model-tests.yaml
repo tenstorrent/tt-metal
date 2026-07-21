@@ -90,6 +90,12 @@ on:
 permissions:
   packages: write
   contents: write
+  # models-unit-tests-impl has a multihost leg that requests id-token: write (ttop OIDC). A reusable
+  # workflow can't request more than its caller grants, and that check runs at startup regardless of
+  # the leg's `if:` guard — so the unit-test caller jobs must be able to pass id-token down even when
+  # no exabox SKU is selected, or the whole run fails at startup. Granted here (workflow-wide) so the
+  # caller jobs inherit it without per-job blocks.
+  id-token: write
 
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
@@ -123,7 +129,8 @@ jobs:
           # NOTE: exabox multihost SKUs (bh_sc1/bh_sc4/bh_sc4-blitz/bh_sc4-mgd/bh_sc16) are intentionally NOT
           # dispatchable from all-model-tests yet — exabox model-unit tests are dispatched via the
           # standalone models-t1/t2/t3-unit-tests workflows (which grant ttop OIDC on their caller
-          # jobs). The t1/t2/t3-unit-tests caller jobs already grant `id-token: write` (ttop OIDC).
+          # jobs). This workflow already grants `id-token: write` workflow-wide (see top-level
+          # permissions), so the caller jobs can pass it down.
           # TODO: to dispatch exabox jobs here alongside everything else, we must:
           #   1. add the exabox SKUs to VALID_SKUS below (keep them out of ALL_SKUS/bh_all so `all`
           #      never auto-allocates scarce exabox hardware);
@@ -319,15 +326,6 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
     secrets: inherit
-    # models-unit-tests-impl declares a multihost job that requests id-token: write (ttop OIDC). A
-    # reusable workflow cannot request more than the caller grants, and this check runs at startup
-    # regardless of the job's `if:` guard — so the caller must grant id-token here even when no
-    # exabox SKU is selected, or the whole run fails at startup. Job-level permissions replace the
-    # inherited defaults, so restate the reads the single-host legs need too.
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -371,12 +369,6 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
     secrets: inherit
-    # See t1-unit-tests: id-token: write is required at startup by the multihost leg of
-    # models-unit-tests-impl, independent of the selected SKUs.
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -420,12 +412,6 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
     secrets: inherit
-    # See t1-unit-tests: id-token: write is required at startup by the multihost leg of
-    # models-unit-tests-impl, independent of the selected SKUs.
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
