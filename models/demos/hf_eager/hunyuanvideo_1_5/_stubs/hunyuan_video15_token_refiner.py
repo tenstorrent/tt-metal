@@ -104,19 +104,21 @@ def build(device, torch_module):
         inner = int(attn.to_q.out_features)
         dim_head = inner // heads
         scale = float(getattr(attn, "scale", dim_head**-0.5))
-        wq, bq = lin(attn.to_q)
-        wk, bk = lin(attn.to_k)
-        wv, bv = lin(attn.to_v)
+        # Fused QKV: one (C -> 3*inner) matmul + slice instead of 3 launches
+        # (launch-bound path; a slice is far cheaper than a matmul launch).
+        _qw = [attn.to_q, attn.to_k, attn.to_v]
+        w_qkv = f32(torch.cat([m.weight.detach() for m in _qw], dim=0).t())
+        _hasb = all(m.bias is not None for m in _qw)
+        b_qkv = f32(torch.cat([m.bias.detach() for m in _qw], dim=0).reshape(1, -1)) if _hasb else None
         wo, bo = lin(attn.to_out[0])
 
+        # Fused AdaLN gate: keep the (C -> 2*half) linear whole + slice into msa/mlp.
         ada_lin = blk.norm_out.linear
         half = int(ada_lin.out_features) // 2
         aw = ada_lin.weight.detach()
         ab = ada_lin.bias.detach() if ada_lin.bias is not None else None
-        w_msa = f32(aw[:half, :].t())
-        w_mlp = f32(aw[half:, :].t())
-        b_msa = f32(ab[:half].reshape(1, half)) if ab is not None else None
-        b_mlp = f32(ab[half:].reshape(1, half)) if ab is not None else None
+        w_ada = f32(aw.t())
+        b_ada = f32(ab.reshape(1, -1)) if ab is not None else None
 
         ffnet = blk.ff.net
         act_wrapper = ffnet[0]
@@ -140,22 +142,16 @@ def build(device, torch_module):
             dict(
                 n1=norm_wbe(blk.norm1),
                 n2=norm_wbe(blk.norm2),
-                wq=wq,
-                bq=bq,
-                wk=wk,
-                bk=bk,
-                wv=wv,
-                bv=bv,
+                w_qkv=w_qkv,
+                b_qkv=b_qkv,
                 wo=wo,
                 bo=bo,
                 heads=heads,
                 dim_head=dim_head,
                 inner=inner,
                 scale=scale,
-                w_msa=w_msa,
-                b_msa=b_msa,
-                w_mlp=w_mlp,
-                b_mlp=b_mlp,
+                w_ada=w_ada,
+                b_ada=b_ada,
                 half=half,
                 ff_w1=ff_w1,
                 ff_b1=ff_b1,
@@ -202,9 +198,10 @@ def build(device, torch_module):
         B = int(h.shape[0])
         L = int(h.shape[1])
         heads, dh, inner, scale = blk["heads"], blk["dim_head"], blk["inner"], blk["scale"]
-        q = _linear(h, blk["wq"], blk["bq"])
-        k = _linear(h, blk["wk"], blk["bk"])
-        v = _linear(h, blk["wv"], blk["bv"])
+        qkv = _linear(h, blk["w_qkv"], blk["b_qkv"])  # (B, L, 3*inner), one launch
+        q = ttnn.slice(qkv, (0, 0, 0), (B, L, inner))
+        k = ttnn.slice(qkv, (0, 0, inner), (B, L, 2 * inner))
+        v = ttnn.slice(qkv, (0, 0, 2 * inner), (B, L, 3 * inner))
 
         def split(t):
             t = ttnn.reshape(t, (B, L, heads, dh))
@@ -221,10 +218,11 @@ def build(device, torch_module):
 
     def _ada_gate(temb, blk):
         s = ttnn.silu(temb)
-        gm = _linear(s, blk["w_msa"], blk["b_msa"])
-        gp = _linear(s, blk["w_mlp"], blk["b_mlp"])
-        bdim = int(gm.shape[0])
         half = blk["half"]
+        g = _linear(s, blk["w_ada"], blk["b_ada"])  # (B, 2*half), one launch
+        bdim = int(g.shape[0])
+        gm = ttnn.slice(g, (0, 0), (bdim, half))
+        gp = ttnn.slice(g, (0, half), (bdim, 2 * half))
         return ttnn.reshape(gm, (bdim, 1, half)), ttnn.reshape(gp, (bdim, 1, half))
 
     def _ff(x, blk):
