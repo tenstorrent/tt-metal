@@ -13,6 +13,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
@@ -737,26 +738,78 @@ void correction_block(
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    for (uint32_t i = 0; i < num_head_tiles; i++) {
-        tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_worker_max);
-        exp_tile_init<EXP_APPROX_MODE>();
-        copy_tile(cb_prev_max, i, dst_reg_0);
-        copy_tile(cb_worker_max, i, dst_reg_1);
-        copy_tile(cb_prev_sum, i, dst_reg_3);
-        copy_tile(cb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst_reg_0, cb_exp_max_diff);
-        pack_tile(dst_reg_1, cb_exp_max_diff_2);
-        pack_tile(dst_reg_2, cb_cur_max);
-        pack_tile(dst_reg_3, cb_cur_sum);
-        tile_regs_release();
-        cb_cur_max_obj.push_back(1);
-        cb_cur_sum_obj.push_back(1);
-        cb_exp_max_diff_obj.push_back(1);
-        cb_exp_max_diff_2_obj.push_back(1);
+    if constexpr (DST_ACCUM_MODE) {
+        // FP32 dest accumulation halves DEST to 4 tiles, but the fused kernel below needs 5
+        // (prev_max, worker_max, cur_max, prev_sum, worker_sum) in one acquire — dst_reg_4 would
+        // be out of range and the worker sum would be read back as garbage. Split the same
+        // correction into two passes that use at most 3 DEST tiles each.
+        //
+        // Pass 1: CUR_MAX = max(PREV_MAX, WORKER_MAX)
+        //         EXP_MAX_DIFF   = exp((PREV_MAX   - CUR_MAX) * scale)
+        //         EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX) * scale)
+        for (uint32_t i = 0; i < num_head_tiles; i++) {
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short(cb_prev_max);
+            copy_tile(cb_prev_max, i, dst_reg_0);
+            copy_tile_to_dst_init_short(cb_worker_max);
+            copy_tile(cb_worker_max, i, dst_reg_1);
+            binary_max_tile_init();
+            binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_2, vector_mode);
+            sub_binary_tile_init();
+            sub_binary_tile(dst_reg_0, dst_reg_2, dst_reg_0);
+            sub_binary_tile(dst_reg_1, dst_reg_2, dst_reg_1);
+            exp_tile_init<EXP_APPROX_MODE>();
+            MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_reg_0)));
+            MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_reg_1)));
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst_reg_0, cb_exp_max_diff);
+            pack_tile(dst_reg_1, cb_exp_max_diff_2);
+            pack_tile(dst_reg_2, cb_cur_max);
+            tile_regs_release();
+            cb_cur_max_obj.push_back(1);
+            cb_exp_max_diff_obj.push_back(1);
+            cb_exp_max_diff_2_obj.push_back(1);
+        }
+        // Pass 2: CUR_SUM = PREV_SUM * EXP_MAX_DIFF + WORKER_SUM * EXP_MAX_DIFF_2
+        cb_exp_max_diff_obj.wait_front(num_head_tiles);
+        cb_exp_max_diff_2_obj.wait_front(num_head_tiles);
+        for (uint32_t i = 0; i < num_head_tiles; i++) {
+            tile_regs_acquire();
+            mul_tiles_init(cb_prev_sum, cb_exp_max_diff);
+            mul_tiles(cb_prev_sum, cb_exp_max_diff, i, i, dst_reg_0);
+            mul_tiles_init(cb_worker_sum, cb_exp_max_diff_2);
+            mul_tiles(cb_worker_sum, cb_exp_max_diff_2, i, i, dst_reg_1);
+            add_binary_tile_init();
+            add_binary_tile(dst_reg_0, dst_reg_1, dst_reg_0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst_reg_0, cb_cur_sum);
+            tile_regs_release();
+            cb_cur_sum_obj.push_back(1);
+        }
+    } else {
+        for (uint32_t i = 0; i < num_head_tiles; i++) {
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short(cb_worker_max);
+            exp_tile_init<EXP_APPROX_MODE>();
+            copy_tile(cb_prev_max, i, dst_reg_0);
+            copy_tile(cb_worker_max, i, dst_reg_1);
+            copy_tile(cb_prev_sum, i, dst_reg_3);
+            copy_tile(cb_worker_sum, i, dst_reg_4);
+            MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst_reg_0, cb_exp_max_diff);
+            pack_tile(dst_reg_1, cb_exp_max_diff_2);
+            pack_tile(dst_reg_2, cb_cur_max);
+            pack_tile(dst_reg_3, cb_cur_sum);
+            tile_regs_release();
+            cb_cur_max_obj.push_back(1);
+            cb_cur_sum_obj.push_back(1);
+            cb_exp_max_diff_obj.push_back(1);
+            cb_exp_max_diff_2_obj.push_back(1);
+        }
     }
     cb_prev_sum_obj.pop_front(num_head_tiles);
     cb_worker_sum_obj.pop_front(num_head_tiles);

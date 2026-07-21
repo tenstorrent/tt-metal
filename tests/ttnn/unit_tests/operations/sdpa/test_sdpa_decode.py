@@ -31,6 +31,40 @@ def reset_seeds():
 
 
 @pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos, k_chunk",
+    ([1, 32, 8, 256, 128, (8, 8), 200, 32],),
+    ids=["llama31_8b"],
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_fp32_dest_acc(device, b, nh, nkv, s, d, grid_size, cur_pos, k_chunk, reset_seeds):
+    """fp32_dest_acc_en=True must match the bf16-dest result.
+
+    The cross-core flash-decode correction ran five tiles through DEST in one acquire,
+    which only fits when DEST holds eight (bf16) tiles; with fp32 accumulation it holds
+    four, so the worker sum was read back as garbage and the op returned silently wrong
+    output. The reduction has to actually run to see it, so keep the sequence short and
+    the k chunk small: that spreads a handful of chunks over several cores per head.
+    """
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        ttnn.bfloat8_b,
+        grid_size,
+        ttnn.bfloat16,
+        cur_pos_tensor=True,
+        sharded_in=False,
+        sharded_out=False,
+        start_indices=[cur_pos] * b,
+        override_k_chunk_size=k_chunk,
+        fp32_dest_acc_en=True,
+    )
+
+
+@pytest.mark.parametrize(
     "dtype, q_dtype",
     [
         [ttnn.bfloat8_b, ttnn.bfloat16],
