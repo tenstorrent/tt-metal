@@ -1,26 +1,25 @@
-# Quasar emulator regression tests
-#
-# Structure:
-#   <group>:            Binary name under build/test/tt_metal/
-#     - filter: <glob>  GTest filter pattern
-#       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
-#       env:            (optional) Extra environment variables as key: value pairs
-#       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
-#       back2back:      (optional) When true, run this entry in the same gtest process as
-#                       other consecutive back2back entries that share the same group,
-#                       config, env, and gtest_repeat. Used by run_quasar_back2back_regression.sh.
-#                       Defaults to false (each entry runs in its own process).
-#
-# Example test entry
-#
-# unit_tests_legacy:
-#   - filter: "*SingleDmL1Write*"
-#     config: 1x3
-#     env:
-#       TT_METAL_SOMETHING: 1
-
 unit_tests_legacy:
-# 1x3 tests run back-to-back
+# 2x3 tests run back-to-back
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# Worker Fast Dispatch test
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+    back2back: true
+    env:
+      TT_METAL_TENSIX_DISPATCH_CORES: 1
+
+# Fast Dispatch (Dispatch Engine) tests
   - filter: "*SingleDmL1Write*"
     config: 2x3_DISPATCH
     back2back: true
@@ -53,15 +52,10 @@ unit_tests_legacy:
   #   config: 1x3
   #   back2back: true
   #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
-
-# 1x3 tests with special setup
 
   - filter: "*Bmm"
     config: 2x3_DISPATCH
-    env:
-      TT_METAL_LOGGER_LEVEL: warning
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+    back2back: true
 
 unit_tests_api:
   - filter: "*QuasarCRTASharedL1Address*"
@@ -75,12 +69,19 @@ unit_tests_api:
   - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"
     config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_device:
   - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
     config: 2x3_DISPATCH
     back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+# pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_custom_cycle_count_slow_dispatch
+#     config: 1x3
+#     env:
+#       TT_METAL_DEVICE_PROFILER=1
+#       TT_METAL_SLOW_DISPATCH_MODE=1
+
+# pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_custom_cycle_count
+#     config: 2x3_DISPATCH
+#     env:
+#       TT_METAL_DEVICE_PROFILER=1
