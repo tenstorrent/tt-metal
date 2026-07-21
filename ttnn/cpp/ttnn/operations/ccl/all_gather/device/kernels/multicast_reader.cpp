@@ -53,8 +53,9 @@ void kernel_main() {
     constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(25);
     constexpr uint32_t receiver_cores_per_link = get_compile_time_arg_val(26);
     constexpr bool ring_fast_control_atomics = get_compile_time_arg_val(27) != 0;
+    constexpr bool explicit_ring_path = get_compile_time_arg_val(28) != 0;
     constexpr bool bank_owned_coalesce_source = (bank_owned_coalesce_mask & 1) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<28>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<29>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
@@ -98,6 +99,20 @@ void kernel_main() {
     const uint8_t rect_e_physical_direction = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t rect_w_physical_direction = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t rect_spine_physical_direction = get_arg_val<uint32_t>(arg_idx++);
+    FabricExplicitPath fabric_path{};
+    FabricExplicitPath fabric_path_alt{};
+    const uint32_t fabric_path_config = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t fabric_path_alt_config = get_arg_val<uint32_t>(arg_idx++);
+    fabric_path.length = fabric_path_config & 0xff;
+    fabric_path.escape_hop = (fabric_path_config >> 8) & 0xff;
+    fabric_path_alt.length = fabric_path_alt_config & 0xff;
+    fabric_path_alt.escape_hop = (fabric_path_alt_config >> 8) & 0xff;
+    for (uint32_t i = 0; i < fabric_explicit_path_word_count; ++i) {
+        fabric_path.words[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
+    for (uint32_t i = 0; i < fabric_explicit_path_word_count; ++i) {
+        fabric_path_alt.words[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
     const uint8_t receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const address_t receiver_buffer_base = get_arg_val<address_t>(arg_idx++);
@@ -219,6 +234,7 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 0u,    // ignore
                 1u});  // increment 1
+        apply_explicit_fabric_path<explicit_ring_path>(sem_route_id, fabric_path);
     }
 
     // Initialization barrier:
@@ -231,7 +247,7 @@ void kernel_main() {
     // Reader fires sem increment forward, and also owns sem wait + decrement.
     // Writer fires sem increment backward, and implicitly gets blocked waiting for CB to
     // contain valid data.
-    if constexpr (do_init_barrier) {
+    if constexpr ((explicit_ring_path && receiver_l1_mode) || do_init_barrier) {
         const uint32_t interval_start = attribution_timestamp();
         if constexpr (receiver_l1_mode) {
             if constexpr (receiver_cores_per_link > 1) {
@@ -248,19 +264,21 @@ void kernel_main() {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2);
             }
         }
-        if constexpr (enable_fabric) {
-            uint64_t barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                fabric_connection,
-                sem_route_id,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+        if constexpr (do_init_barrier) {
+            if constexpr (enable_fabric) {
+                uint64_t barrier_sem_noc_addr_in_pkt =
+                    safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    fabric_connection,
+                    sem_route_id,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            }
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait_value);
+            // Atomic decrement (add -value), not reset to 0, so any increments from other phases are preserved.
+            noc_semaphore_inc(
+                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem),
+                (uint32_t)(-(int32_t)barrier_wait_value));
         }
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait_value);
-        // Atomic decrement (add -value), not reset to 0, so any increments from other phases are preserved.
-        noc_semaphore_inc(
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem),
-            (uint32_t)(-(int32_t)barrier_wait_value));
         attribute_elapsed(init_barrier_cycles, interval_start);
     }
 
@@ -691,12 +709,12 @@ void kernel_main() {
     };
 
     if constexpr (receiver_l1_mode) {
-        FabricL1Writer<packet_size, load_balance_across_alt_routes, receiver_fused_notify> fabric(
-            noc, fabric_connection, num_connections, ranges, ranges_alt);
+        FabricL1Writer<packet_size, load_balance_across_alt_routes, receiver_fused_notify, explicit_ring_path> fabric(
+            noc, fabric_connection, num_connections, ranges, ranges_alt, fabric_path, fabric_path_alt);
         run_main(fabric);
     } else {
-        FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes> fabric(
-            noc, fabric_connection, num_connections, ranges, ranges_alt);
+        FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes, explicit_ring_path> fabric(
+            noc, fabric_connection, num_connections, ranges, ranges_alt, fabric_path, fabric_path_alt);
         run_main(fabric);
     }
 

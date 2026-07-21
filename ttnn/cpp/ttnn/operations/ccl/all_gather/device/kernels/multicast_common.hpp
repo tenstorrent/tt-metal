@@ -16,9 +16,38 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 using FabricRange = uint8_t;  // under 1D each connection carries a single hop count
 #endif
 
+constexpr uint32_t fabric_explicit_path_word_count = 5;
+
+struct FabricExplicitPath {
+    uint8_t length;
+    uint8_t escape_hop;
+    uint32_t words[fabric_explicit_path_word_count];
+};
+
+template <bool enabled>
+FORCE_INLINE void apply_explicit_fabric_path(uint8_t route_id, const FabricExplicitPath& path) {
+#ifdef FABRIC_2D
+    if constexpr (enabled) {
+        ASSERT(path.length > 0 && path.length <= fabric_explicit_path_word_count * 8);
+        ASSERT(PacketHeaderPool::get_num_headers(route_id) == 1);
+        PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t) {
+            packet_header->routing_fields.value = 0;
+            // Zero means that the path remains on VC0. Otherwise this is the
+            // one-based hop index at which the receiving router crosses over
+            // to the escape VC for the remainder of the route.
+            packet_header->mcast_params_64 = path.escape_hop;
+            packet_header->is_mcast_active = tt::tt_fabric::RoutingFieldsConstants::Mesh::EXPLICIT_PATH_MCAST;
+            for (uint32_t hop = 0; hop < path.length; ++hop) {
+                packet_header->route_buffer[hop] = static_cast<uint8_t>((path.words[hop / 8] >> ((hop % 8) * 4)) & 0xF);
+            }
+        });
+    }
+#endif
+}
+
 // Helper class to send pages to remote device.
 // Deals with how to packetize pages and interact with Fabric APIs.
-template <uint32_t page_size, uint32_t packet_size, bool alternate_routes>
+template <uint32_t page_size, uint32_t packet_size, bool alternate_routes, bool explicit_path>
 class FabricWriter {
 public:
     FabricWriter(
@@ -26,7 +55,9 @@ public:
         tt::tt_fabric::RoutingPlaneConnectionManager& manager,
         uint32_t num_connections,
         FabricRange* ranges,
-        FabricRange* ranges_alt = nullptr) :
+        FabricRange* ranges_alt,
+        const FabricExplicitPath& path,
+        const FabricExplicitPath& path_alt) :
         noc{noc},
         fabric_connection{manager},
         // PacketHeaderPool::allocate_header_n (vs allocate_header) allows sending the same packet along multiple
@@ -64,6 +95,8 @@ public:
             starts,
 #endif
             ranges);
+        apply_explicit_fabric_path<explicit_path>(scatter_route_id_1, path);
+        apply_explicit_fabric_path<explicit_path>(unicast_route_id_1, path);
 
         // Ring topology: create a second route to alternate with for load balancing.
         // Example for 8 device ring:
@@ -88,6 +121,8 @@ public:
                 starts,
 #endif
                 ranges_alt);
+            apply_explicit_fabric_path<explicit_path>(scatter_route_id_2, path_alt);
+            apply_explicit_fabric_path<explicit_path>(unicast_route_id_2, path_alt);
         }
     }
 
@@ -215,7 +250,7 @@ private:
 // tells the receiver that the slot is ready to drain.  Unlike FabricWriter, destination
 // tensor pages are deliberately not encoded here: the receiver owns the final DRAM
 // address generation and can fan the batch out across interleaved banks locally.
-template <uint32_t packet_size, bool alternate_routes, bool fused_notify>
+template <uint32_t packet_size, bool alternate_routes, bool fused_notify, bool explicit_path>
 class FabricL1Writer {
 public:
     FabricL1Writer(
@@ -223,7 +258,9 @@ public:
         tt::tt_fabric::RoutingPlaneConnectionManager& manager,
         uint32_t num_connections,
         FabricRange* ranges,
-        FabricRange* ranges_alt = nullptr) :
+        FabricRange* ranges_alt,
+        const FabricExplicitPath& path,
+        const FabricExplicitPath& path_alt) :
         noc{noc},
         fabric_connection{manager},
         payload_route_id_1{PacketHeaderPool::allocate_header_n(num_connections)},
@@ -265,6 +302,10 @@ public:
                 ranges,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
         }
+        apply_explicit_fabric_path<explicit_path>(payload_route_id_1, path);
+        if constexpr (!fused_notify) {
+            apply_explicit_fabric_path<explicit_path>(notify_route_id_1, path);
+        }
 
         if constexpr (alternate_routes) {
             if constexpr (fused_notify) {
@@ -295,6 +336,10 @@ public:
 #endif
                     ranges_alt,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+            }
+            apply_explicit_fabric_path<explicit_path>(payload_route_id_2, path_alt);
+            if constexpr (!fused_notify) {
+                apply_explicit_fabric_path<explicit_path>(notify_route_id_2, path_alt);
             }
         }
     }

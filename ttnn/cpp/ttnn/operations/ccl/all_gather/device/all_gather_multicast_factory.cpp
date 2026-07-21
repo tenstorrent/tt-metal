@@ -17,6 +17,25 @@ using namespace ::ttnn::ccl;
 
 namespace {
 
+constexpr uint32_t explicit_path_word_count = 5;
+
+struct PackedFabricPath {
+    uint32_t length = 0;
+    uint32_t escape_hop = 0;
+    std::array<uint32_t, explicit_path_word_count> words{};
+};
+
+tt::tt_fabric::eth_chan_directions opposite_direction(tt::tt_fabric::eth_chan_directions direction) {
+    using tt::tt_fabric::eth_chan_directions;
+    switch (direction) {
+        case eth_chan_directions::EAST: return eth_chan_directions::WEST;
+        case eth_chan_directions::WEST: return eth_chan_directions::EAST;
+        case eth_chan_directions::NORTH: return eth_chan_directions::SOUTH;
+        case eth_chan_directions::SOUTH: return eth_chan_directions::NORTH;
+        default: TT_THROW("A same-mesh multicast path cannot use the Z direction");
+    }
+}
+
 uint32_t bank_owned_rows_per_run(const AllGatherReceiverPolicy& policy, uint32_t max_rows, uint32_t pages_per_bank) {
     if (policy.bank_owned_run_policy == BankOwnedRunPolicy::MaxTail) {
         return max_rows;
@@ -66,6 +85,13 @@ struct ReceiverL1Plan {
     uint32_t control_semaphore_count = 0;
     uint64_t control_semaphore_bytes_per_core = 0;
 };
+
+bool uses_explicit_ring_path(const AllGatherParams& attrs) {
+    const bool one_active_axis = (attrs.axis_num_devices[0] > 1) != (attrs.axis_num_devices[1] > 1);
+    const uint32_t active_axis = attrs.axis_num_devices[0] > 1 ? 0 : 1;
+    return tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && one_active_axis &&
+           attrs.axis_topology[active_axis] == tt::tt_fabric::Topology::Ring;
+}
 
 // Build the bounded host-side resource and mapping proof used by automatic
 // dispatch. Unsupported mappings return a concrete rejection reason and keep
@@ -153,8 +179,8 @@ ReceiverL1Plan make_receiver_l1_plan(
         if (!attrs.receiver_policy.bank_owned_links) {
             return reject("interleaved bank receivers require bank-owned links");
         }
-        if (active_topology != tt::tt_fabric::Topology::Ring || plan.num_links != 2 || attrs.num_devices % 2 != 0) {
-            return reject("interleaved bank receivers require an even 1D ring with two active links");
+        if (plan.num_links != 2) {
+            return reject("interleaved bank receivers require two active links");
         }
         if (input.device()->num_dram_channels() != 8) {
             return reject("interleaved bank receivers require eight DRAM banks");
@@ -227,16 +253,6 @@ bool auto_receiver_l1_path_is_preferred(const AllGatherParams& attrs, const Tens
         (attrs.axis_num_devices[1] > 1 && attrs.axis_topology[1] == tt::tt_fabric::Topology::Ring);
     if (!active_axis_is_ring) {
         return true;
-    }
-
-    // Ring selection is topology-specific.  The retained measurements cover
-    // exactly an eight-device FABRIC_1D_RING; a 2D Torus-Y route is not
-    // interchangeable merely because its active axis is represented as Ring.
-    // Keep unmeasured ring sizes and torus configurations on the established
-    // path until their own correctness and A/B records exist.  Forced receiver
-    // mode remains available for topology bring-up.
-    if (attrs.fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_RING || attrs.num_devices != 8) {
-        return false;
     }
 
     return attrs.receiver_policy.bank_owned_links;
@@ -356,6 +372,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const tt::tt_metal::GlobalSemaphore& barrier_sem,
     const std::vector<tt::tt_metal::GlobalSemaphore>& receiver_control_sems) {
     const auto& input_tensor = tensor_args.input_tensor;
+    auto* mesh_device = input_tensor.device();
     tt::tt_metal::Program program{};
 
     ////////////////////////////////////////////////////////////////
@@ -409,6 +426,70 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             ns_load_balance = axis_load_balance;
         }
     }
+    const uint32_t active_axis = operation_attributes.axis_num_devices[0] > 1 ? 0 : 1;
+    const bool use_explicit_ring_path = uses_explicit_ring_path(operation_attributes);
+    auto build_explicit_path = [&](int step, uint32_t target_count) {
+        PackedFabricPath path;
+        path.length = target_count;
+        TT_FATAL(
+            target_count <= explicit_path_word_count * 8,
+            "Explicit Fabric ring path of {} hops exceeds the {}-hop host encoding",
+            target_count,
+            explicit_path_word_count * 8);
+        if (target_count == 0) {
+            return path;
+        }
+
+        std::vector<tt::tt_fabric::eth_chan_directions> movements;
+        movements.reserve(target_count);
+        auto previous_coord = sender_device_coord;
+        uint32_t logical_index = device_idx;
+        for (uint32_t hop = 0; hop < target_count; ++hop) {
+            auto next_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                input_tensor, previous_coord, step, tt::tt_fabric::Topology::Ring, active_axis);
+            TT_FATAL(next_coord.has_value(), "Explicit Fabric ring path is missing logical neighbor {}", hop + 1);
+            const auto previous_node = mesh_device->get_fabric_node_id(previous_coord);
+            const auto next_node = mesh_device->get_fabric_node_id(*next_coord);
+            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(previous_node, next_node);
+            TT_FATAL(direction.has_value(), "No Fabric route from {} to ring neighbor {}", previous_node, next_node);
+            movements.push_back(*direction);
+            const uint32_t logical_step = step > 0 ? 1 : num_devices - 1;
+            const uint32_t next_logical_index = (logical_index + logical_step) % num_devices;
+            const bool crosses_dateline = (logical_index == num_devices - 1 && next_logical_index == 0) ||
+                                          (logical_index == 0 && next_logical_index == num_devices - 1);
+            if (crosses_dateline && hop + 1 < target_count) {
+                // Store hop+1 so zero continues to mean that this path never
+                // needs the Fabric escape VC. The receiving router switches
+                // the packet after it traverses the dateline link.
+                path.escape_hop = hop + 1;
+            }
+            logical_index = next_logical_index;
+            previous_coord = *next_coord;
+        }
+
+        for (uint32_t hop = 0; hop < target_count; ++hop) {
+            uint8_t command = 1u << static_cast<uint8_t>(opposite_direction(movements[hop]));
+            if (hop + 1 < target_count) {
+                command |= 1u << static_cast<uint8_t>(movements[hop + 1]);
+            }
+            path.words[hop / 8] |= static_cast<uint32_t>(command) << ((hop % 8) * 4);
+        }
+        return path;
+    };
+
+    PackedFabricPath reader_path;
+    PackedFabricPath reader_path_alt;
+    PackedFabricPath writer_path;
+    PackedFabricPath writer_path_alt;
+    if (use_explicit_ring_path) {
+        const uint32_t forward_hops = active_axis == 0 ? s_hops : e_hops;
+        const uint32_t backward_hops = active_axis == 0 ? n_hops : w_hops;
+        reader_path = build_explicit_path(1, forward_hops);
+        reader_path_alt = build_explicit_path(1, backward_hops);
+        writer_path = build_explicit_path(-1, backward_hops);
+        writer_path_alt = build_explicit_path(-1, forward_hops);
+    }
+
     TT_FATAL(
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
@@ -437,9 +518,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         !operation_attributes.receiver_policy.interleaved_bank_receivers ||
             operation_attributes.receiver_policy.bank_owned_links,
         "interleaved bank receivers require bank-owned links");
-    TT_FATAL(
-        !operation_attributes.receiver_policy.interleaved_bank_receivers || !fabric_is_2d,
-        "interleaved bank receivers require a 1D ring");
     uint32_t receiver_slot_count = receiver_l1_mode ? operation_attributes.receiver_policy.slot_count : 1;
     TT_FATAL(
         !receiver_l1_mode || receiver_control_sems.size() ==
@@ -451,9 +529,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
     // Enabled if any axis is an even-sized ring.
     const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
-    // We use an init barrier to wait for remote output tensors to be allocated. This only
-    // matters when the output is freshly allocated by the op; a persistent/preallocated
-    // output is guaranteed to already exist on every device before op kernel begins.
+    // Fresh outputs require the barrier so that every remote allocation exists before
+    // traffic starts. Receiver-L1 mode also requires it for persistent outputs: the
+    // producer must not publish into receiver slots until all receiver workers have
+    // initialized their slot semaphores and begun consuming them.
     const bool do_init_barrier = receiver_l1_mode || !tensor_args.persistent_output_tensor.has_value();
 
     ////////////////////////////////////////////////////////////////
@@ -603,9 +682,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
             "bank-owned links are initially validated only on Blackhole");
         TT_FATAL(
-            num_devices == 4 || num_devices == 8,
-            "bank-owned links require four or eight devices, got {}",
-            num_devices);
+            num_devices >= 2 && num_devices <= 8, "bank-owned links support two to eight devices, got {}", num_devices);
         TT_FATAL(min_num_links == 2, "bank-owned links initially require two links, got {}", min_num_links);
         TT_FATAL(num_dram_banks == 8, "bank-owned links initially require eight DRAM banks, got {}", num_dram_banks);
         TT_FATAL(batch_size == 1, "bank-owned links initially require batch size one, got {}", batch_size);
@@ -679,7 +756,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         receiver_credit_group_batches = 1;
     } else if (receiver_proactive_credit) {
         receiver_credit_group_batches = operation_attributes.receiver_policy.credit_group_batches == 0
-                                            ? std::max(1u, receiver_slot_count / 3)
+                                            ? std::max(1u, receiver_slot_count / 2)
                                             : operation_attributes.receiver_policy.credit_group_batches;
     }
     TT_FATAL(
@@ -808,8 +885,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
     const bool ring_fast_control_atomics =
-        receiver_l1_mode && operation_attributes.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
-        operation_attributes.receiver_policy.interleaved_bank_receivers;
+        receiver_l1_mode && operation_attributes.receiver_policy.interleaved_bank_receivers &&
+        operation_attributes.axis_topology[active_axis] == tt::tt_fabric::Topology::Ring;
     std::vector<uint32_t> reader_compile_args = {
         input_page_size,                 // input tensor page size
         output_chunk_size,               // NOC write size = min(input, output)
@@ -841,6 +918,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
         receiver_cores_per_link,           // independent receiver/credit streams per link
         ring_fast_control_atomics,         // returned credits do not order terminal payload writes
+        use_explicit_ring_path,            // physical route may turn while following the logical ring
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -874,6 +952,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         bank_owned_coalesce,               // bit 0: source, bit 1: local output, bit 2: receiver
         receiver_cores_per_link,           // independent receiver/credit streams per link
         ring_fast_control_atomics,         // returned credits do not order terminal payload writes
+        use_explicit_ring_path,            // physical route may turn while following the logical ring
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -914,6 +993,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             min_num_links,                 // number of bank ownership groups
             bank_owned_coalesce,           // bit 0: source, bit 1: local output, bit 2: receiver
             receiver_cores_per_link,       // receiver cores per active Fabric link
+            operation_attributes.axis_topology[operation_attributes.axis_num_devices[0] > 1 ? 0 : 1] ==
+                tt::tt_fabric::Topology::Ring,  // active axis wraps
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(receiver_compile_args);
         receiver_kernel_id = tt::tt_metal::CreateKernel(
@@ -936,7 +1017,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Runtime args
     ////////////////////////////////////////////////////////////////
 
-    auto* mesh_device = input_tensor.device();
     for (uint32_t link = 0; link < min_num_links; link++) {
         CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
@@ -1024,9 +1104,21 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             physical_direction(e_coord),        // physical direction of the E rectangle edge
             physical_direction(w_coord),        // physical direction of the W rectangle edge
             physical_direction(s_coord),        // physical direction of the S rectangle spine
-            virtual_receiver_core.x,            // receiver L1 core x (0 outside receiver mode)
-            virtual_receiver_core.y,            // receiver L1 core y
-            receiver_buffer_base,               // source-indexed receiver slot base
+            reader_path.length | (reader_path.escape_hop << 8),
+            reader_path_alt.length | (reader_path_alt.escape_hop << 8),
+            reader_path.words[0],
+            reader_path.words[1],
+            reader_path.words[2],
+            reader_path.words[3],
+            reader_path.words[4],
+            reader_path_alt.words[0],
+            reader_path_alt.words[1],
+            reader_path_alt.words[2],
+            reader_path_alt.words[3],
+            reader_path_alt.words[4],
+            virtual_receiver_core.x,  // receiver L1 core x (0 outside receiver mode)
+            virtual_receiver_core.y,  // receiver L1 core y
+            receiver_buffer_base,     // source-indexed receiver slot base
             receiver_l1_mode ? receiver_control_sems[receiver_produced_forward_sem_base + device_idx].address() : 0,
             receiver_l1_mode ? receiver_control_sems[receiver_credit_sem_base].address() : 0,
             receiver_l1_mode ? receiver_control_sems[receiver_consumed_sem_base].address() : 0,
@@ -1084,9 +1176,21 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             physical_direction(e_coord),        // physical direction of the E rectangle edge
             physical_direction(w_coord),        // physical direction of the W rectangle edge
             physical_direction(n_coord),        // physical direction of the N rectangle spine
-            virtual_receiver_core.x,            // receiver L1 core x (0 outside receiver mode)
-            virtual_receiver_core.y,            // receiver L1 core y
-            receiver_buffer_base,               // source-indexed receiver slot base
+            writer_path.length | (writer_path.escape_hop << 8),
+            writer_path_alt.length | (writer_path_alt.escape_hop << 8),
+            writer_path.words[0],
+            writer_path.words[1],
+            writer_path.words[2],
+            writer_path.words[3],
+            writer_path.words[4],
+            writer_path_alt.words[0],
+            writer_path_alt.words[1],
+            writer_path_alt.words[2],
+            writer_path_alt.words[3],
+            writer_path_alt.words[4],
+            virtual_receiver_core.x,  // receiver L1 core x (0 outside receiver mode)
+            virtual_receiver_core.y,  // receiver L1 core y
+            receiver_buffer_base,     // source-indexed receiver slot base
             receiver_l1_mode
                 ? receiver_control_sems
                       [(bank_owned_links ? receiver_produced_backward_sem_base : receiver_produced_forward_sem_base) +

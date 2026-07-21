@@ -358,11 +358,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->tensix_relay_connection_buffer_index_id = buffer_address;
     buffer_address += field_size;
 
-    // The ring terminal copy protocol is inert for ordinary Fabric packets.
-    // Reserve its bounded shared queue on supported Blackhole 1D rings so the
-    // all-gather packet header can select it without a process-wide knob.
-    if (topology == Topology::Ring && tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-        get_num_riscv_cores() == 2) {
+    // The terminal-copy protocol is inert for ordinary Fabric packets.  Both
+    // a native 1D ring and an explicit ring routed over a 2D fabric can form a
+    // cyclic dependency when a receiver must complete its local write before
+    // releasing the slot used to forward the same packet.
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    if ((fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
+         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) &&
+        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 2) {
         buffer_address = tt::align(buffer_address, alignof(tt::tt_fabric::RingTerminalOffloadQueue));
         this->ring_terminal_offload_queue_base_address = buffer_address;
         buffer_address += sizeof(tt::tt_fabric::RingTerminalOffloadQueue);

@@ -184,6 +184,7 @@ struct RoutingFieldsConstants {
     struct Mesh {
         static constexpr uint32_t FIELD_WIDTH = 8;    // 8 bits per hop command
         static constexpr uint32_t FIELD_MASK = 0b1111;  // 4-bit mask
+        static constexpr uint8_t EXPLICIT_PATH_MCAST = 1;
 
         // Basic direction commands (4-bit encoding for each direction)
         static constexpr uint8_t NOOP = 0b0000;

@@ -135,6 +135,30 @@ tt::tt_fabric::Topology get_axis_topology(
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 
+bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis) {
+    TT_FATAL(axis < 2, "Mesh axis must be 0 or 1, got {}", axis);
+    auto* mesh_device = tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Tensor must have a MeshDevice");
+    const auto shape = mesh_device->shape();
+    if (shape[axis] <= 2) {
+        return false;
+    }
+
+    const uint32_t group_count = shape[1 - axis];
+    for (uint32_t group = 0; group < group_count; ++group) {
+        for (uint32_t rank = 0; rank < shape[axis]; ++rank) {
+            const uint32_t next = (rank + 1) % shape[axis];
+            const MeshCoordinate src = axis == 0 ? MeshCoordinate(rank, group) : MeshCoordinate(group, rank);
+            const MeshCoordinate dst = axis == 0 ? MeshCoordinate(next, group) : MeshCoordinate(group, next);
+            if (!tt::tt_fabric::are_direct_fabric_neighbors(
+                    mesh_device->get_fabric_node_id(src), mesh_device->get_fabric_node_id(dst))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,

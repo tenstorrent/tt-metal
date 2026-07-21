@@ -38,8 +38,9 @@ void kernel_main() {
     constexpr uint32_t bank_owned_num_links = get_compile_time_arg_val(16);
     constexpr uint32_t bank_owned_coalesce_mask = get_compile_time_arg_val(17);
     constexpr uint32_t receiver_cores_per_link = get_compile_time_arg_val(18);
+    constexpr bool active_axis_is_ring = get_compile_time_arg_val(19) != 0;
     constexpr bool bank_owned_coalesce_receiver = (bank_owned_coalesce_mask & 4) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<19>();
+    constexpr auto output_tensor_args = TensorAccessorArgs<20>();
     static_assert(receiver_drain_risc_count == 1 || receiver_drain_risc_count == 2);
     static_assert(receiver_drain_risc_index < receiver_drain_risc_count);
     static_assert(receiver_credit_group_batches > 0);
@@ -182,14 +183,18 @@ void kernel_main() {
                     address_t source_produced_sem = produced_sem_forward[source];
                     uint32_t produced_sequence = batch + 1;
                     if constexpr (bank_owned_links) {
-                        const uint32_t forward_distance = (local_device_idx + num_devices - source) % num_devices;
-                        const uint32_t half_ring = num_devices / 2;
-                        if (forward_distance > half_ring ||
-                            (forward_distance == half_ring && (logical_bank_owned_batch & 1) != 0)) {
+                        if constexpr (active_axis_is_ring) {
+                            const uint32_t forward_distance = (local_device_idx + num_devices - source) % num_devices;
+                            const uint32_t half_ring = num_devices / 2;
+                            if (forward_distance > half_ring ||
+                                (forward_distance == half_ring && (logical_bank_owned_batch & 1) != 0)) {
+                                source_produced_sem = produced_sem_backward[source];
+                            }
+                            if (num_devices % 2 == 0 && forward_distance == half_ring && receiver_cores_per_link == 1) {
+                                produced_sequence = batch / 2 + 1;
+                            }
+                        } else if (source > local_device_idx) {
                             source_produced_sem = produced_sem_backward[source];
-                        }
-                        if (forward_distance == half_ring && receiver_cores_per_link == 1) {
-                            produced_sequence = batch / 2 + 1;
                         }
                     }
                     noc_semaphore_wait_min(

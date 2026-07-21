@@ -44,6 +44,49 @@ def _make_row_major_mesh_tensor(mesh_device, torch_input, dtype, mesh_mapper):
     return ttnn.typecast(tensor, dtype) if dtype == ttnn.fp8_e4m3 else tensor
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 512,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+def test_all_gather_fabric_2d_single_axis_ring_small_direct(mesh_device):
+    # Batch two keeps this diagnostic on the direct path; the persistent
+    # output removes the fresh-allocation readiness multicast.
+    global_shape = (2, 1, 128, 576)
+    torch.manual_seed(0)
+    torch_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    tt_input = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch_input,
+        ttnn.bfloat16,
+        ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=tuple(mesh_device.shape)),
+    )
+    persistent_output = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_output = ttnn.all_gather(
+        tt_input,
+        dim=2,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=0,
+        output_tensor=persistent_output,
+    )
+    ttnn.synchronize_device(mesh_device)
+    for device_tensor in ttnn.get_device_tensors(tt_output):
+        assert torch.equal(ttnn.to_torch(device_tensor), torch_input)
+
+
 def _reference_bank_owned_schedule(total_pages, num_banks, num_links, rows_per_run):
     """Reference the device schedule: link -> bank -> physical run -> page."""
     assert total_pages > 0 and num_banks > 0 and num_links > 0 and rows_per_run > 0
@@ -466,7 +509,7 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": _fabric_router_config(),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "l1_small_size": 2048,
@@ -482,8 +525,8 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
         pytest.param(ttnn.fp8_e4m3, 656, 0.99, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_fabric_1d_large_ring_correctness(mesh_device, dtype, width, pcc):
-    """Check the production large-ring path with persistent output."""
+def test_all_gather_fabric_2d_large_single_axis_correctness(mesh_device, dtype, width, pcc):
+    """Check an eight-rank 1D gather ring routed by the physical 2D fabric."""
     rows_per_device = 65536
     global_shape = (1, 1, rows_per_device * mesh_device.shape[0], width)
     torch.manual_seed(0)
@@ -776,7 +819,7 @@ def test_all_gather_async_fabric_2d_control_row_major_2k_page(mesh_device):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": _fabric_router_config(),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "l1_small_size": 2048,
@@ -792,7 +835,7 @@ def test_all_gather_async_fabric_2d_control_row_major_2k_page(mesh_device):
         pytest.param(ttnn.fp8_e4m3, 656, 704, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_fabric_1d_sparse_mla_row_perf(mesh_device, dtype, width, expected_page_size):
+def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, expected_page_size):
     """Steady-state native AG bandwidth for the sparse-MLA SP row geometry.
 
     The benchmark intentionally times only the compiled all-gather program: input/output creation,
@@ -806,7 +849,7 @@ def test_all_gather_fabric_1d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     valid_gather_extent = None
     samples = 3
     perf_core_rect = None
-    perf_fabric_config = "ring"
+    perf_fabric_config = "fabric_2d"
     perf_l1_small_size = 2048
     perf_sub_core_grid = None
     sp = mesh_device.shape[0]
@@ -878,7 +921,7 @@ def test_all_gather_fabric_1d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     print(
         f"ISOLATED_AG policy=automatic path={'receiver_l1' if expected_receiver_l1 else 'direct'} "
         f"schedule=bank_owned_interleaved batch_rows={receiver_batch_rows} "
-        f"credit=pipelined_group6 drain_riscs={receiver_drain_riscs} terminal_offload=depth4 "
+        f"credit=pipelined_group6 drain_riscs={receiver_drain_riscs} terminal_offload=enabled "
         f"core_rect={perf_core_rect or 'auto'} fabric={perf_fabric_config} l1_small={perf_l1_small_size}B "
         f"dtype={dtype} rows_per_device={rows_per_device} rows_per_page={rows_per_page} "
         f"valid_gather_extent={valid_gather_extent or 'full'} "

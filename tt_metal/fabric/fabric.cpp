@@ -526,6 +526,22 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
     return control_plane.routing_direction_to_eth_direction(routing_direction.value());
 }
 
+bool are_direct_fabric_neighbors(FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) {
+    if (src_fabric_node_id.mesh_id != dst_fabric_node_id.mesh_id) {
+        return false;
+    }
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!direction.has_value()) {
+        return false;
+    }
+    const auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, *direction);
+    const auto mesh_it = neighbors.find(dst_fabric_node_id.mesh_id);
+    return mesh_it != neighbors.end() &&
+           std::find(mesh_it->second.begin(), mesh_it->second.end(), dst_fabric_node_id.chip_id) !=
+               mesh_it->second.end();
+}
+
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||

@@ -247,6 +247,14 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
     constexpr size_t single_mesh_count = 1;
     bool is_multi_mesh = mesh_ids.size() > single_mesh_count;
 
+    // A physical 2D mesh can carry a logical ring whose routes cross a
+    // dateline. Keep the existing second virtual channel available as the
+    // generic escape channel even on a single-mesh system; multi-mesh systems
+    // already require the same full-mesh VC for inter-mesh traffic.
+    if (!is_multi_mesh && is_2D_topology(fabric_context_.get_fabric_topology())) {
+        config = IntermeshVCConfig::full_mesh();
+    }
+
     if (is_multi_mesh) {
         // Check if intermesh connections exist (use inter_mesh_connectivity which has actual parsed connections)
         const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();

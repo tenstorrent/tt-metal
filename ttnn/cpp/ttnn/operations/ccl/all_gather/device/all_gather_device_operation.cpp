@@ -22,6 +22,79 @@
 
 namespace ttnn::operations::ccl {
 
+namespace {
+
+AllGatherReceiverPolicy resolve_receiver_policy(
+    const Tensor& input,
+    const std::optional<Tensor>& persistent_output,
+    int32_t gather_dim,
+    const std::array<uint32_t, 2>& axis_num_devices,
+    const std::array<uint32_t, 2>& axis_num_links,
+    size_t packet_size,
+    const std::optional<tt::tt_metal::SubDeviceId>& requested_subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<uint32_t>& batch_slice_idx,
+    const std::optional<uint32_t>& valid_gather_extent) {
+    AllGatherReceiverPolicy policy;
+    if (!persistent_output.has_value()) {
+        return policy;
+    }
+
+    const auto& output = persistent_output.value();
+    const auto input_shape = input.padded_shape();
+    const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
+    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
+    const uint32_t links0 = axis_num_links[0];
+    const uint32_t links1 = axis_num_links[1];
+    const uint32_t num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
+    const uint32_t num_dram_banks = input.device()->num_dram_channels();
+    const uint32_t input_page_size = input.buffer()->aligned_page_size();
+
+    auto subdevice_id = requested_subdevice_id.value_or(input.device()->get_sub_device_ids().at(0));
+    auto available_cores = input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(sub_core_grid.value());
+    }
+    const bool enough_interleaved_receiver_cores = available_cores.num_cores() >= num_links * 5;
+
+    const auto& allocator = input.device()->allocator();
+    const uint32_t semaphore_alignment = allocator->get_alignment(tt::tt_metal::BufferType::L1_SMALL);
+    const uint64_t required_control_bytes =
+        static_cast<uint64_t>(1 + 2 * num_devices + 2 * 4 + 1) * semaphore_alignment;
+    const bool enough_control_l1 =
+        semaphore_alignment != 0 &&
+        required_control_bytes <= allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+
+    // Select the bank-owned receiver from tensor, topology, and resource facts
+    // only. No model identity, exact page size, or production-shape allowlist is
+    // part of the policy.
+    const bool bank_owned_eligible =
+        one_active_axis && num_devices >= 2 && num_devices <= 8 && num_links == 2 &&
+        input.device()->arch() == tt::ARCH::BLACKHOLE && input.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+        output.layout() == ttnn::ROW_MAJOR_LAYOUT && input_shape.rank() == 4 && gather_dim == 2 &&
+        input_shape[0] == 1 && input_shape[1] == 1 && !batch_slice_idx.has_value() &&
+        !valid_gather_extent.has_value() && input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+        output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+        input.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        output.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED && input_page_size != 0 &&
+        input_page_size == output.buffer()->aligned_page_size() &&
+        input.buffer()->page_size() == output.buffer()->page_size() && input_page_size * 2 <= packet_size &&
+        num_dram_banks > 0 && num_dram_banks % num_links == 0 && input.buffer()->num_pages() % num_dram_banks == 0 &&
+        enough_interleaved_receiver_cores && enough_control_l1;
+
+    if (bank_owned_eligible) {
+        policy.credit_mode = ReceiverL1CreditMode::Pipelined;
+        policy.credit_group_batches = 6;
+        policy.bank_owned_links = true;
+        policy.interleaved_bank_receivers = true;
+        policy.drain_risc_count = 2;
+        policy.slot_count = 12;
+    }
+    return policy;
+}
+
+}  // namespace
+
 void AllGatherDeviceOperation::validate_on_program_cache_miss(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -388,6 +461,10 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        if (::tt::tt_fabric::is_2d_fabric_config(fabric_config) &&
+            ::ttnn::ccl::logical_axis_is_direct_fabric_ring(input_tensor, axis)) {
+            axis_topology[axis] = tt::tt_fabric::Topology::Ring;
+        }
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
@@ -407,21 +484,17 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     uint32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    AllGatherReceiverPolicy receiver_policy;
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const bool production_sparse_mla_ring = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
-                                            num_devices == 8 && gather_dim == 2 &&
-                                            (input_page_size == 704 || input_page_size == 1152);
-    if (production_sparse_mla_ring) {
-        receiver_policy.notify_mode = ReceiverL1NotifyMode::Fused;
-        receiver_policy.credit_mode = ReceiverL1CreditMode::Pipelined;
-        receiver_policy.credit_group_batches = 6;
-        receiver_policy.bank_owned_links = true;
-        receiver_policy.interleaved_bank_receivers = true;
-        receiver_policy.drain_risc_count = 2;
-        receiver_policy.slot_count = 12;
-        receiver_policy.batch_rows = 0;
-    }
+    const auto receiver_policy = resolve_receiver_policy(
+        input_tensor,
+        persistent_output_tensor,
+        gather_dim,
+        axis_num_devices,
+        axis_num_links,
+        packet_size,
+        subdevice_id,
+        sub_core_grid,
+        batch_slice_idx,
+        valid_gather_extent);
 
     return {
         AllGatherParams{
