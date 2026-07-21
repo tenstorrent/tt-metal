@@ -72,7 +72,8 @@ from models.tt_dit.utils.test import line_params
 _KERNEL = (3, 3, 3)
 _STRIDE = (1, 1, 1)
 _PADDING = (1, 1, 1)
-_CHUNK_ELEMS = int(os.environ.get("HY_CONV_CHUNK_ELEMS", str(1024**3)))
+from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import _CONV3D_CHUNK_ELEMS
+
 _KVOL = _KERNEL[0] * _KERNEL[1] * _KERNEL[2]
 
 
@@ -97,9 +98,9 @@ def _chunk_input_heights(c_in: int, t: int, h: int, w: int, *, mode: str) -> lis
     """Mirror HunyuanSymmetricConv3d.forward H-chunk slice heights (padded strips)."""
     ac = aligned_channels(c_in)
     im2col = ac * t * h * w * _KVOL
-    if im2col <= _CHUNK_ELEMS or h <= 1:
+    if im2col <= _CONV3D_CHUNK_ELEMS or h <= 1:
         return []
-    n_chunks = (im2col + _CHUNK_ELEMS - 1) // _CHUNK_ELEMS
+    n_chunks = (im2col + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
     hc = (h + n_chunks - 1) // n_chunks
     pH = _PADDING[1]
     h_pad = h + 2 * pH

@@ -21,7 +21,15 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     decoder_tail_shape,
     decoder_up_level_specs,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import HunyuanSymmetricConv3d
+from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import (
+    HunyuanSymmetricConv3d,
+    _TAIL_CONV_OUT_CHUNK_ELEMS,
+    conv3d_h_chunk_size_for_conv,
+    promote_conv3d_fallback_to_exact,
+)
+from models.experimental.hunyuan_image_3_0.tt.vae.pointwise import HunyuanPointwiseLinear
+from models.experimental.hunyuan_image_3_0.tt.vae.resnet_conv import HunyuanResnetConvPair
+from models.tt_dit.utils.conv3d import aligned_channels
 from models.experimental.hunyuan_image_3_0.tt.vae.spatial import gather_hw, partition_hw, norm_sharded
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import (
     init_conv_in as init_conv_in_weights,
@@ -281,18 +289,18 @@ class ResnetBlockTTNN(Module):
         )
         self.norm1 = GroupNorm3D(num_channels=in_channels, **gn_kwargs)
         self.norm2 = GroupNorm3D(num_channels=out_channels, **gn_kwargs)
-        conv_kwargs = dict(mesh_device=mesh_device, dtype=dtype, t=t, h=h, w=w)
-        self.conv1 = HunyuanSymmetricConv3d(
-            in_channels, out_channels, kernel_size=3, stride=1, padding=1, **conv_kwargs
-        )
-        self.conv2 = HunyuanSymmetricConv3d(
-            out_channels, out_channels, kernel_size=3, stride=1, padding=1, **conv_kwargs
+        self.convs = HunyuanResnetConvPair(
+            in_channels,
+            out_channels,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            t=t,
+            h=h,
+            w=w,
         )
         self.nin_shortcut = None
         if in_channels != out_channels:
-            self.nin_shortcut = HunyuanSymmetricConv3d(
-                in_channels, out_channels, kernel_size=1, stride=1, padding=0, **conv_kwargs
-            )
+            self.nin_shortcut = HunyuanPointwiseLinear(in_channels, out_channels, mesh_device=mesh_device, dtype=dtype)
 
         if prefix:
             self._prefix = prefix
@@ -312,17 +320,17 @@ class ResnetBlockTTNN(Module):
         # otherwise) so the norm -> SiLU -> conv chain stays resident without a DRAM hop.
         h = self._gn(self.norm1, x_bthwc)
         h = ttnn.silu(h, memory_config=h.memory_config())
-        h = self.conv1(h)
+        h = self.convs.forward_conv1(h)
 
         h = self._gn(self.norm2, h)
         h = ttnn.silu(h, memory_config=h.memory_config())
-        h = self.conv2(h)
+        h = self.convs.forward_conv2(h)
 
         return ttnn.add(residual, h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class AttnBlockTTNN(Module):
-    """GroupNorm3D + Q/K/V 1x1 Conv3d + SDPA + proj_out + residual."""
+    """GroupNorm3D + fused QKV linear + SDPA + proj linear + residual."""
 
     ATTN_SCALE = 1.0 / math.sqrt(1024)
 
@@ -351,17 +359,9 @@ class AttnBlockTTNN(Module):
             mesh_device=mesh_device,
             dtype=dtype,
         )
-        conv_kwargs = dict(
-            mesh_device=mesh_device,
-            dtype=dtype,
-            t=t,
-            h=h,
-            w=w,
-        )
-        self.q = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
-        self.k = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
-        self.v = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
-        self.proj_out = HunyuanSymmetricConv3d(channels, channels, kernel_size=1, stride=1, padding=0, **conv_kwargs)
+        pw_kwargs = dict(mesh_device=mesh_device, dtype=dtype)
+        self.qkv = HunyuanPointwiseLinear(channels, 3 * channels, **pw_kwargs)
+        self.proj_out = HunyuanPointwiseLinear(channels, channels, **pw_kwargs)
 
     def _to_sdpa(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         """BTHWC ROW_MAJOR -> [B, 1, T*H*W, C] TILE (matches ref AttnBlock)."""
@@ -370,13 +370,6 @@ class AttnBlockTTNN(Module):
         x_b1sc = ttnn.reshape(x_btsc, (b, 1, t * h * w, c))
         ttnn.deallocate(x_btsc, force=False)
         return ttnn.to_layout(x_b1sc, ttnn.TILE_LAYOUT)
-
-    def _from_sdpa(self, x_b1sc: ttnn.Tensor, b: int, t: int, h: int, w: int, c: int) -> ttnn.Tensor:
-        """[B, 1, T*H*W, C] TILE -> BTHWC ROW_MAJOR for conv3d."""
-        x = ttnn.to_layout(x_b1sc, ttnn.ROW_MAJOR_LAYOUT)
-        x_btsc = ttnn.reshape(x, (b, t, h * w, c))
-        ttnn.deallocate(x, force=False)
-        return ttnn.reshape(x_btsc, (b, t, h, w, c))
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         # Attention is global over T*H*W, so under spatial sharding gather the whole
@@ -395,10 +388,13 @@ class AttnBlockTTNN(Module):
         b, t, h, w, c = x_bthwc.shape
 
         normed = self.norm(x_bthwc)
-        q = self._to_sdpa(self.q(normed))
-        k = self._to_sdpa(self.k(normed))
-        v = self._to_sdpa(self.v(normed))
+        x_b1sc = self._to_sdpa(normed)
         ttnn.deallocate(normed, force=False)
+
+        qkv = self.qkv.forward_b1sc(x_b1sc)
+        ttnn.deallocate(x_b1sc, force=False)
+        q, k, v = ttnn.chunk(qkv, 3, dim=-1)
+        ttnn.deallocate(qkv, force=False)
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -413,12 +409,14 @@ class AttnBlockTTNN(Module):
         ttnn.deallocate(k, force=False)
         ttnn.deallocate(v, force=False)
 
-        attn_bthwc = self._from_sdpa(attn, b, t, h, w, c)
+        out_b1sc = self.proj_out.forward_b1sc(attn)
         ttnn.deallocate(attn, force=False)
 
-        out = self.proj_out(attn_bthwc)
-        ttnn.deallocate(attn_bthwc, force=False)
-        return ttnn.add(residual, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.to_layout(out_b1sc, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(out_b1sc, force=False)
+        out_bthwc = ttnn.reshape(out, (b, t, h, w, c))
+        ttnn.deallocate(out, force=False)
+        return ttnn.add(residual, out_bthwc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class MidBlockTTNN(Module):
@@ -473,6 +471,16 @@ class UpsampleDCAETTNN(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
+        promote_conv3d_fallback_to_exact(
+            h_factor=1,
+            w_factor=1,
+            in_channels=aligned_channels(in_channels),
+            out_channels=out_channels * factor,
+            kernel_size=(3, 3, 3),
+            t=t,
+            h=h,
+            w=w,
+        )
         self.conv = HunyuanSymmetricConv3d(
             in_channels,
             out_channels * factor,
@@ -487,13 +495,14 @@ class UpsampleDCAETTNN(Module):
         )
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
-        conv_out = self.conv(x_bthwc)
-        h_up = dcae_depth_to_space_bthwc(conv_out, out_channels=self.out_channels, r1=self.r1)
-        ttnn.deallocate(conv_out, force=False)
-
+        # Shortcut before conv lowers peak DRAM (conv activations + repeat buffer).
         shortcut_in = ttnn.repeat_interleave(x_bthwc, self.repeats, dim=4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         shortcut_up = dcae_depth_to_space_bthwc(shortcut_in, out_channels=self.out_channels, r1=self.r1)
         ttnn.deallocate(shortcut_in, force=False)
+
+        conv_out = self.conv(x_bthwc)
+        h_up = dcae_depth_to_space_bthwc(conv_out, out_channels=self.out_channels, r1=self.r1)
+        ttnn.deallocate(conv_out, force=False)
 
         return ttnn.add(h_up, shortcut_up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -623,6 +632,14 @@ class ConvOutTTNN(Module):
         )
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        _, t, h, w, _ = x_bthwc.shape
+        self.conv._h_chunk_override = conv3d_h_chunk_size_for_conv(
+            self.conv,
+            t=t,
+            h=h,
+            w=w,
+            chunk_elems=_TAIL_CONV_OUT_CHUNK_ELEMS,
+        )
         return self.conv(x_bthwc)
 
 
