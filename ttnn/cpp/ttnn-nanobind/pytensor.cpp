@@ -206,7 +206,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tensor_impl::to_row_major_layout(
+                auto row_major_data = tt::tt_metal::tensor_impl::to_row_major_layout(
                     tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
@@ -217,7 +217,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
 
-        auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+        auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 

@@ -41,7 +41,6 @@
 #include <atomic>
 
 namespace ttnn {
-using namespace tt::tt_metal;
 namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
 }  // namespace
@@ -65,8 +64,12 @@ Tensor::Tensor(
         std::move(buffer),
         TensorSpec(
             logical_shape,
-            TensorLayout::fromPaddedShape(
-                dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape))) {
+            tt::tt_metal::TensorLayout::fromPaddedShape(
+                dtype,
+                tt::tt_metal::PageConfig(layout, tile),
+                tt::tt_metal::MemoryConfig{},
+                logical_shape,
+                padded_shape))) {
     using namespace tt::constants;
     if (tile.has_value() and  //
         (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT)) {
@@ -109,7 +112,7 @@ void Tensor::deallocate_impl(bool force) {
                (shared_resource.use_count() > 1 && force);
     };
 
-    bool tracking = GraphTracker::instance().is_enabled();
+    bool tracking = tt::tt_metal::GraphTracker::instance().is_enabled();
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
             ttsl::overloaded{
@@ -121,13 +124,14 @@ void Tensor::deallocate_impl(bool force) {
                     }
 
                     if (tracking) {
-                        GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
+                        tt::tt_metal::GraphTracker::instance().track_function_start(
+                            std::string_view("Tensor::deallocate"));
                     }
 
                     storage.deallocate();
 
                     if (tracking) {
-                        GraphTracker::instance().track_function_end();
+                        tt::tt_metal::GraphTracker::instance().track_function_end();
                     }
                 }},
             this->tensor_attributes->get_storage());
@@ -301,7 +305,7 @@ template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_
 
 Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    ttsl::optional_reference<const MemoryConfig> mem_config,
+    ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config,
     std::optional<tt::tt_metal::QueueId> cq_id) const {
     return tt::tt_metal::to_device(*this, mesh_device, mem_config, cq_id);
 }
@@ -405,7 +409,7 @@ bool Tensor::is_scalar() const {
 
 // TODO #32045: Remove this function since IDs are assigned in the constructor.
 Tensor set_tensor_id(const Tensor& tensor) {
-    if (not GraphTracker::instance().is_enabled()) {
+    if (not tt::tt_metal::GraphTracker::instance().is_enabled()) {
         return tensor;
     }
     auto output = tensor;
@@ -474,7 +478,9 @@ tt::tt_metal::distributed::MeshDevice* Tensor::device() const {
 
 const tt::tt_metal::distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
 
-const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
+const tt::tt_metal::MemoryConfig& Tensor::memory_config() const {
+    return tensor_spec().tensor_layout().get_memory_config();
+}
 
 const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
 
