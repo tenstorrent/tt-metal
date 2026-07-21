@@ -299,6 +299,8 @@ void packet_sizes_test(
 
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     unit_tests::dm::dram::packet_sizes_test(
         get_mesh_device(),
         0,      // Test case ID
@@ -308,6 +310,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes) {
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     uint32_t test_case_id = 1;
 
     auto mesh_device = get_mesh_device();
@@ -333,6 +337,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
 
 /* ========== Test case for varying DRAM channels; Test id = 2 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     uint32_t test_case_id = 2;
 
     auto mesh_device = get_mesh_device();
@@ -349,6 +355,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =

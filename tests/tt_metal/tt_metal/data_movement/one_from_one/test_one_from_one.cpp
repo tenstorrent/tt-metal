@@ -330,6 +330,8 @@ void custom_test(
 /* ========== TEST CASES ========== */
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         // subordinate_core_coord {1, 0} requires at least 2 columns in the compute grid
@@ -358,6 +360,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         // subordinate_core_coord {1, 0} requires at least 2 columns in the compute grid

@@ -187,6 +187,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 
 /* ========== Test case for loopback data movement; ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 
@@ -234,6 +236,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
+    GTEST_SKIP() << "Disabled: tt-metal #49437 brisc-link regression on emule; re-enable after emule-side fix (see "
+                    "issue #280 in tt-emule)";
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 
