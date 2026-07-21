@@ -10,5 +10,5 @@ TEST_LORA_FILENAME = "ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensor
 # is not DoRA, and has alpha != rank (so it also exercises scale application).
 # Used to cover the text-encoder fuse/rollback path, which the default UNet-only
 # adapter above does not touch.
-TE_TEST_LORA_REPO_ID = "ProomptEngineer/pe-balloon-diffusion-style"
-TE_TEST_LORA_FILENAME = "PE_BalloonStyle.safetensors"
+TE_TEST_LORA_REPO_ID = "RalFinger/alien-style-lora-sdxl"
+TE_TEST_LORA_FILENAME = "alienzkin-sdxl.safetensors"

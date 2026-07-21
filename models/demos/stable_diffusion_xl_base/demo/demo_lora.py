@@ -364,7 +364,7 @@ def test_demo(
 )
 @pytest.mark.parametrize(
     "prompt, negative_prompt",
-    [("A PE_BalloonStyle astronaut riding a green horse", ["disturbing"])],
+    [("An alienzkin astronaut riding a green horse", ["disturbing"])],
 )
 def test_demo_text_encoder_lora(
     validate_fabric_compatibility,
