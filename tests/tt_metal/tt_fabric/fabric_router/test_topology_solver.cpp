@@ -5950,4 +5950,133 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     }
 }
 
+// ── Minimal-host objective: same-rank-group occupancy cap (set_max_same_rank_groups_used) ──
+//
+// These verify the new hard host-count constraint: with N disconnected targets placed into globals partitioned
+// into host groups of a fixed capacity, set_max_same_rank_groups_used(k) must confine the placement to at most k
+// host groups. N = k * capacity exercises the full-packing fast path (all-or-nothing, no cardinality counter).
+
+namespace {
+AdjacencyGraph<TestTargetNode> make_disconnected_target_graph(size_t n) {
+    typename AdjacencyGraph<TestTargetNode>::AdjacencyMap m;
+    for (size_t i = 0; i < n; ++i) {
+        m[static_cast<TestTargetNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestTargetNode>(m);
+}
+AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph(size_t n) {
+    typename AdjacencyGraph<TestGlobalNode>::AdjacencyMap m;
+    for (size_t i = 0; i < n; ++i) {
+        m[static_cast<TestGlobalNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(m);
+}
+// Interleaved host groups: group g = {g, g+n_groups, g+2*n_groups, ...}. Interleaving (rather than contiguous
+// blocks) means a naive low-index assignment spreads across ALL groups, so a host-group cap is genuinely binding
+// (an uncapped solve tends to occupy every group) rather than vacuously satisfied.
+std::vector<std::set<TestGlobalNode>> make_host_groups(size_t n_groups, size_t group_size) {
+    std::vector<std::set<TestGlobalNode>> groups(n_groups);
+    for (size_t g = 0; g < n_groups; ++g) {
+        for (size_t i = 0; i < group_size; ++i) {
+            groups[g].insert(static_cast<TestGlobalNode>(g + i * n_groups));
+        }
+    }
+    return groups;
+}
+size_t count_occupied_groups(
+    const std::map<TestTargetNode, TestGlobalNode>& mapping,
+    const std::vector<std::set<TestGlobalNode>>& groups) {
+    std::set<size_t> occupied;
+    for (const auto& [t, g] : mapping) {
+        for (size_t i = 0; i < groups.size(); ++i) {
+            if (groups[i].count(g) != 0) {
+                occupied.insert(i);
+                break;
+            }
+        }
+    }
+    return occupied.size();
+}
+}  // namespace
+
+// Single solve: the hard cap must be honored.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespected) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    // Baseline: no cap. With interleaved groups the solver is free to (and does) spread across more than kCap
+    // groups -- this establishes that the cap below is genuinely binding, not vacuously satisfied.
+    MappingConstraints<TestTargetNode, TestGlobalNode> uncapped;
+    (void)uncapped.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    auto baseline = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        uncapped,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(baseline.success) << baseline.error_message;
+    EXPECT_GT(count_occupied_groups(baseline.target_to_global, host_groups), kCap)
+        << "sanity: without a cap the placement should spread across more than " << kCap
+        << " groups (otherwise the cap test would be vacuous)";
+
+    // Capped: the same instance with set_max_same_rank_groups_used(kCap) must confine placement to <= kCap groups.
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    (void)constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << "SAT solve with host-group cap failed: " << result.error_message;
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_occupied_groups(result.target_to_global, host_groups), kCap)
+        << "set_max_same_rank_groups_used(" << kCap << ") must confine the placement to at most " << kCap
+        << " host groups";
+}
+
+// Incremental solver: EVERY solution the enumeration session emits must honor the hard cap. This exercises
+// TopologyMappingEnumerationSession::next() (topology_sat_session_create_and_encode), which now applies the
+// occupancy cap to every incremental solve, not just the first.
+TEST_F(TopologySolverTest, EnumerationSession_MaxSameRankGroups_EverySolutionRespectsCap) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2, kWant = 3;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    (void)constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session;
+    std::vector<std::map<TestTargetNode, TestGlobalNode>> excluded;
+    size_t produced = 0;
+    for (size_t i = 0; i < kWant; ++i) {
+        auto result = session.next(
+            target_graph,
+            global_graph,
+            constraints,
+            excluded,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat,
+            /*unique_shapes=*/false);
+        if (!result.success) {
+            break;  // enumeration may legitimately exhaust distinct capped solutions
+        }
+        ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+        EXPECT_LE(count_occupied_groups(result.target_to_global, host_groups), kCap)
+            << "incremental session solution " << i << " must respect the host-group cap";
+        excluded.push_back(result.target_to_global);
+        ++produced;
+    }
+    EXPECT_GT(produced, 0u) << "enumeration session should produce at least one capped solution";
+}
+
 }  // namespace tt::tt_fabric
