@@ -41,87 +41,53 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 // SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
 constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
-// Wormhole SFPU addr_mode is 2 bits; with ADDR_MOD_SET_Base=1 (set by sfpu_start), insn
-// ADDR_MOD_0..3 select physical banks 4..7. Match typecast: LOAD insn ADDR_MOD_3 → phys 7
-// (incr=0), STORE insn ADDR_MOD_2 → phys 6 (incr=2). Program physical ADDR_MOD_6/7 via .set().
-// 4 faces × 8 iters covers one 32-bit DEST tile (same as VectorMode::RC).
-inline void topk_uint16_inc_dst_face_addr()
-{
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-}
+// 32 SFPU vectors cover one 32-bit DEST tile at addresses 0,2,...,62 (same footprint as
+// typecast VectorMode::RC with ITERATIONS=8). Explicit offsets + ADDR_MOD_3 (incr=0) avoid
+// touching ADDR_MOD_6, which topk uses for alt-stores (incr=32).
+constexpr int TOPK_UINT16_ITERS_PER_TILE = 32;
 
-inline void topk_uint16_strip_one_tile(std::uint32_t dst_tile_index, std::uint32_t store_mode)
+// Wormhole: with addr_mod_base=1, insn ADDR_MOD_3 → phys ADDR_MOD_7 (SFPU invariant, incr=0).
+inline void topk_uint16_strip_tile(std::uint32_t tile_index, std::uint32_t store_mode)
 {
-    set_dst_write_addr(dst_tile_index * 64);
+    const std::uint32_t base = tile_index * 64;
 #pragma GCC unroll 0
-    for (int face = 0; face < 4; face++)
+    for (int i = 0; i < TOPK_UINT16_ITERS_PER_TILE; i++)
     {
-#pragma GCC unroll 0
-        for (int d = 0; d < 8; d++)
-        {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-            TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-            TTI_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_2, 0);
-        }
-        topk_uint16_inc_dst_face_addr();
+        const std::uint32_t addr = base + (i << 1);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, store_mode, ADDR_MOD_3, addr);
     }
 }
 
-// Called from inside topk (addr_mod_base already 1). Temporarily reuse phys ADDR_MOD_6 as the
-// store stepper (topk normally keeps incr=32 there for alt stores); restore afterward.
-// Uses explicit offsets + ADDR_MOD_3 (incr=0) so we never touch ADDR_MOD_6 during clear —
-// mutating ADDR_MOD_6 mid-topk was leaving merge/rebuild only half-sorted (#50215).
+// Called from inside topk (addr_mod_base already 1).
 inline void topk_uint16_clear_value_tiles_high_bits()
 {
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
     {
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        // Strip both value tiles with explicit face/column offsets (no dest.incr side effects).
-        // Layout matches typecast VectorMode::RC: 4 faces × 8 cols, face stride 16, col stride 2.
-#pragma GCC unroll 0
-        for (std::uint32_t tile = 0; tile < 2; tile++)
-        {
-            const std::uint32_t tile_base = tile * 64;
-#pragma GCC unroll 0
-            for (std::uint32_t face = 0; face < 4; face++)
-            {
-                const std::uint32_t face_base = tile_base + face * 16;
-#pragma GCC unroll 0
-                for (std::uint32_t col = 0; col < 8; col++)
-                {
-                    const std::uint32_t addr = face_base + col * 2;
-                    TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
-                    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-                    TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
-                }
-            }
-        }
+        topk_uint16_strip_tile(0, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
+        topk_uint16_strip_tile(1, static_cast<std::uint32_t>(InstrModLoadStore::INT32));
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
 }
 
-// Called from sort after topk/transpose (outside sfpu_start). Must enable addr_mod_base itself.
+// Called from sort after topk/transpose (outside sfpu_start). Enable addr_mod_base for ADDR_MOD_3.
 inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index)
 {
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
     {
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-        // Map insn ADDR_MOD_0..3 → physical 4..7 (same as _llk_math_eltwise_sfpu_start_).
         TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1);
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-        topk_uint16_strip_one_tile(dst_tile_index, TOPK_SFPSTORE_MODE_PACK_UINT16);
+        set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        topk_uint16_strip_tile(dst_tile_index, TOPK_SFPSTORE_MODE_PACK_UINT16);
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
         TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0);
-        // Restore topk ADDR_MOD_6 so a later topk_local_sort still sees incr=32.
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
         set_dst_write_addr(0);
     }
     else
