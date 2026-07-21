@@ -157,14 +157,14 @@ ALWI void matmul_tiles(
  *
  * Return value: None
  *
- * | Argument       | Description                                                   | Type     | Valid Range                                         | Required |
- * |----------------|---------------------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | True     |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | True     |
- * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set   | False    |
- * | ct_dim         | The column dimension for the output block.                    | uint32_t | Must be equal to block B column dimension           | False    |
- * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | False    |
- * | kt_dim         | The inner dimension.                                          | uint32_t | Must be equal to block A column dimension           | False    |
+ * | Argument  | Description                                                | Type     | Valid Range                                                                                    | Required |
+ * |-----------|------------------------------------------------------------|----------|------------------------------------------------------------------------------------------------|----------|
+ * | in0_cb_id | The identifier of the first input circular buffer (CB)     | uint32_t | 0 to 31                                                                                        | True     |
+ * | in1_cb_id | The identifier of the second input circular buffer (CB)    | uint32_t | 0 to 31                                                                                        | True     |
+ * | transpose | The transpose flag for performing transpose operation on B | uint32_t | Any positive value will indicate transpose is set                                              | False    |
+ * | ct_dim    | The column dimension for the output block.                 | uint32_t | Must be equal to block B column dimension; 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
+ * | rt_dim    | The row dimension for the output block.                    | uint32_t | Must be equal to block A row dimension; 1 to 8 in half-sync mode, 1 to 16 in full-sync mode    | False    |
+ * | kt_dim    | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension                                                      | False    |
  */
 // clang-format on
 ALWI void matmul_block_init(
