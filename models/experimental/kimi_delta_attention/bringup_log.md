@@ -371,8 +371,16 @@ test-unpack fix needed; the diagonal-gate tile math + reused WY inverse were rig
 | 256 | 279 µs / 14 | 2089 µs / 159 | 7.5× |
 
 Kernel count 333→14 (near the ~6-program phased floor). The fusion goal is met: the recurrence is no
-longer launch-bound. Next: wire `chunk_kda` into the layer (prefill, C=32) and re-measure the full
-before/after — the layer's "other" term (6.5 ms, dominated by the composed chunk) should collapse.
+longer launch-bound.
+
+**Status:** the fused C++ kernel is **validated + committed at the production head_dim K=128**
+(Kt=4): PCC 0.99999, 8.4× faster than composed. **Known bug — Kt=2 (K=64) hangs** `chunk_kda_prep`
+(never exercised before; the layer PCC test's toy K=64 hit it and wedged the board — recovered with
+`tt-smi -r`). So the op is correct at Kt≥4 but has a **Kt=2 edge case** (a tile-count-dependent CB/WAIT
+or transpose bug — candidates: the dl per-K transpose loop, or a `scr`/`kv` sizing that's only correct
+at Kt=4). **Immediate follow-up:** fix Kt=2, then wire into the layer + full re-measure. Layer wiring
+reverted for now (layers stay on the validated composed chunk_kda_ttnn); the fused op stands as a
+validated standalone `ttnn.transformer.chunk_kda` for K=128.
 
 ## Backlog
 
