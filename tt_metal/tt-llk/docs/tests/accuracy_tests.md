@@ -24,6 +24,31 @@ CHIP_ARCH=wormhole pytest accuracy/test_examples_accuracy.py -s
 `--op` takes a `MathOperation` name (case-insensitive, exact), is repeatable
 (`--op=Exp --op=Log`), and composes with `-k`/`-m`.
 
+## Run modes
+
+The same op/format matrix can run in three modes, selected with `--mode`. All
+three run the one merged kernel (`sources/eltwise_unary_sfpu_perf.cpp`); they
+differ only in what they measure:
+
+- `accuracy` (default) — run on hardware and compare against the torch golden,
+  writing the per-op error files described below.
+- `perf` — profile every scenario for timings only (no golden compare, no file).
+- `both` — do both in one pass: profile *and* write the accuracy files.
+
+```bash
+# accuracy only (default — --mode can be omitted)
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py
+
+# perf only
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --mode=perf
+
+# accuracy + perf in one run
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --mode=both
+```
+
+`--mode` keeps only the matching sweep and deselects the other two. It defaults
+to `accuracy`, and can be combined with `--op`.
+
 ## Output
 
 Results go to `accuracy/_csv_output/<arch>/` (e.g. `wh/`, `bh/`), one file per op
