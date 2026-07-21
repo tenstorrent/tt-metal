@@ -186,7 +186,7 @@ class HunyuanSymmetricConv3d(Module):
         field it would in the replicated conv. With padding=(kH-1)/2 etc., conv with
         H/W padding 0 returns the original local spatial size.
         """
-        from models.tt_dit.parallel.config import vae_neighbor_pad
+        from models.tt_dit.parallel.config import neighbor_pad_safe_num_links, vae_neighbor_pad
 
         pT, pH, pW = self.padding
         x = x_bthwc
@@ -197,9 +197,13 @@ class HunyuanSymmetricConv3d(Module):
             # sequential ones. neighbor_pad_async natively supports "fused 2D padding"
             # when the two dims differ (H=dim2, W=dim3 always do), halving the op's
             # dispatch count for this halo exchange.
+            # Clamp links per pad dim: H-pad (dim=2) on [B,T,H,W,C] with B=T=1 only
+            # allows num_links=1 (TT_FATAL outer_dim_size >= num_links).
             sem_h = self.ccl.get_np_ping_pong_semaphore(self.h_mesh_axis)
             sem_w = self.ccl.get_np_ping_pong_semaphore(self.w_mesh_axis)
             barrier_semaphore = self.ccl.get_barrier_semaphore(self.h_mesh_axis)
+            n_h = neighbor_pad_safe_num_links(x, 2, self.ccl.num_links)
+            n_w = neighbor_pad_safe_num_links(x, 3, self.ccl.num_links)
             x = ttnn.experimental.neighbor_pad_async(
                 x,
                 [2, 3],
@@ -209,7 +213,7 @@ class HunyuanSymmetricConv3d(Module):
                 [self.h_mesh_axis, self.w_mesh_axis],
                 [sem_h, sem_w],
                 [barrier_semaphore],
-                num_links=[self.ccl.num_links, self.ccl.num_links],
+                num_links=[n_h, n_w],
                 topology=ttnn.Topology.Linear,
             )
         elif need_w:

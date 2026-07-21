@@ -1,30 +1,41 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Expert-parallel MoE — shards the 64 experts across a mesh axis so each device
-# holds 64/ndev experts RESIDENT in bf8 (no per-forward host streaming). This is
-# the dominant residency lever for the 80B model (experts are ~97% of per-layer
-# weight memory). See MEMORY_FIT_PLAN.md.
+# Expert-parallel MoE for the HunyuanImage-3.0 backbone. The 64 experts are sharded
+# across the mesh so each device holds 64/ndev experts RESIDENT in bf8 (experts are
+# ~97% of per-layer weight memory; 16 experts/device ~= 19GB is the only layout that
+# fits the 80GB bf8 model — see MEMORY_FIT_PLAN.md).
 #
-# Math (mirrors the dense single-device HunyuanTtMoE):
-#     combined = sum_e expert_e(x) * combine_w[:, e]
-# Each device computes the partial sum over ITS experts, then we all-reduce the
-# partial across the mesh axis to get the full combined output on every device.
+# SPARSE by default. There is ONE resident copy of the expert weights (split
+# gate/up/down, DeepSeek-V3 d_p col-major placement), consumed two ways:
 #
-# Per-device expert identity in SPMD: an arange(E) sharded along the mesh axis
-# gives each device the GLOBAL ids of its local experts, so the combine-weight
-# selection (topk_idx == global_id) picks the right column per device.
+#   * PREFILL (large M): SP-dispatch — route each token only to its top-k experts
+#     (routing_setup -> dispatch -> fused unified_routed_expert_moe -> combine ->
+#     reduce), so an expert computes ONLY its routed tokens (~8x less FLOP than the
+#     old dense-over-all-tokens loop). ~10x on the expert compute; PCC 0.999 @ CF=3.
+#   * DECODE / ineligible shapes (M~1): a plain dense loop over the SAME per-expert
+#     weights + expert all-reduce. At tiny M there is no compute to save, and the
+#     dispatch/combine fabric round-trips would only add latency — so decode skips
+#     them. Both paths read the identical resident weights: no double residency.
+#
+# Expert weight disk cache (same technique as DeepSeek-V3 d_p / MiniMax-M3):
+# ``TtRoutedExpert`` writes/loads per-local-expert ``.tensorbin`` files under
+# ``weight_cache_path`` (from ``TT_DIT_CACHE_DIR``). First process converts host
+# torch -> device and populates the cache; later processes skip the host stack /
+# transpose when the cache is complete and load tilized tensors directly.
+#
+# See SPARSE_MOE_PLAN.md and tests/{pcc/test_moe_sparse.py, perf/test_sparse_moe_*.py}.
 
 import os
-import time
+from pathlib import Path
 
 import torch
 import ttnn
+from loguru import logger
 from models.common.lightweightmodule import LightweightModule
 
 from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
-from ..cache import cache_file, cache_file_exists, cached_tensor_path
 from ..parallel_utils import (
     decode_mm_program_config,
     moe_full_seq_mem_config,
@@ -60,127 +71,42 @@ class HunyuanTtMoEParallel(LightweightModule):
         self.mesh_device = mesh_device
         self.ccl = ccl_manager
         self.mesh_axis = mesh_axis
-        # SP: tokens arrive sequence-sharded on sp_axis. Experts live on all 4
-        # devices, so a local token may route to a remote expert — rather than an
-        # all-to-all, we gather tokens to the full sequence (replicated), run the
-        # existing full-mesh EP, then reshard the combined output back to S/sp. The
-        # EP all-reduce is unchanged (its precondition — replicated tokens — holds
-        # after the gather).
         self.sp_axis = sp_axis
         self.sp_factor = sp_factor
         self.hidden_size = hidden_size
         self.num_experts = num_experts
+        self.moe_topk = moe_topk
+        self.norm_topk_prob = norm_topk_prob
+        self.weight_dtype = weight_dtype
         self.use_mixed_mlp_moe = use_mixed_mlp_moe
+        # Capacity factor for the per-chip dispatch buffer (prefill). CF=3 covers the
+        # summed tile-aligned per-expert counts under routing skew (CF=2 overflows and
+        # drops tokens -> PCC 0.973 vs 0.999; measured in test_sparse_moe_e2e.py).
+        self.sparse_cf = int(os.environ.get("HY_SPARSE_MOE_CF", "3"))
 
-        # Expert parallel spans the FULL mesh: ShardTensorToMesh(dim=0) below splits
-        # the 64 experts row-major across every device, so on a 1x4 mesh each device
-        # holds 16 experts and on a 2x2 mesh each device ALSO holds 16 (4-way EP) —
-        # this is the only layout that fits the 80GB bf8 model (16 experts ~= 19GB).
-        # The partial sum is therefore reduced over every non-trivial mesh axis (the
-        # `mesh_axis` arg is retained for API compatibility but no longer gates the
-        # shard — see forward()). On a 1x4 mesh only axis 1 is non-trivial, so this
-        # reduces to the original single-axis behavior.
         ndev = mesh_device.get_num_devices()
         assert num_experts % ndev == 0, f"{num_experts} experts not divisible by mesh device count {ndev}"
         self.ndev = ndev
         self.experts_per_dev = num_experts // ndev
         mesh_shape = tuple(mesh_device.shape)
+        # Experts are split across every non-trivial mesh axis (disjoint 16/device on a
+        # 2x2 or 1x4); the decode dense-loop partial is summed over these axes.
         self.ep_reduce_axes = [a for a, n in enumerate(mesh_shape) if n > 1]
 
-        # --- stacked expert weights, sharded along the expert dim ------------
-        # gate_and_up: [E, H, 2I]  down: [E, I, H]  (transposed for ttnn.linear)
-        verbose = os.environ.get("HY_VERBOSE", "1") != "0"
-        gate_up_key = f"{prefix}.experts.gate_and_up_stacked"
-        down_key = f"{prefix}.experts.down_stacked"
-        layout = ttnn.TILE_LAYOUT
-        expert_cached = cache_file_exists(
-            weight_cache_path, gate_up_key, dtype=weight_dtype, layout=layout
-        ) and cache_file_exists(weight_cache_path, down_key, dtype=weight_dtype, layout=layout)
-        t_upload = time.time()
-        if expert_cached:
-            if verbose:
-                print(
-                    f"[backbone]   loading cached {num_experts} experts ({weight_dtype}) from disk ...",
-                    flush=True,
-                )
-            self.w_gate_up = ttnn.load_tensor(
-                cached_tensor_path(weight_cache_path, gate_up_key, dtype=weight_dtype, layout=layout),
-                device=mesh_device,
-            )  # per-device [epd, H, 2I]
-            self.w_down = ttnn.load_tensor(
-                cached_tensor_path(weight_cache_path, down_key, dtype=weight_dtype, layout=layout),
-                device=mesh_device,
-            )  # per-device [epd, I, H]
-            self.inter2 = self.w_gate_up.shape[-1]  # 2I
-        else:
-            if verbose:
-                print(f"[backbone]   stacking {num_experts} expert weights on host ...", flush=True)
-            wgu = torch.stack(
-                [
-                    state_dict[f"{prefix}.experts.{e}.gate_and_up_proj.weight"].transpose(0, 1).contiguous()
-                    for e in range(num_experts)
-                ]
-            )
-            wdn = torch.stack(
-                [
-                    state_dict[f"{prefix}.experts.{e}.down_proj.weight"].transpose(0, 1).contiguous()
-                    for e in range(num_experts)
-                ]
-            )
-            self.inter2 = wgu.shape[-1]  # 2I
-            if verbose:
-                print(
-                    f"[backbone]   uploading {num_experts} experts ({weight_dtype}) to mesh ...",
-                    flush=True,
-                )
-            expert_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-            self.w_gate_up = ttnn.as_tensor(
-                wgu,
-                dtype=weight_dtype,
-                layout=layout,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=expert_mapper,
-                cache_file_name=cache_file(weight_cache_path, gate_up_key),
-            )  # per-device [epd, H, 2I]
-            self.w_down = ttnn.as_tensor(
-                wdn,
-                dtype=weight_dtype,
-                layout=layout,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=expert_mapper,
-                cache_file_name=cache_file(weight_cache_path, down_key),
-            )  # per-device [epd, I, H]
-            del wgu, wdn
-        if verbose:
-            print(f"[backbone]   expert upload done ({time.time() - t_upload:.1f}s)", flush=True)
-
-        # Pre-slice the stacked expert weights into per-expert [A, B] tensors ONCE.
-        # The forward path used to re-slice the full DRAM weight stack on the expert
-        # dim for every expert, every layer, every decode step — a ~25MB DRAM copy per
-        # slice that dominated the AR decode step. The weights are static, so we take
-        # those slices here and keep them resident; the hot loop just indexes a list.
-        # Same total bytes (the stack is freed right after), no per-token copy.
-        self.w_gate_up_experts = [self._slice_expert(self.w_gate_up, el) for el in range(self.experts_per_dev)]
-        self.w_down_experts = [self._slice_expert(self.w_down, el) for el in range(self.experts_per_dev)]
-        ttnn.deallocate(self.w_gate_up)
-        ttnn.deallocate(self.w_down)
-
-        # Per-device GLOBAL expert ids: arange(E) sharded along the mesh axis.
-        # bf16 so it compares against the (bf16-cast) topk indices; ids <= 63 exact.
-        ids = torch.arange(num_experts, dtype=torch.float32).reshape(num_experts, 1)
-        self.local_ids = ttnn.from_torch(
-            ids,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        )  # per-device [epd, 1]
-        # Pre-slice once: local_ids is static, so re-slicing inside the per-forward
-        # expert loop would be a pure repeated cost.
-        self.local_ids_experts = [self.local_ids[el] for el in range(self.experts_per_dev)]
+        # --- single resident expert-weight copy (split gate|up|down). Host torch
+        # list is only built on a cache miss; on a hit TtRoutedExpert loads .tensorbin
+        # directly (DeepSeek/MiniMax cache-only path). Hunyuan stores a FUSED
+        # gate_and_up_proj [2I,H]; split into up|gate halves in HF (out,in) layout.
+        # SwiGLU is silu(x2)*x1 with x1=first half => up=FIRST, gate=SECOND —
+        # matches RoutedExpertActivation.Silu = silu(gate)*up.
+        self._prefix = prefix
+        self._cache_name_prefix = f"{prefix}.routed_expert"
+        self._weight_cache_path = Path(weight_cache_path) if weight_cache_path is not None else None
+        self._inter = self._resolve_routed_intermediate(state_dict, prefix)
+        self._expert_torch_weights = self._load_or_skip_host_experts(state_dict, prefix, num_experts)
+        self.routed_expert = None  # TtRoutedExpert weight holder (built lazily, once)
+        self.dec_ids_experts = None  # per-local-expert global id (bf16) for the decode mask
+        self._module_cache = {}  # prefill seq_len -> dispatch/combine/reduce modules
 
         # Gate + shared MLP run replicated (input is replicated). Gate signature is
         # positional: (device, num_experts, moe_topk, state_dict, weight_key, ...).
@@ -197,20 +123,18 @@ class HunyuanTtMoEParallel(LightweightModule):
         )
         self.shared_mlp = None
         if use_mixed_mlp_moe:
-            mlp_dtype = weight_dtype
             self.shared_mlp = HunyuanTtMLP(
                 mesh_device,
                 hidden_size,
                 state_dict,
                 f"{prefix}.shared_mlp",
-                weight_dtype=mlp_dtype,
+                weight_dtype=weight_dtype,
                 weight_cache_path=weight_cache_path,
             )
 
-        # Expert matmuls are memory/compute-bound on low-precision weights (bf8/bf16),
-        # so HiFi4's 4 math passes and fp32 dest accumulation buy no accuracy the
-        # weights can carry — HiFi2 (2 passes) + bf16 accumulation roughly halves the
-        # compute-bound expert-matmul time. PCC-gated by the kv-cache decode/prefill tests.
+        # Expert matmuls are compute-bound on low-precision weights; HiFi2 (2 passes) +
+        # bf16 accumulation is PCC-safe and ~2x faster than HiFi4. Used by the decode
+        # dense loop (the fused prefill op carries its own kernel config).
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -218,71 +142,134 @@ class HunyuanTtMoEParallel(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def _slice_expert(self, w, el):
-        """Slice local expert el from a [epd, A, B] sharded weight -> [A, B]."""
-        epd, A, Bd = w.shape
-        s = ttnn.slice(w, [el, 0, 0], [el + 1, A, Bd])
-        return ttnn.reshape(s, (A, Bd))
+    # ---------------------------------------------------------------- weight residency
+    @staticmethod
+    def _resolve_routed_intermediate(state_dict, prefix: str) -> int:
+        """Routed intermediate I from fused gate_and_up [2I, H] (or raise if absent)."""
+        gu = state_dict.get(f"{prefix}.experts.0.gate_and_up_proj.weight")
+        if gu is None:
+            raise KeyError(
+                f"Missing {prefix}.experts.0.gate_and_up_proj.weight — needed for routed "
+                f"intermediate dim (even on a TTNN cache hit, so empty state_dicts must "
+                f"still supply expert.0 shapes or a future dim sidecar)."
+            )
+        return gu.shape[0] // 2
 
-    def _expert(self, x, el):
-        """Run local expert `el` (its weight slice differs per device).
+    def _expert_cache_complete(self) -> bool:
+        """True when every local expert gate/up/down .tensorbin exists under the cache dir."""
+        if self._weight_cache_path is None:
+            return False
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
-        Use DRAM ``ttnn.linear`` (not L1 width-sharded): the same ``x`` is reused
-        across the gate, every local expert, and the shared MLP. The small-M L1
-        path pads/shards activations and must not consume a shared MoE input.
+        self._weight_cache_path.mkdir(parents=True, exist_ok=True)
+        init_checker(self._weight_cache_path)
+        return TtRoutedExpert.check_cache_complete(
+            self._weight_cache_path, self._cache_name_prefix, self.experts_per_dev
+        )
+
+    def _load_or_skip_host_experts(self, state_dict, prefix: str, num_experts: int):
+        """Build the host torch_weights list, or None when the TTNN expert cache is complete.
+
+        Mirrors DeepSeek/MiniMax: on a cache hit, skip stacking/transposing all experts on
+        host — ``TtRoutedExpert`` loads tilized tensors from ``.tensorbin`` with
+        ``torch_weights=None``.
         """
-        wgu = self.w_gate_up_experts[el]  # [H, 2I] (different global expert per device)
-        wdn = self.w_down_experts[el]  # [I, H]
-        # The transient SwiGLU multiply runs on the full gathered sequence, so its L1
-        # buffer scales with S and clashes with the ops' static CBs past the measured
-        # bound — follow the seq-length L1->DRAM gate.
-        mc = moe_full_seq_mem_config(x.shape[1])
-        # gate_up (M x 4096 x 6144): same M-dependent schedule as down below — small/mid M
-        # (Mt 1-7) wins 1.3-1.36x with the 1D split-N config vs auto; large M uses wide_mm.
-        M_gu, K_gu, N_gu = x.shape[-2], x.shape[-1], wgu.shape[-1]
-        Mt_gu = (M_gu + 31) // 32
-        gu_pc = (
-            wide_mm_program_config(self.mesh_device, M_gu, K_gu, N_gu)
-            if Mt_gu >= 8
-            else decode_mm_program_config(self.mesh_device, M_gu, K_gu, N_gu)
+        if self._expert_cache_complete():
+            verbose = os.environ.get("HY_VERBOSE", "1") != "0"
+            if verbose:
+                logger.info(
+                    f"[moe] {self._cache_name_prefix}: TTNN expert cache hit "
+                    f"({self.experts_per_dev} local x gate/up/down) — skipping host stack"
+                )
+            return None
+
+        weights = []
+        for e in range(num_experts):
+            gu = state_dict[f"{prefix}.experts.{e}.gate_and_up_proj.weight"]  # [2I, H]
+            half = gu.shape[0] // 2
+            weights.append(
+                {
+                    "up_proj": gu[:half].contiguous(),
+                    "gate_proj": gu[half:].contiguous(),
+                    "down_proj": state_dict[f"{prefix}.experts.{e}.down_proj.weight"].contiguous(),  # [H, I]
+                }
+            )
+        return weights
+
+    def _ensure_experts(self):
+        """Build the single resident expert-weight copy (once). TtRoutedExpert loads the
+        split weights in DeepSeek col-major placement (from host or .tensorbin cache) and
+        exposes gate_projs/up_projs/down_projs that BOTH the fused prefill op and the
+        decode loop consume."""
+        if self.routed_expert is not None:
+            return
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+
+        md = self.mesh_device
+        dgs = md.shape[self.sp_axis]
+        ndg = md.shape[1 - self.sp_axis]
+        epc = self.experts_per_dev
+
+        gidx = ExpertMapping.create_global_expert_idx_table(epc, dgs, ndg)  # [ndg, dgs, epc]
+        gidx_tt = ttnn.from_torch(
+            gidx, mesh_mapper=get_ep_mesh_mapper(md), layout=ttnn.ROW_MAJOR_LAYOUT, device=md, dtype=ttnn.uint32
         )
-        gu = ttnn.linear(
-            x, wgu, compute_kernel_config=self.compute_kernel_config, memory_config=mc, program_config=gu_pc
+        gidx_tt = ttnn.squeeze(ttnn.squeeze(gidx_tt, 0), 0)  # per-device [epc]
+
+        # Same col-major placement as gidx, as a bf16 [epc,1] for the decode eq-mask.
+        dec = torch.as_tensor(gidx).reshape(ndg, dgs, epc, 1).float()
+        dec_tt = ttnn.from_torch(
+            dec, mesh_mapper=get_ep_mesh_mapper(md), layout=ttnn.TILE_LAYOUT, device=md, dtype=ttnn.bfloat16
         )
-        x1, x2 = ttnn.chunk(gu, 2, dim=-1)
-        ttnn.deallocate(gu)
-        # SwiGLU x1 * silu(x2), with SiLU folded into the multiply's LHS activation
-        # (one fused BinaryNg instead of a separate silu Unary + multiply). SILU must
-        # apply to x2 (the up half); multiply(x2, x1, a_acts=[SILU]) == x1 * silu(x2).
-        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
-        ttnn.deallocate(x1)
-        ttnn.deallocate(x2)
-        # Down-proj (M x 3072 x 4096) schedule is M-dependent (measured, both L1/DRAM
-        # input, tests/perf/test_expert_down_sweep.py::test_expert_down_threshold):
-        #   * small/mid M (Mt 1-7, decode + M=64 recaption): 1D split-N config, 1.3-1.83x
-        #     vs auto (auto under-distributes N; the 2D wide_mm is ~1.7x SLOWER here).
-        #   * large M (>= 256 / Mt >= 8): auto mis-schedules onto 110 cores at ~3% FLOP
-        #     and degrades catastrophically with M (5.3 ms at M=2048 L1), so force the
-        #     rectangular-grid wide_mm_program_config (360 us at 2048).
-        M_down, K_down, N_down = h.shape[-2], h.shape[-1], wdn.shape[-1]
-        Mt = (M_down + 31) // 32
-        if Mt >= 8:
-            down_pc = wide_mm_program_config(self.mesh_device, M_down, K_down, N_down)
-        else:
-            down_pc = decode_mm_program_config(self.mesh_device, M_down, K_down, N_down)
-        out = ttnn.linear(
-            h, wdn, compute_kernel_config=self.compute_kernel_config, memory_config=mc, program_config=down_pc
+        dec_tt = ttnn.squeeze(ttnn.squeeze(dec_tt, 0), 0)  # per-device [epc,1]
+        self.dec_ids_experts = [dec_tt[el] for el in range(epc)]
+
+        if self._weight_cache_path is not None:
+            self._weight_cache_path.mkdir(parents=True, exist_ok=True)
+            mode = "cache-load" if self._expert_torch_weights is None else "convert+cache"
+            logger.info(
+                f"[moe] {self._cache_name_prefix}: building TtRoutedExpert ({mode}) -> {self._weight_cache_path}"
+            )
+
+        # max_tokens is a fused-op runtime arg (per-prefill); set it per call in
+        # _forward_prefill. Weights do not depend on it, so any positive placeholder is fine.
+        # weight_cache_path + cache_name_prefix: same as DeepSeek TtMoe / MiniMax TtMiniMaxMoE —
+        # first run writes .tensorbin; later runs load them (torch_weights may be None).
+        self.routed_expert = TtRoutedExpert(
+            mesh_device=md,
+            experts_per_chip=epc,
+            global_expert_idx_table=gidx_tt,
+            emb_dim=self.hidden_size,
+            hidden_dim=self._inter,
+            max_tokens=1,
+            torch_weights=self._expert_torch_weights,
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=self.weight_dtype,
+            weight_cache_path=self._weight_cache_path,
+            cache_name_prefix=self._cache_name_prefix,
+            activation=ttnn.RoutedExpertActivation.Silu,
         )
-        ttnn.deallocate(h)
-        return out
+        self._expert_torch_weights = None  # free host copy (if any)
+
+    def _num_links(self):
+        from models.common.modules.tt_ccl import get_num_links
+
+        return max(1, get_num_links(self.mesh_device))
+
+    def _prefill_eligible(self, x: ttnn.Tensor) -> bool:
+        """SP-dispatch prefill needs a replicated full sequence we can shard across the SP
+        mesh axis into tile-aligned per-chip shards. Decode (S=1) and non-tile-aligned
+        shards fall back to the dense loop."""
+        dgs = self.mesh_device.shape[self.sp_axis]
+        s = x.shape[1]
+        return self.sp_factor == 1 and x.shape[0] == 1 and dgs > 1 and s % dgs == 0 and (s // dgs) % 64 == 0
 
     def _ep_all_reduce(self, partial: ttnn.Tensor) -> ttnn.Tensor:
-        """Sum a [B,S,H] per-device partial over every non-trivial mesh axis.
-
-        Each device computed the partial sum over ITS local experts; reducing over
-        the axes the experts are sharded on yields the full combined output on
-        every device. Done as all-gather(dim=0)+sum per axis.
-        """
+        """Sum a [B,S,H] per-device partial over every non-trivial mesh axis. Each device
+        computed the partial over ITS disjoint local experts; reducing over the shard axes
+        yields the full combined output on every device (all-gather(dim=0)+sum per axis)."""
         out = partial
         for axis in self.ep_reduce_axes:
             n = self.mesh_device.shape[axis]
@@ -296,12 +283,199 @@ class HunyuanTtMoEParallel(LightweightModule):
         return out
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # SP: gather the sequence-sharded tokens to the full (replicated) sequence so
-        # the full-mesh EP below is valid; reshard the combined output back at the end.
-        # `xf` is a fresh tensor — the caller-owned `x` is left untouched.
+        self._ensure_experts()
+        if self._prefill_eligible(x):
+            return self._forward_prefill(x)
+        return self._forward_decode(x)
+
+    # -------------------------------------------------------------------- prefill (sparse)
+    def _build_modules(self, seq_len: int):
+        """Lazily build (cache by seq_len) the seq-dependent EP dispatch/combine/reduce
+        modules + capacity constants. Weights are NOT here — they live in self.routed_expert."""
+        if seq_len in self._module_cache:
+            return self._module_cache[seq_len]
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
+
+        md = self.mesh_device
+        nl = self._num_links()
+        dgs = md.shape[self.sp_axis]  # SP / dispatch-group axis
+        ep_axis = 1 - self.sp_axis  # EP-group / TP axis
+        ndg = md.shape[ep_axis]
+        spc = seq_len // dgs
+        epc, metadata_len, max_buf, max_tok = compute_constants(
+            spc, self.num_experts, self.moe_topk, md.get_num_devices(), dgs, self.sparse_cf
+        )
+
+        edt = ExpertMapping.create_dispatch_table(self.num_experts, dgs, ndg)
+        mods = {
+            "dgs": dgs,
+            "ep_axis": ep_axis,
+            "spc": spc,
+            "max_tok": max_tok,
+            "tt_edt": TtDispatchModule.shard_expert_dispatch_table(md, edt, self.sp_axis),
+            "routing_setup": TtMoERoutingSetup(md, edt, num_links=nl, experts_per_chip=epc),
+            "dispatch": TtDispatchModule(
+                md,
+                dgs,
+                epc,
+                self.num_experts,
+                self.moe_topk,
+                metadata_len,
+                max_buf,
+                spc,
+                emb_dim=self.hidden_size,
+                cluster_axis=self.sp_axis,
+                num_links=nl,
+                topology=ttnn.Topology.Linear,
+            ),
+            "combine": TtCombineModule(
+                md,
+                dgs,
+                ndg,
+                epc,
+                self.moe_topk,
+                spc,
+                cluster_axis=self.sp_axis,
+                num_links=nl,
+                topology=ttnn.Topology.Linear,
+                init_zeros=True,
+            ),
+            "reduce": TtReduceModule(md, topk_dim=3, cluster_axis=ep_axis, num_links=nl, topology=ttnn.Topology.Linear),
+        }
+        self._module_cache[seq_len] = mods
+        return mods
+
+    def _forward_prefill(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """SP-dispatch MoE: shard the replicated sequence across the SP axis, route each
+        token only to its top-k experts, run the fused sparse expert on the routed tokens,
+        combine + weighted-reduce, regather emb, add the (SP-sharded) shared MLP, and
+        regather the sequence to the replicated [1,S,H] the layer residual expects."""
+        md = self.mesh_device
+        m = self._build_modules(x.shape[1])
+        dgs, ep_axis, spc = m["dgs"], m["ep_axis"], m["spc"]
+
+        # replicated [1,S,H] -> per-device row shard [1, S/dgs, H]. DRAM: the dispatch /
+        # fused-expert chain requires DRAM-interleaved tensors (fused op TT_FATALs on L1).
+        xs = sp_shard(self.ccl, x, dim=1, mesh_axis=self.sp_axis, n=dgs, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # router on the sharded tokens; slice off the gate's tile-pad (sentinel id = E).
+        topk_w, topk_idx = self.gate(xs)
+        idx_rm = ttnn.to_layout(topk_idx, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_idx)
+        w_rm = ttnn.to_layout(topk_w, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_w)
+        idx_rm = idx_rm[:, :, : self.moe_topk]
+        w_rm = w_rm[:, :, : self.moe_topk]
+        if idx_rm.get_dtype() != ttnn.uint16:
+            idx_rm = ttnn.typecast(idx_rm, ttnn.uint16)
+        if w_rm.get_dtype() != ttnn.bfloat16:
+            w_rm = ttnn.typecast(w_rm, ttnn.bfloat16)
+        idx3 = ttnn.reshape(idx_rm, (1, spc, self.moe_topk))
+        scores3 = ttnn.reshape(w_rm, (1, spc, self.moe_topk))
+        idx2 = ttnn.reshape(idx_rm, (spc, self.moe_topk))
+
+        offsets, counts, region_offsets, _ = m["routing_setup"](
+            ttnn_top_k_experts_indices=idx2,
+            num_routed_experts=self.num_experts,
+            seq_len_per_chip=spc,
+            num_experts_per_tok=self.moe_topk,
+        )
+
+        buf, meta = m["dispatch"](xs, scores3, idx3, offsets, m["tt_edt"])
+        buf_tiled = ttnn.to_layout(ttnn.squeeze(ttnn.squeeze(buf, 0), 0), ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(buf)
+        if buf_tiled.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            buf_tiled = ttnn.to_memory_config(buf_tiled, ttnn.DRAM_MEMORY_CONFIG)  # fused op requires DRAM-interleaved
+        self.routed_expert.max_tokens = m["max_tok"]  # per-prefill capacity for the fused op
+        eo = self.routed_expert(buf_tiled, counts, region_offsets)
+        eo = ttnn.unsqueeze(ttnn.unsqueeze(eo, 0), 0)
+        comb = m["combine"](eo, meta, counts, region_offsets)
+        routed = m["reduce"](comb, weights=scores3, indices=idx3, expert_dispatch_table=m["tt_edt"])
+
+        # reduce reduce-scatters emb across the EP/TP axis -> regather to full emb
+        if md.shape[ep_axis] > 1:
+            routed = self.ccl.all_gather(routed, dim=-1, mesh_axis=ep_axis, use_hyperparams=False)
+        routed = ttnn.reshape(routed, (1, spc, self.hidden_size))
+
+        # shared MLP on the SAME sharded tokens (halves its M), added here
+        if self.shared_mlp is not None:
+            shared = self.shared_mlp(xs)
+            shared = ttnn.reshape(shared, (1, spc, self.hidden_size))
+            out_sharded = ttnn.add(shared, routed, memory_config=moe_full_seq_mem_config(spc))
+            ttnn.deallocate(shared)
+            ttnn.deallocate(routed)
+        else:
+            out_sharded = routed
+        ttnn.deallocate(xs)
+
+        # sequence-sharded -> replicated full [1,S,H] for the layer residual add
+        out = sp_gather(
+            self.ccl,
+            out_sharded,
+            dim=1,
+            mesh_axis=self.sp_axis,
+            n=dgs,
+            out_memory_config=moe_full_seq_mem_config(x.shape[1]),
+        )
+        ttnn.deallocate(out_sharded)
+        return out
+
+    # ---------------------------------------------------------------------- decode (dense)
+    def _expert_dense(self, x, el):
+        """Run local expert `el` on all tokens using the resident SPLIT weights
+        (silu(gate)*up @ down). Used for decode / small-M where dispatch overhead would
+        dominate — same weights as the fused prefill op."""
+        wg = self.routed_expert.gate_projs[el]  # [H, I]
+        wu = self.routed_expert.up_projs[el]  # [H, I]
+        wd = self.routed_expert.down_projs[el]  # [I, H]
+        mc = moe_full_seq_mem_config(x.shape[1])
+        Mt = (x.shape[-2] + 31) // 32
+
+        def pc(M, K, N):
+            return (
+                wide_mm_program_config(self.mesh_device, M, K, N)
+                if Mt >= 8
+                else decode_mm_program_config(self.mesh_device, M, K, N)
+            )
+
+        g = ttnn.linear(
+            x,
+            wg,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=mc,
+            program_config=pc(x.shape[-2], x.shape[-1], wg.shape[-1]),
+        )
+        u = ttnn.linear(
+            x,
+            wu,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=mc,
+            program_config=pc(x.shape[-2], x.shape[-1], wu.shape[-1]),
+        )
+        # silu(gate) * up (gate=g from the second fused half, up=u from the first).
+        h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+        ttnn.deallocate(g)
+        ttnn.deallocate(u)
+        out = ttnn.linear(
+            h,
+            wd,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=mc,
+            program_config=pc(h.shape[-2], h.shape[-1], wd.shape[-1]),
+        )
+        ttnn.deallocate(h)
+        return out
+
+    def _forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Dense loop over the resident experts + expert all-reduce. For decode (M~1) and
+        any shape the SP-dispatch path is not eligible for. Handles sp>1 by gathering to
+        the full sequence and resharding the result (the EP all-reduce needs replicated
+        tokens), mirroring the previous dense path."""
         sp = self.sp_factor > 1
-        # gathered tokens feed the router matmul next: land L1-resident up to the
-        # full-sequence CB-clash bound (the gathered tensor is the GLOBAL seq), else DRAM.
         global_seq = x.shape[1] * self.sp_factor if sp else x.shape[1]
         xf = (
             sp_gather(
@@ -316,44 +490,24 @@ class HunyuanTtMoEParallel(LightweightModule):
             else x
         )
 
-        out = self._forward_full(xf)
-        if sp:
-            ttnn.deallocate(xf)
-            # MoE output feeds the layer's residual add next: land it L1-resident up to
-            # the per-device residual bound (the reshard output is the per-device seq).
-            out = sp_shard(
-                self.ccl,
-                out,
-                dim=1,
-                mesh_axis=self.sp_axis,
-                n=self.sp_factor,
-                out_memory_config=resid_mem_config(out.shape[1] // self.sp_factor),
-            )
-        return out
-
-    def _forward_full(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        topk_w, topk_idx_raw = self.gate(x)  # [B,S,k] each, replicated
+        topk_w, topk_idx_raw = self.gate(xf)  # [B,S,k] replicated
         topk_idx = ttnn.typecast(topk_idx_raw, ttnn.bfloat16)  # ids <= 63 exact in bf16
         ttnn.deallocate(topk_idx_raw)
 
-        # Full-S combine accumulator [B,S,H] scales with sequence like the expert body,
-        # so it follows the same measured L1->DRAM gate.
-        mc = moe_full_seq_mem_config(x.shape[1])
+        mc = moe_full_seq_mem_config(xf.shape[1])
         partial = None
         for el in range(self.experts_per_dev):
-            gid = self.local_ids_experts[el]  # [1] — global id of this device's el-th expert
-            sel = ttnn.eq(topk_idx, gid)  # [B,S,k] (broadcast scalar differs per device)
+            gid = self.dec_ids_experts[el]  # global id of this device's el-th expert (col-major)
+            sel = ttnn.eq(topk_idx, gid)  # [B,S,k]
             contrib = ttnn.multiply(sel, topk_w)
             ttnn.deallocate(sel)
             w_e = ttnn.sum(contrib, dim=-1, keepdim=True)  # [B,S,1]
             ttnn.deallocate(contrib)
 
-            oe = self._expert(x, el)
+            oe = self._expert_dense(xf, el)
             if partial is None:
-                partial = ttnn.multiply(oe, w_e, memory_config=mc)  # [B,S,H]
+                partial = ttnn.multiply(oe, w_e, memory_config=mc)
             else:
-                # addcmul(partial, oe, w_e) = partial + oe * w_e, fused in one op
-                # instead of a separate multiply + add.
                 tmp = ttnn.addcmul(partial, oe, w_e, memory_config=mc)
                 ttnn.deallocate(partial)
                 partial = tmp
@@ -363,17 +517,23 @@ class HunyuanTtMoEParallel(LightweightModule):
         ttnn.deallocate(topk_w)
         ttnn.deallocate(topk_idx)
 
-        # All-reduce the per-device partial sums over the full expert-shard mesh.
-        # Experts are split across EVERY non-trivial mesh axis (4-way on a 2x2,
-        # 4-way on a 1x4), so we reduce over each such axis in turn: all-gather the
-        # partials along the axis and sum. After the final axis every device holds
-        # the full combined output. (On a 1x4 this is a single reduce over axis 1.)
         combined = self._ep_all_reduce(partial)
-
         if self.shared_mlp is not None:
-            shared = self.shared_mlp(x)
-            out = ttnn.add(shared, combined, memory_config=moe_full_seq_mem_config(x.shape[1]))
+            shared = self.shared_mlp(xf)
+            out = ttnn.add(shared, combined, memory_config=moe_full_seq_mem_config(xf.shape[1]))
             ttnn.deallocate(shared)
             ttnn.deallocate(combined)
-            return out
-        return combined
+        else:
+            out = combined
+
+        if sp:
+            ttnn.deallocate(xf)
+            out = sp_shard(
+                self.ccl,
+                out,
+                dim=1,
+                mesh_axis=self.sp_axis,
+                n=self.sp_factor,
+                out_memory_config=resid_mem_config(out.shape[1] // self.sp_factor),
+            )
+        return out
