@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Hunyuan VAE conv3d blocking tables (exact + channel fallbacks).
 
-Auto-generated from sweep JSON via scripts/apply_encoder_sweep_blockings.py.
-Do not edit HUNYUAN_EXACT_BLOCKINGS by hand — re-run the sweep + apply script.
+Auto-generated from sweep JSON via scripts/apply_decoder_sweep_blockings.py
+(encoder exact table preserved; re-run apply_encoder_sweep_blockings.py to refresh enc).
 
 Exact entries: (h_factor, w_factor, C_in, C_out, kernel, T, H_in, W_in)
 -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
 
-Swept enc dirs: enc_1024, enc_1024x768, enc_1216x832, enc_1280x720, enc_1280x768, enc_720x1280, enc_768x1024, enc_832x1216
+Swept dec dirs: dec_64x64, legacy_bh_2x2
 """
 
 from __future__ import annotations
@@ -427,33 +427,44 @@ HUNYUAN_CHANNEL_BLOCKINGS: dict = {
     (1024, 64, (3, 3, 3)): (128, 64, 1, 16, 2),
     (1024, 128, (3, 3, 3)): (64, 128, 1, 16, 8),
     (1024, 1024, (3, 3, 3)): (64, 256, 1, 8, 8),
-    # --- decoder (unchanged placeholders until decoder sweep) ---
-    (128, 3, (3, 3, 3)): (32, 32, 1, 2, 2),
+    # --- decoder (from dec_64x64 full-shape sweeps + legacy fallbacks) ---
+    (32, 1024, (3, 3, 3)): (32, 256, 1, 2, 16),
+    (128, 3, (3, 3, 3)): (128, 32, 2, 8, 16),
     (128, 512, (3, 3, 3)): (64, 32, 1, 2, 2),
-    (256, 512, (3, 3, 3)): (64, 32, 1, 2, 2),
-    (512, 1024, (3, 3, 3)): (64, 32, 1, 2, 2),
-    (1024, 1024, (1, 1, 1)): (256, 32, 1, 1, 1),
+    (256, 512, (3, 3, 3)): (64, 256, 2, 2, 16),
+    (512, 1024, (3, 3, 3)): (64, 256, 1, 8, 8),
+    (1024, 1024, (1, 1, 1)): (1024, 512, 1, 8, 4),
     (1024, 2048, (3, 3, 3)): (64, 32, 1, 2, 2),
-    (1024, 4096, (3, 3, 3)): (64, 32, 1, 2, 2),
-    (1024, 8192, (3, 3, 3)): (64, 32, 1, 2, 2),
+    (1024, 4096, (3, 3, 3)): (64, 256, 1, 8, 8),
+    (1024, 8192, (3, 3, 3)): (64, 256, 1, 4, 8),
 }
-
 # ===================================================================
-# BH 2×2 replicated decoder — hardware-swept exact blockings (PCC-verified
-# against full decode, not isolated single-call). See bruteforce_conv3d_sweep_hunyuan.py.
+# BH 2×2 spatial-sharded decoder — hardware-swept exact blockings
 # ===================================================================
 HUNYUAN_DECODER_EXACT_BLOCKINGS: dict = {
-    (1, 1, 512, 512, (3, 3, 3), 4, 130, 130): (64, 256, 2, 4, 8),
-    (1, 1, 128, 128, (3, 3, 3), 4, 130, 514): (64, 128, 2, 16, 8),
-    (1, 1, 256, 256, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),
-    (1, 1, 1024, 1024, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),
-    (1, 1, 1024, 4096, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),
-    (1, 1, 512, 1024, (3, 3, 3), 4, 130, 130): (64, 256, 1, 8, 8),
-    (1, 1, 256, 512, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),
-    (1, 1, 1024, 1024, (3, 3, 3), 1, 34, 34): (64, 256, 1, 4, 8),
-    (1, 1, 1024, 1024, (1, 1, 1), 1, 64, 64): (1024, 512, 1, 8, 4),
+    # dec_conv_in_32x1024_T1_H34_W34.json [dec_64x64]  # 44 us
     (1, 1, 32, 1024, (3, 3, 3), 1, 34, 34): (32, 256, 1, 2, 16),
-    # ~10.5us sweep, full-decode PCC verified (rejected faster blocking: PCC 0.762).
+    # dec_conv_out_128x3_T4_H130_W514.json [dec_64x64]  # 1255 us
+    (1, 1, 128, 3, (3, 3, 3), 4, 130, 514): (128, 32, 2, 8, 16),
+    # dec_u4_res0_128x128_T4_H130_W514.json [dec_64x64]  # 2439 us
+    (1, 1, 128, 128, (3, 3, 3), 4, 130, 514): (64, 128, 2, 16, 8),
+    # dec_u3_res0_256x256_T4_H130_W258.json [dec_64x64]  # 3853 us
+    (1, 1, 256, 256, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),
+    # dec_u3_upsample_256x512_T4_H258_W258.json [dec_64x64]  # 7860 us
+    (1, 1, 256, 512, (3, 3, 3), 4, 130, 258): (64, 256, 2, 2, 16),
+    # dec_u2_res0_512x512_T4_H130_W130.json [dec_64x64]  # 9795 us
+    (1, 1, 512, 512, (3, 3, 3), 4, 130, 130): (64, 256, 2, 4, 8),
+    # dec_u2_upsample_512x1024_T4_H130_W130.json [dec_64x64]  # 24233 us
+    (1, 1, 512, 1024, (3, 3, 3), 4, 130, 130): (64, 256, 1, 8, 8),
+    # dec_mid_res0_1024x1024_T1_H34_W34.json [dec_64x64]  # 1321 us
+    (1, 1, 1024, 1024, (3, 3, 3), 1, 34, 34): (64, 256, 1, 4, 8),
+    # dec_mid_attn_1024x1024_T1_H64_W64.json [dec_64x64]  # 104 us
+    (1, 1, 1024, 1024, (1, 1, 1), 1, 64, 64): (1024, 512, 1, 8, 4),
+    # dec_u1_res0_1024x1024_T2_H66_W66.json [dec_64x64]  # 8303 us
+    (1, 1, 1024, 1024, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),
+    # dec_u1_upsample_1024x4096_T2_H66_W66.json [dec_64x64]  # 27252 us
+    (1, 1, 1024, 4096, (3, 3, 3), 2, 66, 66): (64, 256, 1, 8, 8),
+    # dec_u0_upsample_1024x8192_T1_H34_W34.json [dec_64x64]  # 10176 us
     (1, 1, 1024, 8192, (3, 3, 3), 1, 34, 34): (64, 256, 1, 4, 8),
 }
 

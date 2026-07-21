@@ -63,17 +63,29 @@ def init_conv_in(module) -> None:
 def load_resnet_block(module, ref_block) -> None:
     _load_gn(module.norm1, ref_block.norm1.state_dict())
     _load_gn(module.norm2, ref_block.norm2.state_dict())
-    _load_state(module.conv1, ref_block.conv1.state_dict())
-    _load_state(module.conv2, ref_block.conv2.state_dict())
+    _load_state(module.convs.conv1, ref_block.conv1.state_dict())
+    _load_state(module.convs.conv2, ref_block.conv2.state_dict())
     if module.nin_shortcut is not None:
         _load_state(module.nin_shortcut, ref_block.nin_shortcut.state_dict())
 
 
+def _fuse_qkv_state(ref_q, ref_k, ref_v) -> dict[str, torch.Tensor]:
+    def _weight(conv) -> torch.Tensor:
+        w = conv.weight.squeeze()
+        return w.transpose(0, 1).contiguous()
+
+    def _bias(conv) -> torch.Tensor:
+        return conv.bias.reshape(1, -1)
+
+    return {
+        "weight": torch.cat([_weight(ref_q), _weight(ref_k), _weight(ref_v)], dim=1),
+        "bias": torch.cat([_bias(ref_q), _bias(ref_k), _bias(ref_v)], dim=1),
+    }
+
+
 def load_attn_block(module, ref_block) -> None:
-    _load_state(module.norm, ref_block.norm.state_dict())
-    _load_state(module.q, ref_block.q.state_dict())
-    _load_state(module.k, ref_block.k.state_dict())
-    _load_state(module.v, ref_block.v.state_dict())
+    _load_gn(module.norm, ref_block.norm.state_dict())
+    module.qkv.load_torch_state_dict(_fuse_qkv_state(ref_block.q, ref_block.k, ref_block.v))
     _load_state(module.proj_out, ref_block.proj_out.state_dict())
 
 
