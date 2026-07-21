@@ -1,0 +1,2222 @@
+{
+    "generated_at": "2026-07-21T11:06:16.296268+00:00",
+    "architecture": "wormhole",
+    "scope": "**/perf_*.py",
+    "header_limitations":
+        "Expected headers include configuration, marker, profiler timing, and TEXT_SIZE columns. Hardware-counter columns remain runtime-derived; std timing columns are expected when run_count > 1.",
+    "summary": {
+        "module_count": 26,
+        "function_count": 35,
+        "collected_case_count": 37830,
+        "captured_config_count": 33890,
+        "schema_count": 22,
+        "warning_count": 0
+    },
+    "warnings": [],
+    "modules": [
+        {
+            "path": "perf_eltwise_bcast_col_custom.py",
+            "functions": [
+                {
+                    "name": "test_perf_eltwise_bcast_col_custom",
+                    "collected_cases": 2,
+                    "captured_configs": 2,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "mathop",
+                        "broadcast_type",
+                        "ct_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "mathop",
+                        "broadcast_type",
+                        "ct_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 2,
+                    "functions": [
+                        "test_perf_eltwise_bcast_col_custom"
+                    ],
+                    "sources": [
+                        "sources/eltwise_bcast_col_custom_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "mathop": "MathOperation.Elwsub",
+                        "dest_acc": "DestAccumulation.No",
+                        "math_fidelity": "MathFidelity.LoFi",
+                        "broadcast_type": "BroadcastType.Column",
+                        "ct_dim": "1",
+                        "loop_factor": "16"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_eltwise_binary_fpu.py",
+            "functions": [
+                {
+                    "name": "test_perf_eltwise_binary_fpu",
+                    "collected_cases": 86,
+                    "captured_configs": 86,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "mathop",
+                        "tile_cnt",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "mathop",
+                        "tile_cnt",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 86,
+                    "functions": [
+                        "test_perf_eltwise_binary_fpu"
+                    ],
+                    "sources": [
+                        "sources/eltwise_binary_fpu_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Bfp8_b->Bfp8_b, B=Bfp8_b)",
+                        "mathop": "MathOperation.Elwadd",
+                        "tile_count": "16",
+                        "math_fidelity": "MathFidelity.LoFi",
+                        "dest_acc": "DestAccumulation.No"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_eltwise_binary_sfpu.py",
+            "functions": [
+                {
+                    "name": "test_perf_eltwise_binary_sfpu_float",
+                    "collected_cases": 384,
+                    "captured_configs": 384,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_eltwise_binary_sfpu_int",
+                    "collected_cases": 10,
+                    "captured_configs": 10,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_eltwise_binary_sfpu_add_top_row",
+                    "collected_cases": 8,
+                    "captured_configs": 6,
+                    "skipped_cases": 2,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "SfpuAddTopRow does not support Float32 with DestAccumulation.Yes",
+                            "case_count": 2
+                        }
+                    ],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 400,
+                    "functions": [
+                        "test_perf_eltwise_binary_sfpu_add_top_row",
+                        "test_perf_eltwise_binary_sfpu_float",
+                        "test_perf_eltwise_binary_sfpu_int"
+                    ],
+                    "sources": [
+                        "sources/eltwise_binary_sfpu_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float32->Float32, B=Float32)",
+                        "approx_mode": "ApproximationMode.Yes",
+                        "mathop": "MathOperation.SfpuElwadd",
+                        "dest_acc": "DestAccumulation.Yes",
+                        "loop_factor": "16",
+                        "iterations": "32",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_eltwise_typecast.py",
+            "functions": [
+                {
+                    "name": "test_perf_eltwise_typecast",
+                    "collected_cases": 5,
+                    "captured_configs": 5,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "input_format",
+                        "output_format",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(MATH_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "input_format",
+                        "output_format",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(MATH_ISOLATE)",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "variant_count": 5,
+                    "functions": [
+                        "test_perf_eltwise_typecast"
+                    ],
+                    "sources": [
+                        "sources/eltwise_unary_typecast_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "MATH_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "typecast_case": "[DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No]",
+                        "approx_mode": "ApproximationMode.No",
+                        "loop_factor": "16",
+                        "iterations": "8",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_eltwise_unary_sfpu.py",
+            "functions": [
+                {
+                    "name": "test_perf_eltwise_unary_sfpu",
+                    "collected_cases": 1280,
+                    "captured_configs": 1280,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 1280,
+                    "functions": [
+                        "test_perf_eltwise_unary_sfpu"
+                    ],
+                    "sources": [
+                        "sources/eltwise_unary_sfpu_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float32->Float32, B=Float32)",
+                        "approx_mode": "ApproximationMode.Yes",
+                        "mathop": "MathOperation.Reciprocal",
+                        "dest_acc": "DestAccumulation.Yes",
+                        "loop_factor": "16",
+                        "iterations": "32",
+                        "fast_mode": "FastMode.No",
+                        "stable_sort": "StableSort.No",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_eltwise_unary_sfpu_int32.py",
+            "functions": [
+                {
+                    "name": "test_perf_eltwise_unary_sfpu_int32",
+                    "collected_cases": 7,
+                    "captured_configs": 7,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(MATH_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(MATH_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "variant_count": 7,
+                    "functions": [
+                        "test_perf_eltwise_unary_sfpu_int32"
+                    ],
+                    "sources": [
+                        "sources/eltwise_unary_sfpu_perf.cpp"
+                    ],
+                    "run_types": [
+                        "MATH_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Int32->Int32, B=Int32)",
+                        "mathop": "MathOperation.AddInt32",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_fast_tilize.py",
+            "functions": [
+                {
+                    "name": "test_fast_tilize_perf",
+                    "collected_cases": 516,
+                    "captured_configs": 516,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "TEXT_SIZE(L1_TO_L1)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "std(L1_TO_L1)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "std(L1_TO_L1)",
+                        "TEXT_SIZE(L1_TO_L1)"
+                    ],
+                    "variant_count": 516,
+                    "functions": [
+                        "test_fast_tilize_perf"
+                    ],
+                    "sources": [
+                        "sources/fast_tilize_test.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1"
+                    ],
+                    "run_counts": [
+                        2
+                    ],
+                    "example_case": {
+                        "input_format": "DataFormat.Float32",
+                        "output_format": "DataFormat.Float32",
+                        "dest_acc": "DestAccumulation.Yes",
+                        "input_dimensions": "[1, 1]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_fast_tilize_full.py",
+            "functions": [
+                {
+                    "name": "test_perf_fast_tilize",
+                    "collected_cases": 16,
+                    "captured_configs": 0,
+                    "skipped_cases": 16,
+                    "skip_reason": "Test is not supported on Wormhole architecture",
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_fast_tilize_bfp",
+                    "collected_cases": 15,
+                    "captured_configs": 0,
+                    "skipped_cases": 15,
+                    "skip_reason": "Test is not supported on Wormhole architecture",
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_fast_untilize.py",
+            "functions": [
+                {
+                    "name": "test_perf_fast_untilize",
+                    "collected_cases": 1620,
+                    "captured_configs": 0,
+                    "skipped_cases": 1620,
+                    "skip_reason": "Test is not supported on Wormhole architecture",
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_fast_untilize_baseline_compare.py",
+            "functions": [
+                {
+                    "name": "test_perf_fast_untilize_baseline_compare",
+                    "collected_cases": 810,
+                    "captured_configs": 0,
+                    "skipped_cases": 810,
+                    "skip_reason": "Test is not supported on Wormhole architecture",
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_fused.py",
+            "functions": [
+                {
+                    "name": "test_fuser",
+                    "collected_cases": 27,
+                    "captured_configs": 0,
+                    "skipped_cases": 27,
+                    "skip_reason": "Test is not supported on Wormhole architecture",
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_math_matmul.py",
+            "functions": [
+                {
+                    "name": "test_perf_math_matmul",
+                    "collected_cases": 19920,
+                    "captured_configs": 19920,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "dest_sync",
+                        "throttle_level",
+                        "dst_index",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "tile_cnt",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "partial_a",
+                        "partial_face_pack",
+                        "partial_b",
+                        "partial_face_math",
+                        "c_dimm",
+                        "r_dimm",
+                        "k_dimm",
+                        "in0_r_dim",
+                        "in0_c_dim",
+                        "in1_r_dim",
+                        "in1_c_dim",
+                        "loop_factor",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "dest_sync",
+                        "throttle_level",
+                        "dst_index",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "tile_cnt",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "partial_a",
+                        "partial_face_pack",
+                        "partial_b",
+                        "partial_face_math",
+                        "c_dimm",
+                        "r_dimm",
+                        "k_dimm",
+                        "in0_r_dim",
+                        "in0_c_dim",
+                        "in1_r_dim",
+                        "in1_c_dim",
+                        "loop_factor",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 19920,
+                    "functions": [
+                        "test_perf_math_matmul"
+                    ],
+                    "sources": [
+                        "sources/math_matmul_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "math_fidelity": "MathFidelity.LoFi",
+                        "matmul_config":
+                            "MatmulConfig(tile_dimensions=TileDimensions(in0_dimensions=[32, 32], in1_dimensions=(32, 32), output_dimensions=(32, 32), rt_dim=1, ct_dim=1, kt_dim=1, tile_cnt=1, tile_cnt_in0=1, tile_cnt_in1=1, output_tile_cnt=1, in0_tile_r_dim=1, in0_tile_c_dim=32, in1_tile_r_dim=32, in1_tile_c_dim=32), face_layout_config=FaceLayoutConfig(unpack_transpose_faces=<Transpose.No: False>, unpack_transpose_within_face=<Transpose.No: False>, num_faces_in0=2, num_faces_in1=4, num_faces=2, partial_face_in0=True, partial_face_in1=False, partial_face_math=True, partial_face_pack=True), formats=InputOutputFormat[A:Bfp8_b,B:Bfp8_b,out:Bfp8_b], stochastic_rnd=<StochasticRounding.No: 'StochRndType::None'>, dst_index=0, dest_sync=<DestSync.Half: 'SyncHalf'>, dest_acc=<DestAccumulation.No: False>)",
+                        "throttle": "0"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_math_transpose.py",
+            "functions": [
+                {
+                    "name": "test_perf_math_transpose",
+                    "collected_cases": 16,
+                    "captured_configs": 4,
+                    "skipped_cases": 12,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "Prevent mixing INT and FP in math transpose",
+                            "case_count": 8
+                        },
+                        {
+                            "reason": "Unsupported config transpose_of_faces = false and is_32bit = false",
+                            "case_count": 2
+                        },
+                        {
+                            "reason": "Skip transposing faces twice",
+                            "case_count": 2
+                        }
+                    ],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_transpose_faces",
+                        "tile_cnt",
+                        "unpack_transpose_faces",
+                        "TEXT_SIZE(L1_TO_L1)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_transpose_faces",
+                        "tile_cnt",
+                        "unpack_transpose_faces",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "TEXT_SIZE(L1_TO_L1)"
+                    ],
+                    "variant_count": 4,
+                    "functions": [
+                        "test_perf_math_transpose"
+                    ],
+                    "sources": [
+                        "sources/math_transpose_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "unpack_transpose_faces": "Transpose.No",
+                        "math_transpose_faces": "Transpose.Yes"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_matmul.py",
+            "functions": [
+                {
+                    "name": "test_perf_matmul",
+                    "collected_cases": 10176,
+                    "captured_configs": 9792,
+                    "skipped_cases": 384,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "Dest accumulation must be enabled for this format",
+                            "case_count": 384
+                        }
+                    ],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "dest_sync",
+                        "throttle_level",
+                        "unpack_transpose_faces",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "loop_factor",
+                        "tile_cnt",
+                        "c_dimm",
+                        "r_dimm",
+                        "k_dimm",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "dest_sync",
+                        "throttle_level",
+                        "unpack_transpose_faces",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "loop_factor",
+                        "tile_cnt",
+                        "c_dimm",
+                        "r_dimm",
+                        "k_dimm",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 9792,
+                    "functions": [
+                        "test_perf_matmul"
+                    ],
+                    "sources": [
+                        "sources/matmul_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "combos": "[InputOutputFormat(Float16_b->Float16_b, B=Float16_b), DestAccumulation.No, [[32, 32], [32, 32]]]",
+                        "math_fidelity": "MathFidelity.LoFi"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_pack_dest_bank.py",
+            "functions": [
+                {
+                    "name": "test_perf_pack_dest_bank",
+                    "collected_cases": 24,
+                    "captured_configs": 18,
+                    "skipped_cases": 6,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "Local perf sweep only uses 1x4, 2x4, and 1x8 blocked-pack patterns",
+                            "case_count": 6
+                        }
+                    ],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "tilize",
+                        "loop_factor",
+                        "dst_index",
+                        "tile_cnt",
+                        "num_blocks",
+                        "input_num_blocks",
+                        "output_num_blocks",
+                        "num_tiles_in_block",
+                        "input_num_tiles_in_block",
+                        "output_num_tiles_in_block",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "l1_acc",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(PACK_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "tilize",
+                        "loop_factor",
+                        "dst_index",
+                        "tile_cnt",
+                        "num_blocks",
+                        "input_num_blocks",
+                        "output_num_blocks",
+                        "num_tiles_in_block",
+                        "input_num_tiles_in_block",
+                        "output_num_tiles_in_block",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "l1_acc",
+                        "marker",
+                        "mean(PACK_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 18,
+                    "functions": [
+                        "test_perf_pack_dest_bank"
+                    ],
+                    "sources": [
+                        "sources/pack_dest_bank_perf.cpp"
+                    ],
+                    "run_types": [
+                        "PACK_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "dest_acc": "DestAccumulation.No",
+                        "l1_acc": "L1Accumulation.No",
+                        "num_faces": "4",
+                        "tilize": "Tilize.No",
+                        "dest_index": "0",
+                        "num_blocks": "1",
+                        "num_tiles_in_block": "4",
+                        "loop_factor": "1"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_pack_untilize.py",
+            "functions": [
+                {
+                    "name": "test_perf_pack_untilize",
+                    "collected_cases": 1600,
+                    "captured_configs": 832,
+                    "skipped_cases": 768,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "Pack Untilize does not support mixing Int32 with other formats",
+                            "case_count": 448
+                        },
+                        {
+                            "reason": "Pack Untilize does not support Bfp8_b output",
+                            "case_count": 320
+                        }
+                    ],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 832,
+                    "functions": [
+                        "test_perf_pack_untilize"
+                    ],
+                    "sources": [
+                        "sources/pack_untilize_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "full_rt_dim": "1",
+                        "full_ct_dim": "1"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_reduce.py",
+            "functions": [
+                {
+                    "name": "test_perf_reduce",
+                    "collected_cases": 144,
+                    "captured_configs": 144,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "reduce_pool_type",
+                        "tile_cnt",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "reduce_pool_type",
+                        "tile_cnt",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 144,
+                    "functions": [
+                        "test_perf_reduce"
+                    ],
+                    "sources": [
+                        "sources/reduce_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "dest_acc": "DestAccumulation.No",
+                        "reduce_dim": "ReduceDimension.Row",
+                        "pool_type": "ReducePool.Max"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_sfpu_binop_scalar.py",
+            "functions": [
+                {
+                    "name": "test_perf_sfpu_binop_scalar",
+                    "collected_cases": 20,
+                    "captured_configs": 20,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "value_bits",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "value_bits",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 20,
+                    "functions": [
+                        "test_perf_sfpu_binop_scalar"
+                    ],
+                    "sources": [
+                        "sources/sfpu_binop_scalar_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "dest_acc": "DestAccumulation.Yes",
+                        "mathop": "MathOperation.ScalarAdd",
+                        "loop_factor": "16",
+                        "iterations": "32",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_sfpu_div_wh.py",
+            "functions": [
+                {
+                    "name": "test_perf_div_bf16",
+                    "collected_cases": 1,
+                    "captured_configs": 1,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_div_fp32",
+                    "collected_cases": 1,
+                    "captured_configs": 1,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(MATH_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(MATH_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "variant_count": 2,
+                    "functions": [
+                        "test_perf_div_bf16",
+                        "test_perf_div_fp32"
+                    ],
+                    "sources": [
+                        "sources/eltwise_binary_sfpu_perf.cpp"
+                    ],
+                    "run_types": [
+                        "MATH_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_sfpu_erfinv_wh.py",
+            "functions": [
+                {
+                    "name": "test_perf_erfinv_bf16",
+                    "collected_cases": 1,
+                    "captured_configs": 1,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_erfinv_fp32",
+                    "collected_cases": 1,
+                    "captured_configs": 1,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(MATH_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "approx_mode",
+                        "iterations",
+                        "fast_mode",
+                        "stable_sort",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(MATH_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "variant_count": 2,
+                    "functions": [
+                        "test_perf_erfinv_bf16",
+                        "test_perf_erfinv_fp32"
+                    ],
+                    "sources": [
+                        "sources/eltwise_unary_sfpu_perf.cpp"
+                    ],
+                    "run_types": [
+                        "MATH_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "mathop": "MathOperation.Erfinv",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_sfpu_reduce_row_max.py",
+            "functions": [
+                {
+                    "name": "test_perf_sfpu_reduce_row_max",
+                    "collected_cases": 20,
+                    "captured_configs": 20,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "pool_type",
+                        "approx_mode",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(MATH_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "pool_type",
+                        "approx_mode",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "marker",
+                        "mean(MATH_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "variant_count": 20,
+                    "functions": [
+                        "test_perf_sfpu_reduce_row_max"
+                    ],
+                    "sources": [
+                        "sources/sfpu_reduce_row_max_perf.cpp"
+                    ],
+                    "run_types": [
+                        "MATH_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float32->Float32, B=Float32)",
+                        "dest_acc": "DestAccumulation.Yes",
+                        "mathop": "MathOperation.ReduceRow",
+                        "reduce_pool": "ReducePool.Max",
+                        "loop_factor": "10"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_sfpu_reduce_sdpa.py",
+            "functions": [
+                {
+                    "name": "test_perf_sfpu_reduce_sdpa",
+                    "collected_cases": 20,
+                    "captured_configs": 20,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "reduce_pool_type",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(MATH_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "reduce_pool_type",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "marker",
+                        "mean(MATH_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)"
+                    ],
+                    "variant_count": 20,
+                    "functions": [
+                        "test_perf_sfpu_reduce_sdpa"
+                    ],
+                    "sources": [
+                        "sources/sfpu_reduce_sdpa_perf.cpp"
+                    ],
+                    "run_types": [
+                        "MATH_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "dest_acc": "DestAccumulation.No",
+                        "mathop": "MathOperation.ReduceColumn",
+                        "reduce_pool": "ReducePool.Max",
+                        "loop_factor": "10"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_sfpu_ternary.py",
+            "functions": [
+                {
+                    "name": "test_perf_sfpu_addcmul",
+                    "collected_cases": 6,
+                    "captured_configs": 6,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_sfpu_addcdiv",
+                    "collected_cases": 4,
+                    "captured_configs": 4,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_sfpu_lerp",
+                    "collected_cases": 4,
+                    "captured_configs": 4,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_sfpu_snake_beta",
+                    "collected_cases": 4,
+                    "captured_configs": 4,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "value_bits",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "mathop",
+                        "value_bits",
+                        "approx_mode",
+                        "iterations",
+                        "tile_cnt",
+                        "loop_factor",
+                        "num_faces",
+                        "num_faces_A",
+                        "num_faces_B",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(MATH_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(MATH_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 18,
+                    "functions": [
+                        "test_perf_sfpu_addcdiv",
+                        "test_perf_sfpu_addcmul",
+                        "test_perf_sfpu_lerp",
+                        "test_perf_sfpu_snake_beta"
+                    ],
+                    "sources": [
+                        "sources/sfpu_ternary_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "MATH_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "dest_acc": "DestAccumulation.Yes",
+                        "loop_factor": "16",
+                        "iterations": "32",
+                        "input_dimensions": "[128, 64]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_unpack_a_bcast_eltwise.py",
+            "functions": [
+                {
+                    "name": "test_perf_col_tile_sdpa",
+                    "collected_cases": 18,
+                    "captured_configs": 18,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "mathop",
+                        "dest_sync",
+                        "tile_cnt",
+                        "srca_reuse_count",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "std(L1_TO_L1)",
+                        "mean(PACK_ISOLATE)",
+                        "std(PACK_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "math_fidelity",
+                        "mathop",
+                        "dest_sync",
+                        "tile_cnt",
+                        "srca_reuse_count",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "std(L1_TO_L1)",
+                        "mean(PACK_ISOLATE)",
+                        "std(PACK_ISOLATE)",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 18,
+                    "functions": [
+                        "test_perf_col_tile_sdpa"
+                    ],
+                    "sources": [
+                        "sources/unpack_a_bcast_eltwise_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "PACK_ISOLATE"
+                    ],
+                    "run_counts": [
+                        10
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "mathop": "MathOperation.Elwsub",
+                        "dest_acc": "DestAccumulation.No",
+                        "srca_reuse_count": "2",
+                        "math_fidelity": "MathFidelity.LoFi",
+                        "input_dimensions": "[128, 32]"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_unpack_tilize.py",
+            "functions": [
+                {
+                    "name": "test_perf_unpack_tilize_float",
+                    "collected_cases": 1024,
+                    "captured_configs": 768,
+                    "skipped_cases": 256,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "Bfp8_b input not supported for unpack_tilize",
+                            "case_count": 256
+                        }
+                    ],
+                    "errors": []
+                },
+                {
+                    "name": "test_perf_unpack_tilize_int",
+                    "collected_cases": 4,
+                    "captured_configs": 4,
+                    "skipped_cases": 0,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "full_rt_dim",
+                        "full_ct_dim",
+                        "block_ct_dim",
+                        "block_rt_dim",
+                        "tile_cnt",
+                        "loop_factor",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "mean(PACK_ISOLATE)",
+                        "mean(L1_CONGESTION[UNPACK])",
+                        "mean(L1_CONGESTION[PACK])",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(PACK_ISOLATE)"
+                    ],
+                    "variant_count": 772,
+                    "functions": [
+                        "test_perf_unpack_tilize_float",
+                        "test_perf_unpack_tilize_int"
+                    ],
+                    "sources": [
+                        "sources/unpack_tilize_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE",
+                        "PACK_ISOLATE",
+                        "L1_CONGESTION"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Float16_b->Float16_b, B=Float16_b)",
+                        "rt_dim": "1",
+                        "ct_dim": "1"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        },
+        {
+            "path": "perf_unpack_transpose.py",
+            "functions": [
+                {
+                    "name": "test_perf_unpack_transpose",
+                    "collected_cases": 36,
+                    "captured_configs": 12,
+                    "skipped_cases": 24,
+                    "skip_reason": null,
+                    "runtime_skip_reasons": [
+                        {
+                            "reason": "Skipping test for unpack_transpose_faces=False and unpack_transpose_within_face=False",
+                            "case_count": 5
+                        },
+                        {
+                            "reason": "Bfp8_b -> Int32 conversion not supported (packer limitation)",
+                            "case_count": 4
+                        },
+                        {
+                            "reason": "Float16 -> Int32 conversion not supported (packer limitation)",
+                            "case_count": 4
+                        },
+                        {
+                            "reason": "Int32 -> Bfp8_b conversion not supported (unpacker limitation)",
+                            "case_count": 4
+                        },
+                        {
+                            "reason": "Int32 -> Float16 conversion not supported (unpacker limitation)",
+                            "case_count": 4
+                        },
+                        {
+                            "reason": "Transpose not supported for Int32",
+                            "case_count": 3
+                        }
+                    ],
+                    "errors": []
+                }
+            ],
+            "schemas": [
+                {
+                    "sweep_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "tile_cnt",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)"
+                    ],
+                    "timing_columns": [
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)"
+                    ],
+                    "expected_header": [
+                        "formats.input_A",
+                        "formats.input_B",
+                        "formats.output",
+                        "unpack_to_dest",
+                        "dest_acc",
+                        "tile_cnt",
+                        "unpack_transpose_faces",
+                        "unpack_transpose_within_face",
+                        "marker",
+                        "mean(L1_TO_L1)",
+                        "mean(UNPACK_ISOLATE)",
+                        "TEXT_SIZE(L1_TO_L1)",
+                        "TEXT_SIZE(UNPACK_ISOLATE)"
+                    ],
+                    "variant_count": 12,
+                    "functions": [
+                        "test_perf_unpack_transpose"
+                    ],
+                    "sources": [
+                        "sources/unpack_transpose_perf.cpp"
+                    ],
+                    "run_types": [
+                        "L1_TO_L1",
+                        "UNPACK_ISOLATE"
+                    ],
+                    "run_counts": [
+                        1
+                    ],
+                    "example_case": {
+                        "formats": "InputOutputFormat(Bfp8_b->Bfp8_b, B=Bfp8_b)",
+                        "unpack_transpose_faces": "Transpose.No",
+                        "unpack_transpose_within_face": "Transpose.Yes"
+                    },
+                    "duplicate_columns": []
+                }
+            ],
+            "warnings": [],
+            "errors": []
+        }
+    ]
+}

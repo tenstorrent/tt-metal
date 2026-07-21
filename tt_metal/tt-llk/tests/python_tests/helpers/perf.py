@@ -581,6 +581,69 @@ class PerfConfig(TestConfig):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
+    def _csv_report_sweep_fields(
+        self, code_sizes: dict[PerfRunType, int] | None = None
+    ) -> tuple[list[str], list[Any]]:
+        """Return the ordered configuration fields used to construct a perf CSV.
+
+        ``code_sizes=None`` is the pre-run mode: the expected TEXT_SIZE columns are
+        included with ``None`` values. Passing measured code sizes is the runtime
+        mode used by :meth:`run`.
+        """
+        names = (
+            [
+                "formats.input_A",
+                "formats.input_B",
+                "formats.output",
+            ]
+            if self.formats_config
+            else []
+        )
+        values = (
+            [
+                self.formats_config[0].unpack_A_src,
+                self.formats_config[0].unpack_B_src,
+                self.formats_config[0].output_format,
+            ]
+            if self.formats_config
+            else []
+        )
+
+        names += ["unpack_to_dest", "dest_acc"]
+        values += [self.unpack_to_dest, self.dest_acc]
+
+        for param in self.passed_templates + self.passed_runtimes:
+            for name, value in PerfConfig._dataclass_name_and_values(param):
+                if value is not None:
+                    names.append(name)
+                    values.append(value)
+
+        if code_sizes is None:
+            code_sizes = {
+                run_type: None
+                for _, _, run_type in self.run_configs
+                if run_type in _CODE_SIZE_COMPONENTS
+            }
+
+        for run_type, size in code_sizes.items():
+            names.append(f"TEXT_SIZE({run_type.name})")
+            values.append(size)
+
+        return names, values
+
+    def get_csv_report_sweep_header(self) -> list[str]:
+        """Return perf CSV configuration columns without building or running a test.
+
+        The complete CSV header is not knowable before execution because profiler
+        and optional hardware-counter columns are derived from observed data. The
+        returned columns are the deterministic configuration prefix plus expected
+        ``TEXT_SIZE(...)`` suffix columns, in their eventual CSV order.
+        """
+        names, _ = self._csv_report_sweep_fields()
+        text_size_columns = [name for name in names if name.startswith("TEXT_SIZE(")]
+        other_columns = [name for name in names if not name.startswith("TEXT_SIZE(")]
+        return other_columns + text_size_columns
+
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
@@ -712,35 +775,9 @@ class PerfConfig(TestConfig):
             results,
         )
 
-        # Setting header fields that are always there
-        names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
-            if self.formats_config
-            else []
-        )
-        values = (
-            [
-                self.formats_config[0].unpack_A_src,
-                self.formats_config[0].unpack_B_src,
-                self.formats_config[0].output_format,
-            ]
-            if self.formats_config[0]
-            else []
-        )
-
-        names += ["unpack_to_dest", "dest_acc"]
-        values += [self.unpack_to_dest, self.dest_acc]
-
-        for param in self.passed_templates + self.passed_runtimes:
-            for name, value in PerfConfig._dataclass_name_and_values(param):
-                if value is not None:
-                    names.append(name)
-                    values.append(value)
-
-        for run_type, size in code_sizes.items():
-            names.append(f"TEXT_SIZE({run_type.name})")
-            values.append(size)
-
+        # Configuration columns are generated independently from test execution so
+        # callers can inspect their report schema before building or running.
+        names, values = self._csv_report_sweep_fields(code_sizes)
         sweep = pd.DataFrame([values], columns=names)
         combined = sweep.merge(run_results, how="cross")
 
