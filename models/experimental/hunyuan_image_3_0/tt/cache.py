@@ -113,3 +113,31 @@ def cache_file(weight_cache_path: Path | None, key: str) -> str | None:
     if weight_cache_path is None:
         return None
     return str(weight_cache_path / key)
+
+
+def cached_tensor_path(
+    weight_cache_path: Path | str | None,
+    key: str,
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+) -> Path | None:
+    """On-disk path for a tilized cache entry (matches ``ttnn.as_tensor`` naming)."""
+    base = cache_file(weight_cache_path, key)
+    if base is None:
+        return None
+    dtype_name = dtype.name if hasattr(dtype, "name") else str(dtype)
+    layout_name = layout.name if hasattr(layout, "name") else str(layout)
+    return Path(f"{base}_dtype_{dtype_name}_layout_{layout_name}.tensorbin")
+
+
+def cache_file_exists(
+    weight_cache_path: Path | str | None,
+    key: str,
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+) -> bool:
+    """True when the tilized cache file for ``key`` is already on disk."""
+    path = cached_tensor_path(weight_cache_path, key, dtype=dtype, layout=layout)
+    return path is not None and path.is_file()
