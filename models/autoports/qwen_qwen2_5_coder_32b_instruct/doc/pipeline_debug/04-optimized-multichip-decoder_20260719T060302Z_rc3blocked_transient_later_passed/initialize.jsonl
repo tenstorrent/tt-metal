@@ -1,0 +1,3 @@
+{"ts": "20260719T060302Z", "direction": "send", "message": {"id": "bace1f89-a17b-4866-8802-ade1bf67124f", "method": "initialize", "params": {"clientInfo": {"name": "tt-metal-multigoal", "title": "TT Metal Multigoal Runner", "version": "1"}, "capabilities": {"experimentalApi": true}}}}
+{"ts": "20260719T060302Z", "direction": "recv", "message": {"id": "bace1f89-a17b-4866-8802-ade1bf67124f", "result": {"userAgent": "tt-metal-multigoal/0.144.4 (Ubuntu 24.4.0; x86_64) unknown (tt-metal-multigoal; 1)", "codexHome": "/home/mvasiljevic/codex-runs/04-optimized-multichip-decoder-qwen_qwen2_5_coder_32b_instruct_-20260719T060302Z/codex_home", "platformFamily": "unix", "platformOs": "linux"}}}
+{"ts": "20260719T060302Z", "direction": "send", "message": {"method": "initialized"}}
