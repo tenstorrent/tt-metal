@@ -1,0 +1,3 @@
+rc=124 (timeout)
+run_dir: /home/mvasiljevic/codex-runs/05-full-model-meta_llama_llama_3_1_70b_instruct_-20260720T224501Z
+stage-05 full-model 7h timeout, logs captured retroactively

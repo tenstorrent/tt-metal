@@ -1,0 +1,15 @@
+started_at_utc=20260720T224501Z
+repo=/home/mvasiljevic/tt-metal
+codex_home=/home/mvasiljevic/codex-runs/05-full-model-meta_llama_llama_3_1_70b_instruct_-20260720T224501Z/codex_home
+codex_bin=/home/mvasiljevic/.local/bin/codex
+hf_model=meta-llama/Llama-3.1-70B-Instruct
+model_dir=models/autoports/meta_llama_llama_3_1_70b_instruct
+runner=app-server
+approval_policy=never
+sandbox=danger-full-access
+prompt_files:
+- .agents/prompts/model_bringup_multigoal/05-full-model.txt
+stage_1_objective_chars=3697
+stage_1_skills=autofix,full-model,stage-review,tt-device-usage,tt-enable-tracing
+stage_1_missing_skills=
+stage_1_thread_id=019f81b4-4477-72b2-ab35-85fc82bf3fe7
