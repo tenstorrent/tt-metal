@@ -103,23 +103,19 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole - viommu)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_h2d_socket_sync.py -xv --timeout=600'
+  # These tests require host IOMMU: the H2D socket sync exercises 64-bit PCIe addressing, while the
+  # indexer_score and sparse_sdpa perf checks require the realtime device profiler's D2H socket.
+  cmd: |
+    pytest \
+      tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_h2d_socket_sync.py \
+      tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_math_util \
+      tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_perf \
+      tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_perf.py \
+      -xv --timeout=600
   skus:
     bh_p150b_civ2_viommu:
       timeout: 5
   owner_id: U09L76N1MAT  # Nenad Babin
-  team: ttnn
-  category: experimental
-
-- name: ttnn nightly indexer_score perf checks (blackhole - viommu)
-  # indexer_score math-util bands via the realtime device profiler. The profiler's D2H socket uses 64-bit
-  # PCIe addressing, which needs host IOMMU, so this runs on the IOMMU sku. It is excluded by name from the
-  # broad non-IOMMU experimental glob above and fails if the profiler is inactive.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_math_util -xv --timeout=600'
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 5
-  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: experimental
 
@@ -280,22 +276,6 @@
       timeout: 55
     bh_p150b_civ2:
       timeout: 55
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ttnn
-  category: sdpa
-
-- name: ttnn nightly sparse_sdpa perf checks (blackhole - viommu)
-  # Realtime-device-profiler perf bands for sparse_sdpa / sparse_sdpa_msa. The profiler's D2H socket uses
-  # 64-bit PCIe addressing, which needs host IOMMU, so these run on the IOMMU sku. They are excluded by name
-  # from the broad non-IOMMU sdpa glob above and fail if the profiler is inactive. The rest of the sdpa suite
-  # runs on the non-IOMMU sku above.
-  cmd: |
-    pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_perf \
-           tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_perf.py \
-           -xv --timeout=600
-  skus:
-    bh_p150b_civ2_viommu:
-      timeout: 5
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: sdpa
