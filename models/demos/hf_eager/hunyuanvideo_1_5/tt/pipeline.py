@@ -133,10 +133,13 @@ def _norm_w(device, norm):
 
 
 def _linear(x, w, b, cc):
-    y = ttnn.matmul(x, w, compute_kernel_config=cc)
+    # Fold bias into the matmul epilogue (ttnn.linear) instead of a separate
+    # dispatch-bound ttnn.add — the profiled path is launch-bound, so removing
+    # the standalone add per glue linear (proj_in/out, context embedder, refiner)
+    # cuts real op launches.
     if b is not None:
-        y = ttnn.add(y, b)
-    return y
+        return ttnn.linear(x, w, bias=b, compute_kernel_config=cc)
+    return ttnn.matmul(x, w, compute_kernel_config=cc)
 
 
 def _rotate_matrix(device, dim_head):
