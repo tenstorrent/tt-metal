@@ -22,7 +22,6 @@ import ttnn
 
 from models.experimental.xtts.reference.xtts_gpt_block import (
     HEAD_DIM,
-    HIDDEN_SIZE,
     LAYER_NORM_EPS,
     NUM_HEADS,
 )
@@ -72,27 +71,18 @@ class TtXttsGptBlock(LightweightModule):
         self.mlp_c_proj_weight = _to_device(state_dict[prefix + "mlp.c_proj.weight"], device)
         self.mlp_c_proj_bias = _to_device(state_dict[prefix + "mlp.c_proj.bias"], device)
 
-    def _split_heads(self, x):  # [b, s, hidden] -> [b, heads, s, head_dim]
-        b, s, _ = x.shape
-        x = ttnn.reshape(x, (b, s, NUM_HEADS, HEAD_DIM))
-        return ttnn.permute(x, (0, 2, 1, 3))
-
-    def _merge_heads(self, x):  # [b, heads, s, head_dim] -> [b, s, hidden]
-        b, _, s, _ = x.shape
-        x = ttnn.permute(x, (0, 2, 1, 3))
-        return ttnn.reshape(x, (b, s, HIDDEN_SIZE))
-
     def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
+        # One fused op replaces the slice x3 + reshape/permute x3 head-split: it splits the
+        # [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
+        # transpose_key=False keeps K as [b, heads, s, head_dim] — SDPA and the decode KV
+        # cache expect that layout, not K^T.
         qkv = ttnn.linear(x, self.attn_c_attn_weight, bias=self.attn_c_attn_bias)
-        b, s = qkv.shape[0], qkv.shape[1]
-        q = ttnn.slice(qkv, [0, 0, 0], [b, s, HIDDEN_SIZE])
-        k = ttnn.slice(qkv, [0, 0, HIDDEN_SIZE], [b, s, 2 * HIDDEN_SIZE])
-        v = ttnn.slice(qkv, [0, 0, 2 * HIDDEN_SIZE], [b, s, 3 * HIDDEN_SIZE])
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=NUM_HEADS, transpose_key=False)
         ttnn.deallocate(qkv)
-        return self._split_heads(q), self._split_heads(k), self._split_heads(v)
+        return q, k, v
 
     def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden]
-        out = self._merge_heads(attn)  # permute copies -> attn buffer now free
+        out = ttnn.transformer.concatenate_heads(attn)  # fused permute + reshape
         ttnn.deallocate(attn)
         proj = ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias)
         ttnn.deallocate(out)
