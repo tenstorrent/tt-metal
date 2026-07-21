@@ -288,7 +288,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t fsl = args.frame_seqlen.value();
         const uint32_t nf_pad = args.num_frames_padded.value();
         TT_FATAL(!args.is_causal, "sparse-frames windowed path is incompatible with is_causal");
-        TT_FATAL(!is_chunked, "sparse-frames path does not support chunked-prefill");
+        // `is_chunked` proper is derived later in this function; compute it locally here so the
+        // sparse-frames block can precede the dtype/shape checks that also use it.
+        TT_FATAL(!tensor_args.is_chunked(), "sparse-frames path does not support chunked-prefill");
         TT_FATAL(!args.has_kv_pad_rotation(), "sparse-frames path does not support kv-pad rotation");
         TT_FATAL(
             fsl % tt::constants::TILE_HEIGHT == 0,
