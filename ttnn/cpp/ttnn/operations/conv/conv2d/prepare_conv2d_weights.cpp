@@ -1604,8 +1604,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride,
-        true);
+        orig_stride);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(
@@ -1624,7 +1623,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
     uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
-    const bool is_conv1d = is_1d_conv(original_weights_window_h, params.input_height);
     const bool is_conv_1d_depthwise_conv = is_1d_depthwise_conv(
         params.groups,
         original_weights_in_channels * params.groups,
@@ -1632,26 +1630,20 @@ static ttnn::Tensor prepare_conv_weights_internal(
         original_weights_window_h,
         params.input_height,
         params.has_bias);
-    // Convert weight tensor to 0 padded shape if groups > 1
-    if (!is_conv1d and params.groups > 1) {
+    if (is_conv_1d_depthwise_conv) {
+        weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(
+            weight_tensor_, params.act_block_h_ntiles, weight_tensor_.dtype());
+        // After depthwise conversion, the weight tensor has shape
+        //   [out_channels, act_block_h_ntiles * TILE_HEIGHT * kernel_h * kernel_w, 1, 1]
+        // with each kernel tap occupying its own act_block_h_ntiles * TILE_HEIGHT slab in axis 1.
+        // The depthwise factory feeds each tap as a separate weight block via
+        // num_blocks_weight_h == kernel_h * kernel_w, so the per-block height is just
+        // act_block_h_ntiles unless the reader coalesces the whole kernel-width window.
+        params.weight_block_h_ntiles =
+            params.act_block_h_ntiles * (params.coalesce_1d_depthwise_kw_reads ? original_weights_window_w : 1);
+    } else if (params.groups > 1) {
         weight_tensor_ =
             convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
-    } else if (is_conv1d and params.groups > 1) {
-        if (is_conv_1d_depthwise_conv) {
-            weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(
-                weight_tensor_, params.act_block_h_ntiles, weight_tensor_.dtype());
-            // After depthwise conversion, the weight tensor has shape
-            //   [out_channels, act_block_h_ntiles * TILE_HEIGHT * kernel_h * kernel_w, 1, 1]
-            // with each kernel tap occupying its own act_block_h_ntiles * TILE_HEIGHT slab in axis 1.
-            // The depthwise factory feeds each tap as a separate weight block via
-            // num_blocks_weight_h == kernel_h * kernel_w, so the per-block height is just
-            // act_block_h_ntiles unless the reader coalesces the whole kernel-width window.
-            params.weight_block_h_ntiles =
-                params.act_block_h_ntiles * (params.coalesce_1d_depthwise_kw_reads ? original_weights_window_w : 1);
-        } else {
-            weight_tensor_ =
-                convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
-        }
     }
     if (params.enable_kernel_stride_folding) {
         weight_tensor_ = to_folded_weight_layout(weight_tensor_, params.stride);
@@ -1725,7 +1717,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
     TT_FATAL(weight_tensor_.logical_shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
     ttnn::Shape target_shape({1, 1, weight_matrix_height, out_channels});
     ttnn::Shape padded_target_shape({1, 1, weight_tensor_.logical_shape()[2], out_channels + out_channel_padding});
-    if (is_conv_1d_depthwise_conv && params.use_depthwise_weight_plan_shape) {
+    if (is_conv_1d_depthwise_conv) {
         const uint32_t kernel_taps = original_weights_window_h * original_weights_window_w;
         TT_FATAL(
             weight_matrix_height % kernel_taps == 0,

@@ -256,18 +256,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const uint32_t filter_h = static_cast<uint32_t>(sliding_window_config.window_hw.first);
     const uint32_t filter_w = static_cast<uint32_t>(sliding_window_config.window_hw.second);
+    const uint32_t input_height =
+        sliding_window_config.is_transpose ? sliding_window_config.get_transposed_full_input_shape()[1] : ashape[1];
     const bool is_conv_1d_depthwise_conv =
-        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
-    const bool uses_depthwise_weight_plan_shape = is_conv_1d_depthwise_conv && !sliding_window_config.is_transpose;
-
+        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, input_height, has_bias);
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_FATAL(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
     TT_FATAL(b.padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
     TT_FATAL(
-        uses_depthwise_weight_plan_shape || b.padded_shape()[1] == 1,
-        "Non-depthwise and transposed convolution weight matrix shape is invalid");
+        is_conv_1d_depthwise_conv || b.padded_shape()[1] == 1,
+        "Non-depthwise convolution weight matrix shape is invalid");
     uint32_t weight_matrix_height =
-        uses_depthwise_weight_plan_shape ? b.padded_shape()[1] * b.padded_shape()[2] : b.padded_shape()[2];
+        is_conv_1d_depthwise_conv ? b.padded_shape()[1] * b.padded_shape()[2] : b.padded_shape()[2];
     uint32_t weight_matrix_width = b.padded_shape()[3];
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / tt::constants::TILE_WIDTH;
 
@@ -400,20 +400,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             expected_act_block_w_ntiles);
         const auto depthwise_weight_plan_shape = get_depthwise_conv1d_weight_plan_shape(
             filter_h, filter_w, act_block_h_ntiles, output_channels, parallelization_config.num_cores_c_out);
-        if (uses_depthwise_weight_plan_shape) {
-            TT_FATAL(
-                b.logical_shape()[1] == depthwise_weight_plan_shape.kernel_taps &&
-                    b.padded_shape()[1] == depthwise_weight_plan_shape.kernel_taps &&
-                    b.logical_shape()[2] == depthwise_weight_plan_shape.tap_height &&
-                    b.padded_shape()[2] == depthwise_weight_plan_shape.tap_height,
-                "1D depthwise weight plan must have {} taps with {} rows per tap; got logical/padded [{}, {}]/[{}, {}]",
-                depthwise_weight_plan_shape.kernel_taps,
-                depthwise_weight_plan_shape.tap_height,
-                b.logical_shape()[1],
-                b.logical_shape()[2],
-                b.padded_shape()[1],
-                b.padded_shape()[2]);
-        }
+        TT_FATAL(
+            b.logical_shape()[1] == depthwise_weight_plan_shape.kernel_taps &&
+                b.padded_shape()[1] == depthwise_weight_plan_shape.kernel_taps &&
+                b.logical_shape()[2] == depthwise_weight_plan_shape.tap_height &&
+                b.padded_shape()[2] == depthwise_weight_plan_shape.tap_height,
+            "1D depthwise weight plan must have {} taps with {} rows per tap; got logical/padded [{}, {}]/[{}, {}]",
+            depthwise_weight_plan_shape.kernel_taps,
+            depthwise_weight_plan_shape.tap_height,
+            b.logical_shape()[1],
+            b.logical_shape()[2],
+            b.padded_shape()[1],
+            b.padded_shape()[2]);
         TT_FATAL(
             b.logical_shape()[3] == output_channels &&
                 b.padded_shape()[3] == depthwise_weight_plan_shape.padded_out_channels,
@@ -1126,17 +1124,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
         compute_kernel_args = {
             act_block_w_ntiles,                                         // 0: in0_block_w
-            act_num_subblocks,                                          // 1: in0_num_subblocks
-            act_block_num_tiles,                                        // 2: in0_block_num_tiles
-            num_blocks_act_h_per_core,                                  // 3: in0_num_blocks_h
-            in0_num_blocks_w,                                           // 4: in0_num_blocks_w
-            get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,          // 5: in0_cb_id (raw RM)
-            get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,      // 6: in1_cb_id
-            get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,  // 7: tilized_in0_cb_id
-            get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,          // 8: out_cb_id
-            filter_w,                                                   // 9: kernel_width
-            coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
-            dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
+            act_block_num_tiles,                                        // 1: in0_block_num_tiles
+            num_blocks_act_h_per_core,                                  // 2: in0_num_blocks_h
+            in0_num_blocks_w,                                           // 3: in0_num_blocks_w
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,          // 4: in0_cb_id (raw RM)
+            get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,      // 5: in1_cb_id
+            get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,  // 6: tilized_in0_cb_id
+            get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,          // 7: out_cb_id
+            filter_w,                                                   // 8: kernel_width
+            coalesce_1d_depthwise_kw_reads,                             // 9: coalesced activation block
+            dest_reuse_scratch_cb_id,                                   // 10: dest-reuse read-back scratch
         };
     } else {
         compute_kernel_args = {
