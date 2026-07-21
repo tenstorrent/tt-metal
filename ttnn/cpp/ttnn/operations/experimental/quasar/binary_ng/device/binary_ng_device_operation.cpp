@@ -501,10 +501,16 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     // Subtile broadcast admission. The DFB path drives the LLK unary_bcast primitive through an
     // intermediate DFB. ROW_A / ROW_B (unary_bcast<ROW>), COL_A / COL_B (unary_bcast<COL>), and
     // SCALAR_A / SCALAR_B (unary_bcast<SCALAR>) are wired -- all three lower to the same MOVB2D LLK
-    // datacopy, differentiated only by broadcast constants -- and only for bf16 -- on both the FPU
-    // (add/subtract) and SFPU (multiply/divide/maximum) compute kernels (fp32/int and the mixed ROW/COL
-    // types are later tasks). Admitting a type here without a matching factory kernel would route it to
-    // an unwired factory path, so keep every not-yet-wired type on the descriptor.
+    // datacopy, differentiated only by broadcast constants. The MIXED ROW_A_COL_B / ROW_B_COL_A types are
+    // also wired, as a HYBRID: the ROW operand goes through compute unary_bcast<ROW> while the COL operand
+    // is software-filled by the reader (a deliberate reader/compute load-balance keeping compute at 2 LLK
+    // passes). The reader fill uses a COHERENT store (non-cacheable L1 alias) because the Quasar DM core's
+    // write-back L1 D$ is incoherent with the TL1 SRAM the compute consumer reads -- a plain cacheable fill
+    // is invisible to the consumer and corrupts the neighbor DFB (see reader_row_col_mixed_bcast_dfb.cpp /
+    // task-9-report.md). All are admitted only for bf16, on both the FPU (add/subtract) and SFPU
+    // (multiply/divide/maximum) compute kernels (fp32/int bcast paths are later tasks). Admitting a type
+    // here without a matching factory kernel would route it to an unwired factory path, so keep every
+    // not-yet-wired type on the descriptor.
     switch (attributes.subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: break;  // whole no-broadcast slice (FPU/SFPU, any dtype)
         case SubtileBroadcastType::ROW_A:
@@ -513,12 +519,24 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
         case SubtileBroadcastType::COL_B:
         case SubtileBroadcastType::SCALAR_A:
         case SubtileBroadcastType::SCALAR_B:
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A:
             if (tensor_args.input_tensor_a.dtype() != tt::tt_metal::DataType::BFLOAT16) {
                 return false;  // bf16 only (FPU + SFPU) until the fp32 / int bcast paths are wired
             }
             break;
-        case SubtileBroadcastType::ROW_A_COL_B:
-        case SubtileBroadcastType::ROW_B_COL_A: return false;  // not wired in the DFB factory yet
+    }
+    // WORKAROUND (Quasar substrate, tracked in task-9-report.md): ROW_A_COL_B is INTERMITTENTLY wrong on
+    // the current craq-sim. In ROW_A_COL_B the binary op's srcA is the llk_post (unary_bcast<ROW>) operand
+    // (c_5) and srcB is the reader-filled+held COL operand; ~1 of the 5 ops fails per run (which op varies
+    // -- a race), with srcA reading 0 (a's contribution missing, PCC ~0.73). It is specific to
+    // llk_post-as-srcA: the mirror ROW_B_COL_A (llk_post is srcB, c_6) is rock-solid (20/20 across runs), as
+    // is single-operand ROW_A (srcA=llk_post but a streamed full srcB). So it is a craq-sim/LLK substrate
+    // race in the llk_post-as-srcA + filled-held-COL-srcB path, not an op-code bug. Route ALL of
+    // ROW_A_COL_B to the descriptor (loud "unsupported" on Quasar) rather than an intermittently wrong
+    // result; ROW_B_COL_A stays on the reliable DFB path. Remove once the LLK/sim race is fixed.
+    if (attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
+        return false;
     }
     // TILE layout (32x32) in and out (row-major routes to the descriptor).
     if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||

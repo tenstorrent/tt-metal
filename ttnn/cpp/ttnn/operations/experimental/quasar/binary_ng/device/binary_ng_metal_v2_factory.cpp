@@ -132,6 +132,20 @@ constexpr const char* kComputeFpuScalarBcastDfb =
 constexpr const char* kComputeSfpuScalarBcastDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
     "eltwise_binary_sfpu_scalar_bcast_dfb.cpp";
+// MIXED subtile broadcast (ROW_A_COL_B / ROW_B_COL_A): a dedicated reader that software-fills the COL
+// operand (FILL_TILE_WITH_FIRST_COLUMN, once per tile-row) and delivers the ROW operand as a raw partial
+// tile (BCAST_LLK, per column) + the mixed compute (a HYBRID: unary_bcast<ROW> in compute for the ROW
+// operand, reader software-fill for the COL operand; freq=Wt reuse loop). The COL-via-reader-fill split
+// keeps compute at 2 LLK passes -- a deliberate reader/compute load-balance, NOT a fallback.
+constexpr const char* kReaderRowColMixedBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/"
+    "reader_row_col_mixed_bcast_dfb.cpp";
+constexpr const char* kComputeFpuRowColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_row_col_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuRowColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_sfpu_row_col_bcast_dfb.cpp";
 
 // The compute kernel includes eltwise_utils_common.hpp (in kernels/compute) and its DFB preprocess
 // helper (in kernels_dfb/compute) by bare name; both directories go on the compute include path.
@@ -192,7 +206,24 @@ DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcas
                 .compute = is_sfpu ? kComputeSfpuScalarBcastDfb : kComputeFpuScalarBcastDfb,
             };
         case SubtileBroadcastType::ROW_A_COL_B:
-        case SubtileBroadcastType::ROW_B_COL_A: break;  // rejected by matches_metal_v2_slice, not wired here
+        case SubtileBroadcastType::ROW_B_COL_A:
+            // MIXED subtile broadcast: the mixed reader software-fills the COL operand and delivers the ROW
+            // operand as a raw partial tile; the mixed compute expands the ROW operand via unary_bcast<ROW>
+            // (through llk_post, freq=Wt reuse loop) and reads the reader-filled COL operand directly, then
+            // runs the binary op -- FPU (add/subtract) or SFPU (multiply/divide/maximum). The COL operand
+            // uses reader software-fill (NOT a compute unary_bcast<COL>) as a deliberate reader/compute
+            // load-balance keeping compute at 2 LLK passes. On Quasar the reader fill uses a COHERENT store
+            // (non-cacheable L1 alias) because the DM core's write-back L1 D$ is incoherent with the TL1 SRAM
+            // the compute consumer reads -- a plain cacheable fill is invisible to the consumer and corrupts
+            // the neighbor llk_post DFB (see reader_row_col_mixed_bcast_dfb.cpp). matches_metal_v2_slice
+            // restricts this to bf16, and currently ONLY ROW_B_COL_A reaches here (llk_post is srcB, c_6 --
+            // stable); ROW_A_COL_B (llk_post is srcA, c_5) is gated to the descriptor pending a craq-sim/LLK
+            // fix of a residual intermittent llk_post-as-srcA race (see the gate + task-9-report.md).
+            return DfbKernelSources{
+                .reader = kReaderRowColMixedBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuRowColBcastDfb : kComputeFpuRowColBcastDfb,
+            };
     }
     TT_THROW(
         "binary_ng Metal 2.0 factory: unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
@@ -479,21 +510,28 @@ ProgramArtifacts create_no_bcast_artifacts(
     // for SCALAR_A / SCALAR_B.
     const DfbKernelSources kernel_sources = select_dfb_kernel_sources(op.subtile_broadcast_type, is_sfpu);
 
-    // Subtile broadcast: ROW_A / COL_A / SCALAR_A broadcast the LHS operand (a), ROW_B / COL_B / SCALAR_B
-    // the RHS operand (b). Exactly one holds on the bcast path (the gate admits only ROW_A/B, COL_A/B, and
-    // SCALAR_A/B here); both false on no-broadcast. uses_tile_freq_reuse additionally selects the COL/
-    // SCALAR freq/tile_start reuse loop (compute args) -- ROW's compute is a flat per-tile loop (freq
-    // always 1) and needs no runtime freq/tile_start.
+    // bcast_lhs / bcast_rhs mark which operand owns the compute unary_bcast -> llk_post intermediate
+    // (c_5 / c_6). Single-operand: the broadcast operand itself (ROW_A / COL_A / SCALAR_A -> a; ROW_B /
+    // COL_B / SCALAR_B -> b). MIXED (ROW_A_COL_B / ROW_B_COL_A): the ROW operand -- the only one expanded
+    // in compute (unary_bcast<ROW>); the COL operand is reader-software-filled and owns no llk_post. So
+    // ROW_A_COL_B (a is ROW) -> bcast_lhs (c_5); ROW_B_COL_A (b is ROW) -> bcast_rhs (c_6). Exactly one
+    // holds on the bcast path; both false on no-broadcast. is_mixed_bcast distinguishes the mixed types
+    // (their define set differs -- see below). uses_tile_freq_reuse selects the COL/SCALAR/MIXED
+    // freq/tile_start reuse loop (compute args); ROW's compute is a flat per-tile loop (freq always 1).
+    const bool is_mixed_bcast = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+                                op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A;
     const bool bcast_lhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
                            op.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
-                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A;
+                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B;
     const bool bcast_rhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
                            op.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
-                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B;
+                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A;
     const bool uses_tile_freq_reuse = op.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
                                       op.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                       op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
-                                      op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B;
+                                      op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B || is_mixed_bcast;
 
     // The bcast compute processes exactly ONE tile per cycle (unary_bcast -> pack -> binary op on DST
     // index 0) while advancing every DFB by num_tiles_per_cycle; that is only correct at
@@ -585,14 +623,30 @@ ProgramArtifacts create_no_bcast_artifacts(
     writer_defines["DST_SHARDED"] = c_borrowed ? "1" : "0";
     writer_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
 
-    // Subtile-broadcast defines (ROW, COL, and SCALAR). Set only on the bcast path so the no-broadcast
-    // define set is untouched. The bcast reader keys the partial-tile walk off SRC_BCAST / SRC_BCAST_B;
-    // BCAST_LLK=1 means it delivers the partial (or, for SCALAR, single-element) tile (no FILL_TILE),
-    // leaving the broadcast to the compute's unary_bcast<ROW|COL|SCALAR>. The compute selects its c_5/c_6
-    // llk_post mapping off SRC_BCAST[_B]. BCAST_INPUT (0 = LHS bcast, 1 = RHS bcast) mirrors the
-    // descriptor's compute define (COL/SCALAR use it to preprocess the broadcast operand once and stream
-    // the other per freq iteration).
-    if (bcast_lhs || bcast_rhs) {
+    // Subtile-broadcast defines. Set only on the bcast path so the no-broadcast define set is untouched.
+    //
+    // Single-operand (ROW / COL / SCALAR): the reader keys the partial-tile walk off SRC_BCAST /
+    // SRC_BCAST_B; BCAST_LLK=1 means it delivers the partial (or, for SCALAR, single-element) tile (no
+    // FILL_TILE), leaving the broadcast to the compute's unary_bcast<ROW|COL|SCALAR>. The compute selects
+    // its c_5/c_6 llk_post mapping off SRC_BCAST[_B]. BCAST_INPUT (0 = LHS bcast, 1 = RHS bcast) mirrors the
+    // descriptor's compute define (COL/SCALAR preprocess the broadcast operand once and stream the other).
+    //
+    // MIXED (ROW_A_COL_B / ROW_B_COL_A) is a HYBRID and uses a DIFFERENT define set: the reader keys off
+    // SRC_BCAST_COL (which operand is the reader-software-filled COL operand -- FILL_TILE_WITH_FIRST_COLUMN,
+    // UNCONDITIONAL) and SRC_BCAST_ROW_B (which is the raw-partial ROW operand), with BCAST_LLK=1 keeping
+    // the ROW operand a partial tile (the compute's unary_bcast<ROW> expands it; only the ROW fill is
+    // BCAST_LLK-gated). The mixed compute selects the COL (once-per-row BCAST_OP) vs ROW (streamed
+    // OTHER_OP) operand off BCAST_INPUT (1 = ROW_A_COL_B, 0 = ROW_B_COL_A) and reads the ROW operand's
+    // llk_post via the dfb::llk_post accessor (bound to c_5 / c_6 by bcast_lhs / bcast_rhs above), so it
+    // needs no SRC_BCAST[_B]. SRC_BCAST_COL and SRC_BCAST_ROW_B carry the same value (a is COL <=> b is
+    // ROW, and vice versa), matching the descriptor factory (binary_ng_program_factory.cpp).
+    if (is_mixed_bcast) {
+        const std::string src_bcast_col = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_COL"] = src_bcast_col;
+        reader_defines["SRC_BCAST_ROW_B"] = src_bcast_col;
+        reader_defines["BCAST_LLK"] = "1";
+        compute_defines["BCAST_INPUT"] = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ? "1" : "0";
+    } else if (bcast_lhs || bcast_rhs) {
         const std::string src_bcast = bcast_lhs ? "1" : "0";
         const std::string src_bcast_b = bcast_rhs ? "1" : "0";
         const std::string bcast_input = bcast_lhs ? "0" : "1";
