@@ -38,7 +38,7 @@
     wh_n300_sweeps:
       timeout: 60
     wh_t3k_sweeps:
-      timeout: 90
+      timeout: 60
     bh_p100a_sweeps:
       timeout: 30
     bh_p150b_sweeps:
