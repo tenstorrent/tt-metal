@@ -163,10 +163,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.input.layout() == Layout::TILE) {
         const auto& tile = tensor_args.input.tensor_spec().tile();
         TT_FATAL(tile.get_width() == TILE_WIDTH, "slice requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
-        TT_FATAL(
-            !(tile.get_height() < TILE_HEIGHT &&
-              (tensor_args.input.dtype() == DataType::BFLOAT8_B || tensor_args.input.dtype() == DataType::BFLOAT4_B)),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
         if (tensor_args.preallocated_output.has_value()) {
             const auto& out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
             TT_FATAL(
