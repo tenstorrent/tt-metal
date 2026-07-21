@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "api/tensor/noc_traits.h"
 
@@ -366,18 +369,18 @@ void kernel_main() {
     // the dispatch drain core.  Use aligned_page_size so we copy the full buffer allocation.
     // Note: drain_core_noc_x/y refer to tilize_cores[0] (tilize drain) for cross-tilize semaphores.
     {
-        // Device 2.0 migration: legacy primitives retained: precomposed uint64_t NoC addresses
-        // built via NOC_XY_ADDR with DYNAMIC_NOC_X/Y macros
-        uint64_t src_indices = NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc_index, dispatch_drain_noc_x),
-            DYNAMIC_NOC_Y(noc_index, dispatch_drain_noc_y),
-            indices_tensor_address);
-        noc_async_read(src_indices, cb_indices_tensor.get_read_ptr(), aligned_indices_page_size * indices_pages);
-        uint64_t src_scores = NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc_index, dispatch_drain_noc_x),
-            DYNAMIC_NOC_Y(noc_index, dispatch_drain_noc_y),
-            scores_tensor_address);
-        noc_async_read(src_scores, cb_scores_tensor.get_read_ptr(), aligned_scores_page_size * scores_pages);
+        noc_obj.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(cb_indices_tensor.get_read_ptr()),
+            aligned_indices_page_size * indices_pages,
+            {.noc_x = dispatch_drain_noc_x, .noc_y = dispatch_drain_noc_y, .addr = indices_tensor_address},
+            {});
+        noc_obj.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(cb_scores_tensor.get_read_ptr()),
+            aligned_scores_page_size * scores_pages,
+            {.noc_x = dispatch_drain_noc_x, .noc_y = dispatch_drain_noc_y, .addr = scores_tensor_address},
+            {});
     }
 
     // Wait for all reads to complete (mapping + indices/scores)
@@ -615,15 +618,17 @@ void kernel_main() {
                     if (remote_count > 0) {
                         // Source: remote core's e_t buffer, expert e's section starts at 0
                         uint32_t remote_e_t_addr = cb_e_t.get_write_ptr() + e * (tokens + 1) * e_t_entry_size;
-                        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC
-                        // address (remote tilize core)
-                        uint64_t remote_e_t_noc_addr = get_noc_addr(remote_noc_x, remote_noc_y, remote_e_t_addr);
 
                         // Destination: drain's e_t buffer, after current entries for this expert
                         uint32_t local_e_t_dst =
                             e_t_buffer_base + (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
 
-                        noc_async_read(remote_e_t_noc_addr, local_e_t_dst, remote_count * e_t_entry_size);
+                        noc_obj.async_read(
+                            UnicastEndpoint{},
+                            CoreLocalMem<uint32_t>(local_e_t_dst),
+                            remote_count * e_t_entry_size,
+                            {.noc_x = remote_noc_x, .noc_y = remote_noc_y, .addr = remote_e_t_addr},
+                            {});
 
                         // Update drain's count for this expert
                         num_activated_tokens_per_expert[e] += remote_count;
@@ -634,19 +639,17 @@ void kernel_main() {
                 if (remote_activated_count > 0) {
                     // Source: remote core's expert_activation buffer, rows start at 0
                     uint32_t remote_activation_addr = cb_expert_activation.get_read_ptr();
-                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC
-                    // address (remote tilize core)
-                    uint64_t remote_activation_noc_addr =
-                        get_noc_addr(remote_noc_x, remote_noc_y, remote_activation_addr);
 
                     // Destination: drain's expert_activation buffer, after current rows
                     uint32_t local_activation_dst =
                         expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
 
-                    noc_async_read(
-                        remote_activation_noc_addr,
-                        local_activation_dst,
-                        remote_activated_count * aligned_activation_row_bytes);
+                    noc_obj.async_read(
+                        UnicastEndpoint{},
+                        CoreLocalMem<uint32_t>(local_activation_dst),
+                        remote_activated_count * aligned_activation_row_bytes,
+                        {.noc_x = remote_noc_x, .noc_y = remote_noc_y, .addr = remote_activation_addr},
+                        {});
 
                     // Update drain's total activated count
                     num_activated_tokens += remote_activated_count;
@@ -829,10 +832,6 @@ void kernel_main() {
 
         // Get drain core's remote_counts_cb address
         uint32_t local_counts_addr = cb_remote_counts.get_read_ptr();
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-        // (drain tilize core target)
-        uint64_t drain_counts_noc_addr =
-            get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_counts_addr + remote_counts_offset);
 
         // Pack counts into local buffer first (we can use the local remote_counts_cb space temporarily)
         uint32_t* counts_ptr = reinterpret_cast<uint32_t*>(local_counts_addr);
@@ -842,9 +841,12 @@ void kernel_main() {
         counts_ptr[experts_per_device] = num_activated_tokens;
 
         // Write counts to drain core's remote_counts_cb
-        // Device 2.0 migration: legacy primitive retained: dst is a precomposed uint64_t
-        // cross-core NoC address from get_noc_addr(x,y,addr)
-        noc_async_write(local_counts_addr, drain_counts_noc_addr, remote_counts_entry_size);
+        noc_obj.async_write(
+            CoreLocalMem<uint32_t>(local_counts_addr),
+            UnicastEndpoint{},
+            remote_counts_entry_size,
+            {},
+            {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = local_counts_addr + remote_counts_offset});
         noc_obj.async_write_barrier();
 
         // Signal drain core via semaphore increment

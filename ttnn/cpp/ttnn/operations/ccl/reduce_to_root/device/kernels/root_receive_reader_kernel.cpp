@@ -4,6 +4,10 @@
 ///
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -22,6 +26,7 @@
 using tt::data_movement::common::tt_memmove;
 
 inline void read_from_local(
+    const Noc& noc,
     uint32_t src_addr_l,
     uint32_t src_addr_s,
     uint32_t src_addr_m,
@@ -33,27 +38,42 @@ inline void read_from_local(
     uint32_t cb_id_in_m,  // compute cb for m
     uint32_t onetile,
     uint32_t input_num_tiles) {
+    CircularBuffer cb_in_l(cb_id_in_l);
+    CircularBuffer cb_in_s(cb_id_in_s);
+    CircularBuffer cb_in_m(cb_id_in_m);
     // read l, s, m data from own device and push it to compute cbs
-    cb_reserve_back(cb_id_in_l, input_num_tiles);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
-    uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
-    cb_push_back(cb_id_in_l, input_num_tiles);
+    cb_in_l.reserve_back(input_num_tiles);
+    uint32_t l1_write_addr = cb_in_l.get_write_ptr();
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(l1_write_addr),
+        input_num_tiles * page_bytes,
+        {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_l},
+        {});
+    cb_in_l.push_back(input_num_tiles);
 
     // for tensor s
-    cb_reserve_back(cb_id_in_s, onetile);
-    l1_write_addr = get_write_ptr(cb_id_in_s);
-    read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
-    noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
-    cb_push_back(cb_id_in_s, onetile);
+    cb_in_s.reserve_back(onetile);
+    l1_write_addr = cb_in_s.get_write_ptr();
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(l1_write_addr),
+        onetile * page_bytes,
+        {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_s},
+        {});
+    cb_in_s.push_back(onetile);
 
     // for tensor m
-    cb_reserve_back(cb_id_in_m, onetile);
-    l1_write_addr = get_write_ptr(cb_id_in_m);
-    read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
-    noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in_m, onetile);
+    cb_in_m.reserve_back(onetile);
+    l1_write_addr = cb_in_m.get_write_ptr();
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(l1_write_addr),
+        onetile * page_bytes,
+        {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_m},
+        {});
+    noc.async_read_barrier();
+    cb_in_m.push_back(onetile);
 }
 
 void kernel_main() {
@@ -70,6 +90,13 @@ void kernel_main() {
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(12);
+
+    // Kernel-level circular buffers (reused across both device-1 and device-2 receive phases).
+    CircularBuffer packet_header_cb(packet_header_cb_id);
+    CircularBuffer packet_cb(packet_cb_id);
+    CircularBuffer receiver_cb_l(receiver_cb_id_l);
+    CircularBuffer receiver_cb_s(receiver_cb_id_s);
+    CircularBuffer receiver_cb_m(receiver_cb_id_m);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -138,9 +165,9 @@ void kernel_main() {
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
-    cb_reserve_back(packet_header_cb_id, 1);
-    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    packet_header_cb.reserve_back(1);
+    const uint32_t sem_header_addr = packet_header_cb.get_write_ptr();
+    packet_header_cb.push_back(1);
 
     const uint64_t sender_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr);
 
@@ -152,11 +179,12 @@ void kernel_main() {
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
-    cb_reserve_back(packet_cb_id, 1);
-    uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
+    packet_cb.reserve_back(1);
+    uint32_t packet_l1_addr = packet_cb.get_write_ptr();
 
     // read local data from own device and push to compute cbs
     read_from_local(
+        noc,
         src_addr_l,
         src_addr_s,
         src_addr_m,
@@ -190,35 +218,39 @@ void kernel_main() {
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
     uint32_t packet_idx = 0;
 
-    cb_reserve_back(receiver_cb_id_l, input_num_tiles);
-    uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
+    receiver_cb_l.reserve_back(input_num_tiles);
+    uint32_t dest_page_base_addr = receiver_cb_l.get_write_ptr();
 
-    uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
-    noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(packet_l1_addr),
+        new_packet_size_bytes,
+        {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = intermediate_base_addr},
+        {});
 
     // moving l tensor
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    cb_push_back(receiver_cb_id_l, input_num_tiles);
+    receiver_cb_l.push_back(input_num_tiles);
     //  now s and m
-    cb_reserve_back(receiver_cb_id_s, 1);
-    cb_reserve_back(receiver_cb_id_m, 1);
+    receiver_cb_s.reserve_back(1);
+    receiver_cb_m.reserve_back(1);
 
-    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
+    uint32_t dest_page_base_addr_s = receiver_cb_s.get_write_ptr();
     tt_memmove<true, false, false, 0>(
         noc, dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
-    cb_push_back(receiver_cb_id_s, 1);
+    receiver_cb_s.push_back(1);
 
-    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+    uint32_t dest_page_base_addr_m = receiver_cb_m.get_write_ptr();
     tt_memmove<true, false, false, 0>(
         noc,
         dest_page_base_addr_m,
         packet_l1_addr + packet_size_bytes + aligned_page_size_bytes,
         aligned_page_size_bytes);
-    cb_push_back(receiver_cb_id_m, 1);
+    receiver_cb_m.push_back(1);
 
-    cb_push_back(packet_cb_id, 1);
+    packet_cb.push_back(1);
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     // now the similar behaviour when device 2 is sending data to device 1
     // will be waiting on another semaphore, and fabric is for the other 2 muxes
@@ -266,9 +298,9 @@ void kernel_main() {
         fabric_mux_x2, fabric_mux_y2, fabric_mux_status_address, local_fabric_mux_status_address);
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle2);
 
-    cb_reserve_back(packet_header_cb_id, 1);
-    const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    packet_header_cb.reserve_back(1);
+    const uint32_t sem_header_addr_2 = packet_header_cb.get_write_ptr();
+    packet_header_cb.push_back(1);
 
     const uint64_t sender_sem_noc_addr_2 = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr2);
     auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
@@ -296,23 +328,27 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 
-    cb_reserve_back(packet_cb_id, 1);
-    packet_l1_addr = get_write_ptr(packet_cb_id);
+    packet_cb.reserve_back(1);
+    packet_l1_addr = packet_cb.get_write_ptr();
 
     packet_idx = 0;
 
-    cb_reserve_back(receiver_cb_id_l, input_num_tiles);
-    dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
-    noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    receiver_cb_l.reserve_back(input_num_tiles);
+    dest_page_base_addr = receiver_cb_l.get_write_ptr();
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(packet_l1_addr),
+        new_packet_size_bytes,
+        {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = intermediate_base_addr},
+        {});
 
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    cb_push_back(receiver_cb_id_l, input_num_tiles);
+    receiver_cb_l.push_back(input_num_tiles);
 
-    cb_reserve_back(receiver_cb_id_s, 1);
-    cb_reserve_back(receiver_cb_id_m, 1);
-    dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
-    dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+    receiver_cb_s.reserve_back(1);
+    receiver_cb_m.reserve_back(1);
+    dest_page_base_addr_s = receiver_cb_s.get_write_ptr();
+    dest_page_base_addr_m = receiver_cb_m.get_write_ptr();
 
     tt_memmove<true, false, false, 0>(
         noc, dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
@@ -321,9 +357,9 @@ void kernel_main() {
         dest_page_base_addr_m,
         packet_l1_addr + packet_size_bytes + aligned_page_size_bytes,
         aligned_page_size_bytes);
-    cb_push_back(receiver_cb_id_s, 1);
-    cb_push_back(receiver_cb_id_m, 1);
-    cb_push_back(packet_cb_id, 1);
+    receiver_cb_s.push_back(1);
+    receiver_cb_m.push_back(1);
+    packet_cb.push_back(1);
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
