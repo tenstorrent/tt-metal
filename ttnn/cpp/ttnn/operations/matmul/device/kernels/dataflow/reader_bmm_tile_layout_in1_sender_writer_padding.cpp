@@ -91,6 +91,20 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
+    // Indexed/gather mode: iterate only the num_active selected experts. Each iteration gathers the
+    // weights of expert bB = indices[i] and writes its result to COMPACT output slot i.
+#ifdef USE_INDICES
+    constexpr bool use_indices = true;
+    // Read only when indexed (the named arg is dropped from the map when its value is 0 / unused).
+    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
+    constexpr uint32_t batch_loop_lim = num_active;
+#else
+    constexpr bool use_indices = false;
+    constexpr uint32_t batch_loop_lim = batchB_lim;
+#endif
+
+    constexpr uint32_t one_tile = 1;
+
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -122,6 +136,13 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif  // OUT_SHARDED
 
+#ifdef USE_INDICES
+    // Indexed/gather mode: the compacted active-expert id list buffer address. Placed here so the
+    // running rt_args_idx lands on it after the standard sparse-path args (fuse_op is off in this
+    // mode, so the trailing fuse-op placeholder slot is free; see the program factory).
+    const uint32_t indices_addr = get_arg_val<uint32_t>(rt_args_idx++);
+#endif  // USE_INDICES
+
     constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(30);
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(31);
 
@@ -147,6 +168,17 @@ void kernel_main() {
 #else
     constexpr auto after_bias_offset = out_args.next_compile_time_args_offset();
 #endif  // FUSE_BIAS
+
+#ifdef USE_INDICES
+    // The program factory always appends a (placeholder) bias TensorAccessor before the indices one,
+    // so the indices accessor sits after the bias-placeholder args regardless of FUSE_BIAS.
+#ifdef FUSE_BIAS
+    constexpr auto indices_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto bias_placeholder_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto indices_args = TensorAccessorArgs<bias_placeholder_args.next_compile_time_args_offset()>();
+#endif  // FUSE_BIAS
+#endif  // USE_INDICES
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_WIDTH_SHARDED
@@ -221,6 +253,18 @@ void kernel_main() {
     CircularBuffer cb_sparsity(cb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
+    // indices accessor (indexed/gather mode): read the active-expert id list once into its CB.
+#ifdef USE_INDICES
+    constexpr uint32_t cb_id_indices = get_named_compile_time_arg_val("cb_indices");
+    CircularBuffer cb_indices(cb_id_indices);
+    const auto s_indices = TensorAccessor(indices_args, indices_addr);
+    cb_indices.reserve_back(1);
+    uint32_t l1_write_addr_indices = cb_indices.get_write_ptr();
+    noc.async_read(s_indices, cb_indices, num_active * sizeof(uint16_t), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    auto* const indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_indices);
+#endif  // USE_INDICES
+
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     receiver_sem.set(VALID);
@@ -233,7 +277,7 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0) {
+    if constexpr (batchB > 0 && !use_indices) {
         cb_sparsity.reserve_back(1);
         l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
     }
@@ -258,12 +302,24 @@ void kernel_main() {
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
-        if constexpr (batchB > 0) {
+        if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
-        for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
+        // Indexed/gather mode writes to compact output slots, so capture the output base for this
+        // outer batch and index it by the compact slot i (= the loop counter) each iteration.
+        const uint32_t out_base_tile_id = out_tensor_start_tile_id;
+
+        for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef USE_INDICES
+            // Gather: jump straight to expert indices[bB]'s weight block; scatter the result to
+            // compact output slot bB. Every iterated expert is active (no skip). (Under #ifdef rather
+            // than `if constexpr` because indices_ptr only exists in this build.)
+            const uint32_t expert_id = indices_ptr[bB];
+            in1_batch_tile_id = in1_tensor_start_tile_id + expert_id * KtNt;
+            out_tensor_start_tile_id = out_base_tile_id + bB * MtNt;
+#else
             if constexpr (batchB > 0) {
                 if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
                     out_tensor_start_tile_id += MtNt;
@@ -271,6 +327,7 @@ void kernel_main() {
                     continue;
                 }
             }
+#endif  // USE_INDICES
 
             uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
