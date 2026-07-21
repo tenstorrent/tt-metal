@@ -3076,9 +3076,9 @@ class ModelArgs:
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
         built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
         cache_path = self.weight_cache_path(dtype)
-        cache_path.mkdir(parents=True, exist_ok=True)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
         try:
+            cache_path.mkdir(parents=True, exist_ok=True)
             marker.write_text(
                 json.dumps(
                     {
