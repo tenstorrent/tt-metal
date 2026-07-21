@@ -158,7 +158,7 @@ inline void write_rankfile(
 }
 
 // -----------------------------------------------------------------------------
-// Multi-solution support (see README_generate_rank_bindings_all_solutions.md)
+// Multi-solution support (see README_generate_rank_bindings.md)
 // -----------------------------------------------------------------------------
 
 // Sorted set of distinct hostnames a solution occupies. Hostnames are used verbatim (no cleaning); the set
