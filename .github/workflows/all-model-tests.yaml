@@ -319,6 +319,15 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
     secrets: inherit
+    # models-unit-tests-impl declares a multihost job that requests id-token: write (ttop OIDC). A
+    # reusable workflow cannot request more than the caller grants, and this check runs at startup
+    # regardless of the job's `if:` guard — so the caller must grant id-token here even when no
+    # exabox SKU is selected, or the whole run fails at startup. Job-level permissions replace the
+    # inherited defaults, so restate the reads the single-host legs need too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -362,6 +371,12 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
     secrets: inherit
+    # See t1-unit-tests: id-token: write is required at startup by the multihost leg of
+    # models-unit-tests-impl, independent of the selected SKUs.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -405,6 +420,12 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
     secrets: inherit
+    # See t1-unit-tests: id-token: write is required at startup by the multihost leg of
+    # models-unit-tests-impl, independent of the selected SKUs.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
