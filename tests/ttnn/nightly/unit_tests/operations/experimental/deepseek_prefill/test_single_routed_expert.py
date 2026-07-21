@@ -230,6 +230,16 @@ _FAKED_SWEEP = [
     (1024, 0, "1k-alloc-0k-active"),
     (5120, 256, "5k-alloc-256-active"),
     (25600, 4096, "25k-alloc-4k-active"),
+    # 5,120-allocated active-token sweep for DRAM-bandwidth / utilization profiling.
+    (5120, 16, "5k-alloc-16-active"),
+    (5120, 32, "5k-alloc-32-active"),
+    (5120, 64, "5k-alloc-64-active"),
+    (5120, 128, "5k-alloc-128-active"),
+    (5120, 512, "5k-alloc-512-active"),
+    (5120, 1024, "5k-alloc-1k-active"),
+    (5120, 2048, "5k-alloc-2k-active"),
+    (5120, 4096, "5k-alloc-4k-active"),
+    (5120, 5120, "5k-alloc-5k-active"),
 ]
 
 
