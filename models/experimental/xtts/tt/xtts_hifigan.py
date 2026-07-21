@@ -183,7 +183,6 @@ class TtHifiganGenerator(LightweightModule):
             ttnn.deallocate(z_sum)
             ttnn.deallocate(o)  # free the resblock input once the MRF sum is done
             o = o_new
-
         a = ttnn.leaky_relu(o, negative_slope=FINAL_LRELU_SLOPE)
         ttnn.deallocate(o)
         p = self.conv_post(a)
