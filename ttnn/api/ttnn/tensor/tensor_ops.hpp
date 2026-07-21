@@ -19,9 +19,6 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
-// Low-level tensor transfer / layout helpers.
-// Nested under ttnn::tensor_ops so names like to_dtype / to_layout / view do not
-// collide with the high-level ttnn:: operations of the same name.
 namespace ttnn::tensor_ops {
 
 using Tensor = ttnn::Tensor;
@@ -112,16 +109,10 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
 
-// NOTE: `to_string(const Tensor&)` lives in to_string.hpp / tensor_impl.hpp — not declared
-// here — to avoid colliding with the high-level `ttnn::to_string` wrapper.
-
 }  // namespace ttnn::tensor_ops
 
 namespace ttnn {
 
-// Non-colliding helpers re-exported into ttnn so ADL on ttnn::Tensor keeps working.
-// Do NOT re-export to_dtype / to_layout / to_device / view / reshape here — they collide
-// with high-level ttnn operations of the same name.
 using tensor_ops::allocate_tensor_on_host;
 using tensor_ops::copy_to_device;
 using tensor_ops::copy_to_host;
@@ -137,7 +128,6 @@ using tensor_ops::unpad_from_tile;
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate.
 using ttnn::tensor_ops::allocate_tensor_on_host;
 using ttnn::tensor_ops::copy_to_device;
 using ttnn::tensor_ops::copy_to_host;

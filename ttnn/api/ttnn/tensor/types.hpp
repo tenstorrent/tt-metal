@@ -50,7 +50,6 @@ using Array8D = std::array<uint32_t, 8>;
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
 using ttnn::Array1D;
 using ttnn::Array2D;
 using ttnn::Array3D;

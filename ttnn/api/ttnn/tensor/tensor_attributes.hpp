@@ -36,7 +36,6 @@ private:
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat alias while call sites migrate to ttnn::.
 using TensorAttributes = ttnn::TensorAttributes;
 
 }  // namespace tt::tt_metal

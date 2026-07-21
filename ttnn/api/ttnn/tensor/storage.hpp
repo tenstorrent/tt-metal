@@ -219,7 +219,6 @@ using Storage = std::variant<HostStorage, DeviceStorage>;
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
 using HostStorage = ttnn::HostStorage;
 using DeviceStorage = ttnn::DeviceStorage;
 using Storage = ttnn::Storage;

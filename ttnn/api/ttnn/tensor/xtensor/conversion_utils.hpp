@@ -129,7 +129,6 @@ xt::xarray<T> to_xtensor(const Tensor& tensor) {
 
 namespace tt::tt_metal::experimental::xtensor {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate.
 using ttnn::experimental::xtensor::adapt;
 using ttnn::experimental::xtensor::AdaptedView;
 using ttnn::experimental::xtensor::from_xtensor;

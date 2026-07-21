@@ -42,7 +42,6 @@
 
 namespace ttnn {
 
-// D2D service implementation was written against tt::tt_metal enclosing lookup.
 using namespace tt::tt_metal;
 namespace stream_service_common = tt::tt_metal::stream_service_common;
 

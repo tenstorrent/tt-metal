@@ -348,7 +348,6 @@ private:
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
 using ttnn::D2DEndpointConfig;
 using ttnn::D2DStreamConfig;
 using ttnn::D2DStreamService;

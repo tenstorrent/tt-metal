@@ -33,7 +33,6 @@ std::vector<Tensor> disaggregate(const Tensor& tensor);
 
 namespace tt::tt_metal::experimental::unit_mesh {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::experimental::unit_mesh.
 using ttnn::experimental::unit_mesh::aggregate;
 using ttnn::experimental::unit_mesh::disaggregate;
 

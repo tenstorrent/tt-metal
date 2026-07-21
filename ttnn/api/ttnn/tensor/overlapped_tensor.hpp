@@ -33,7 +33,6 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
 using ttnn::dump_overlapped_tensors;
 using ttnn::load_overlapped_tensors;
 using ttnn::OverlappedTensorView;

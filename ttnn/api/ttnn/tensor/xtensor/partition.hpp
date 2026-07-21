@@ -66,7 +66,6 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim = 0);
 
 namespace tt::tt_metal::experimental::xtensor {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate.
 using ttnn::experimental::xtensor::chunk;
 using ttnn::experimental::xtensor::chunk_ndim;
 using ttnn::experimental::xtensor::concat;

@@ -27,8 +27,6 @@ namespace ttnn::operations::experimental::quasar::binary {
 
 using namespace operations;
 
-// Disambiguate the quasar binary primitives below from the identically-named top-level
-// ttnn ops: now that Tensor lives in `ttnn`, ADL pulls those in as overload candidates.
 namespace q = ttnn::operations::experimental::quasar::binary;
 
 // nextafter

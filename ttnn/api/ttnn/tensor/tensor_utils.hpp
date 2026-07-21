@@ -97,7 +97,6 @@ inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
 using ttnn::as_optional_mesh_tensor;
 using ttnn::cb_descriptor_from_sharded_tensor;
 using ttnn::get_cb_address;

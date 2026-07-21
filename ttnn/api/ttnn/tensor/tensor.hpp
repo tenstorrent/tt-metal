@@ -285,7 +285,6 @@ std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
 namespace tt::tt_metal {
 
-// TODO(deprecate): temporary backward-compat aliases while call sites migrate to ttnn::.
 using Tensor = ttnn::Tensor;
 using ttnn::operator<<;
 using ttnn::set_tensor_id;

@@ -441,7 +441,6 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
 }
 
 Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
-    // Qualify: unity TUs can see high-level ttnn::view via enclosing-ns lookup.
     return tensor_ops::view(input_tensor, new_shape, new_shape);
 }
 
@@ -477,7 +476,6 @@ Tensor reshape(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape) {
-    // Qualify: unity TUs can see high-level ttnn::view / ttnn::reshape.
     return tensor_ops::view(input_tensor, new_logical_shape, new_padded_shape);
 }
 
