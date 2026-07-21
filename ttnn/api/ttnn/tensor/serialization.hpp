@@ -27,11 +27,3 @@ void dump_tensor_flatbuffer(
 Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device = nullptr);
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using ttnn::dump_tensor_flatbuffer;
-using ttnn::DumpTensorMode;
-using ttnn::load_tensor_flatbuffer;
-
-}  // namespace tt::tt_metal

@@ -33,7 +33,7 @@ namespace ttnn::experimental {
 // to the sender service core (metadata mode; its size must match the service config).
 // Returns the (now-filled) backing tensor.
 Tensor outbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceSender& service,
+    const ttnn::D2DStreamServiceSender& service,
     const Tensor& input,
     const std::optional<Tensor>& metadata = std::nullopt);
 Tensor outbound_socket_service_sync(

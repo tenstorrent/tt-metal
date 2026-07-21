@@ -21,7 +21,12 @@
 #include "hostdevcommon/common_values.hpp"
 #include "common/tt_backend_api_types.hpp"
 
-using namespace tt::tt_metal;  // For test
+using namespace tt::tt_metal;
+using ttnn::create_device_tensor;
+using ttnn::is_cpu_tensor;  // For test
+using ttnn::is_device_tensor;
+using ttnn::StorageType;
+using ttnn::Tensor;
 
 namespace ttnn {
 class TTNNFixtureBase : public ::testing::Test {

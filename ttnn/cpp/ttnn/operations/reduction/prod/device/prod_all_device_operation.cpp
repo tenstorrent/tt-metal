@@ -11,7 +11,7 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input;
 
     TT_FATAL(
-        input.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input.storage_type() == ttnn::StorageType::DEVICE,
         "Operands need to be on device! Got storage type: {}",
         input.storage_type());
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");

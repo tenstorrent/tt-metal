@@ -30,7 +30,7 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::tt::tt_metal::is_device_tensor;
+using ttnn::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 

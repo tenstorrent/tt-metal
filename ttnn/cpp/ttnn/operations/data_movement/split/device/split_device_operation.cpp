@@ -51,7 +51,7 @@ SplitDeviceOperation::spec_return_value_t SplitDeviceOperation::compute_output_s
     TensorSpec spec(
         Shape(output_shape_array),
         TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
-    return std::vector<ttnn::TensorSpec>(args.num_splits, spec);
+    return std::vector<tt::tt_metal::TensorSpec>(args.num_splits, spec);
 }
 
 SplitDeviceOperation::tensor_return_value_t SplitDeviceOperation::create_output_tensors(

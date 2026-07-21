@@ -48,6 +48,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
+using ttnn::Tensor;
 
 enum TwoInputReaderKernelWriteMode { LOCAL_WRITEBACK, FABRIC_UNICAST, FABRIC_MULTICAST };
 

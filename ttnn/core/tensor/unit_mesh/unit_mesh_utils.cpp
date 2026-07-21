@@ -32,7 +32,7 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
 
 }  // namespace
 
-Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
+Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
 
     // Validate all tensors are allocated on the unit meshes.
@@ -97,11 +97,11 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
 
     MeshTensor mesh_tensor = MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec, topology);
 
-    auto result = Tensor(tt::tt_metal::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+    auto result = Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;
 }
 
-std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tensor) {
+std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
     using namespace tt::tt_metal;
 
     // Validate the tensor is allocated on mesh device, that is parent mesh of unit meshes.

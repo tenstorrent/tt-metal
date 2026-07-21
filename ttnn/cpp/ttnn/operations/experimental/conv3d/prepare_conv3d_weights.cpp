@@ -138,15 +138,15 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
                 {DataType::BFLOAT4_B, &conv_group_weight_zero_pad_helper<uint32_t>},
             };
 
-    if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (ttnn::is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare weights for Conv3D with groups > 1 expects weights on host, but they are on device. The op will "
             "move them back to host.");
     }
     return convert_tensor_to_tiled_layout_common(
-        tt::tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
-                                                           : conv_weight_tensor,
+        ttnn::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                                   : conv_weight_tensor,
         output_dtype,
         to_w_tile_layout_map,
         original_conv_weight_tensor_shape,

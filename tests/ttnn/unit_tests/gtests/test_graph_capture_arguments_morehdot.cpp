@@ -58,9 +58,9 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_TRUE(operation0.arguments[1].find("TilePageConfig") != std::string::npos);
     EXPECT_TRUE(operation0.arguments[1].find("DeviceStorage()") != std::string::npos);
 
-    // operations[1]: tt::tt_metal::create_device_tensor (output tensor creation)
+    // operations[1]: ttnn::create_device_tensor (output tensor creation)
     const auto& operation1 = operations[1];
-    EXPECT_EQ(operation1.operation_name, "tt::tt_metal::create_device_tensor");
+    EXPECT_EQ(operation1.operation_name, "ttnn::create_device_tensor");
     EXPECT_EQ(operation1.arguments.size(), 5);
     EXPECT_EQ(operation1.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation1.arguments[1], "DataType::BFLOAT16");

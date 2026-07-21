@@ -100,7 +100,7 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const auto& input_shape = combine_output.padded_shape();

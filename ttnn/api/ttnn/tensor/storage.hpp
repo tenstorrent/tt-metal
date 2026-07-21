@@ -216,11 +216,3 @@ private:
 using Storage = std::variant<HostStorage, DeviceStorage>;
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using HostStorage = ttnn::HostStorage;
-using DeviceStorage = ttnn::DeviceStorage;
-using Storage = ttnn::Storage;
-
-}  // namespace tt::tt_metal

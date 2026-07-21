@@ -30,10 +30,3 @@ Tensor aggregate(const std::vector<Tensor>& tensors);
 std::vector<Tensor> disaggregate(const Tensor& tensor);
 
 }  // namespace ttnn::experimental::unit_mesh
-
-namespace tt::tt_metal::experimental::unit_mesh {
-
-using ttnn::experimental::unit_mesh::aggregate;
-using ttnn::experimental::unit_mesh::disaggregate;
-
-}  // namespace tt::tt_metal::experimental::unit_mesh

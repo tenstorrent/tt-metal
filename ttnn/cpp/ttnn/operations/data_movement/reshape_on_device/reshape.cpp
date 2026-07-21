@@ -80,7 +80,7 @@ ttnn::Tensor reshape_on_device(
             input_tensor.dtype());
 
         return operations::data_movement::detail::manual_insertion(
-            (tt::tt_metal::Tensor)input_tensor,
+            (ttnn::Tensor)input_tensor,
             logical_output_shape,
             padded_output_shape,
             input_tensor.device(),

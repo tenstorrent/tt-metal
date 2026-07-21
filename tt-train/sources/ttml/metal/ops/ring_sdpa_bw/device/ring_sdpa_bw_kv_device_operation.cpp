@@ -25,19 +25,19 @@ void RingSDPABwKVDeviceOperation::validate_on_program_cache_miss(
 RingSDPABwKVDeviceOperation::spec_return_value_t RingSDPABwKVDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
     // Handle grad_key spec
-    ttnn::TensorSpec grad_key_spec =
+    tt::tt_metal::TensorSpec grad_key_spec =
         tensor_args.preallocated_grad_key.has_value()
             ? tensor_args.preallocated_grad_key->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.key.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.key.dtype(), tt::tt_metal::Layout::TILE, tensor_args.key.memory_config()));
 
     // Handle grad_value spec
-    ttnn::TensorSpec grad_value_spec =
+    tt::tt_metal::TensorSpec grad_value_spec =
         tensor_args.preallocated_grad_value.has_value()
             ? tensor_args.preallocated_grad_value->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.value.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.value.dtype(), tt::tt_metal::Layout::TILE, tensor_args.value.memory_config()));

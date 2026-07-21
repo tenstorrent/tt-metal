@@ -26,9 +26,9 @@ using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
-using ::tt::tt_metal::Tensor;
-using ::tt::tt_metal::TensorLayout;
-using ::tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorLayout;
+using tt::tt_metal::TensorSpec;
+using ttnn::Tensor;
 
 using BigMeshDualRankTest2x4 = tt::tt_metal::MeshDevice2x4Fixture;
 
@@ -58,7 +58,7 @@ TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
 
     // Perform all-gather on host and validate the data at each host.
     auto all_gather_tensor = host_ccl::all_gather(sharded_tensor);
-    EXPECT_EQ(all_gather_tensor.storage_type(), tt::tt_metal::StorageType::HOST);
+    EXPECT_EQ(all_gather_tensor.storage_type(), ttnn::StorageType::HOST);
     EXPECT_EQ(count_local_buffers(all_gather_tensor), kNumDevices);
 
     auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
@@ -67,7 +67,7 @@ TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
 
     // Calling `all_gather` again should be a no-op.
     all_gather_tensor = host_ccl::all_gather(all_gather_tensor);
-    EXPECT_EQ(all_gather_tensor.storage_type(), tt::tt_metal::StorageType::HOST);
+    EXPECT_EQ(all_gather_tensor.storage_type(), ttnn::StorageType::HOST);
     EXPECT_EQ(count_local_buffers(all_gather_tensor), kNumDevices);
 
     EXPECT_THAT(aggregate_tensor(all_gather_tensor, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));

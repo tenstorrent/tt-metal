@@ -242,8 +242,8 @@ std::vector<::bfloat16> run_tanh_bw_batched(
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device);
 
     auto results = ttnn::tanh_bw(grad_tensor, input_tensor);
     auto result = results[0].value();

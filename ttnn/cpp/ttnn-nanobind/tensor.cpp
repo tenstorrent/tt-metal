@@ -120,7 +120,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         Class defining tile dims
     )doc");
 
-    nb::class_<ttnn::TensorSpec>(m_tensor, "TensorSpec", R"doc(
+    nb::class_<tt::tt_metal::TensorSpec>(m_tensor, "TensorSpec", R"doc(
         Class defining the specification of Tensor
     )doc");
 

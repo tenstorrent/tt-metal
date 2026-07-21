@@ -13,9 +13,6 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
-namespace tt::tt_metal {
-using Tensor = ttnn::Tensor;
-}
 namespace ttnn::prim {
 
 struct ReduceOpDeviceGridValidationOptions {
@@ -29,14 +26,14 @@ struct ReduceOpDeviceGridValidationOptions {
 };
 
 void validate_reduce_op_tensor(
-    const tt::tt_metal::Tensor& tensor_ref,
+    const ttnn::Tensor& tensor_ref,
     std::string_view op_name,
     std::string_view tensor_label,
     const ReduceOpDeviceGridValidationOptions* core_grids_within_device_grid = nullptr,
     std::optional<tt::tt_metal::TensorSpec> tensor_spec_ref = std::nullopt);
 
 struct ReduceOpProgramGridShardedTensor {
-    const tt::tt_metal::Tensor* tensor = nullptr;
+    const ttnn::Tensor* tensor = nullptr;
     std::string_view label = {};
 };
 

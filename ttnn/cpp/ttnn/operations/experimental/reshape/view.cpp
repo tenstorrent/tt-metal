@@ -11,16 +11,16 @@ namespace ttnn::experimental {
 
 ttnn::Tensor view(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
-    return tt::tt_metal::view(tensor, logical_shape, padded_shape);
+    return ttnn::tensor_ops::view(tensor, logical_shape, padded_shape);
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    return tt::tt_metal::view(tensor, shape, shape);
+    return ttnn::tensor_ops::view(tensor, shape, shape);
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape_vector) {
     auto shape = ttnn::operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector);
-    return tt::tt_metal::view(tensor, shape, shape);
+    return ttnn::tensor_ops::view(tensor, shape, shape);
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, const ttsl::SmallVector<int32_t>& shape_vector) {

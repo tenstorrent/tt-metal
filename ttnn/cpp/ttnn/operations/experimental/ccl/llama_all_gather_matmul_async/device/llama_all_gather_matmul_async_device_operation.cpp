@@ -65,7 +65,7 @@ LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_specs(
         aggregated_shape, TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul
-    ttnn::TensorSpec matmul_output_specs =
+    tt::tt_metal::TensorSpec matmul_output_specs =
         ttnn::prim::MatmulDeviceOperation::compute_output_specs(args.matmul_struct, {{input0, input1}, {}})[0];
 
     return LlamaAllGatherMatmulAsyncResultSpec{.mm = matmul_output_specs, .aggregated = aggregated_tensor_spec};

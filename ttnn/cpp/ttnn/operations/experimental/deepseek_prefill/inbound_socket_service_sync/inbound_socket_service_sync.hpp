@@ -35,6 +35,6 @@ std::vector<Tensor> inbound_socket_service_sync(
 // device->device path). The receiver exposes the same getters as
 // H2DStreamService. Returns [tokens] or [tokens, metadata] identically.
 std::vector<Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes = 0);
+    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes = 0);
 
 }  // namespace ttnn::experimental

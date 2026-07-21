@@ -8,7 +8,7 @@
 namespace ttnn {
 
 Tensor to_dtype(const Tensor& input_tensor, const DataType& dtype) {
-    return tt::tt_metal::to_dtype(input_tensor, dtype);
+    return ttnn::tensor_ops::to_dtype(input_tensor, dtype);
 }
 
 }  // namespace ttnn

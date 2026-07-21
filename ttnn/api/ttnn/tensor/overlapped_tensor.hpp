@@ -30,11 +30,3 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
     const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device = nullptr);
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using ttnn::dump_overlapped_tensors;
-using ttnn::load_overlapped_tensors;
-using ttnn::OverlappedTensorView;
-
-}  // namespace tt::tt_metal

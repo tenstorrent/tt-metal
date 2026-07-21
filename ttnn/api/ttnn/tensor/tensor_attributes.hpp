@@ -33,9 +33,3 @@ private:
 };
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using TensorAttributes = ttnn::TensorAttributes;
-
-}  // namespace tt::tt_metal

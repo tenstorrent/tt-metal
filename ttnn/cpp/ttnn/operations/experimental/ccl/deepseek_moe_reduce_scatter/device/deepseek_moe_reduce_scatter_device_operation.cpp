@@ -138,7 +138,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
         dim);
 }
 
-std::vector<ttnn::TensorSpec> DeepseekMoEReduceScatterDeviceOperation::compute_output_specs(
+std::vector<tt::tt_metal::TensorSpec> DeepseekMoEReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
 
@@ -166,9 +166,9 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
 
-    std::vector<ttnn::TensorSpec> tensor_specs = compute_output_specs(operation_attributes, tensor_args);
-    const ttnn::TensorSpec& intermediate_tensor_spec = tensor_specs.at(0);
-    const ttnn::TensorSpec& output_tensor_spec = tensor_specs.at(1);
+    std::vector<tt::tt_metal::TensorSpec> tensor_specs = compute_output_specs(operation_attributes, tensor_args);
+    const tt::tt_metal::TensorSpec& intermediate_tensor_spec = tensor_specs.at(0);
+    const tt::tt_metal::TensorSpec& output_tensor_spec = tensor_specs.at(1);
 
     return {
         create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate

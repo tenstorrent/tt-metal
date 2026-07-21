@@ -435,7 +435,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
-                return ttnn::TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),

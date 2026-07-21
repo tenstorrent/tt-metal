@@ -352,7 +352,7 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
 
     // Run forward GELU once on entire tensor
     auto result = ttnn::gelu(input_tensor, false);
@@ -497,7 +497,7 @@ TEST_F(GeluFwUlpTest, CumulativeULPDistribution) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
 
     auto result = ttnn::gelu(input_tensor, false);
     auto output_cpu = ttnn::from_device(result);
@@ -715,7 +715,7 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto result_tensor = ttnn::gelu(input_tensor, false);
     auto output_cpu = ttnn::from_device(result_tensor);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
@@ -821,7 +821,7 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto result = ttnn::gelu(input_tensor, false);
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();

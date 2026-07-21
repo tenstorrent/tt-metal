@@ -34,7 +34,7 @@ struct ReshapeViewDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-tt::tt_metal::Tensor reshape_view(
+ttnn::Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,

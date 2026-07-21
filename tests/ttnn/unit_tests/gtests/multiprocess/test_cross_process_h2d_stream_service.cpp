@@ -41,10 +41,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
-using ::tt::tt_metal::TensorLayout;
-using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorLayout;
+using tt::tt_metal::TensorMemoryLayout;
+using tt::tt_metal::TensorSpec;
+using ttnn::Tensor;
 
 int g_world_rank = -1;
 int g_world_size = -1;
@@ -63,9 +63,9 @@ std::vector<uint32_t> make_iter_data(uint32_t iter, size_t volume) {
 tt::tt_metal::distributed::MeshWorkload build_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::H2DStreamService& service,
-    const tt::tt_metal::Tensor& output_tensor,
+    const ttnn::Tensor& output_tensor,
     const CoreRange& worker_cores) {
-    const tt::tt_metal::Tensor& input_tensor = service.get_backing_tensor();
+    const ttnn::Tensor& input_tensor = service.get_backing_tensor();
     auto* input_buf = input_tensor.buffer();
     auto* output_buf = output_tensor.buffer();
     TT_FATAL(input_buf != nullptr, "build_worker_workload: input tensor has no buffer");
@@ -194,7 +194,7 @@ void run_owner(
 
     const auto& backing = service.get_backing_tensor();
     auto output_tensor =
-        tt::tt_metal::create_device_tensor(backing.tensor_spec(), mesh_device.get(), backing.tensor_topology());
+        ttnn::create_device_tensor(backing.tensor_spec(), mesh_device.get(), backing.tensor_topology());
 
     auto worker_workload = build_worker_workload(mesh_device, service, output_tensor, cs.worker_cores);
 

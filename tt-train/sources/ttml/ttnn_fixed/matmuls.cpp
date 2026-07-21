@@ -7,12 +7,12 @@
 #include "core/compute_kernel_config.hpp"
 
 namespace ttml::ttnn_fixed {
-tt::tt_metal::Tensor matmul(
-    const tt::tt_metal::Tensor& a,
-    const tt::tt_metal::Tensor& b,
+ttnn::Tensor matmul(
+    const ttnn::Tensor& a,
+    const ttnn::Tensor& b,
     bool transpose_a,
     bool transpose_b,
-    std::optional<tt::tt_metal::Tensor> output_tensor) {
+    std::optional<ttnn::Tensor> output_tensor) {
     const auto grid_size = a.device()->compute_with_storage_grid_size();
     auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
@@ -32,12 +32,8 @@ tt::tt_metal::Tensor matmul(
         /* optional_output_tensor */ std::move(output_tensor));
 }
 
-std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
-    const tt::tt_metal::Tensor& a,
-    const tt::tt_metal::Tensor& b,
-    const tt::tt_metal::Tensor& out_grad,
-    bool transpose_a,
-    bool transpose_b) {
+std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
+    const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& out_grad, bool transpose_a, bool transpose_b) {
     auto a_shape = a.logical_shape();
     auto b_shape = b.logical_shape();
     auto grad_shape = out_grad.logical_shape();

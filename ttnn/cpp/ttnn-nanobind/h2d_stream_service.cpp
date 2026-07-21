@@ -144,9 +144,7 @@ void py_module_types(nb::module_& mod) {
             // `metadata` must be exactly `metadata_size_bytes` bytes long when the
             // service was constructed with metadata enabled; empty otherwise. An
             // empty bytes object always satisfies the disabled case.
-            [](tt::tt_metal::H2DStreamService& self,
-               const tt::tt_metal::Tensor& host_tensor,
-               const nb::bytes& metadata) {
+            [](tt::tt_metal::H2DStreamService& self, const ttnn::Tensor& host_tensor, const nb::bytes& metadata) {
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
                 self.forward_to_tensor(host_tensor, meta_span);

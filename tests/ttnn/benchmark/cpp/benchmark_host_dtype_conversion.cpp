@@ -16,6 +16,7 @@
 #include <list>
 
 namespace tt::tt_metal {
+using ttnn::Tensor;
 namespace {
 
 ttnn::distributed::MeshDevice* device = nullptr;
@@ -23,14 +24,14 @@ ttnn::distributed::MeshDevice* device = nullptr;
 void BM_host_bfloat8_conversion(benchmark::State& state) {
     const auto tensor_shape = ttnn::Shape{state.range(0), constants::TILE_HEIGHT, constants::TILE_WIDTH};
 
-    std::vector<Tensor> tensors;
+    std::vector<ttnn::Tensor> tensors;
     for (int i = 0; i < device->num_devices(); i++) {
         std::vector<bfloat16> host_data;
         host_data.reserve(tensor_shape.volume());
         for (int j = 0; j < tensor_shape.volume(); j++) {
             host_data.push_back(bfloat16(j));
         }
-        tensors.push_back(Tensor::from_vector(
+        tensors.push_back(ttnn::Tensor::from_vector(
             std::move(host_data),
             TensorSpec(tensor_shape, TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, MemoryConfig{}))));
     }

@@ -62,22 +62,3 @@ std::string to_string(const Tensor& tensor);
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
 }  // namespace ttnn::tensor_impl
-
-namespace tt::tt_metal::tensor_impl {
-
-using ttnn::tensor_impl::extract_shard;
-using ttnn::tensor_impl::PrintOptions;
-using ttnn::tensor_impl::SciMode;
-using ttnn::tensor_impl::TensorPrintProfile;
-using ttnn::tensor_impl::TTNN_PRINT_OPTIONS;
-using ttnn::tensor_impl::operator<<;
-using ttnn::tensor_impl::to_string;
-using ttnn::tensor_impl::view;
-
-}  // namespace tt::tt_metal::tensor_impl
-
-namespace tt::tt_metal {
-
-using ttnn::tensor_impl::to_string;
-
-}  // namespace tt::tt_metal

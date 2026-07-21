@@ -12,8 +12,8 @@
 
 namespace ttnn::experimental::xtensor {
 
+using tt::tt_metal::TensorSpec;
 using ttnn::Tensor;
-using ttnn::TensorSpec;
 
 // Returns the shape of the xtensor as `tt::tt_metal::Shape`.
 template <typename E>
@@ -126,16 +126,3 @@ xt::xarray<T> to_xtensor(const Tensor& tensor) {
 }
 
 }  // namespace ttnn::experimental::xtensor
-
-namespace tt::tt_metal::experimental::xtensor {
-
-using ttnn::experimental::xtensor::adapt;
-using ttnn::experimental::xtensor::AdaptedView;
-using ttnn::experimental::xtensor::from_xtensor;
-using ttnn::experimental::xtensor::get_shape_from_xarray;
-using ttnn::experimental::xtensor::span_to_xtensor_view;
-using ttnn::experimental::xtensor::to_xtensor;
-using ttnn::experimental::xtensor::xtensor_to_span;
-using ttnn::experimental::xtensor::XtensorAdapter;
-
-}  // namespace tt::tt_metal::experimental::xtensor

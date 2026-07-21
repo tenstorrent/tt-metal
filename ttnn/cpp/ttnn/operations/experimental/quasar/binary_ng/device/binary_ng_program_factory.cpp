@@ -13,6 +13,7 @@
 
 #include <algorithm>
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

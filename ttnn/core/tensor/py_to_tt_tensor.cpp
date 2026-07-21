@@ -14,6 +14,7 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_dataformat_converter(dtype)); }

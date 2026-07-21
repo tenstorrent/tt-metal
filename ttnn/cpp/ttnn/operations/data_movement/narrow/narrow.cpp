@@ -80,7 +80,7 @@ ttnn::Tensor narrow(
 
     // Handle INTERLEAVED DRAM buffers
     if (input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM &&
-        input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) {
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         // For DRAM interleaved, narrowing is only supported on the first non-trivial dimension
         // (dimensions with size > 1). All preceding dimensions must be of size 1.
         bool all_preceding_dims_trivial = true;
@@ -132,7 +132,7 @@ ttnn::Tensor narrow(
                 input_tensor.tensor_spec().page_config(),
                 input_tensor.tensor_spec().memory_config()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
+        ttnn::DeviceStorage subtensor_storage(
             storage,
             tt::tt_metal::MeshTensor::from_buffer(
                 std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
@@ -293,7 +293,7 @@ ttnn::Tensor narrow(
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
+        ttnn::DeviceStorage subtensor_storage(
             storage,
             tt::tt_metal::MeshTensor::from_buffer(
                 std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));

@@ -1994,7 +1994,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         }
                     }
                     // support for multi-tensor output
-                    const ttnn::TensorSpec tensor_spec(
+                    const tt::tt_metal::TensorSpec tensor_spec(
                         output_shape,
                         tt::tt_metal::TensorLayout(
                             attributes.output_dtype.value(),
@@ -2002,7 +2002,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                                     : tt::tt_metal::PageConfig(output_layout, output_tile),
                             mem_config));
 
-                    std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
+                    std::vector<tt::tt_metal::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,

@@ -74,7 +74,7 @@ std::vector<Tensor> allocate_outputs(
 
     if (shared_output_map.empty()) {
         for (size_t i = 0; i < n; ++i) {
-            outputs.push_back(tt::tt_metal::create_device_tensor(output_specs[i], mesh_device));
+            outputs.push_back(ttnn::create_device_tensor(output_specs[i], mesh_device));
         }
     } else {
         TT_FATAL(
@@ -84,7 +84,7 @@ std::vector<Tensor> allocate_outputs(
             n);
         for (size_t i = 0; i < n; ++i) {
             if (shared_output_map[i] == static_cast<std::uint32_t>(i)) {
-                outputs.push_back(tt::tt_metal::create_device_tensor(output_specs[i], mesh_device));
+                outputs.push_back(ttnn::create_device_tensor(output_specs[i], mesh_device));
             } else {
                 auto canonical = shared_output_map[i];
                 TT_FATAL(

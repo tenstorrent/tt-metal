@@ -587,10 +587,10 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
     auto* device = ttnn::GetDefaultDevice();
     if (device != nullptr) {
-        if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+        if (a_slim.storage_type() != ttnn::StorageType::DEVICE) {
             a_slim = a_slim.to_device(device);
         }
-        if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+        if (b_slim.storage_type() != ttnn::StorageType::DEVICE) {
             b_slim = b_slim.to_device(device);
         }
     }

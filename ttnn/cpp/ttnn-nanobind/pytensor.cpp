@@ -166,7 +166,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 // Wrapper around HostBuffer that provides a row-major view of the data, handles padding / logical view, and provides
 // `shape` and `data_type` information.
 struct RowMajorHostBuffer {
-    static RowMajorHostBuffer create_padded(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
+    static RowMajorHostBuffer create_padded(HostBuffer buffer, const tt::tt_metal::TensorSpec& tensor_spec) {
         ttsl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
@@ -175,7 +175,7 @@ struct RowMajorHostBuffer {
         };
     }
 
-    static RowMajorHostBuffer create_logical(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
+    static RowMajorHostBuffer create_logical(HostBuffer buffer, const tt::tt_metal::TensorSpec& tensor_spec) {
         ttsl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
@@ -1690,7 +1690,7 @@ void pytensor_module(nb::module_& mod) {
 
     mod.def(
         "get_optimal_worker_cores_for_sharded_tensor",
-        &tt::tt_metal::get_optimal_worker_cores_for_sharded_tensor,
+        &ttnn::get_optimal_worker_cores_for_sharded_tensor,
         nb::arg("tensor"),
         nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
         R"doc(

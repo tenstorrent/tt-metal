@@ -94,14 +94,3 @@ inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
 }
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using ttnn::as_optional_mesh_tensor;
-using ttnn::cb_descriptor_from_sharded_tensor;
-using ttnn::get_cb_address;
-using ttnn::get_optimal_worker_cores_for_sharded_tensor;
-using ttnn::is_cpu_tensor;
-using ttnn::is_device_tensor;
-
-}  // namespace tt::tt_metal

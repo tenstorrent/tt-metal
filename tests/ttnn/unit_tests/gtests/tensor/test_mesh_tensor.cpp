@@ -53,6 +53,12 @@ using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
+using ttnn::cpu;
+using ttnn::create_device_tensor;
+using ttnn::StorageType;
+using ttnn::Tensor;
+using ttnn::tensor_ops::to_device;
+
 using MeshTensorTest = GenericMeshDeviceFixture;
 using MeshTensorTest1x2 = MeshDevice1x2Fixture;
 using MeshTensorTest2x4 = MeshDevice2x4Fixture;
@@ -392,7 +398,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
 }
 
 TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
-    tt::tt_metal::DeviceStorage storage;
+    ttnn::DeviceStorage storage;
 
     EXPECT_THAT(([&]() { storage.get_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
     EXPECT_THAT(([&]() { storage.get_mesh_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));

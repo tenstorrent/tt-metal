@@ -365,13 +365,13 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
+    const std::vector<tt::tt_metal::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
 
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
 
     // re-percieve tilize output tensor as RM for output
     const auto matmul_output_tensor =
-        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+        ttnn::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
     TT_FATAL(
         matmul_output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");

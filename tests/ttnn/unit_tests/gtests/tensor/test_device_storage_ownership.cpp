@@ -18,16 +18,16 @@ namespace {
 using ::testing::SizeIs;
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::DeviceStorage;
 using tt::tt_metal::GenericMeshDeviceFixture;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshDevice1x2Fixture;
 using tt::tt_metal::MeshTensor;
-using tt::tt_metal::Tensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
 using tt::tt_metal::TensorTopology;
+using ttnn::DeviceStorage;
+using ttnn::Tensor;
 
 // Most ownership tests only need a single device.
 using DeviceStorageOwnershipTest = GenericMeshDeviceFixture;

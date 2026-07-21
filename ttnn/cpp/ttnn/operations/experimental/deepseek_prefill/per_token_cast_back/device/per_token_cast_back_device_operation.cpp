@@ -24,7 +24,7 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
 }
 
 void validate_tensor_specs(const Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);

@@ -231,7 +231,7 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
 
     auto mem_config = args.output_mem_config;
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.dtype.value_or(input_tensor.dtype()),

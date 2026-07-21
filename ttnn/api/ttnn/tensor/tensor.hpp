@@ -282,11 +282,3 @@ Tensor set_tensor_id(const Tensor& tensor);
 std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using Tensor = ttnn::Tensor;
-using ttnn::operator<<;
-using ttnn::set_tensor_id;
-
-}  // namespace tt::tt_metal

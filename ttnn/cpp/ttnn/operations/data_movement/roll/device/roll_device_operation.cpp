@@ -18,7 +18,7 @@ namespace {
 
 void validate_roll(const RollParams& operation_attributes, const RollInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
-    TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to roll need to be on device!");
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to roll need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input.is_sharded(), "Native sharded roll requires a sharded input");
     TT_FATAL(operation_attributes.output_mem_config.is_sharded(), "Native sharded roll requires a sharded output");

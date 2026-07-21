@@ -307,11 +307,11 @@ Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config,
     std::optional<tt::tt_metal::QueueId> cq_id) const {
-    return tt::tt_metal::to_device(*this, mesh_device, mem_config, cq_id);
+    return ttnn::tensor_ops::to_device(*this, mesh_device, mem_config, cq_id);
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) const {
-    return tt::tt_metal::cpu(*this, blocking, cq_id);
+    return ttnn::cpu(*this, blocking, cq_id);
 }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
@@ -323,7 +323,7 @@ Tensor Tensor::extract_shard(const CoreCoord& core) const {
 
 Tensor Tensor::extract_shard(const uint32_t& core_id) const { return tensor_impl::extract_shard(*this, core_id); }
 
-Tensor Tensor::to_layout(Layout target_layout) const { return tt::tt_metal::to_layout(*this, target_layout); }
+Tensor Tensor::to_layout(Layout target_layout) const { return ttnn::tensor_ops::to_layout(*this, target_layout); }
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
 
@@ -331,23 +331,21 @@ Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) const {
-    return tt::tt_metal::pad(*this, output_padded_shape, input_tensor_start, pad_value);
+    return ttnn::pad(*this, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(
     const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) const {
-    return tt::tt_metal::unpad(*this, output_tensor_start, output_tensor_end);
+    return ttnn::unpad(*this, output_tensor_start, output_tensor_end);
 }
 
-Tensor Tensor::pad_to_tile(float pad_value) const { return tt::tt_metal::pad_to_tile(*this, pad_value); }
+Tensor Tensor::pad_to_tile(float pad_value) const { return ttnn::pad_to_tile(*this, pad_value); }
 
 Tensor Tensor::unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const {
-    return tt::tt_metal::unpad_from_tile(*this, output_tensor_shape);
+    return ttnn::unpad_from_tile(*this, output_tensor_shape);
 }
 
-bool Tensor::is_sharded() const {
-    return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
-}
+bool Tensor::is_sharded() const { return ttnn::is_device_tensor(*this) ? this->memory_config().is_sharded() : false; }
 
 uint32_t Tensor::element_size() const {
     switch (this->dtype()) {
@@ -364,11 +362,11 @@ uint32_t Tensor::element_size() const {
     }
 }
 
-Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const { return view(*this, new_shape); }
+Tensor Tensor::reshape(const tt::tt_metal::Shape& new_shape) const { return ttnn::tensor_ops::view(*this, new_shape); }
 
 Tensor Tensor::reshape(
     const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const {
-    return view(*this, new_logical_shape, new_padded_shape);
+    return ttnn::tensor_ops::view(*this, new_logical_shape, new_padded_shape);
 }
 
 void Tensor::update_tensor_topology(const TensorTopology& tensor_topology) {

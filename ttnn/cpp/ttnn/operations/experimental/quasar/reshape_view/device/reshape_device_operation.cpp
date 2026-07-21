@@ -40,7 +40,7 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
             operation_attributes.padded_output_shape));
 }
 
-tt::tt_metal::Tensor ReshapeViewDeviceOperation::create_output_tensors(
+ttnn::Tensor ReshapeViewDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
@@ -62,7 +62,7 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-tt::tt_metal::Tensor reshape_view(
+ttnn::Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,

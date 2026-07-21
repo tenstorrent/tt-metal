@@ -52,14 +52,14 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
-using ::tt::tt_metal::TensorLayout;
-using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorLayout;
+using tt::tt_metal::TensorMemoryLayout;
+using tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshWorkload;
+using ttnn::Tensor;
 
 constexpr uint32_t kMinWarmupIters = 4;
 constexpr uint32_t kWarmupSettlingIters = 2;

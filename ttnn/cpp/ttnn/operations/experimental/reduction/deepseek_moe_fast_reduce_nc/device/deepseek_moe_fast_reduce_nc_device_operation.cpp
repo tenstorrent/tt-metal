@@ -53,7 +53,7 @@ void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
         num_output_tensors * tt::constants::TILE_WIDTH);
 }
 
-ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const uint32_t reduction_dim = operation_attributes.dim;
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
@@ -76,7 +76,7 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCDeviceOperation::create_output_
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
-    const ttnn::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
+    const tt::tt_metal::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
 
     const uint32_t num_output_tensors = input_tensor.logical_shape()[-1] / operation_attributes.split_size;
     std::vector<ttnn::Tensor> output_tensors(num_output_tensors);

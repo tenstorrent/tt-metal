@@ -232,7 +232,7 @@ XtensorAdapter<typename Expression::value_type> concat(const std::vector<Express
     return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
-// Adaptor APIs from xtensor to tt::tt_metal::Tensor.
+// Adaptor APIs from xtensor to ttnn::Tensor.
 namespace adaptor {
 namespace {
 

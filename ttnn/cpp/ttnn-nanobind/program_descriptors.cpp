@@ -516,7 +516,7 @@ void py_module_types(nb::module_& mod) {
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
         "cb_descriptor_from_sharded_tensor",
-        &tt::tt_metal::cb_descriptor_from_sharded_tensor,
+        &ttnn::cb_descriptor_from_sharded_tensor,
         nb::arg("cb_index"),
         nb::arg("tensor"),
         nb::arg("address_offset") = 0,
@@ -558,7 +558,7 @@ void py_module_types(nb::module_& mod) {
     // Helper function for getting the L1 byte address of a CB descriptor
     mod.def(
         "get_cb_address",
-        &tt::tt_metal::get_cb_address,
+        &ttnn::get_cb_address,
         nb::arg("descriptor"),
         R"pbdoc(
             Get the L1 byte address of a CB descriptor.

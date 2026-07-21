@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for the host-only layout conversion tt::tt_metal::to_layout(const HostTensor&, Layout).
+// Tests for the host-only layout conversion ttnn::tensor_ops::to_layout(const HostTensor&, Layout).
 //
 // Group 1 (no sharding): a matrix of {conversion direction} x {dtype}. For each cell, to_layout's
 // output is compared against an INDEPENDENTLY constructed reference tensor built directly in the

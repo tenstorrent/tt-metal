@@ -145,7 +145,7 @@ std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_a
 }
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
+    const ttnn::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
     uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
     if (reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_H;
@@ -267,7 +267,7 @@ void validate_reduce_sharded_buffer_types(
 }
 
 bool h_reduce_negate_fits_in_l1(
-    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
     // The quasar Metal 2.0 ReduceMultiCoreH factory does not implement a fused in-kernel negate path

@@ -36,15 +36,15 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     // validate input dim
     const auto input_rank = input.logical_shape().rank();
     TT_FATAL(
-        (args.dim >= 0 && args.dim <= tt::tt_metal::MAX_NUM_DIMENSIONS - 2),
+        (args.dim >= 0 && args.dim <= ttnn::MAX_NUM_DIMENSIONS - 2),
         "dim must be between 0 and {}.",
-        tt::tt_metal::MAX_NUM_DIMENSIONS - 2);
+        ttnn::MAX_NUM_DIMENSIONS - 2);
     TT_FATAL((args.dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
     TT_FATAL(
-        input_rank <= tt::tt_metal::MAX_NUM_DIMENSIONS,
+        input_rank <= ttnn::MAX_NUM_DIMENSIONS,
         "FastReduceNC input rank {} exceeds maximum {}",
         input_rank,
-        tt::tt_metal::MAX_NUM_DIMENSIONS);
+        ttnn::MAX_NUM_DIMENSIONS);
 
     ttnn::prim::ReduceOpDeviceGridValidationOptions input_grid_opts{};
     if (args.sub_core_grids.has_value()) {

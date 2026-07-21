@@ -14,7 +14,7 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
     const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "PolyNormBackward operation requires {} to be on Device. Input storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -34,7 +34,7 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "PolyNormBackward operation requires Interleaved memory layout. {} memory layout: `{}`",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -68,7 +68,7 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_packed_partials.has_value()) {
         const auto& packed_partials = tensor_args.preallocated_packed_partials.value();
         TT_FATAL(
-            packed_partials.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            packed_partials.storage_type() == ttnn::StorageType::DEVICE,
             "Preallocated packed partials must be on Device. Storage type: {}",
             enchantum::to_string(packed_partials.storage_type()));
         TT_FATAL(
@@ -81,7 +81,7 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
             packed_partials.dtype() == tt::tt_metal::DataType::FLOAT32,
             "Preallocated packed partials must be FLOAT32.");
         TT_FATAL(
-            packed_partials.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            packed_partials.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Preallocated packed partials must use Interleaved memory layout. Memory layout: `{}`",
             enchantum::to_string(packed_partials.memory_config().memory_layout()));
         TT_FATAL(

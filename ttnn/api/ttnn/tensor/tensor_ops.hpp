@@ -125,23 +125,3 @@ using tensor_ops::unpad;
 using tensor_ops::unpad_from_tile;
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using ttnn::tensor_ops::allocate_tensor_on_host;
-using ttnn::tensor_ops::copy_to_device;
-using ttnn::tensor_ops::copy_to_host;
-using ttnn::tensor_ops::cpu;
-using ttnn::tensor_ops::create_device_tensor;
-using ttnn::tensor_ops::pad;
-using ttnn::tensor_ops::pad_to_tile;
-using ttnn::tensor_ops::reshape;
-using ttnn::tensor_ops::to_device;
-using ttnn::tensor_ops::to_dtype;
-using ttnn::tensor_ops::to_layout;
-using ttnn::tensor_ops::unchecked_reinterpret_layout;
-using ttnn::tensor_ops::unpad;
-using ttnn::tensor_ops::unpad_from_tile;
-using ttnn::tensor_ops::view;
-
-}  // namespace tt::tt_metal

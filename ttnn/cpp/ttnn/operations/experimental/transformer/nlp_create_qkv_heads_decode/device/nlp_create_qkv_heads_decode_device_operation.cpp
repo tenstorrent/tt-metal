@@ -111,7 +111,7 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-std::vector<ttnn::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_output_specs(
+std::vector<tt::tt_metal::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor;

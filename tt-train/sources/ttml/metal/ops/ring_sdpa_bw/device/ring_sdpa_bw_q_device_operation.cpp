@@ -24,10 +24,10 @@ void RingSDPABwQDeviceOperation::validate_on_program_cache_miss(
 
 RingSDPABwQDeviceOperation::spec_return_value_t RingSDPABwQDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
-    ttnn::TensorSpec grad_query_spec =
+    tt::tt_metal::TensorSpec grad_query_spec =
         tensor_args.preallocated_grad_query.has_value()
             ? tensor_args.preallocated_grad_query->tensor_spec()
-            : ttnn::TensorSpec(
+            : tt::tt_metal::TensorSpec(
                   tensor_args.query.logical_shape(),
                   tt::tt_metal::TensorLayout(
                       tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
@@ -37,7 +37,7 @@ RingSDPABwQDeviceOperation::spec_return_value_t RingSDPABwQDeviceOperation::comp
     auto u_scaler_shape = ttnn::Shape({1, 1, B * NH * S, tt::constants::TILE_WIDTH});
     auto mem_config =
         tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
-    ttnn::TensorSpec u_scaler_spec(
+    tt::tt_metal::TensorSpec u_scaler_spec(
         u_scaler_shape,
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config));
 

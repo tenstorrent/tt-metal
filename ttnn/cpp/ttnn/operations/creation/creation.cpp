@@ -195,7 +195,7 @@ Tensor full_impl(
         case DataType::BFLOAT8_B: {
             TensorSpec tensor_spec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
-            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            auto output = ttnn::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
             if (device_to_use != nullptr) {
                 output = output.to_device(device_to_use, mem_cfg);
             }
@@ -224,7 +224,7 @@ Tensor full_like_impl(
     DataType dtype_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
-    if (tt::tt_metal::is_device_tensor(tensor)) {
+    if (ttnn::is_device_tensor(tensor)) {
         // Fast on-device fill via SFPU kernel: only valid when the output dtype matches the input
         // tensor's dtype. If the caller requested a dtype override, fall through to the host-side
         // full_impl so that dtype conversion is applied correctly.

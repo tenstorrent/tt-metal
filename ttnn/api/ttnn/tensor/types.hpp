@@ -47,18 +47,3 @@ using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using ttnn::Array1D;
-using ttnn::Array2D;
-using ttnn::Array3D;
-using ttnn::Array4D;
-using ttnn::Array5D;
-using ttnn::Array6D;
-using ttnn::Array7D;
-using ttnn::Array8D;
-using ttnn::MAX_NUM_DIMENSIONS;
-using ttnn::StorageType;
-
-}  // namespace tt::tt_metal

@@ -97,7 +97,7 @@ ttsl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         input_tensor.padded_shape());
 }
 
-tt::tt_metal::Tensor reshape_on_device(
+ttnn::Tensor reshape_on_device(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& logical_output_shape,
     const tt::tt_metal::Shape& padded_output_shape,

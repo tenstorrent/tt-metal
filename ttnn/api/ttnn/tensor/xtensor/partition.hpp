@@ -63,14 +63,3 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 Tensor concat(const std::vector<Tensor>& tensors, int dim = 0);
 
 }  // namespace ttnn::experimental::xtensor
-
-namespace tt::tt_metal::experimental::xtensor {
-
-using ttnn::experimental::xtensor::chunk;
-using ttnn::experimental::xtensor::chunk_ndim;
-using ttnn::experimental::xtensor::concat;
-using ttnn::experimental::xtensor::concat_ndim;
-using ttnn::experimental::xtensor::StridedView;
-using ttnn::experimental::xtensor::StridedViews;
-
-}  // namespace tt::tt_metal::experimental::xtensor

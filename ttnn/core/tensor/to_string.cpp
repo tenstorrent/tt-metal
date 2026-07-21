@@ -33,11 +33,11 @@ std::string to_string(const Tensor& tensor) {
 
             if (mesh_device->num_devices() == 1) {
                 auto cpu_tensor = tensor.cpu();
-                return tt::tt_metal::tensor_impl::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+                return ttnn::tensor_impl::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
             }
         }
     }
-    auto result = tt::tt_metal::tensor_impl::to_string(tensor);
+    auto result = ttnn::tensor_impl::to_string(tensor);
     tt::tt_metal::GraphTracker::instance().track_function_end();
     return result;
 }

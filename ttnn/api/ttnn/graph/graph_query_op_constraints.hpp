@@ -20,6 +20,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
@@ -97,24 +98,24 @@ inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& res
 template <typename Arg>
 auto materialize_arg(tt::tt_metal::distributed::MeshDevice* device, Arg&& arg) {
     if constexpr (std::is_same_v<std::decay_t<Arg>, DistributedTensorSpec>) {
-        return create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
+        return ttnn::create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<DistributedTensorSpec>>) {
-        return arg ? std::optional<Tensor>(create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
+        return arg ? std::optional<Tensor>(ttnn::create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
                    : std::nullopt;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<DistributedTensorSpec>>) {
         std::vector<Tensor> result(arg.size());
         std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
-            return create_device_tensor(item.tensor_spec, device, item.tensor_topology);
+            return ttnn::create_device_tensor(item.tensor_spec, device, item.tensor_topology);
         });
         return result;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, TensorSpec>) {
-        return create_device_tensor(arg, device);
+        return ttnn::create_device_tensor(arg, device);
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<TensorSpec>>) {
-        return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
+        return arg ? std::optional<Tensor>(ttnn::create_device_tensor(*arg, device)) : std::nullopt;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<TensorSpec>>) {
         std::vector<Tensor> result(arg.size());
         std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
-            return create_device_tensor(item, device);
+            return ttnn::create_device_tensor(item, device);
         });
         return result;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, tt::tt_metal::distributed::MeshDevice>) {

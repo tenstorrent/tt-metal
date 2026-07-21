@@ -128,8 +128,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                Tensor input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
-                Tensor output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, single_mesh.get());
+                Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = ttnn::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the read/write command queue and record the event
                 ttnn::write_buffer(QueueId(op_cq_id), input_tensor, {host_data});
@@ -151,8 +151,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
 
@@ -178,7 +178,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
                 auto& single_mesh = single_meshes[dev_idx];
-                Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor dummy_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
 
@@ -289,8 +289,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                Tensor input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
-                Tensor output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, single_mesh.get());
+                Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = ttnn::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(op_cq_id, input_tensor, {host_data});
@@ -318,8 +318,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
@@ -350,7 +350,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor dummy_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(op_cq_id, dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, op_cq_id);
 
@@ -482,8 +482,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                Tensor input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
-                Tensor output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, single_mesh.get());
+                Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = ttnn::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(mem_cq_id, input_tensor, {host_data});
@@ -511,8 +511,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
@@ -541,7 +541,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor dummy_tensor = ttnn::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(op_ccl_cq_id, dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, op_ccl_cq_id);
 

@@ -189,7 +189,7 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
 
     // Re-perceive tilize output tensor as RM for output[4] (same buffer, different layout view)
     const auto output_tensor =
-        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+        ttnn::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
     TT_FATAL(
         output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");

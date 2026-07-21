@@ -18,7 +18,7 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
                            const tt::tt_metal::Layout required_layout,
                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "CrossEntropyForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -40,7 +40,7 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -67,7 +67,7 @@ CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDevic
     }
     auto input_logical_shape = tensor_args.input.logical_shape();
     input_logical_shape[-1] = 1U;
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));

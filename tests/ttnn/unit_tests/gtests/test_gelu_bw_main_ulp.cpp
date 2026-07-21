@@ -417,8 +417,8 @@ TEST_F(GeluBwMainUlpTest, ComprehensiveULPByRegion) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     // Run GELU backward once on entire tensor
     auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
@@ -577,8 +577,8 @@ TEST_F(GeluBwMainUlpTest, CumulativeULPDistribution) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
     auto result = results[0].value();
@@ -951,8 +951,8 @@ TEST_F(GeluBwMainPolyTest, ComprehensiveULPAnalysis) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     // Run GELU backward with polynomial approximation
     auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
@@ -1130,8 +1130,8 @@ TEST_F(GeluBwMainPolyTest, DetailedSegmentAnalysis) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
     auto result = results[0].value();
@@ -1317,8 +1317,8 @@ TEST_F(GeluBwMainPolyTest, ExpBasedRegionFullDump) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
     auto result = results[0].value();
@@ -1439,8 +1439,8 @@ TEST_F(GeluBwMainPolyTest, DeepNegativeRegionAnalysis) {
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
     auto result = results[0].value();
@@ -1703,8 +1703,8 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 tt::tt_metal::MemoryConfig{}));
 
-        auto in_t = tt::tt_metal::Tensor::from_vector(std::move(inputs), spec).to_device(device_);
-        auto gr_t = tt::tt_metal::Tensor::from_vector(std::move(grads), spec).to_device(device_);
+        auto in_t = ttnn::Tensor::from_vector(std::move(inputs), spec).to_device(device_);
+        auto gr_t = ttnn::Tensor::from_vector(std::move(grads), spec).to_device(device_);
 
         auto res_vec = ttnn::gelu_bw(gr_t, in_t, "none");
         auto res = res_vec[0].value();

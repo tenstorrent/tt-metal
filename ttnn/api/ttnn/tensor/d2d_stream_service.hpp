@@ -345,13 +345,3 @@ private:
 };
 
 }  // namespace ttnn
-
-namespace tt::tt_metal {
-
-using ttnn::D2DEndpointConfig;
-using ttnn::D2DStreamConfig;
-using ttnn::D2DStreamService;
-using ttnn::D2DStreamServiceReceiver;
-using ttnn::D2DStreamServiceSender;
-
-}  // namespace tt::tt_metal

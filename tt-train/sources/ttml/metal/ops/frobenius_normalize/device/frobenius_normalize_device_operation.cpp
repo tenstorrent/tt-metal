@@ -16,7 +16,7 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input;
 
     TT_FATAL(
-        input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == ttnn::StorageType::DEVICE,
         "FrobeniusNormalize requires input on Device. Storage type: {}",
         enchantum::to_string(input_tensor.storage_type()));
 
@@ -33,19 +33,19 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.dtype()));
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "FrobeniusNormalize requires INTERLEAVED memory layout. Got: {}",
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& output = tensor_args.preallocated_output.value();
-        TT_FATAL(output.storage_type() == tt::tt_metal::StorageType::DEVICE, "Preallocated output must be on Device");
+        TT_FATAL(output.storage_type() == ttnn::StorageType::DEVICE, "Preallocated output must be on Device");
         TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Preallocated output must be TILE layout");
         TT_FATAL(output.dtype() == tt::tt_metal::DataType::BFLOAT16, "Preallocated output must be BFLOAT16");
         TT_FATAL(output.logical_shape() == input_tensor.logical_shape(), "Preallocated output shape must match input.");
         TT_FATAL(output.device() == input_tensor.device(), "Preallocated output must be on the same device as input");
         TT_FATAL(
-            output.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Preallocated output requires INTERLEAVED memory layout. Got: {}",
             enchantum::to_string(output.memory_config().memory_layout()));
     }
@@ -57,7 +57,7 @@ FrobeniusNormalizeSpecReturn FrobeniusNormalizeDeviceOperation::compute_output_s
         return {tensor_args.preallocated_output->tensor_spec()};
     }
 
-    return {ttnn::TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         tensor_args.input.logical_shape(),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()))};

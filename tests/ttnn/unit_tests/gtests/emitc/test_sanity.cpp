@@ -8,7 +8,10 @@ namespace ttnn::test {
 
 ttnn::Tensor add(ttnn::Tensor v1, ttnn::Tensor v2) {
     ttnn::Tensor v3 = ttnn::add(
-        v1, v2, ::std::nullopt, ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
+        v1,
+        v2,
+        ::std::nullopt,
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
     ttnn::deallocate(v2, false);
     ttnn::deallocate(v1, false);
     return v3;
@@ -21,17 +24,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> create_inputs_for_add() {
         ttnn::DataType::BFLOAT16,
         ttnn::Layout::TILE,
         ::std::nullopt,
-        ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
-    ttnn::Tensor v3 =
-        ttnn::to_device(v2, v1, ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
+    ttnn::Tensor v3 = ttnn::to_device(
+        v2, v1, ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
     ttnn::Tensor v4 = ttnn::ones(
         ttnn::Shape({32, 32}),
         ttnn::DataType::BFLOAT16,
         ttnn::Layout::TILE,
         ::std::nullopt,
-        ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
-    ttnn::Tensor v5 =
-        ttnn::to_device(v4, v1, ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
+    ttnn::Tensor v5 = ttnn::to_device(
+        v4, v1, ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM});
     return std::make_tuple(v3, v5);
 }
 
