@@ -2340,6 +2340,15 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return;
     }
 
+    // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
+    // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
+    // (MakeProgramFromSpec/MakeMeshWorkloadFromSpecs) reach compile() directly, so skip here too.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
+
     TT_FATAL(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
