@@ -21,6 +21,10 @@ BACK2BACK=true
 # emu_<date>_<time>_.log file (gtest hangs waiting for the device in this case).
 # Set QUASAR_EMU_HOSTNAME_MAX_RETRIES=0 to disable retries (still fails fast).
 EMU_HOSTNAME_MAX_RETRIES="${QUASAR_EMU_HOSTNAME_MAX_RETRIES:-2}"
+if [[ ! "$EMU_HOSTNAME_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: QUASAR_EMU_HOSTNAME_MAX_RETRIES must be a non-negative integer"
+    exit 1
+fi
 EMU_HOSTNAME_RETRY_DELAY="${QUASAR_EMU_HOSTNAME_RETRY_DELAY:-30}"
 EMU_MONITOR_POLL_INTERVAL="${QUASAR_EMU_HOSTNAME_POLL_INTERVAL:-2}"
 EMU_LOG_GLOB='emu_*_.log'
@@ -52,7 +56,7 @@ Options:
   --tests <path>                   Path to YAML test file (default: quasar_regression_tests.yaml)
   --build-dir <path>               Path to build directory (default: $BUILD_DIR)
   --log-dir <path>                 Save per-test gtest JSON results to this directory
-  --no-back2back                   Run each test in a separate gtest process (same as run_quasar_regression.sh)
+  --no-back2back                   Run each test in a separate gtest process
   --fast-dispatch                  Do not set TT_METAL_SLOW_DISPATCH_MODE by default (fast dispatch).
                                    Per-test env in the YAML file can still set TT_METAL_SLOW_DISPATCH_MODE.
   --dry-run                        Print commands without executing
@@ -424,6 +428,8 @@ cleanup_emu_attempt() {
 # Run gtest in the background and poll emu_<date>_<time>_.log for hostname conflicts.
 # Sets gtest_emu_hostname_conflict=1 when the emulator log reports a conflict.
 # Returns the gtest exit code (1 when terminated due to conflict).
+# Tracks active_gtest_pid / active_tracked_sim_pid for INT cleanup (setsid isolates
+# the gtest process group from the terminal's Ctrl-C).
 run_gtest_with_emu_monitor() {
     local gtest_pid rc=0
     local emu_log="" emu_offset=0 metal_offset=0 conflict_lines=""
@@ -440,10 +446,13 @@ run_gtest_with_emu_monitor() {
         "${gtest_cmd_env[@]}" "$binary" --gtest_filter="$combined_filter" "${gtest_repeat_args[@]}" "${gtest_log_args[@]}" &
     fi
     gtest_pid=$!
+    active_gtest_pid=$gtest_pid
+    active_tracked_sim_pid=""
 
     while kill -0 "$gtest_pid" 2>/dev/null; do
         if [[ -n "$log_file" ]]; then
             poll_metal_log_for_simulator_pid "$log_file" metal_offset tracked_sim_pid || true
+            active_tracked_sim_pid="$tracked_sim_pid"
         fi
 
         if [[ -z "$emu_log" ]]; then
@@ -457,6 +466,8 @@ run_gtest_with_emu_monitor() {
                 gtest_emu_conflict_lines="$conflict_lines"
                 echo "  EMU HOSTNAME CONFLICT in $emu_log (terminating hung gtest)"
                 cleanup_emu_attempt "$gtest_pid" "$tracked_sim_pid"
+                active_gtest_pid=""
+                active_tracked_sim_pid=""
                 break
             fi
         fi
@@ -469,6 +480,8 @@ run_gtest_with_emu_monitor() {
     else
         rc=1
     fi
+    active_gtest_pid=""
+    active_tracked_sim_pid=""
     return $rc
 }
 
@@ -524,10 +537,10 @@ record_gtest_result() {
             [[ $rc -ne 0 ]] && no_match_status=FAIL
             if [[ ${#filters[@]} -gt 0 ]]; then
                 for filter in "${filters[@]}"; do
-                    record_one_result "$no_match_status" "[$config] $group --gtest_filter=$filter" "$(fmt_duration elapsed), no tests ran"
+                    record_one_result "$no_match_status" "[$config] $group --gtest_filter=$filter" "$(fmt_duration "$elapsed"), no tests ran"
                 done
             else
-                record_one_result "$no_match_status" "$label" "$(fmt_duration elapsed), no tests ran"
+                record_one_result "$no_match_status" "$label" "$(fmt_duration "$elapsed"), no tests ran"
             fi
         fi
     else
@@ -535,13 +548,16 @@ record_gtest_result() {
         [[ $rc -ne 0 ]] && status=FAIL
         if [[ ${#filters[@]} -gt 0 ]]; then
             for filter in "${filters[@]}"; do
-                record_one_result "$status" "[$config] $group --gtest_filter=$filter" "$(fmt_duration elapsed)"
+                record_one_result "$status" "[$config] $group --gtest_filter=$filter" "$(fmt_duration "$elapsed")"
             done
         else
-            record_one_result "$status" "$label" "$(fmt_duration elapsed)"
+            record_one_result "$status" "$label" "$(fmt_duration "$elapsed")"
         fi
     fi
 
+    if [[ $rc -ne 0 && $inv_failed -eq 0 ]]; then
+        record_one_result FAIL "$label" "$(fmt_duration "$elapsed"), process exited with status $rc"
+    fi
     if [[ $inv_failed -gt 0 ]]; then
         echo "  RESULT: ${inv_passed} passed, ${inv_failed} failed, ${inv_skipped} skipped"
     elif [[ $inv_skipped -gt 0 && $inv_passed -eq 0 ]]; then
@@ -755,6 +771,15 @@ run_gtest_invocation() {
     echo ""
 }
 
+clear_back2back_batch() {
+    batch_filters=()
+    batch_group=""
+    batch_config=""
+    batch_envvars=""
+    batch_gtest_repeat=""
+    batch_key_current=""
+}
+
 flush_back2back_batch() {
     [[ ${#batch_filters[@]} -eq 0 ]] && return
 
@@ -769,18 +794,41 @@ flush_back2back_batch() {
         label="$label --gtest_repeat=$batch_gtest_repeat"
     fi
 
-    run_gtest_invocation "$batch_group" "$batch_config" "$batch_envvars" "$batch_gtest_repeat" "$label" "${batch_filters[@]}"
+    # Capture and clear before invoking so an INT mid-run cannot re-enter with
+    # the same filters and launch a duplicate gtest/emulator.
+    local -a filters_to_run=("${batch_filters[@]}")
+    local group="$batch_group" config="$batch_config"
+    local envvars="$batch_envvars" gtest_repeat="$batch_gtest_repeat"
+    clear_back2back_batch
 
-    batch_filters=()
-    batch_group=""
-    batch_config=""
-    batch_envvars=""
-    batch_gtest_repeat=""
-    batch_key_current=""
+    run_gtest_invocation "$group" "$config" "$envvars" "$gtest_repeat" "$label" "${filters_to_run[@]}"
+}
+
+# Ctrl-C must not flush/re-run a batch: batch_filters used to remain set until
+# run_gtest_invocation returned, so the INT trap re-entered flush and started
+# duplicate work. gtest is also launched under setsid, so the terminal signal
+# never reaches it — explicit cleanup is required to avoid leaking the detached
+# simulator (UV_PROCESS_DETACHED).
+on_interrupt() {
+    trap - INT
+    echo ""
+    echo "*** Interrupted ***"
+
+    clear_back2back_batch
+
+    if [[ -n "${active_gtest_pid:-}" ]]; then
+        echo "  cleaning up active gtest (pid $active_gtest_pid) and simulator..."
+        cleanup_emu_attempt "$active_gtest_pid" "${active_tracked_sim_pid:-}"
+        active_gtest_pid=""
+        active_tracked_sim_pid=""
+    fi
+
+    print_summary
+    exit 130
 }
 
 run_start=$SECONDS
-trap 'echo ""; echo "*** Interrupted ***"; flush_back2back_batch; print_summary; exit 130' INT
+trap on_interrupt INT
 run_num=0
 
 declare -A log_base_counts=()
@@ -789,6 +837,8 @@ declare -a extra_env_pairs=()
 declare -a gtest_cmd_env=()
 gtest_emu_hostname_conflict=0
 gtest_emu_conflict_lines=""
+active_gtest_pid=""
+active_tracked_sim_pid=""
 
 # Back-to-back batch state
 declare -a batch_filters=()

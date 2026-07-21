@@ -8,7 +8,7 @@
 #       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
 #       back2back:      (optional) When true, run this entry in the same gtest process as
 #                       other consecutive back2back entries that share the same group,
-#                       config, env, and gtest_repeat. Used by run_quasar_back2back_regression.sh.
+#                       config, env, and gtest_repeat. Used by run_quasar_regression.sh.
 #                       Defaults to false (each entry runs in its own process).
 #
 # Example test entry
@@ -88,7 +88,7 @@ unit_tests_legacy:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# 2x3_DISPATCH tests run back-to-backß
+# 2x3_DISPATCH tests run back-to-back
   - filter: "*SingleDmL1Write*"
     config: 2x3_DISPATCH
     back2back: true
