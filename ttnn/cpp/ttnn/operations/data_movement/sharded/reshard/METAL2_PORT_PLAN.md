@@ -3,14 +3,21 @@
 Port plan for `ttnn/cpp/ttnn/operations/data_movement/sharded/reshard`, ported from the legacy
 `ProgramDescriptor` (`descriptor` concept) API to Metal 2.0.
 
-**Scope of this pass.** `ReshardDeviceOperation` holds **8 factory instantiations across 5 templates**
-(see the audit). Per the recipe's atomic-unit rule, this pass ports **one factory**:
-**`NdReshardCopyPagesFactory`** (DRAM↔DRAM page-by-page copy). It was selected first because it is the
-cleanest: both its kernels live in the op's **own** directory (no shared-pool / cross-op coupling), both
-tensor bindings are **Case 1** (plain `TensorAccessor`), it has **one legal `(1,1)` staging DFB** (no
-multi-binding), and its args are **fixed-index** (no varargs). The other 7 instantiations are enumerated
-under [Deferred / Flagged](#deferred--flagged) as remaining work — the variant's other factories stay on
-the legacy `descriptor` concept meanwhile, and the op keeps building and running (per-factory dispatch).
+**Scope.** `ReshardDeviceOperation` holds **8 factory instantiations across 5 templates** (see the audit).
+Per the recipe's atomic-unit rule, factories are ported one at a time. **Two are done so far:**
+
+1. **`NdReshardCopyPagesFactory`** (DRAM↔DRAM page-by-page copy) — the cleanest (own-dir kernels, Case 1,
+   plain `(1,1)` staging DFB, fixed-index args). Committed `cbc70d0efce`. **Hardware-verified.**
+2. **`ReshardGenericFactory`** (general L1-sharded↔L1-sharded reshard) — the complex one: **Case 2**
+   raw-pointer input, **borrowed-memory** output DFB, **multi-binding** (self-loop), **varargs**, and an
+   **in-place shared-pool kernel rewrite** (`reshard_reader.cpp` / `reshard_reader_diff_width.cpp`).
+   **Hardware-verified.** See [Factory 2](#factory-2--reshardgenericfactory).
+
+The remaining 6 instantiations are enumerated under [Deferred / Flagged](#deferred--flagged); they stay on
+the legacy `descriptor` concept and dispatch per-factory at runtime, so the op keeps building and running.
+
+The sections below (Legacy Inventory … Applied Patterns) document **Factory 1**; Factory 2 has its own
+[section](#factory-2--reshardgenericfactory).
 
 Written during the inventory and planning steps; committed alongside the port for review.
 
@@ -126,15 +133,65 @@ none — no work-split multiplicity in legacy (single group; per-core variation 
   default → `ttnn::create_writer_datamovement_config(device->arch())`. Values-match, not name-match: these
   are the two DM default configs.
 
+## Factory 2 — `ReshardGenericFactory`
+
+General L1-sharded↔L1-sharded reshard (selected for width-sharded-with-padding and the non-DRAM sharded
+fallthrough). Single, non-templated factory. Runtime-selects one of two kernel sources by page-size match.
+
+### Legacy Inventory (Generic)
+- **Factory shape**: `descriptor` (`create_descriptor` → `ProgramDescriptor`); no custom hash.
+- **Kernels** (runtime-selected, both **shared pool** `data_movement/sharded/device/kernels/dataflow/`,
+  **not** the op's own dir): `reshard_reader.cpp` (page sizes equal) / `reshard_reader_diff_width.cpp`
+  (page sizes differ). Cross-op check: **no other op** instantiates these exact paths — `experimental/quasar/reshard`
+  keeps its *own* copies — so the port-together set is just this factory (Caution: shared dataflow kernel,
+  rewrite in place). Each source is instantiated **twice** (kernel_desc_0 = `ReaderConfigDescriptor`,
+  kernel_desc_1 = `WriterConfigDescriptor`) on the full `all_cores` grid, splitting output-page ranges
+  across BRISC/NCRISC.
+- **CTAs** (positional, both kernels): `{dst_cb_index(=16), grid.x, grid.y, page_size, unit_size}`.
+- **CB** c_16: `total_size` (output shard bytes), `page_size = output_buffer->page_size()`, **borrowed**
+  (`cb.buffer = output_buffer`). Used sync-free (`dfb.get_write_ptr()` only, no FIFO ops).
+- **RTAs** (variable, per core): `[phys-x-coords(grid.x), phys-y-coords(grid.y), input_addr, num_output_pages,
+  num_ranges/num_blocks, output_page_offset, <packed stride blocks…>]`. The `input_addr` slot at index
+  `grid.x+grid.y` was **patched to an `input_buffer` `Buffer*` binding** (Case 2 base delivery). Kernel reads
+  the tail sequentially *and* random-indexes the coord table — genuine **varargs**.
+- **Semaphores**: none.
+
+### Planned Spec Shape (Generic)
+- **KernelSpecs**: 2 — `reader` (reader-DM-config), `writer` (writer-DM-config), same runtime-selected source.
+- **DataflowBufferSpecs**: 1 — `shard` (**borrowed_from = OUTPUT**, `allow_instance_multi_binding = true`),
+  `entry_size = output_buffer->page_size()`, `num_entries = min(total_size, packed_output_bytes)/page_size`.
+- **TensorParameters**: 2 — `input` (bound by both kernels, Case 2 via `get_bank_base_address`), `output`
+  (referenced only by the DFB `borrowed_from`; **no kernel TensorBinding needed** — the validator counts
+  `borrowed_from` as a use).
+- **WorkUnitSpecs**: 1 — `{reader, writer}` on `all_cores`.
+
+### Dropped Plumbing (Generic)
+| legacy | Metal 2.0 replacement |
+|---|---|
+| `dst_cb_index (=16)` CTA | `DFBBinding{shard}` |
+| `input_addr` RTA slot (patched `Buffer*` at index `grid.x+grid.y`) | `TensorAccessor(tensor::input).get_bank_base_address()` (Case 2); host passes `input_addr=0` then `erase()`s the slot |
+| positional CTAs | named CTAs (`num_x_cores`, `num_y_cores`, `page_size`, `unit_size`) |
+| positional RTA tail via `emplace_runtime_args` | `num_runtime_varargs` (max length) + per-node zero-padded `runtime_varargs` |
+| `push_reshard_generic_cb_pair` (builds `CBDescriptor`) | deleted; borrowed `DataflowBufferSpec` |
+
+### Applied Patterns (Generic)
+- [Sync-free / single-ended CB → self-loop DFB](../shared/port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb):
+  the borrowed c_16 is an address-source only (`get_write_ptr`), touched by 2 co-resident instances → each
+  self-loops it (PRODUCER + CONSUMER) with `allow_instance_multi_binding = true` (audit's disposition).
+- [Kernel-side whitelist rule 5 — Case 2 raw pointer](../port/metal2_port.md#kernel-side-whitelist): input
+  base via `get_bank_base_address`, raw `noc.async_read({.noc_x,.noc_y,.addr=base+off})` walk unchanged.
+- Varargs (per [Caution: varargs](../shared/port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary)):
+  legitimate here — the kernel loop-reads a runtime-count stride tail and random-indexes the coord table.
+- hw_config: `ReaderConfigDescriptor{}`/`WriterConfigDescriptor{}` → `create_reader/writer_datamovement_config`.
+
 ## Deferred / Flagged
-- **Remaining factories (next passes):** each is a complete sub-port of its own.
+- **Remaining factories (next passes):** 6 instantiations, each a complete sub-port of its own.
   - `NdReshardCopyLocalShardFactory<true/false>` — own-dir kernel (`nd_reshard_copy_local_shards.cpp`,
-    shared BRISC+NCRISC), Case 1, **no CB**. Next cleanest after this one.
-  - `ReshardGenericFactory` — shared-pool kernels (`reshard_reader.cpp` / `reshard_reader_diff_width.cpp`),
-    **Case 2** raw-pointer input + borrowed-DFB output (**multi-binding**), **varargs** RTA block.
-  - `ReshardSameWidthFactory<true/false>`, `ReshardSameHeightFactory<true/false>` — shared-pool kernels,
-    Case 2 remote + borrowed-DFB local (multi-binding), varargs; SameWidth`<true>` adds a scratch DFB
-    (self-loop, multi-binding) when unaligned.
-  - These 6 shared-pool kernels are a single in-place rewrite (Caution: shared dataflow kernel), but no
-    other op instantiates those exact paths (audit-confirmed), so the port-together set stays this op.
-- **New findings during planning:** none — the inventory matched the audit's dispositions exactly.
+    shared BRISC+NCRISC), Case 1, **no CB**. Next cleanest.
+  - `ReshardSameWidthFactory<true/false>`, `ReshardSameHeightFactory<true/false>` — shared-pool kernels
+    (`reshard_same_width_*` / `reshard_same_height_*`), Case 2 remote + borrowed-DFB local (multi-binding),
+    varargs; SameWidth`<true>` adds a scratch DFB (self-loop, multi-binding) when unaligned. These reuse the
+    Generic patterns proven here (borrowed multi-binding DFB, Case 2, varargs), so they should go faster.
+- **New findings during the port:** none structural — the inventory matched the audit's dispositions. The
+  audit dispositioned c_16 as multi-binding; realized as a self-loop pair on each of the 2 instances (see
+  report). Borrowed-DFB size needed a clamp to the packed output size (padded shards); noted in the report.
