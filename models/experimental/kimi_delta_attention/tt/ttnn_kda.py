@@ -14,7 +14,10 @@ import torch
 import ttnn
 from einops import rearrange
 
+from .ttnn_kda_chunk import chunk_kda_ttnn
 from .ttnn_kda_ops import causal_conv1d_silu_ttnn, conv_weight_taps, kda_gate_ttnn, l2norm_ttnn, recurrent_kda_ttnn
+
+_CHUNK = 64  # chunked prefill when T % _CHUNK == 0, else token-recurrent (decode / ragged)
 
 _MM = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -103,7 +106,10 @@ class TtKimiDeltaAttention:
         k = l2norm_ttnn(k)
         g = kda_gate_ttnn(g, self.A_log, self.dt_bias, self.lower_bound)
 
-        o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.device)   # [B,T,HV,V]
+        if T % _CHUNK == 0:
+            o, _ = chunk_kda_ttnn(q, k, v, g, beta, device=self.device, chunk_size=_CHUNK)  # prefill
+        else:
+            o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.device)                 # decode/ragged
 
         # gated RMSNorm (norm before gate) then o_proj
         gate = ttnn.reshape(ttnn.add(self._proj(self._proj(x, self.w_g0), self.w_g1), self.b_g1), [B, T, self.HV, self.V])

@@ -19,12 +19,15 @@ from einops import rearrange
 
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import create_global_semaphores
 
+from .ttnn_kda_chunk import chunk_kda_ttnn
 from .ttnn_kda_ops import (
     causal_conv1d_silu_ttnn,
     kda_gate_ttnn,
     l2norm_ttnn,
     recurrent_kda_ttnn,
 )
+
+_CHUNK = 64  # chunked prefill when T % _CHUNK == 0, else token-recurrent
 
 _MM = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -155,7 +158,10 @@ class TtKimiDeltaAttentionMesh:
             beta = ttnn.multiply(beta, 2.0)
         g = kda_gate_ttnn(g, self.A_log, self.dt_bias, self.lower_bound)
 
-        o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.md)  # per-chip, local heads
+        if T % _CHUNK == 0:
+            o, _ = chunk_kda_ttnn(q, k, v, g, beta, device=self.md, chunk_size=_CHUNK)  # prefill, per-chip local heads
+        else:
+            o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.md)
 
         gate = ttnn.reshape(ttnn.add(self._lin(self._lin(x, self.w_g0), self.w_g1), self.b_g1), [B, T, self.Hloc, self.V])
         o_norm = ttnn.rms_norm(o, epsilon=self.norm_eps, weight=self.o_norm_w)

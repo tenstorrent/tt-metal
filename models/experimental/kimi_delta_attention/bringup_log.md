@@ -227,6 +227,26 @@ Kernel count collapsed 14 695→371 as intended. Still ~14 µs/kernel × 371 →
 but not yet fused into one kernel; next loop iterations: wire into the layer + re-measure full before/after;
 then reduce the 371 (fuse NT loop / bigger chunk / C++ kernel) toward the ~44 µs compute roofline.
 
+### Phase 9 — perf loop iteration 2: chunk wired into the layer → collective now dominates
+
+Wired `chunk_kda_ttnn` into both layers (prefill when `T % 64 == 0`, else recurrent). Layer PCC still
+green incl. T=128 chunk path. **Full-layer before/after re-measured (T=640, device µs):**
+
+| group | before TP=1 | after TP=4 |
+|---|---|---|
+| matmul | 14 341 | 3 923 |
+| collective | 0 | **26 355** |
+| other | 18 687 | 12 804 |
+| **total** | **33 028** (was 217 276) | **43 082** (was 116 538) |
+
+- **Chunking cut the un-distributed layer 217→33 ms (6.6×).** matmul in the distributed case 30.8→3.9 ms.
+- **TP=4 is now SLOWER than TP=1** (43 vs 33 ms): once compute is fused, the **un-optimized all-reduce
+  (26.4 ms, all-gather+local-sum) dominates** and swamps the compute savings. This realizes the roofline's
+  **CCL-bound** prediction — distribution only pays once the collective is optimized.
+- **Next target: the collective.** 26.4 ms vs 49 µs roofline (~540× off) — the all-gather+sum path is
+  inefficient; switch to `reduce_scatter` + `all_gather` (needs the 3-semaphore RS set), or reduce
+  collective volume. This is the next loop iteration.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).

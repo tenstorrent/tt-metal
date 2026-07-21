@@ -116,7 +116,7 @@ def test_conv1d_op(device, T):
     assert ok, f"PCC too low: {pcc}"
 
 
-@pytest.mark.parametrize("T,use_conv", [(1, True), (8, True), (16, True), (8, False)])
+@pytest.mark.parametrize("T,use_conv", [(1, True), (8, True), (16, True), (8, False), (128, True), (128, False)])
 def test_kda_layer(device, T, use_conv):
     """End-to-end ttnn KDA layer vs torch reference layer (shared weights)."""
     hidden, head_dim, nh = 256, 64, 4
