@@ -143,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(PACK_FMT);
 
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
+    _llk_pack_dest_init_wrapper_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>();
 
     // Multi-tile: pack each result tile (always at Dest tile 0) to its L1 slot.
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
@@ -152,8 +152,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             const std::uint32_t result_tile = block * params.NUM_TILES_IN_BLOCK + tile;
             _llk_packer_wait_for_math_done_();
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[result_tile]));
-            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[result_tile]));
+            _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         }
     }
 }

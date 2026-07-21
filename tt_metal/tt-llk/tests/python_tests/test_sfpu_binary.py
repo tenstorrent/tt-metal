@@ -66,9 +66,10 @@ def _skip_bh_float16_no_dest_acc(formats, dest_acc):
 # =============================================================================
 # Shared crafted-stimuli helpers
 #
-# Several predicate/paired ops (mask, isclose, eq/ne, logsigmoid) need operand
-# tiles filled from *different* per-position data, which the default random
-# sweep can't express. These builders produce those StimuliSpecs.
+# Several predicate/paired ops (mask, isclose, eq/ne) need operand tiles filled
+# from *different* per-position data, which the default random sweep can't
+# express. These builders produce those StimuliSpecs. (logsigmoid also lives
+# here, but it is a plain single-distribution spec that never reads in1.)
 # =============================================================================
 
 # Number of faces per tile for the [64, 32] two-tile binary harness layout
@@ -967,13 +968,17 @@ def _golden_sfpu_binary_bcast(
 
 @skip_for_quasar
 @parametrize(
+    # Only same-format in/out combinations are supported by the broadcast kernel,
+    # so `same=True` (a full Cartesian product would also blow past the 100-combo
+    # Python test guideline).
     formats=input_output_formats(
         [
             DataFormat.Float32,
             DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
-        ]
+        ],
+        same=True,
     ),
     bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
     mathop=[

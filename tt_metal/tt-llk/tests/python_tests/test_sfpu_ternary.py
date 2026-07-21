@@ -280,16 +280,16 @@ def test_ttnn_where(
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.TTNNWhere,
-    height=[64],
-    width=[64],
 )
 def test_ttnn_where_mcw(
     formats,
     dest_acc,
     mathop,
-    height,
-    width,
 ):
+    # Multi-tile tensor dimensions (2x2 tiles of 32x32).
+    height = 64
+    width = 64
+
     # Generate dtype dynamically based on current input format
 
     if (
