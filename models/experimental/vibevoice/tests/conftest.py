@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-_VIBEVOICE_ROOT = Path(__file__).resolve().parent
+_VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent
 _REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
 _TT_METAL_ROOT = _VIBEVOICE_ROOT.parent.parent.parent
 
