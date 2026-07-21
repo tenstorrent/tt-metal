@@ -17,12 +17,12 @@ Multi-speaker climate demos auto-enable voice cloning from resources/voices/:
   Speaker 4 Maya   -> en-Maya_woman.wav
 
 Usage (from tt-metal root):
-    python models/experimental/vibevoice/demo_ttnn.py
-    python models/experimental/vibevoice/demo_ttnn.py --demo 2p_goat
-    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
-    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 256
-    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 32 --trace
-    python models/experimental/vibevoice/demo_ttnn.py --text ... --voice alice.wav carter.wav frank.wav --max_new_tokens 64 --debug
+    python models/experimental/vibevoice/demo/demo.py
+    python models/experimental/vibevoice/demo/demo.py --demo 2p_goat
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 256
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --trace
+    python models/experimental/vibevoice/demo/demo.py --text ... --voice alice.wav carter.wav frank.wav --max_new_tokens 64 --debug
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ from models.experimental.vibevoice.common.resource_utils import (
 )
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
-_VV_ROOT = Path(__file__).resolve().parent
+_VV_ROOT = Path(__file__).resolve().parent.parent
 for _p in (_VV_ROOT / "reference", _VV_ROOT.parent.parent.parent):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

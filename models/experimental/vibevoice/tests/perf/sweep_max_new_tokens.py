@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-DEMO_TTNN = Path(__file__).resolve().parents[2] / "demo_ttnn.py"
+DEMO_TTNN = Path(__file__).resolve().parents[2] / "demo" / "demo.py"
 DEFAULT_DEMO = "4p_climate_45min"
 DEFAULT_TOKENS = [32, 64, 128, 256]
 SWEEP_OUT_BASE = Path("/tmp/vv_sweep")
