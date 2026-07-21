@@ -6,8 +6,13 @@
 import pytest
 
 import ttnn
-from models.demos.gemma4.tt.attention.operations import prefill_short_lived_memcfg
+from models.demos.gemma4.tt.attention.operations import (
+    PREFILL_SDPA_HARD_MAX,
+    PREFILL_SDPA_MAX_SEQ,
+    prefill_short_lived_memcfg,
+)
 from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_topology
+from models.demos.gemma4.tt.dram_sharded import can_dram_shard
 
 
 @pytest.mark.parametrize(
@@ -35,3 +40,14 @@ def test_prefill_l1_act_env(monkeypatch):
     assert prefill_short_lived_memcfg() == ttnn.DRAM_MEMORY_CONFIG
     monkeypatch.setenv("GEMMA4_PREFILL_L1_ACT", "1")
     assert prefill_short_lived_memcfg() == ttnn.L1_MEMORY_CONFIG
+
+
+def test_prefill_sdpa_max_seq_clamped_to_hard_max():
+    """Env override must not raise the non-chunked SDPA path past 2^15."""
+    assert PREFILL_SDPA_MAX_SEQ <= PREFILL_SDPA_HARD_MAX
+
+
+def test_shared_mlp_down_shard_unguarded_at_tp8():
+    """intermediate=2112 @ TP=8 → down_k=264 is not DRAM-shardable; gate_up is."""
+    assert can_dram_shard(2816, 528)  # gate_up n at tp=8
+    assert not can_dram_shard(264, 2816)  # down_k at tp=8

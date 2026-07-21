@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -87,14 +87,13 @@ class SharedMLP:
             gate_up_weight = None
             down_proj_weight = None
 
-        self._dram_shard = _DRAM_SHARD_MLP and tp > 1
         gu_n = 2 * self.intermediate_size // tp
         down_k = self.intermediate_size // tp
+        # Gate each projection independently — e.g. intermediate=2112 at TP=4/8
+        # makes down_k non-tile-aligned, so only gate_up can use the DRAM path.
+        dram_shard = _DRAM_SHARD_MLP and tp > 1
 
-        if self._dram_shard:
-            # Single DRAM-width-sharded weight per projection (same size as the
-            # interleaved weight) serves both the decode DRAM-sharded kernel and
-            # the prefill 2D matmul — no extra memory vs interleaved.
+        if dram_shard and can_dram_shard(self.hidden_size, gu_n):
             self.gate_up_proj = DramShardedLinear(
                 gate_up_weight,
                 mesh_device,
@@ -106,6 +105,19 @@ class SharedMLP:
                     tensor_cache_path, f"gate_up_proj.weight.ws{tp_suffix}{dtype_suffix}"
                 ),
             )
+        else:
+            gate_up_proj = ttnn.as_tensor(
+                gate_up_weight,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=col_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
+
+        if dram_shard and can_dram_shard(down_k, self.hidden_size):
             self.down_proj = DramShardedLinear(
                 down_proj_weight,
                 mesh_device,
@@ -116,17 +128,6 @@ class SharedMLP:
                 cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight.ws{tp_suffix}{dtype_suffix}"),
             )
         else:
-            # gate_up: column-parallel (shard fused output dim across TP devices)
-            gate_up_proj = ttnn.as_tensor(
-                gate_up_weight,
-                device=mesh_device,
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=col_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            # down: row-parallel (shard input dim, allreduce after)
             down_proj = ttnn.as_tensor(
                 down_proj_weight,
                 device=mesh_device,
@@ -136,7 +137,6 @@ class SharedMLP:
                 cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
             self.down_proj = lambda x: ttnn.linear(x, down_proj)
 
     def __call__(self, hidden_states):
@@ -147,8 +147,8 @@ class SharedMLP:
         """
         # Fused gate/up projection: one matmul produces [.., 2*inter/tp] per
         # device laid out as [up_i | gate_i]. A single wide matmul beats two
-        # narrow ones (fewer op launches, better core packing). For multi-device
-        # the weight is DRAM-width-sharded so the decode (M<=32) matmul is
+        # narrow ones (fewer op launches, better core packing). When the shard
+        # shape allows, the weight is DRAM-width-sharded so decode (M<=32) is
         # weight-read-optimal; prefill uses a 2D program config on the same
         # weight (see DramShardedLinear). We split the result back out and reuse
         # the original (fast-approx GELU) math — numerics identical to baseline.
