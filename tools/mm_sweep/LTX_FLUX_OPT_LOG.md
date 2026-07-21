@@ -86,3 +86,22 @@ shape (trained to 100% on exactly these 20). => config=None already selects the 
 headroom is ~0 by construction** on this corpus. All remaining gains must be KERNEL/dataflow improvements
 (which then trigger a re-sweep + table refresh). Per-shape work therefore centers on the ablation: is there
 an IDLE-RISC recoverable stall (kernel opportunity) or is the shape RISC-cobound/geometry-bound (floor)?
+
+### [3] 64x4608x6144 (Mt2, wide-N Nt192, shallow-K Kt144) — KEPT: picker win −2.8%
+Rank #2 by excess (9.7µs). First WIN. Invalidates the "table==sweep-winner for all shapes" assumption:
+this shape's table entry was suboptimal.
+- **Baseline** (config=None, mask 0): auto (1,6,1,1,8), us_med ~122.4, ideal 113.3, wall/ideal 1.09, 472
+  GB/s, all-RISC cobound (riscImb 1%), core_spread 9%.
+- **Sweep** (360 configs, broad-nsb + full-width; ltxflux_sweep_64x4608x6144.json): best (2,3,2,2,6)=118.70µs,
+  top cluster all Ns2/Pk3 (118.7–119.6, 485–489 GB/s) => 3.3% headroom. => PICKER problem (not kernel).
+- **A/B** (3 interleaved paired relaunches, auto vs 3 leading): auto 122.36 [121.9–122.5] vs
+  (2,3,2,2,6)/(2,3,1,2,3)/(2,3,1,1,6) all 118.9–119.0 [cleanly separated] = **−2.8% stable**. Direction:
+  Ns2/Pk3 (N-split + shallower split-K) beats auto Ns1/Pk6.
+- **Fix**: lookup-table entry {{2,144,192}} {6,1,1,1,8} -> {3,2,1,2,3} (Ns2,Pk3,Sm1,kb2,nsb3), + python
+  mirror picker_table.py. Chose the clean Sm=1 winner (tied-best, no M-split machinery).
+- **Production verify** (config=None, mask 0, real op, 3 relaunches): **119.04µs [119.0–119.2]** vs old
+  122.4 = **−2.8%**, 489 GB/s. Picker now returns the new config.
+- **Regression**: unit 111/111, corpus 60/60 (config=None PCC fresh+cached, no other shape moved). Surgical
+  keyed entry => zero effect on other shapes by construction.
+- **Decision: KEPT, −2.8%.** Commit: this branch. Artifacts: ltxflux_sweep_64x4608x6144.json.
+- **LESSON**: the LTX/FLUX lookup table is NOT uniformly optimal — sweep each shape rather than assume.
