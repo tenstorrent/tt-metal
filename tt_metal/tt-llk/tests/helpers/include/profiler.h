@@ -179,14 +179,7 @@ __attribute__((always_inline)) inline void reset()
 
     *epoch_ptr = 0;
 
-    *epoch_ptr = 0;
-
-    // buffer is volatile (device-written profiler storage), so memset cannot take it.
-    volatile std::uint32_t* trisc_buffer = buffer[TRISC_ID];
-    for (std::uint32_t i = 0; i < BUFFER_LENGTH; ++i)
-    {
-        trisc_buffer[i] = 0;
-    }
+    memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
 
 __attribute__((always_inline)) inline bool is_buffer_full()
