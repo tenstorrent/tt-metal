@@ -938,7 +938,9 @@ def create_tt_model(
     if state_dict is None:
         if not tt_model_args.dummy_weights and tt_model_args.weight_cache_is_complete(dtype):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
-            state_dict = {}
+            # Dataless placeholder: every weight is loaded from its .tensorbin by ttnn.as_tensor;
+            # the placeholder only satisfies the host-side reshape ops (see placeholder_state_dict).
+            state_dict = tt_model_args.placeholder_state_dict(dtype)
         else:
             state_dict = tt_model_args.load_state_dict()
             loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
@@ -957,7 +959,7 @@ def create_tt_model(
     # can skip the load. Only for full-model builds (a num_layers override produces a partial
     # cache that must not satisfy the completeness check).
     if loaded_real_weights and num_layers is None:
-        tt_model_args.mark_weight_cache_complete(dtype)
+        tt_model_args.mark_weight_cache_complete(dtype, state_dict)
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 

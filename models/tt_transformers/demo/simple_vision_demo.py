@@ -196,7 +196,8 @@ def create_multimodal_model(
     if checkpoint is None:
         if not tt_model_args.dummy_weights and tt_model_args.weight_cache_is_complete(cache_dtype):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
-            checkpoint = {}
+            # Dataless placeholder: weights are loaded from .tensorbin by ttnn.as_tensor.
+            checkpoint = tt_model_args.placeholder_state_dict(cache_dtype)
         else:
             checkpoint = tt_model_args.load_state_dict()
             loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights
@@ -223,7 +224,7 @@ def create_multimodal_model(
     # If this run populated the cache from a cold host load, record completion so future runs
     # can skip the load.
     if loaded_real_weights:
-        tt_model_args.mark_weight_cache_complete(cache_dtype)
+        tt_model_args.mark_weight_cache_complete(cache_dtype, checkpoint)
 
     return tt_model_args, model, checkpoint
 
