@@ -17,6 +17,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    PerfRunType,
     Transpose,
     UnpackerEngine,
     format_dict,
@@ -27,6 +28,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
     generate_stimuli,
@@ -36,9 +38,11 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -56,6 +60,8 @@ from helpers.utils import passed_test
 
 def generate_unpack_unary_operand_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate unpack_unary_operand combinations.
@@ -68,6 +74,9 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
+    perf_dimensions = [32, 32]
+    perf_tile_dims = (32, 32)
+    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
@@ -86,6 +95,32 @@ def generate_unpack_unary_operand_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
 
+        if is_perf:
+            if in_fmt.is_32_bit():
+                continue
+            # Same packer constraint as the correctness path: non-Fp32 input cannot
+            # pack to Fp32 when dest is in 16-bit mode.
+            if (
+                in_fmt != DataFormat.Float32
+                and fmt.output_format == DataFormat.Float32
+            ):
+                continue
+            for dest_acc in (DestAccumulation.No,):
+                for dest_sync in dest_sync_modes:
+                    for unpacker_sel in (UnpackerEngine.UnpA,):
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                dest_sync,
+                                Transpose.No,
+                                unpacker_sel,
+                                runtime(perf_dimensions),
+                                runtime(perf_tile_dims),
+                            )
+                        )
+            continue
+
         for dest_acc in dest_acc_modes:
             if (
                 in_fmt != DataFormat.Float32
@@ -95,7 +130,7 @@ def generate_unpack_unary_operand_combinations(
                 # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
-            for dest_sync in (DestSync.Half, DestSync.Full):
+            for dest_sync in dest_sync_modes:
                 for transpose_en in transpose_modes:
                     for unpacker_sel in unpacker_engines:
                         # transpose is not supported for tiny-tiles
@@ -147,15 +182,26 @@ UNPACK_FORMATS = input_output_formats(
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS
 )
+PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
+    UNPACK_FORMATS,
+    is_perf=True,
+)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_unpack_unary_operand_quasar(
     formats_dest_acc_sync_transpose_unpack_sel_dims,
+    run_types,
+    loop_factor,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
     (
         formats,
@@ -165,7 +211,7 @@ def test_unpack_unary_operand_quasar(
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
+    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -222,10 +268,13 @@ def test_unpack_unary_operand_quasar(
             tile_shape=tile_shape,
         )
 
-    configuration = TestConfig(
-        "sources/quasar/unpack_unary_operand_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/unpack_unary_operand_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(
@@ -237,14 +286,15 @@ def test_unpack_unary_operand_quasar(
             UNPACK_TRANS_FACES(transpose_en),
             UNPACK_TRANS_WITHIN_FACE(transpose_en),
         ],
-        runtimes=[
+        "runtimes": [
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -258,15 +308,26 @@ def test_unpack_unary_operand_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=(
+        "unpack_to_dest": (
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
-        dest_acc=dest_acc,
-        boot_mode=boot_mode,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
-        disable_format_inference=(formats.input_format.is_mx_format()),
-    )
+        "dest_acc": dest_acc,
+        "boot_mode": boot_mode,
+        "disable_format_inference": formats.input_format.is_mx_format(),
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
