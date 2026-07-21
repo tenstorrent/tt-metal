@@ -53,10 +53,6 @@ using ::testing::Pointwise;
 using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
-using ttnn::cpu;
-using ttnn::create_device_tensor;
-using ttnn::StorageType;
-using ttnn::Tensor;
 using ttnn::tensor_ops::to_device;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
