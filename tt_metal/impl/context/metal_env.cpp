@@ -135,7 +135,8 @@ namespace {
 //     differ per device, which breaks our programming model that the cores look identical on every
 //     device. A single device has no cross-device consistency to break, and an unharvested multi-device
 //     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
-bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
+bool should_enable_blackhole_dram_programmable_cores(
+    [[maybe_unused]] const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
     if (override.has_value()) {
         log_info(
@@ -146,30 +147,9 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         return *override;
     }
 
-    FirmwareCapabilityRequest req;
-    req.dram_programmable_cores = true;
-    FirmwareCapabilityResult res;
-    check_firmware_capabilities(
-        cluster.arch(),
-        {.firmware_bundle = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version()},
-        req,
-        res);
-    if (!res.dram_programmable_cores) {
-        return false;
-    }
-
-    if (cluster.number_of_devices() == 1) {
-        return true;
-    }
-    // Multi-device: the GCB-credit core must be the same on every device, so reject if any device has
-    // a harvested DRAM channel (which would shift that core on that device).
-    for (const auto chip : cluster.all_chip_ids()) {
-        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
-            return false;
-        }
-    }
-    return true;
+    return false;
 }
+
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
