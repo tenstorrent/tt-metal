@@ -215,7 +215,9 @@ struct OutputLifecycle {
 ///   - Block  — a distinct tile every step; the index advances with the walk (full Ht x Wt input).
 ///   - Row    — indexed by column only: the same tile-row is re-read for every output row ([1, Wt] input).
 ///   - Col    — indexed by row only: the same tile-column is re-read for every output column ([Ht, 1] input).
-///   - Scalar — always the same single tile, every step.
+///   - Scalar — contribute index 0 every step, pinning the read to the operand's base tile
+///              (`TileOffset::Set` may make that base nonzero). This is inter-tile indexing, not a
+///              hardware scalar broadcast; it is independent of `BroadcastDim`.
 /// The size aspect only matters with a Bulk-style (upfront-wait) lifecycle, where the kind also sets
 /// how many tiles are waited/popped upfront: Scalar 1, Row Wt, Col Ht, Block Ht x Wt.
 /// The 1D tiles(n) shape allows only Block and Scalar; Row and Col need the 2D grid(H, W) shape.
@@ -358,6 +360,10 @@ enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference. Mirrors
 /// `ckernel::BroadcastType` values (NONE=0, COL=1, ROW=2, SCALAR=3).
+///
+/// `BinaryFpu<CbA, CbB, ...>` always applies this intra-tile broadcast to operand B (`CbB`);
+/// operand A is never the broadcast source. This is independent of each operand's `OperandKind`,
+/// which only selects the tile index read during the (Ht x Wt) walk.
 ///
 /// The dim names which axis is BROADCAST, not which was reduced. A REDUCE_ROW result is
 /// column-shaped (N,1) and broadcasts back across columns via `BroadcastDim::Col`; a
