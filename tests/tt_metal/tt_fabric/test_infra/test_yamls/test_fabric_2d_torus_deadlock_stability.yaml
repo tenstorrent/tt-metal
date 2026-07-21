@@ -11,7 +11,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -20,7 +20,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          E: 3
+          E: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -31,7 +31,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -40,7 +40,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          W: 3
+          W: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -51,7 +51,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -60,7 +60,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          N: 7
+          N: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -71,7 +71,7 @@ Tests:
 
     fabric_setup:
       topology: Ring
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -80,7 +80,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          S: 7
+          S: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -95,8 +95,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -105,7 +104,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          E: 3
+          E: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -117,8 +116,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -127,7 +125,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          W: 3
+          W: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -139,8 +137,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -149,7 +146,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          N: 7
+          N: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -161,8 +158,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -171,7 +167,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          S: 7
+          S: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -183,8 +179,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -193,8 +188,8 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          N: 7
-          E: 3
+          N: max
+          E: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -206,8 +201,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -216,8 +210,8 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          N: 7
-          W: 3
+          N: max
+          W: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -229,8 +223,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -239,8 +232,8 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          S: 7
-          E: 3
+          S: max
+          E: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -252,8 +245,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -262,8 +254,8 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          S: 7
-          W: 3
+          S: max
+          W: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -275,8 +267,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -284,15 +275,26 @@ Tests:
       size: 256
       num_packets: 2000
       destination:
-        hops:
-          N: 3
-          S: 4
-          E: 1
-          W: 2
+        hops: full_mcast
 
     patterns:
       - type: all_devices_uniform_pattern
         iterations: 3
+
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      num_links: max
+
+    parametrization_params:
+      size: [256, 512, 1024]
+      num_packets: [2000]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
 
 # ================================================
 # 2D Torus (X)
@@ -303,8 +305,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -313,7 +314,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          E: 3
+          E: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -325,8 +326,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -335,11 +335,26 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          W: 3
+          W: max
 
     patterns:
       - type: all_devices_uniform_pattern
         iterations: 3
+
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+      num_links: max
+
+    parametrization_params:
+      size: [256, 512, 1024]
+      num_packets: [2000]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
 
 # ================================================
 # 2D Torus (Y)
@@ -350,8 +365,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -360,7 +374,7 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          N: 7
+          N: max
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -372,8 +386,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-
-      num_links: 4
+      num_links: max
 
     defaults:
       ftype: mcast
@@ -382,8 +395,23 @@ Tests:
       num_packets: 2000
       destination:
         hops:
-          S: 7
+          S: max
 
     patterns:
       - type: all_devices_uniform_pattern
         iterations: 3
+
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+      num_links: max
+
+    parametrization_params:
+      size: [256, 512, 1024]
+      num_packets: [2000]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
