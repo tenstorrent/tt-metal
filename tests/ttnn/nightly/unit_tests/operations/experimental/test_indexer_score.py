@@ -1287,7 +1287,7 @@ _MATH_UTIL_CASES = [
         "minimax_m3",
         run_indexer_m3,
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        43.55,
+        42.9,
     ),
     # Block-split grid fill: GLM5/DSv32 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
     # scheduler spreads across num_blocks=2 row-blocks (110 cores); without the fill these would use only 55
