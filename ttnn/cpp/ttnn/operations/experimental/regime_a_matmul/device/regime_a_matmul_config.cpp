@@ -125,7 +125,7 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
         {{2, 192, 48}, {12, 1, 1, 2, 1}},
         {{2, 480, 48}, {12, 1, 1, 1, 3}},  // (64,15360,1536)
         {{2, 192, 144}, {6, 1, 1, 4, 2}},
-        {{2, 144, 192}, {6, 1, 1, 1, 8}},
+        {{2, 144, 192}, {3, 2, 1, 2, 3}},  // 64x4608x6144: LTX/FLUX campaign sweep winner, -2.8% vs {6,1,1,1,8}
         {{2, 192, 288}, {6, 1, 1, 4, 2}},
         {{4, 192, 24}, {12, 1, 1, 2, 1}},
         // (128,15360,768): ring-order corpus re-sweep found (Pk6,kb2,nsb3) a stable +6.5% over the old
