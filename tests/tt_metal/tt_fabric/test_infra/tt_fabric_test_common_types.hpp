@@ -10,6 +10,7 @@
 #include <variant>
 #include <optional>
 #include <cstdint>
+#include <limits>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -45,6 +46,9 @@ using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
 using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
 
+// Sentinel for a per-direction hop count of "max": resolved to (axis_dim - 1) from the global mesh
+// shape at build time. UINT32_MAX is never a real hop count, so it is safe as a marker.
+inline constexpr uint32_t kHopsMax = std::numeric_limits<uint32_t>::max();
 // Sentinel stored for parametrization_params.num_links: all. Resolved to [1 .. max links] at build
 // time (when the cluster is available). 0 is never a valid num_links, so it is safe as a marker.
 inline constexpr uint32_t kNumLinksAll = 0;
@@ -54,6 +58,7 @@ struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
     std::optional<CoreConfig> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+    bool full_mcast_hops = false;  // hops: full_mcast -> resolved to get_full_mcast_hops(src) at build time
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
 };

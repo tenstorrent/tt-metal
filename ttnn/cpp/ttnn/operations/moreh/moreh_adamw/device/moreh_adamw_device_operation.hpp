@@ -30,7 +30,7 @@ struct MorehAdamWDeviceOperation {
 
         // lr and step are excluded from the program hash (they vary every optimizer step, so
         // hashing them would recompile every call); they are re-applied on each cache hit via
-        // get_dynamic_runtime_args(). beta1/beta2/eps/weight_decay are rarely-varying
+        // override_runtime_arguments(). beta1/beta2/eps/weight_decay are rarely-varying
         // hyperparameters and stay in the hash.
         static constexpr auto attribute_names = std::forward_as_tuple(
             "beta1", "beta2", "eps", "weight_decay", "amsgrad", "memory_config", "compute_kernel_config");
@@ -71,15 +71,14 @@ struct MorehAdamWDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // lr/step (and the step-derived beta1/beta2 exponents) are excluded from the hash, so they
-    // must be re-applied to the cached program on every fast-path cache hit. Mirrors the reader and
-    // compute runtime args built in create_descriptor() — test_moreh_adamw_cache enforces it (it
-    // fails outright if step/lr stay frozen across the cache-hit steps).
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),
+    // since the hash excludes lr/step. Re-derives from create_descriptor; see the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
