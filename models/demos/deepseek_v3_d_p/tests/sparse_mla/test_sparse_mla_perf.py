@@ -194,12 +194,25 @@ SCENARIO = os.environ.get("DS_PERF_SCENARIO", "warm")
 _REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 # Repo root is five levels up (sparse_mla → tests → deepseek_v3_d_p → demos → models → <root>).
 _REPO_ROOT = os.path.normpath(os.path.join(_REPO_DIR, *([os.pardir] * 5)))
+_PROFILER_ROOT = os.path.join(_REPO_ROOT, "generated", "profiler")
+
+
+def _contained(path: str) -> str:
+    """Resolve `path` and require it to stay under generated/profiler/. Guards the one real traversal
+    vector — a DS_PERF_CSV / DS_DENSE_PERF_CSV env override with `../` in it (see _csv_name) — from
+    escaping the output tree. commonpath, not startswith: startswith would accept a sibling like
+    `<root>-evil`."""
+    resolved = os.path.abspath(path)
+    root = os.path.abspath(_PROFILER_ROOT)
+    if os.path.commonpath([resolved, root]) != root:
+        raise ValueError(f"refusing path outside {root}: {path!r}")
+    return resolved
 
 
 def _output_dir(subdir: str) -> str:
     """Per-(variant, mode) output dir for summary CSVs + run manifest. Replaces Tracy's
     PROFILER_ARTIFACTS_DIR now that profiling is in-process (no tracy report tree)."""
-    d = os.path.join(_REPO_ROOT, "generated", "profiler", subdir)
+    d = _contained(os.path.join(_PROFILER_ROOT, subdir))
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -298,7 +311,7 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, command, wo
             "build": {"so_mtime": so_mtime},
             "command": reproducer,
         }
-        path = os.path.join(report_dir, f"run_manifest_{scenario}.json")
+        path = _contained(os.path.join(report_dir, f"run_manifest_{scenario}.json"))
         with open(path, "w") as f:
             json.dump(manifest, f, indent=2)
         logger.info(f"run manifest written to {path}")
@@ -488,7 +501,7 @@ def _write_ops_dump(out_dir: str, name_root: str, forwards: list) -> str:
     row per program (duration = max across chips) per forward, in program order (the per_program dict is
     keyed by first arrival, which equals device execution order — see _profile_forward). Also carries the
     raw kernel_sources so the op-code translation can be authored/verified from real data."""
-    path = os.path.join(out_dir, f"{name_root}_ops.csv")
+    path = _contained(os.path.join(out_dir, f"{name_root}_ops.csv"))
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["forward", "seq", "runtime_id", "OP CODE", "DEVICE KERNEL DURATION [ns]", "kernel_sources"])
@@ -730,7 +743,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, config_only
     print("\n" + table)  # ensure full table reaches stdout even if logging is filtered
 
     out_dir = _output_dir(subdir)
-    csv_out = _scenario_csv(out_dir, scenario, variant.name, attn_mode)
+    csv_out = _contained(_scenario_csv(out_dir, scenario, variant.name, attn_mode))
     by_op.reset_index().to_csv(csv_out, index=False)
     logger.info(f"per-op CSV written to {os.path.abspath(csv_out)}")
 
