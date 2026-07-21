@@ -1235,7 +1235,8 @@ static Conv2dBlockConfig get_opt_block_config(
         parallel_config.shard_orientation,
         mm_conv,
         require_input_channel_partition,
-        conv_config.override_output_sharding_config ? conv_config.core_grid : std::nullopt);
+        require_input_channel_partition && conv_config.override_output_sharding_config ? conv_config.core_grid
+                                                                                       : std::nullopt);
 
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
@@ -1569,7 +1570,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         parallel_config.shard_orientation,
         mm_conv,
         require_input_channel_partition,
-        conv_config.override_output_sharding_config ? conv_config.core_grid : std::nullopt);
+        require_input_channel_partition && conv_config.override_output_sharding_config ? conv_config.core_grid
+                                                                                       : std::nullopt);
 
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
@@ -1600,8 +1602,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        true,
-        orig_stride);
+        orig_stride,
+        true);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(

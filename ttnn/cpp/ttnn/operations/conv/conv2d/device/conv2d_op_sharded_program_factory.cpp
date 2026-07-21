@@ -33,6 +33,7 @@ namespace ttnn::prim {
 
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::get_depthwise_conv1d_weight_plan_shape;
 using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
 using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
@@ -397,30 +398,31 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             "1D depthwise activation block width mismatch. Got {} tiles, expected {} tiles",
             act_block_w_ntiles,
             expected_act_block_w_ntiles);
-        const uint32_t expected_kernel_taps = filter_h * filter_w;
-        const uint32_t expected_tap_height = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
+        const auto depthwise_weight_plan_shape = get_depthwise_conv1d_weight_plan_shape(
+            filter_h, filter_w, act_block_h_ntiles, output_channels, parallelization_config.num_cores_c_out);
         if (uses_depthwise_weight_plan_shape) {
             TT_FATAL(
-                b.logical_shape()[1] == expected_kernel_taps && b.padded_shape()[1] == expected_kernel_taps &&
-                    b.logical_shape()[2] == expected_tap_height && b.padded_shape()[2] == expected_tap_height,
+                b.logical_shape()[1] == depthwise_weight_plan_shape.kernel_taps &&
+                    b.padded_shape()[1] == depthwise_weight_plan_shape.kernel_taps &&
+                    b.logical_shape()[2] == depthwise_weight_plan_shape.tap_height &&
+                    b.padded_shape()[2] == depthwise_weight_plan_shape.tap_height,
                 "1D depthwise weight plan must have {} taps with {} rows per tap; got logical/padded [{}, {}]/[{}, {}]",
-                expected_kernel_taps,
-                expected_tap_height,
+                depthwise_weight_plan_shape.kernel_taps,
+                depthwise_weight_plan_shape.tap_height,
                 b.logical_shape()[1],
                 b.logical_shape()[2],
                 b.padded_shape()[1],
                 b.padded_shape()[2]);
         }
-        const uint32_t output_channel_partition_width =
-            output.shard_spec()->shape[1] * parallelization_config.num_cores_c_out;
         TT_FATAL(
-            b.logical_shape()[3] == output_channels && b.padded_shape()[3] == output_channel_partition_width,
+            b.logical_shape()[3] == output_channels &&
+                b.padded_shape()[3] == depthwise_weight_plan_shape.padded_out_channels,
             "1D depthwise weight channel shape must match the output plan. Weight logical/padded width: {}/{}, "
             "output logical/partitioned width: {}/{}",
             b.logical_shape()[3],
             b.padded_shape()[3],
             output_channels,
-            output_channel_partition_width);
+            depthwise_weight_plan_shape.padded_out_channels);
 
         if (block_sharded) {
             const auto& output_shard_spec = output.shard_spec().value();

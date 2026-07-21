@@ -96,14 +96,27 @@ sliding_window::ParallelConfig determine_parallel_config(
     bool is_shard_width_tile_multiple = true,
     uint32_t act_block_h_override = 0);
 
+struct DepthwiseConv1dWeightPlanShape {
+    uint32_t kernel_taps;
+    uint32_t tap_height;
+    uint32_t padded_out_channels;
+};
+
+DepthwiseConv1dWeightPlanShape get_depthwise_conv1d_weight_plan_shape(
+    uint32_t filter_h,
+    uint32_t filter_w,
+    uint32_t act_block_h_ntiles,
+    uint32_t out_channels,
+    uint32_t output_channel_cores);
+
 sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv,
-    bool require_input_channel_partition,
-    const std::optional<CoreRangeSet>& explicit_output_grid_override = std::nullopt);
+    bool require_input_channel_partition = false,
+    const std::optional<CoreRangeSet>& input_partition_grid_constraint = std::nullopt);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> input_image_size,
@@ -253,7 +266,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t groups,
     bool enable_bias,
     const DeviceComputeKernelConfig& compute_config,
-    bool supports_block_sharded_1d_depthwise);
+    bool supports_block_sharded_1d_depthwise = false);
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);
 
@@ -269,7 +282,7 @@ shard_or_reshard_tensor_if_required(
     uint32_t out_channels,
     bool is_mm_conv,
     bool auto_shard,
-    bool require_tile_aligned_channels);
+    bool require_tile_aligned_channels = false);
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
