@@ -1,0 +1,4 @@
+stage=04-optimized-multichip-decoder
+run=/home/mvasiljevic/codex-runs/04-optimized-multichip-decoder-qwen_qwen3_32b_-20260719T035118Z
+note=blocked at the time; stage was RETRIED and PASSED later (this stage is green on the branch). Kept for completeness.
+captured_at=2026-07-21T13:23:09Z

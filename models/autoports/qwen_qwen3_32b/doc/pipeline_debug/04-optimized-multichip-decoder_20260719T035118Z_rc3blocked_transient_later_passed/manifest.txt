@@ -1,0 +1,16 @@
+started_at_utc=20260719T035118Z
+repo=/home/mvasiljevic/tt-metal
+codex_home=/home/mvasiljevic/codex-runs/04-optimized-multichip-decoder-qwen_qwen3_32b_-20260719T035118Z/codex_home
+codex_bin=/home/mvasiljevic/.local/bin/codex
+hf_model=Qwen/Qwen3-32B
+model_dir=models/autoports/qwen_qwen3_32b
+runner=app-server
+approval_policy=never
+sandbox=danger-full-access
+prompt_files:
+- .agents/prompts/model_bringup_multigoal/04-optimized-multichip-decoder.txt
+stage_1_objective_chars=3564
+stage_1_skills=autofix,optimize,stage-review,tt-device-usage
+stage_1_missing_skills=
+stage_1_thread_id=019f787f-f301-7d20-9f44-5de425773cea
+stage_1_terminal_status=blocked
