@@ -172,11 +172,18 @@ class TtXttsConditioning(LightweightModule):
         return ttnn.linear(h, layer["ff2_w"], bias=layer["ff2_b"])  # [1, 32, 1024]
 
     # ------------------------------------------------------------------ #
+    def mel_to_device(self, mel):
+        """Host log-mel ``[1, 80, s]`` -> device bf16 TILE tensor (the ``from_torch`` host->device
+        write, kept OUTSIDE any trace capture — writes are fatal inside a trace)."""
+        return ttnn.from_torch(mel.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.bfloat16)
+
     def forward(self, mel):
         """mel: torch tensor ``[1, 80, s]`` -> conditioning latents ttnn ``[1, 1024, 32]``."""
-        mel_tt = ttnn.from_torch(
-            mel.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.bfloat16
-        )
+        return self.forward_dev(self.mel_to_device(mel))
+
+    def forward_dev(self, mel_tt):
+        """Trace-compatible: ``mel_tt`` is an already-on-device ``[1, 80, s]`` bf16 tensor (no
+        host->device write here), so this can run inside a captured trace. -> ttnn ``[1, 1024, 32]``."""
         x = ttnn.permute(mel_tt, (0, 2, 1))  # [1, s, 80]
         x = ttnn.linear(x, self.init_w, bias=self.init_b)  # [1, s, 1024]
 
