@@ -18,6 +18,7 @@ namespace tt::tt_metal {
 class Tensor;
 class MemoryConfig;
 class TensorSpec;
+struct Tile;
 
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
