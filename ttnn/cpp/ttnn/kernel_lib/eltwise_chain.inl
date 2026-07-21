@@ -1397,6 +1397,14 @@ struct ElemDesc {
     uint32_t lane_width;
     uint32_t transient_lane_width;
     bool supports_block;
+    uint32_t outer_input_a_cb;
+    uint32_t outer_input_b_cb;
+    bool wait_a_per_outer;
+    bool wait_b_per_outer;
+    bool pop_a_per_outer;
+    bool pop_b_per_outer;
+    bool reserve_per_outer;
+    bool push_per_outer;
 };
 
 template <class E>
@@ -1450,6 +1458,85 @@ constexpr uint32_t transient_lane_width_of() {
 }
 
 template <class E>
+constexpr uint32_t outer_input_a_cb_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return E::dfb_a_id();
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        return E::dfb;
+    } else {
+        return INVALID_DFB;
+    }
+}
+
+template <class E>
+constexpr uint32_t outer_input_b_cb_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (!E::same_dfb) {
+            return E::dfb_b_id();
+        }
+    }
+    return INVALID_DFB;
+}
+
+template <class E>
+constexpr bool wait_a_per_outer_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return E::APolicy.wait_policy == WaitPolicy::PerOuter;
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        return E::Policy.wait_policy == WaitPolicy::PerOuter;
+    } else {
+        return false;
+    }
+}
+
+template <class E>
+constexpr bool wait_b_per_outer_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (!E::same_dfb) {
+            return E::BPolicy.wait_policy == WaitPolicy::PerOuter;
+        }
+    }
+    return false;
+}
+
+template <class E>
+constexpr bool pop_a_per_outer_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return E::APolicy.pop_policy == PopPolicy::PerOuter;
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        return E::Policy.pop_policy == PopPolicy::PerOuter;
+    } else {
+        return false;
+    }
+}
+
+template <class E>
+constexpr bool pop_b_per_outer_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (!E::same_dfb) {
+            return E::BPolicy.pop_policy == PopPolicy::PerOuter;
+        }
+    }
+    return false;
+}
+
+template <class E>
+constexpr bool reserve_per_outer_of() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::Policy.reserve_policy == ReservePolicy::PerOuter;
+    }
+    return false;
+}
+
+template <class E>
+constexpr bool push_per_outer_of() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::Policy.push_policy == PushPolicy::PerOuter;
+    }
+    return false;
+}
+
+template <class E>
 constexpr ElemDesc describe() {
     return ElemDesc{
         is_cb_reader_op_v<E>,
@@ -1473,6 +1560,14 @@ constexpr ElemDesc describe() {
         elem_lane_width_v<E>,
         transient_lane_width_of<E>(),
         element_supports_block<E>(),
+        outer_input_a_cb_of<E>(),
+        outer_input_b_cb_of<E>(),
+        wait_a_per_outer_of<E>(),
+        wait_b_per_outer_of<E>(),
+        pop_a_per_outer_of<E>(),
+        pop_b_per_outer_of<E>(),
+        reserve_per_outer_of<E>(),
+        push_per_outer_of<E>(),
     };
 }
 
@@ -2331,53 +2426,25 @@ ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
         }
     }
 }
-// Per-outer-row hooks (InputLifecycle::OuterStream readers): wait at row entry, pop at row exit.
-// Inert for every other policy.
-template <class E>
-ALWI void elem_wait_per_row([[maybe_unused]] const E& e) {
-    if constexpr (is_binary_fpu_op_v<E>) {
-        if constexpr (E::APolicy.wait_policy == WaitPolicy::PerOuter) {
-            DataflowBuffer(E::dfb_a_id()).wait_front(1);
-        }
-        if constexpr (!E::same_dfb && E::BPolicy.wait_policy == WaitPolicy::PerOuter) {
-            DataflowBuffer(E::dfb_b_id()).wait_front(1);
-        }
-    } else if constexpr (is_cb_reader_op_v<E>) {
-        if constexpr (E::Policy.wait_policy == WaitPolicy::PerOuter) {
-            DataflowBuffer(E::dfb).wait_front(1);
-        }
-    }
+// Per-outer-row lifecycle takes only reflected constants. Unlike the upfront/end
+// adapters, it needs no element runtime state, so one non-template emitter serves
+// every element without changing A-before-B or element-order sequencing.
+ALWI void emit_wait_per_row(uint32_t cb_a, bool wait_a, uint32_t cb_b, bool wait_b) {
+    if (wait_a) DataflowBuffer(cb_a).wait_front(1);
+    if (wait_b) DataflowBuffer(cb_b).wait_front(1);
 }
-template <class E>
-ALWI void elem_pop_per_row([[maybe_unused]] const E& e) {
-    if constexpr (is_binary_fpu_op_v<E>) {
-        if constexpr (E::APolicy.pop_policy == PopPolicy::PerOuter) {
-            DataflowBuffer(E::dfb_a_id()).pop_front(1);
-        }
-        if constexpr (!E::same_dfb && E::BPolicy.pop_policy == PopPolicy::PerOuter) {
-            DataflowBuffer(E::dfb_b_id()).pop_front(1);
-        }
-    } else if constexpr (is_cb_reader_op_v<E>) {
-        if constexpr (E::Policy.pop_policy == PopPolicy::PerOuter) {
-            DataflowBuffer(E::dfb).pop_front(1);
-        }
-    }
+
+ALWI void emit_pop_per_row(uint32_t cb_a, bool pop_a, uint32_t cb_b, bool pop_b) {
+    if (pop_a) DataflowBuffer(cb_a).pop_front(1);
+    if (pop_b) DataflowBuffer(cb_b).pop_front(1);
 }
-template <class E>
-ALWI void elem_reserve_per_row([[maybe_unused]] const E& e) {
-    if constexpr (is_cb_writer_op_v<E>) {
-        if constexpr (E::Policy.reserve_policy == ReservePolicy::PerOuter) {
-            DataflowBuffer(E::dfb).reserve_back(1);
-        }
-    }
+
+ALWI void emit_reserve_per_row(uint32_t cb, bool reserve) {
+    if (reserve) DataflowBuffer(cb).reserve_back(1);
 }
-template <class E>
-ALWI void elem_push_per_row([[maybe_unused]] const E& e) {
-    if constexpr (is_cb_writer_op_v<E>) {
-        if constexpr (E::Policy.push_policy == PushPolicy::PerOuter) {
-            DataflowBuffer(E::dfb).push_back(1);
-        }
-    }
+
+ALWI void emit_push_per_row(uint32_t cb, bool push) {
+    if (push) DataflowBuffer(cb).push_back(1);
 }
 
 }  // namespace detail
@@ -2501,8 +2568,14 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     if constexpr (detail::ChainTraits<Es...>::any_dest_accumulation) {
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             const uint32_t row_base = ht * Wt;
-            (detail::elem_wait_per_row(elts), ...);
-            (detail::elem_reserve_per_row(elts), ...);
+            (detail::emit_wait_per_row(
+                 detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
+                 detail::ChainTraits<Es...>::d[Is].wait_a_per_outer,
+                 detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
+                 detail::ChainTraits<Es...>::d[Is].wait_b_per_outer), ...);
+            (detail::emit_reserve_per_row(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb,
+                 detail::ChainTraits<Es...>::d[Is].reserve_per_outer), ...);
             tile_regs_acquire();
             for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
                 const uint32_t inner_count =
@@ -2527,8 +2600,14 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  elts, row_base, ht, 0, 1, 0, Ht, Wt),
              ...);
             tile_regs_release();
-            (detail::elem_push_per_row(elts), ...);
-            (detail::elem_pop_per_row(elts), ...);
+            (detail::emit_push_per_row(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb,
+                 detail::ChainTraits<Es...>::d[Is].push_per_outer), ...);
+            (detail::emit_pop_per_row(
+                 detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
+                 detail::ChainTraits<Es...>::d[Is].pop_a_per_outer,
+                 detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
+                 detail::ChainTraits<Es...>::d[Is].pop_b_per_outer), ...);
         }
     } else {
         if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
@@ -2536,7 +2615,11 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         }
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             const uint32_t row_base = ht * Wt;
-            (detail::elem_wait_per_row(elts), ...);
+            (detail::emit_wait_per_row(
+                 detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
+                 detail::ChainTraits<Es...>::d[Is].wait_a_per_outer,
+                 detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
+                 detail::ChainTraits<Es...>::d[Is].wait_b_per_outer), ...);
             for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
                 const uint32_t inner_count =
                     (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
@@ -2568,7 +2651,11 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                 }
                 tile_regs_release();
             }
-            (detail::elem_pop_per_row(elts), ...);
+            (detail::emit_pop_per_row(
+                 detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
+                 detail::ChainTraits<Es...>::d[Is].pop_a_per_outer,
+                 detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
+                 detail::ChainTraits<Es...>::d[Is].pop_b_per_outer), ...);
         }
         if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) pack_reconfig_l1_acc(0);
     }
