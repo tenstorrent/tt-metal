@@ -6,8 +6,7 @@ import torch
 # import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.llama3_70b_galaxy.reference.llama import Transformer
 
 from loguru import logger
 
@@ -18,10 +17,10 @@ def test_llama_torch_inference(ensure_gc):
 
     model_args = TtModelArgs(mesh_device=None)
     state_dict = model_args.load_state_dict()
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     prompts = ["1 2 3 4 "] * model_args.max_batch_size
-    encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+    encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     reference_model = Transformer(model_args)
     reference_model.load_state_dict(state_dict)

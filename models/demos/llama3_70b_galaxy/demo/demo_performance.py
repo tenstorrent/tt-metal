@@ -15,7 +15,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
@@ -92,7 +91,7 @@ def run_llama3_decode_performance(
     )
     model_args.n_layers = layers
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
@@ -153,7 +152,7 @@ def run_llama3_decode_performance(
             [128000, 2028, 374, 264, 1296]
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
     else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+        encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in input_prompts]
 
     # Prefill by decode: start at first token; pad to 32 (tile size)
     max_prompt_length = max([len(prompt) for prompt in encoded_prompts])
