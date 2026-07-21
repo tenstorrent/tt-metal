@@ -609,16 +609,28 @@ def _self_traced_prompt(out_rel: str, task: str, src_label: str, demo_src: str, 
     )
 
 
+_TRACER_IMPORT_RE = re.compile(r"from\s+\S*\btracing\S*\s+import\s+.*\bTracer\b")
+
+
 def _self_tracing_fns(root: Path) -> set:
     """MODEL-AGNOSTIC: the model's OWN callables that ALREADY capture a trace themselves — their body
-    calls ttnn.begin_trace_capture. Instrumenting one under the tool's own trace/measure would nest two
-    captures on the device -> TT_FATAL + teardown hang. Derived by scanning the model's source (no
-    per-model names); empty for models that don't self-trace. Lets the generator emit a time-it-directly
-    test for a self-recording pipeline instead of a re-recording one that freezes.
+    calls ttnn.begin_trace_capture (directly, OR indirectly via a shared `Tracer` helper such as
+    models.tt_dit.utils.tracing.Tracer — the helper's OWN file lives outside the model's directory, so
+    a literal-text scan of the model's tree alone would never see its internal begin_trace_capture
+    call; constructing that Tracer is treated as an equivalent signal). Instrumenting a self-tracing
+    function under the tool's own trace/measure would nest two captures on the device -> TT_FATAL +
+    teardown hang. Derived by scanning the model's source (no per-model names); empty for models that
+    don't self-trace. Lets the generator emit a time-it-directly test for a self-recording pipeline
+    instead of a re-recording one that freezes.
 
     Covers BOTH shapes the demo can call: a top-level function (`run_tts_fast(...)`) AND a class method
-    (`pipe.generate(...)`). An indent-tracked scope stack attributes a begin_trace_capture to the OUTERMOST
-    enclosing callable — the public entry the demo invokes — so nested private helpers roll up to it."""
+    (`pipe.generate(...)`). An indent-tracked scope stack attributes a begin_trace_capture (or Tracer(...)
+    construction) to the OUTERMOST enclosing callable — the public entry the demo invokes — so nested
+    private helpers roll up to it. Class methods are Python SIBLINGS, never lexically nested, so the
+    common OOP shape (a public `run_x(...)` delegating to a private `_x_traced(...)` that does the real
+    capturing) needs a SEPARATE call-graph propagation pass: once a function's OWN body is known
+    self-tracing, any other function whose body calls it (by name) inherits that status too, transitively,
+    so the public entry the demo actually invokes ends up correctly marked."""
     fns = set()
     try:
         for py in sorted(root.rglob("*.py")):
@@ -629,24 +641,64 @@ def _self_tracing_fns(root: Path) -> set:
                 txt = py.read_text(errors="ignore")
             except Exception:  # noqa: BLE001
                 continue
-            if "begin_trace_capture" not in txt:
+            has_direct = "begin_trace_capture" in txt
+            has_tracer_helper = bool(_TRACER_IMPORT_RE.search(txt)) and "Tracer(" in txt
+            if not (has_direct or has_tracer_helper):
                 continue
             stack = []
+            bodies: dict[str, list[str]] = {}  # def name -> every raw line within its own indent range
+            direct = set()  # functions whose OWN body has a marker line
+            paren_depth = 0  # tracks open (/[/{ across a multi-line statement (e.g. a signature)
             for raw in txt.splitlines():
                 stripped = raw.strip()
                 if not stripped:
                     continue
-                indent = len(raw) - len(raw.lstrip())
-                while stack and stack[-1][0] >= indent:
-                    stack.pop()
-                m = re.match(r"(class|def)\s+([A-Za-z_]\w*)", stripped)
-                if m:
-                    stack.append((indent, m.group(1), m.group(2)))
-                elif "begin_trace_capture" in raw:
+                # Only re-evaluate scope (pop/push) when NOT mid a multi-line statement — otherwise a
+                # Black-formatted multi-line `def foo(\n    a,\n):` pops foo's own frame the instant the
+                # closing `):` line lands back at the def's indent, before the body is ever scanned.
+                if paren_depth == 0:
+                    indent = len(raw) - len(raw.lstrip())
+                    while stack and stack[-1][0] >= indent:
+                        stack.pop()
+                    m = re.match(r"(class|def)\s+([A-Za-z_]\w*)", stripped)
+                    if m:
+                        stack.append((indent, m.group(1), m.group(2)))
+                        if m.group(1) == "def":
+                            bodies.setdefault(m.group(2), [])
+                else:
+                    m = None
+                for _ind, kind, name in stack:
+                    if kind == "def":
+                        bodies[name].append(raw)
+                if not m and (("begin_trace_capture" in raw) or (has_tracer_helper and "Tracer(" in raw)):
                     for _ind, kind, name in stack:
                         if kind == "def":
-                            fns.add(name)
+                            direct.add(name)
                             break
+                paren_depth += raw.count("(") + raw.count("[") + raw.count("{")
+                paren_depth -= raw.count(")") + raw.count("]") + raw.count("}")
+                paren_depth = max(paren_depth, 0)
+            # Propagate: a function whose body CALLS an already-self-tracing function (by name, any of
+            # `self.<name>(` / `<name>(`) inherits self-tracing status too. Fixed-point over the small
+            # per-file def set so any call depth (not just one hop) resolves.
+            file_self_tracing = set(direct)
+            changed = True
+            while changed:
+                changed = False
+                for name, body_lines in bodies.items():
+                    if name in file_self_tracing:
+                        continue
+                    body_text = "\n".join(body_lines)
+                    for other in file_self_tracing:
+                        if other == name:
+                            continue
+                        if re.search(r"\.%s\s*\(" % re.escape(other), body_text) or re.search(
+                            r"\b%s\s*\(" % re.escape(other), body_text
+                        ):
+                            file_self_tracing.add(name)
+                            changed = True
+                            break
+            fns |= file_self_tracing
     except Exception:  # noqa: BLE001
         pass
     return fns
