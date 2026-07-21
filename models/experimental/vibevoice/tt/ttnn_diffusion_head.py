@@ -29,6 +29,32 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# Byte-identical B=2 program configs for the CFG diffusion head.  The head ALWAYS runs at B=2
+# (sample_speech_latents concats [neg,pos] on dim0), on auto, so each head weight is read TWICE per
+# step x 10 steps/frame — the same weight-read-twice waste the LM FFN had.  per_core_M=2 folds both
+# CFG rows into M so the weights are read once.  in0_block_w=2 is auto's K-reduction block for these
+# shapes (proven maxabsdiff==0 vs auto for both fp32 and bf16 inputs in
+# tests/perf/diffusion_byteident_ibw_sweep.py) => same reduction order => long-form-safe (Tier-0),
+# ~1.6-1.9x per matmul.  Applied only when B==2; a B=1 PCC-test call falls back to auto.
+def _diff_b2_cfg(cx, cy, pn):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=2,
+        per_core_N=pn,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+_DIFF_N4608_B2 = _diff_b2_cfg(8, 9, 2)  # gate / up / head-layer modulation  (K=1536, N=4608)
+_DIFF_N1536_B2 = _diff_b2_cfg(8, 3, 2)  # swiglu down                        (K=4608, N=1536)
+_DIFF_N3072_B2 = _diff_b2_cfg(8, 6, 2)  # final-layer modulation             (K=1536, N=3072)
+
+
 @dataclass
 class DiffusionHeadWeights:
     """All device tensors for VibeVoiceDiffusionHead."""
@@ -205,16 +231,19 @@ class TTDiffusionHead:
     def _swiglu_ffn(self, x: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
         """SwiGLU FFN: gate * silu(gate) project → down."""
         w = self.w
+        b2 = x.shape[0] == 2  # CFG B=2 frame path → byte-identical weight-read-once progcfgs
         gate = ttnn.linear(
             x,
             w.layer_ffn_gate_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_DIFF_N4608_B2 if b2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         up = ttnn.linear(
             x,
             w.layer_ffn_up_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_DIFF_N4608_B2 if b2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -223,6 +252,7 @@ class TTDiffusionHead:
             hidden,
             w.layer_ffn_down_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_DIFF_N1536_B2 if b2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
@@ -240,6 +270,7 @@ class TTDiffusionHead:
             sc,
             w.layer_adaLN_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_DIFF_N4608_B2 if sc.shape[0] == 2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # chunk into 3 parts along last dim
@@ -282,6 +313,7 @@ class TTDiffusionHead:
             sc,
             w.final_adaLN_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_DIFF_N3072_B2 if sc.shape[0] == 2 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         hidden_size = w.hidden_size
