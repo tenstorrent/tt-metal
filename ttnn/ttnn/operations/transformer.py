@@ -6,11 +6,10 @@ from typing import Optional
 
 import ttnn
 
-# SDPA op was nuked for agent evaluation, but the SDPAProgramConfig type
+# SDPA op is not built here, but the SDPAProgramConfig type
 # (sdpa_config.hpp) survives and is still bound; re-export it for compatibility.
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
-SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 
 
 def _golden_function(
@@ -85,7 +84,7 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
     return torch.softmax(input_tensor, -1)
 
 
-# attention_softmax / attention_softmax_ nuked for agent evaluation.
+# attention_softmax / attention_softmax_ not available in this build.
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):

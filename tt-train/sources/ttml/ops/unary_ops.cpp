@@ -83,13 +83,13 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
-    // TODO(nuked-op softmax): restore real ttnn::moreh_softmax call
+    // TODO(softmax): restore real ttnn::moreh_softmax call
     auto log_softmax = tensor->get_value();
     static_cast<void>(dim);
     auto out = autograd::create_tensor(log_softmax);
 
     autograd::GradFunction grad = [tensor, out]() {
-        // TODO(nuked-op softmax): restore real ttnn::moreh_softmax_backward call
+        // TODO(softmax): restore real ttnn::moreh_softmax_backward call
         auto grad = out->get_grad();
         tensor->add_grad(grad);
     };

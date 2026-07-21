@@ -180,7 +180,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        // TODO(nuked-op layer_norm): restore layernorm / composite_layernorm bindings once the op is recreated.
+        // TODO(layer_norm): restore layernorm / composite_layernorm bindings once the op is recreated.
     }
 
     {
@@ -334,7 +334,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        // TODO(nuked-op sdpa): restore scaled_dot_product_attention bindings
+        // TODO(sdpa): restore scaled_dot_product_attention bindings
         // (overloads + composite) once the SDPA op is recreated.
         static_cast<void>(m);
     }
@@ -413,7 +413,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        // TODO(nuked-op rms_norm): restore rmsnorm / rmsnorm_composite bindings once the op is recreated.
+        // TODO(rms_norm): restore rmsnorm / rmsnorm_composite bindings once the op is recreated.
     }
 
     m.def(
