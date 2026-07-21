@@ -77,6 +77,8 @@ static void pin_thread_to_core(std::thread& t, int core) {
 #include <llrt/tt_cluster.hpp>
 #include <tools/profiler/x280_driver.hpp>
 #include <tools/profiler/x280_profzone_boot.hpp>  // shared profzone bring-up (single source of truth)
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>   // D2HSocket (production D2H transport, --socket)
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
 
 #include "prof_packet.h"
@@ -214,6 +216,8 @@ int main(int argc, char** argv) {
                                // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
+    bool socket_mode = false;  // --socket: relay drains into one tt-metal D2HSocket per relay (the production
+                               // D2H transport) instead of raw sysmem rings; A/B the knee vs the raw path.
     bool bringup = false;      // --bringup: STEP1 -- boot profzone as a PERSISTENT active FW and confirm it
                                // stays resident (idle FW never re-entered); no workload, no P_STOP, exit resident.
     bool do_pin = false;       // --pin: bind each flusher to its own core (0,1,...). Pair with `taskset -c 2-N`
@@ -270,6 +274,8 @@ int main(int argc, char** argv) {
         } else if (a == "--wnoc1") {
             wnoc1 = true;
             direct = true;
+        } else if (a == "--socket") {
+            socket_mode = true;
         } else if (a == "--nodrain") {
             nodrain = true;
         } else if (a == "--fullread") {
@@ -390,7 +396,7 @@ int main(int argc, char** argv) {
                                               // writes reader h -> ring h), each drained by its own host thread
     // SENT pointer for ring h lives in sysmem at data_off + h*ring_stride + hring_bytes (the trailer).
     auto sent_off = [&](uint64_t h) { return data_off + h * ring_stride + hring_bytes; };
-    if (ring_stride * ndh > win_stride) {
+    if (!socket_mode && ring_stride * ndh > win_stride) {
         fprintf(
             stderr,
             "[d2h] %llu host rings (%llu B each) exceed %llu MB window -- lower --hring or raise --winmb\n",
@@ -401,7 +407,7 @@ int main(int argc, char** argv) {
     }
     // data_off starts at chan_sz/2, so the rings have the whole second half of the PCIe channel to grow into;
     // the X280 writes them through the PCIe tile which maps the full channel, so win_stride is just a budget.
-    if (data_off + ring_stride * ndh > chan_sz) {
+    if (!socket_mode && data_off + ring_stride * ndh > chan_sz) {
         fprintf(stderr, "[d2h] rings overflow host channel (%llu MB)\n", (unsigned long long)(chan_sz >> 20));
         std::_Exit(2);
     }
@@ -412,7 +418,7 @@ int main(int argc, char** argv) {
         mpmc = (int)ndh;
         printf("[realprof] defaulting to MPMC pipeline (%d consumer(s))\n", mpmc);
     }
-    {  // zero all host rings + their SENT trailers
+    if (!socket_mode) {  // zero all host rings + their SENT trailers (raw path only; socket owns its own FIFO)
         std::vector<uint8_t> z(ring_stride * ndh, 0);
         cluster.write_sysmem(z.data(), (uint32_t)z.size(), data_off, device_id, 0);
     }
@@ -444,6 +450,61 @@ int main(int argc, char** argv) {
     bcfg.bulkcore = bulkcore;
     bcfg.dualrelay = dualrelay;
     bcfg.adaptive = adaptive;
+    bcfg.socket = socket_mode;
+    // --socket: create one D2HSocket per relay (the production D2H transport) at the LIM config addrs the
+    // relay reads (0x0801A000 + h*0x1000). Must exist BEFORE boot so the sender_socket_md is resident when
+    // relay_run_socket reads it. sender_is_l2cpu routes the config + bytes_acked writes to the X280 LIM. FIFO
+    // is the same size as the raw ring so the knee A/B is apples-to-apples (same host-side buffering).
+    std::vector<std::unique_ptr<distributed::D2HSocket>> socks;
+    if (socket_mode) {
+        const CoreCoord l2phys = pz::x280_l2cpu_tile(l2cpu);
+        distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh->shape()).begin();
+        const uint32_t cfg_sz = distributed::D2HSocket::required_config_buffer_size();
+        uint64_t fifo_lo[2] = {0, 0};  // per-socket FIFO NoC addr (lo32; packed into P_HOST_BASE param)
+        for (uint64_t h = 0; h < ndh; h++) {
+            uint32_t caddr = 0x08019000u + (uint32_t)h * 0x100u;  // config buffer (bytes_acked lives here, +32)
+            auto s = std::make_unique<distributed::D2HSocket>(
+                mesh,
+                distributed::MeshCoreCoord{scoord, l2phys},
+                (uint32_t)hring_bytes,
+                distributed::D2HSocket::ExternalConfigBuffer{.address = caddr, .sender_is_l2cpu = true});
+            s->set_page_size(64);
+            socks.push_back(std::move(s));
+            // Read the FIFO NoC addr the socket wrote (get_noc_addr). The X280 can't read this config buffer
+            // from LIM coherently (per-hart stale), so we pass the FIFO addr via the P_HOST_BASE param instead
+            // (packed lo32/socket -- get_noc_addr hi=0 on BH). bytes_acked (config+32) is still read live.
+            std::vector<uint8_t> cfgbuf(cfg_sz, 0);
+            drv.read_block(cfgbuf.data(), cfg_sz, caddr);
+            const uint32_t* c = reinterpret_cast<const uint32_t*>(cfgbuf.data());
+            uint64_t fifo = (((uint64_t)c[13]) << 32) | c[4];
+            if ((fifo >> 32) != 0 && h < 2) {
+                fprintf(
+                    stderr,
+                    "[socket%llu] FIFO addr 0x%llx has nonzero hi -- lo32 packing is lossy!\n",
+                    (unsigned long long)h,
+                    (unsigned long long)fifo);
+                std::_Exit(2);
+            }
+            if (h < 2) {
+                fifo_lo[h] = fifo & 0xffffffffull;
+            }
+            printf(
+                "[socket%llu cfg] fifo_noc=0x%llx fifo_total=%u is_d2h=%u enc[14]=0x%x cfg_sz=%u\n",
+                (unsigned long long)h,
+                (unsigned long long)fifo,
+                c[5],
+                c[6],
+                c[14],
+                cfg_sz);
+        }
+        // Pass the FIFO addrs to profzone via P_HOST_BASE (unused in socket mode) -- read FRESH as a param.
+        bcfg.host_base = (fifo_lo[0] & 0xffffffffull) | ((fifo_lo[1] & 0xffffffffull) << 32);
+        printf(
+            "[socket] created %llu D2HSocket(s), %llu B FIFO each, page 64 B; P_HOST_BASE packed=0x%llx\n",
+            (unsigned long long)ndh,
+            (unsigned long long)hring_bytes,
+            (unsigned long long)bcfg.host_base);
+    }
     uint64_t nharts = 0;
     bool half_broken = false;
     if (!pz::boot_profzone(drv, bcfg, nharts, half_broken)) {
@@ -453,6 +514,15 @@ int main(int argc, char** argv) {
             (int)half_broken,
             device_id);
         std::_Exit(1);
+    }
+    if (socket_mode) {
+        uint32_t hb[2] = {0, 0};
+        drv.read_block(hb, 8, 0x08011008ull);  // P_HOST_BASE in LIM (should == packed fifo addrs)
+        printf(
+            "[socket POST-BOOT] LIM P_HOST_BASE = 0x%08x%08x (expect 0x%llx)\n",
+            hb[1],
+            hb[0],
+            (unsigned long long)bcfg.host_base);
     }
     uint64_t nrelay = dualrelay ? nread : 1;
     if (direct) {
@@ -600,6 +670,7 @@ int main(int argc, char** argv) {
     // per-flusher (per-socket) verify results
     std::vector<uint64_t> fl_mk(ndh, 0), fl_start(ndh, 0), fl_end(ndh, 0), fl_prog_ok(ndh, 0), fl_ts_bad(ndh, 0),
         fl_unbal(ndh, 0), fl_stall(ndh, 0);
+    std::vector<uint64_t> fl_pages(ndh, 0);  // --socket: total pages the host read from this socket (reliable)
     // Flusher for socket h: drain ring h IN ORDER, demux (dispatch bulk/per-risc) + decode into fully-
     // resolved device records + per-lane seq verify (this socket owns its half's lanes), push record batches
     // to the MPMC. Demux MUST live here (sticky-src is in-order per stream); records are self-contained so
@@ -615,6 +686,8 @@ int main(int argc, char** argv) {
         Batch batch;
         batch.reserve(BATCH_RECS);
         std::vector<uint32_t> buf;
+        std::vector<uint32_t> resid;  // --socket: partial packet carried across reads (socket pages are 16-word
+                                      // aligned, NOT packet-aligned like the raw ring's packet-boundary SENT)
         uint32_t cur_lane = 0xFFFFFFFF;
         auto emit = [&](uint32_t lane, uint32_t w0, uint32_t w1) {
             if (lane >= NL) {
@@ -669,39 +742,61 @@ int main(int argc, char** argv) {
                 printf("  [flusher %llu] WALL TIMEOUT\n", (unsigned long long)h);
                 break;
             }
-            uint32_t hsent;
-            cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
-            if (hsent == acked) {
-                if (device_done.load()) {  // FW idle => sent is final; caught up => done
-                    break;
+            if (socket_mode) {
+                // --socket: read whole 64 B pages from the D2HSocket FIFO (read() auto-acks the sender via
+                // bytes_acked). Pages are 16-word aligned, NOT packet-aligned, so prepend the residual partial
+                // packet carried from the last read; the walk below consumes whole packets and re-saves the tail.
+                uint32_t np = socks[h]->pages_available();
+                if (np == 0) {
+                    if (device_done.load()) {  // FW idle => sender's final bytes_sent is in; FIFO drained => done
+                        break;
+                    }
+                    continue;  // spin
                 }
-                continue;  // spin
-            }
-            uint32_t avail = hsent - acked;
-            if (avail > hring_words) {
-                overflow.fetch_add(1);
-                acked = hsent;
-                drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
-                continue;
-            }
-            // sent is always published on a packet boundary, so avail is a whole number of packet-words;
-            // drain all of it (packets are now VARIABLE length -- SRC/TIMER are 1 word -- so no even-align).
-            uint32_t drain = avail;
-            buf.resize(drain);
-            uint32_t st = acked % hring_words;
-            if (st + drain <= hring_words) {
-                cluster.read_sysmem(
-                    reinterpret_cast<uint8_t*>(buf.data()), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                uint32_t dw = np * 16u;  // 64 B page = 16 words
+                buf.resize(resid.size() + dw);
+                if (!resid.empty()) {
+                    std::copy(resid.begin(), resid.end(), buf.begin());
+                }
+                socks[h]->read(reinterpret_cast<void*>(buf.data() + resid.size()), np);  // notify_sender=true
+                total_words.fetch_add(dw);
+                fl_pages[h] += np;  // reliable host-side signal: did the relay deliver anything to this socket?
+                resid.clear();
             } else {
-                uint32_t first = hring_words - st;
-                cluster.read_sysmem(
-                    reinterpret_cast<uint8_t*>(buf.data()), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
-                cluster.read_sysmem(
-                    reinterpret_cast<uint8_t*>(buf.data() + first), (drain - first) * 4, hoff, device_id, 0);
+                uint32_t hsent;
+                cluster.read_sysmem(reinterpret_cast<uint8_t*>(&hsent), 4, soff, device_id, 0);  // SENT from sysmem
+                if (hsent == acked) {
+                    if (device_done.load()) {  // FW idle => sent is final; caught up => done
+                        break;
+                    }
+                    continue;  // spin
+                }
+                uint32_t avail = hsent - acked;
+                if (avail > hring_words) {
+                    overflow.fetch_add(1);
+                    acked = hsent;
+                    drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
+                    continue;
+                }
+                // sent is always published on a packet boundary, so avail is a whole number of packet-words;
+                // drain all of it (packets are now VARIABLE length -- SRC/TIMER are 1 word -- so no even-align).
+                uint32_t drain = avail;
+                buf.resize(drain);
+                uint32_t st = acked % hring_words;
+                if (st + drain <= hring_words) {
+                    cluster.read_sysmem(
+                        reinterpret_cast<uint8_t*>(buf.data()), drain * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                } else {
+                    uint32_t first = hring_words - st;
+                    cluster.read_sysmem(
+                        reinterpret_cast<uint8_t*>(buf.data()), first * 4, hoff + (uint64_t)st * 4, device_id, 0);
+                    cluster.read_sysmem(
+                        reinterpret_cast<uint8_t*>(buf.data() + first), (drain - first) * 4, hoff, device_id, 0);
+                }
+                acked += drain;
+                total_words.fetch_add(drain);
+                drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
             }
-            acked += drain;
-            total_words.fetch_add(drain);
-            drv.write_block(reinterpret_cast<uint8_t*>(&acked), 4, HACKED_ADDR_H(h));
             // decode buf (whole frames): variable-length walk. SRC/TIMER are 1 word; PROG/markers 2; BULK
             // has its own framing. Advance by the decoded length so packet boundaries stay in sync.
             size_t p = 0, sz = buf.size();
@@ -760,6 +855,10 @@ int main(int argc, char** argv) {
                     emit(cur_lane, w0, buf[p + 1]);
                     p += 2;
                 }
+            }
+            if (socket_mode && p < sz) {
+                // trailing partial packet (socket pages aren't packet-aligned) -> carry to the next read
+                resid.assign(buf.begin() + (std::ptrdiff_t)p, buf.end());
             }
         }
         if (!batch.empty()) {
@@ -1188,6 +1287,11 @@ int main(int argc, char** argv) {
                 (unsigned long long)aux1,
                 (unsigned long long)aux2,
                 (unsigned long long)breach);
+            printf(
+                "    [relay%llu cfg] fifo_addr=0x%llx bsent_addr=0x%llx\n",
+                (unsigned long long)(h - nread),
+                (unsigned long long)breach,
+                (unsigned long long)nbulk);
         } else {
             uint64_t visits = aux2, polls = breach;  // reader: v[5]=visits (drains), v[6]=polls, v[7]=bulk cores
             printf(
@@ -1251,6 +1355,18 @@ int main(int argc, char** argv) {
             (unsigned long long)consumed.load(),
             (unsigned long long)kernel_min,
             ok ? "  OK" : "  *** LOSS ***");
+        if (socket_mode) {
+            uint64_t tp = 0;
+            for (uint64_t h = 0; h < ndh; h++) {
+                tp += fl_pages[h];
+            }
+            printf(
+                "  socket pages : %llu total read by host (%llu + %llu per socket) -- >0 => relay IS delivering "
+                "to the FIFO\n",
+                (unsigned long long)tp,
+                (unsigned long long)fl_pages[0],
+                (unsigned long long)(ndh > 1 ? fl_pages[1] : 0));
+        }
         printf(
             "  zones        : %llu START / %llu END   unbalanced lanes: %llu\n",
             (unsigned long long)starts,

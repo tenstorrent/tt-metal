@@ -21,6 +21,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "tools/profiler/x280_driver.hpp"
@@ -57,6 +58,7 @@ inline constexpr uint64_t kNonceFullread = 0x2000ULL;   // bit13: reader always 
 inline constexpr uint64_t kNonceBulkcore = 0x4000ULL;   // bit14: one bulk NoC read per core
 inline constexpr uint64_t kNonceDualrelay = 0x8000ULL;  // bit15: one relay hart per reader
 inline constexpr uint64_t kNonceAdaptive = 0x10000ULL;  // bit16: per-core adaptive bulk-vs-per-risc switch
+inline constexpr uint64_t kNonceSocket = 0x20000ULL;    // bit17: relay uses the D2HSocket transport (sender_socket_md)
 
 // X280 boot-phase word (from x280_boot.h) -- lets the host confirm profzone is a RESIDENT active FW.
 inline constexpr uint64_t kX280BootPhaseAddr = 0x080160C0ULL;       // X280_BOOT_HANDSHAKE_BASE(0x08016000)+0xC0
@@ -95,6 +97,13 @@ struct ProfzoneBootCfg {
     bool bulkcore = false;
     bool dualrelay = true;
     bool adaptive = true;
+    bool socket = false;  // relay writes into a tt-metal D2HSocket (sender_socket_md) instead of a raw ring;
+                          // caller must create the D2HSocket(s) at the config addrs BEFORE boot
+    // --socket: caller-captured D2HSocket config buffers ({LIM addr, bytes}) to (re)write into LIM AFTER
+    // ensure_idle. The D2HSocket ctor writes the config pre-boot, but ensure_idle asserts L2CPU reset and
+    // WIPES LIM -> the relay would read a zeroed config. boot_profzone restores these post-reset (like
+    // coords/SRCLUT) so the config is live when relay_run_socket reads it.
+    std::vector<std::pair<uint64_t, std::vector<uint8_t>>> socket_configs;
 };
 
 namespace detail {
@@ -135,6 +144,11 @@ inline bool boot_profzone(X280Driver& drv, const ProfzoneBootCfg& cfg, uint64_t&
         }
         drv.write_block(lut.data(), static_cast<uint32_t>(lut.size()), kProfzoneSrcLutBase);
     }
+    // --socket: restore the D2HSocket config buffers WIPED by ensure_idle's reset, so relay_run_socket reads
+    // live fifo/bytes_sent addrs (post-reset, like coords/SRCLUT above -> survives to the drain loop).
+    for (const auto& sc : cfg.socket_configs) {
+        drv.write_block(sc.second.data(), static_cast<uint32_t>(sc.second.size()), sc.first);
+    }
     // params
     {
         std::vector<uint8_t> params(64, 0);
@@ -147,7 +161,8 @@ inline bool boot_profzone(X280Driver& drv, const ProfzoneBootCfg& cfg, uint64_t&
         uint64_t nonce = cfg.read_noc | (cfg.direct ? kNonceDirect : 0) | (cfg.split_noc ? kNonceSplitNoc : 0) |
                          (cfg.wnoc1 ? kNonceWnoc1 : 0) | (cfg.nodrain ? kNonceNodrain : 0) |
                          (cfg.fullread ? kNonceFullread : 0) | (cfg.bulkcore ? kNonceBulkcore : 0) |
-                         (cfg.dualrelay ? kNonceDualrelay : 0) | (cfg.adaptive ? kNonceAdaptive : 0);
+                         (cfg.dualrelay ? kNonceDualrelay : 0) | (cfg.adaptive ? kNonceAdaptive : 0) |
+                         (cfg.socket ? kNonceSocket : 0);
         detail::pz_pack<uint64_t>(params, kPOffNonce, nonce);
         detail::pz_pack<uint64_t>(params, kPOffNRead, cfg.direct ? cfg.ndrain : cfg.nread);
         drv.write_block(params.data(), static_cast<uint32_t>(params.size()), kProfzoneMboxParams);

@@ -78,6 +78,29 @@
 #define PP_BULK_CORE 5u              /* raw-bulk core frame type (MUST match prof_packet.h) */
 #define WRITE_WIN_BASE 200u
 
+/* --- D2H-socket transport (P_NONCE bit17): relay publishes into the tt-metal D2HSocket FIFO via its
+ *     sender_socket_md instead of a raw HSENT/HACKED ring. profzone is bare-metal C and can't include the
+ *     C++ hostdev/socket.h, so these WORD offsets into the sender core's config buffer MUST stay in lockstep
+ *     with the config buffer's L1_ALIGNMENT=16 layout (md padded to 32B=8 words, ack 16B, enc 16B) -- these
+ *     match the PROVEN sender in profsock.c (--socktest/--realzones):
+ *       0 bytes_sent | 2 write_ptr | 3 dn_bytes_sent_addr_lo | 4 dn_fifo_addr_lo | 5 dn_fifo_total
+ *       8 bytes_acked (byte 32) | 12 bytes_sent_addr_hi | 13 fifo_addr_hi | 14 pcie_xy_enc */
+#define SMD_BYTES_SENT 0u
+#define SMD_WRITE_PTR 2u
+#define SMD_DN_BSENT_LO 3u
+#define SMD_DN_FIFO_LO 4u
+#define SMD_FIFO_TOTAL 5u
+#define SMD_BACKED 8u /* bytes_acked -- host writes here (X280 LIM, byte 32), relay reads (fast local) */
+#define SMD_BSENT_HI 12u
+#define SMD_FIFO_HI 13u
+#define SOCKET_WIN_BASE 208u      /* posted windows: data @ +h, bytes_sent @ +4+h */
+#define kNonceSocket (1ull << 17) /* P_NONCE bit17: use the D2HSocket transport */
+/* socket h config @ base + h*stride. MUST be in the core-readable low mailbox region (between COORDS-end
+ * 0x08011570 and HEADS 0x08013000): the X280 core reads 0x0801A000 (the manager's addr) as ZERO -- that
+ * range is a hole in the core's LIM view even though it's NoC-writable. See FINDINGS / the takeover note. */
+#define X280_SOCKET_CONFIG_BASE 0x08019000ull /* profsock.c/--realzones proven addr (delivered to host) */
+#define X280_SOCKET_CONFIG_STRIDE 0x100ull
+
 static inline uint64_t rdcycle(void) {
     uint64_t c;
     __asm__ volatile("rdcycle %0" : "=r"(c));
@@ -495,6 +518,138 @@ static void relay_run(
     fence_();
 }
 
+/* ============================== RELAY (D2H-socket transport) ============================== */
+/* Same round-robin drain as relay_run, but each reader h -> a tt-metal D2HSocket. The socket's config buffer
+ * (sender_socket_md @ X280_SOCKET_CONFIG_BASE + h*stride, in X280 LIM, written by the host before boot) gives
+ * the host FIFO addr/size, the bytes_sent slot (host sysmem -- we publish), the pcie enc, and bytes_acked[0]
+ * (LIM -- host writes => flow control). bytes_sent is published PER DRAIN-BATCH (amortized, not per page); the
+ * host reads whole pages and its streaming demux walks packets across page boundaries. */
+static void relay_run_socket(
+    uint64_t hartid,
+    uint64_t pcie_enc,
+    uint64_t rlo,
+    uint64_t rhi,
+    uint64_t bulkcore,
+    const uint64_t* sk_fifo,     /* per-socket FIFO NoC addr, read COLD in main (see the stale-LIM note) */
+    const uint64_t* sk_bsent,    /* per-socket bytes_sent host addr */
+    const uint64_t* sk_fbytes,   /* per-socket FIFO total bytes */
+    const uint64_t* sk_bsent0) { /* per-socket initial bytes_sent (resume) */
+    uint32_t stage_words = bulkcore ? STAGE_WORDS_BULK : STAGE_WORDS_NORMAL;
+    uint32_t swm = stage_words - 1u;
+
+    uint64_t fbase[4], bsbase[4]; /* posted-window NoC addrs: FIFO data / bytes_sent slot (host sysmem) */
+    uint64_t cfg_backed[4];       /* LIM addr of bytes_acked[0] for socket h */
+    uint32_t fifo_bytes[4], bytes_sent[4];
+    uint32_t cons[4] = {0, 0, 0, 0};
+
+    for (uint64_t h = rlo; h < rhi; h++) {
+        uint64_t c = X280_SOCKET_CONFIG_BASE + h * X280_SOCKET_CONFIG_STRIDE;
+        uint64_t fifo_addr = sk_fifo[h]; /* from the COLD main read -- NOT a late (stale) config load */
+        uint64_t bsent_addr = sk_bsent[h];
+        fifo_bytes[h] = (uint32_t)sk_fbytes[h];
+        bytes_sent[h] = (uint32_t)sk_bsent0[h];
+        cfg_backed[h] = c + (uint64_t)SMD_BACKED * 4; /* runtime bytes_acked (host ack) -- read live in the loop */
+        /* DEBUG: the fifo/bsent addrs this relay will write to (from the fresh main-variable unpack). */
+        w64(RES_SLOT(hartid) + 0x30, fifo_addr);
+        w64(RES_SLOT(hartid) + 0x38, bsent_addr);
+
+        noc_tlb_2m_t wt;
+        wt.data[0] = 0;
+        wt.data[1] = 0;
+        wt.data[2] = 0;
+        wt.data[3] = 0;
+        wt.x_end = (uint32_t)(pcie_enc & 0x3f);
+        wt.y_end = (uint32_t)((pcie_enc >> 6) & 0x3f);
+        wt.x_start = wt.x_end;
+        wt.y_start = wt.y_end;
+        wt.noc_selector = 1; /* NOC1: the socket's pinned-buffer ATU mapping is reachable on NOC1 (proven
+                              * profsock/old-profzone sender). NOC0 (raw host-channel window) delivers nothing here. */
+        wt.posted = 1;
+        uint32_t dwin = SOCKET_WIN_BASE + (uint32_t)h; /* FIFO data window */
+        wt.addr = fifo_addr >> 21;
+        (void)noc_configure_tlb_2m_ext(dwin, &wt, 0);
+        fbase[h] =
+            NOC_2M_WINDOW_BASE + (uint64_t)dwin * NOC_2M_WINDOW_STRIDE + (fifo_addr & (NOC_2M_WINDOW_STRIDE - 1ULL));
+        uint32_t bwin = SOCKET_WIN_BASE + 4u + (uint32_t)h; /* bytes_sent window (separate pinned buf) */
+        wt.addr = bsent_addr >> 21;
+        (void)noc_configure_tlb_2m_ext(bwin, &wt, 0);
+        bsbase[h] =
+            NOC_2M_WINDOW_BASE + (uint64_t)bwin * NOC_2M_WINDOW_STRIDE + (bsent_addr & (NOC_2M_WINDOW_STRIDE - 1ULL));
+        w32(CONS(h), 0);
+    }
+    fence_();
+
+    uint64_t total = 0, t_copy = 0, hostfull = 0, idle = 0;
+    uint64_t t0 = rdcycle();
+    for (;;) {
+        uint64_t pending = 0;
+        for (uint64_t h = rlo; h < rhi; h++) {
+            uint32_t prod = r32(PROD(h));
+            uint32_t cn = cons[h];
+            if ((int32_t)(prod - cn) <= 0) {
+                continue;
+            }
+            pending = 1;
+            uint64_t sbase = STAGE_BASE + h * STAGE_STRIDE;
+            uint32_t avail = prod - cn; /* whole frames (reader publishes PROD at frame boundaries) */
+            uint32_t need_b = avail * 4u;
+            uint32_t acked = r32(cfg_backed[h]);
+            if (fifo_bytes[h] - (bytes_sent[h] - acked) < need_b) {
+                hostfull++;
+                continue; /* not enough FIFO room for the whole snapshot yet */
+            }
+            uint64_t tc = rdcycle();
+            uint32_t fifo_w = fifo_bytes[h] / 4u;
+            uint32_t si = cn, dbyte = bytes_sent[h] % fifo_bytes[h], leftw = avail;
+            while (leftw) {
+                uint32_t sslot = si & swm;
+                uint32_t dwslot = (dbyte / 4u) % fifo_w;
+                uint32_t chunk = leftw;
+                if (chunk > stage_words - sslot) {
+                    chunk = stage_words - sslot;
+                }
+                if (chunk > fifo_w - dwslot) {
+                    chunk = fifo_w - dwslot;
+                }
+                copy_words(fbase[h] + (uint64_t)dwslot * 4, sbase + (uint64_t)sslot * 4, chunk);
+                si += chunk;
+                dbyte = (dbyte + chunk * 4u) % fifo_bytes[h];
+                leftw -= chunk;
+            }
+            t_copy += rdcycle() - tc;
+            cn += avail;
+            cons[h] = cn;
+            bytes_sent[h] += need_b;
+            total += avail;
+            fence_();                      /* payload lands before bytes_sent is published (posted order) */
+            w32(CONS(h), cn);              /* free reader SPSC */
+            w32(bsbase[h], bytes_sent[h]); /* publish bytes_sent to host sysmem (amortized per batch) */
+        }
+        if (!pending) {
+            idle++;
+        }
+        if (r64(P_STOP) && !pending) {
+            uint64_t all_done = 1;
+            for (uint64_t h = rlo; h < rhi; h++) {
+                if (r64(RES_SLOT(h) + RES_DONE) != DONE_MAGIC || r32(PROD(h)) != cons[h]) {
+                    all_done = 0;
+                }
+            }
+            if (all_done) {
+                break;
+            }
+        }
+    }
+    uint64_t t_total = rdcycle() - t0;
+    w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);
+    w64(RES_SLOT(hartid) + 0x08, t_copy);
+    w64(RES_SLOT(hartid) + 0x10, t_total);
+    w64(RES_SLOT(hartid) + 0x20, hostfull);
+    w64(RES_SLOT(hartid) + 0x28, idle);
+    w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+    fence_();
+}
+
 /* ============================== DIRECT DRAIN (1..N harts) ============================== */
 /* Each drain hart reads its OWN slice of worker cores (NoC, uncached -> coherent) and writes its OWN host
  * ring DIRECTLY, injecting a STICKY-SRC before each source's data. No LIM SPSC, no cross-hart handoff ->
@@ -655,6 +810,7 @@ int main(uint64_t hartid) {
     uint64_t bulkcore = (r64(P_NONCE) >> 14) & 1ull;  /* NONCE bit 14: one bulk NoC read per core (all 5 rings) */
     uint64_t dualrelay = (r64(P_NONCE) >> 15) & 1ull; /* NONCE bit 15: one relay hart PER READER (decouple halves) */
     uint64_t adaptive = (r64(P_NONCE) >> 16) & 1ull;  /* NONCE bit 16: per-core adaptive bulk-vs-per-risc switch */
+    uint64_t use_socket = (r64(P_NONCE) >> 17) & 1ull; /* NONCE bit 17: relay uses the D2HSocket transport */
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -671,6 +827,31 @@ int main(uint64_t hartid) {
     }
     uint64_t nrelay = dualrelay ? nread : 1;              /* 1 relay for all, or 1 per reader */
     uint64_t nharts = direct ? ndrain : (nread + nrelay); /* direct: ndrain drainers; split: readers + relays */
+
+    /* --socket: the FIFO NoC addrs come from a PARAM (P_HOST_BASE, packed lo32 per socket), NOT from the
+     * sender_socket_md config buffer. The X280 reads params FRESH but reads arbitrary host-written LIM STALE
+     * (0) -- no cbo to invalidate (Zicbom absent). The working D2H prototypes all sidestepped this (Tensix
+     * sender / host-side NoC reads / hart-0). So: fifo addr <- param; fifo size = raw-ring bytes (hring*4);
+     * the bytes_sent host buffer sits right after the FIFO (D2HSocket layout: bytes_sent_addr = data + size);
+     * runtime bytes_acked is read live from config+32 in the loop (a host-continuously-updated word reads
+     * fresh on repeated loads, like the raw HACKED read). hi=0 from get_noc_addr on BH -> lo32 packing lossless.
+     * NOT {0}-initialized: an aggregate init emits memset, but the FW is -nostdlib -> undefined reference. */
+    uint64_t sk_fifo[4], sk_bsent[4], sk_fbytes[4], sk_bsent0[4];
+    if (use_socket) {
+        /* USE THE host_base VARIABLE (read once at the top of main -> fresh), NOT a re-read of P_HOST_BASE:
+         * the X280 reads params fresh on the FIRST (cold) load but a later re-read of the same param returns
+         * STALE 0 (the params line is evicted and refetches 0 -- the same reason the raw path caches host_base
+         * in a local and never re-reads it). This was the whole bug. */
+        uint64_t packed = host_base; /* socket0 fifo lo32 | socket1 fifo lo32 << 32 */
+        uint64_t total = hring_words * 4ull;
+        sk_fifo[0] = packed & 0xffffffffull;
+        sk_fifo[1] = (packed >> 32) & 0xffffffffull;
+        for (uint64_t h = 0; h < nread && h < 2; h++) {
+            sk_fbytes[h] = total;
+            sk_bsent[h] = sk_fifo[h] + total; /* D2HSocket: bytes_sent buffer immediately follows the FIFO */
+            sk_bsent0[h] = 0;
+        }
+    }
 
     volatile uint64_t* rl = (volatile uint64_t*)RES_SLOT(hartid);
     for (int i = 0; i < 8; i++) {
@@ -696,8 +877,12 @@ int main(uint64_t hartid) {
         uint64_t hri = hartid - nread; /* relay index 0..nrelay-1 */
         uint64_t rlo = (nrelay == 1) ? 0 : hri;
         uint64_t rhi = (nrelay == 1) ? nread : (hri + 1); /* one relay per reader when dualrelay */
-        relay_run(
-            hartid, host_base, rlo, rhi, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull, bulkcore || adaptive);
+        if (use_socket) {
+            relay_run_socket(hartid, pcie_enc, rlo, rhi, bulkcore || adaptive, sk_fifo, sk_bsent, sk_fbytes, sk_bsent0);
+        } else {
+            relay_run(
+                hartid, host_base, rlo, rhi, hring_words, pcie_enc, (r64(P_NONCE) >> 12) & 1ull, bulkcore || adaptive);
+        }
     }
 
     if (hartid == 0) {
