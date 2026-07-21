@@ -72,14 +72,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     // copy srca to dest
-    const bool is_8bit_format = _llk_math_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
-    const bool TILIZE         = true;
+    const bool TILIZE = true;
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math, is_8bit_format /* skip_bh_tilize_workaround */);
+        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;

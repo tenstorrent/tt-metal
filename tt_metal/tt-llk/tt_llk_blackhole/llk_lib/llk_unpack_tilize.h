@@ -25,13 +25,10 @@ using namespace ckernel::unpacker;
  * Selects between unpacking to SrcA (with a SrcB dvalid NOP) or straight to dest. 8-bit formats
  * use the inline 2-context path in @ref _llk_unpack_tilize_ instead (no MOP).
  *
- * @param narrow_tile: Whether the tile is narrow (single column of faces). Unused; asserted false.
  * @param unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  */
-inline void _llk_unpack_tilize_mop_config_([[maybe_unused]] const bool narrow_tile = false, const bool unpack_to_dest = false)
+inline void _llk_unpack_tilize_mop_config_(const bool unpack_to_dest = false)
 {
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
-
     // SrcB SET_DVALID + UNP_ZEROSRC: math's ELWADD branch (FP32 dest-accumulate) reads SrcB,
     // so it must be both dvalid and zeroed. MOVA2D branch ignores it (harmless handshake).
     static constexpr std::uint32_t unpack_srca =
@@ -55,13 +52,18 @@ inline void _llk_unpack_tilize_mop_config_([[maybe_unused]] const bool narrow_ti
  *
  * Disables face transpose, configures the unpacker into tileize mode (throttle, shift amount,
  * per-tile X/Z dims) for the given block column dimension, decides whether 32-bit datums must be
- * unpacked to dest, and programs the tilize MOP.
+ * unpacked to dest, and:
+ *   - 8-bit formats: programs the 1x16 face x_dim per context and (for num_faces==4) the
+ *     SCRATCH_SEC0_val preload used by the inline CFGSHIFTMASK. No MOP is programmed —
+ *     the UNPACR sequence is issued inline by @ref _llk_unpack_tilize_.
+ *   - non-8-bit formats: programs the whole-tile x_dim/z_dim descriptor state and the
+ *     MOP template via @ref _llk_unpack_tilize_mop_config_ (Blackhole workaround).
  *
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param ct_dim: Number of column tiles in the block, used to size the column dimension.
  * @param face_r_dim: Rows per face, valid values = <2, 4, 8, 16>.
- * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param narrow_tile: Whether the tile is narrow (single column of faces). Not supported on the 8-bit path (asserted false).
  * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
  * @note Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
  * @ref _llk_unpack_tilize_ is the matching execute call.
@@ -96,14 +98,15 @@ inline void _llk_unpack_tilize_init_(
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
 
-    const bool is_8bit_format = IS_8BIT_FORMAT(unpack_src_format);
+    const bool is_8bit_format        = IS_8BIT_FORMAT(unpack_src_format);
+    const std::uint32_t shift_amount = (SCALE_DATUM_SIZE(unpack_src_format, block_c_dim)) >> 4;
 
     // Override default settings to enable tilize mode
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
     config.f.throttle_mode   = 2;
     config.f.tileize_mode    = 1;
-    config.f.shift_amount    = (SCALE_DATUM_SIZE(unpack_src_format, block_c_dim)) >> 4;
+    config.f.shift_amount    = shift_amount;
 
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
@@ -111,7 +114,6 @@ inline void _llk_unpack_tilize_init_(
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
     if (is_8bit_format)
     {
-        LLK_ASSERT(num_faces == 2 || num_faces == 4, "8-bit tilize currently supports only num_faces=2 or 4");
         LLK_ASSERT(!narrow_tile, "8-bit tilize narrow_tile not supported");
         LLK_ASSERT(!unpack_to_dest, "8-bit tilize unpack_to_dest not supported");
 
@@ -126,12 +128,11 @@ inline void _llk_unpack_tilize_init_(
         //   -2 compensates for Z=2 L1 offset (Z * XDim * DatumSize = 2 * 16 * 1 = 32 bytes = 2 16B-words)
         if (num_faces == 4)
         {
-            const std::uint32_t shift_amount           = (SCALE_DATUM_SIZE(unpack_src_format, block_c_dim)) >> 4;
             const std::uint32_t base_address_increment = shift_amount * face_r_dim - 2;
             TT_SETDMAREG(0, LOWER_HALFWORD(base_address_increment), 0, LO_16(p_gpr_unpack::TMP0));
             TT_SETDMAREG(0, UPPER_HALFWORD(base_address_increment), 0, HI_16(p_gpr_unpack::TMP0));
             TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-            TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
+            TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         }
     }
     else
@@ -148,16 +149,20 @@ inline void _llk_unpack_tilize_init_(
         // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1)
         TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
 
-        _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest);
+        _llk_unpack_tilize_mop_config_(unpack_to_dest);
     }
 }
 
 /**
  * @brief Unpack and tilize a tile from L1 into SrcA or the dest register.
  *
- * Computes per-face L1 addresses for the selected column tile and runs the tilize MOP. For 8-bit
- * formats it loops over face groups using the Wormhole-style path; otherwise it runs a single pass
- * and, when unpacking 32-bit datums, manages the dest write address and completion handshake.
+ * Computes the L1 base address for the selected column tile and unpacks it into SrcA.
+ *   - 8-bit formats: issues an inline 2-context UNPACR sequence (2 UNPACRs for num_faces=2, or
+ *     4 UNPACRs + CFGSHIFTMASK for num_faces=4) plus a SrcB SET_DVALID + UNP_ZEROSRC handshake.
+ *     Emits 1 DVALID per tile. No MOP; `face_r_dim` is not consumed by the sequence itself
+ *     (already programmed via init's SCRATCH_SEC0_val preload) but drives the init-time preload.
+ *   - non-8-bit formats: runs the whole-tile MOP programmed at init, and — when unpacking
+ *     32-bit datums to dest — manages the dest write address and completion handshake.
  *
  * @param base_address: L1 base address of the source tile buffer.
  * @param tile_index: Column tile index selecting which tile to unpack.
@@ -165,7 +170,7 @@ inline void _llk_unpack_tilize_init_(
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param face_r_dim: Rows per face.
  * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
- * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param narrow_tile: Whether the tile is narrow (single column of faces). Not supported on the 8-bit path.
  * @note Call @ref _llk_unpack_tilize_init_ before this function, and
  *       @ref _llk_unpack_tilize_uninit_ after it to restore modified state.
  */
@@ -194,11 +199,18 @@ inline void _llk_unpack_tilize_(
 
     // 8-bit path: 2-context inline UNPACR sequence. AddrMode=0b00010001 advances BOTH
     // Ch0.Z (L1 input read) and Ch1.Z (SrcA output write) so face N lands in SrcA rows
-    // 16*N..16*N+15 via the Zstride configured by configure_unpack_AB. This works
-    // because SRCA_SET_SetOvrdWithAddr is enabled by default on BH, letting OutAddr
-    // drive the row directly (SrcRow is not added). The active context selects between
-    // REG3_Base_address (cntx0) and REG3_Base_cntx1_address for both the base-address
-    // cfg write and the CFGSHIFTMASK target.
+    // 16*N..16*N+15 via the Zstride configured by configure_unpack_AB. This relies on
+    // SRCA_SET_SetOvrdWithAddr = 1 (letting OutAddr drive the SrcA row directly, without
+    // SrcRow being added). Contract: the bit is set to 1 by configure_unpack_AB at unpack
+    // init (see cunpack_common.h:946 -- TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4)) and is the
+    // resting state. It is transiently cleared to 0 only by set_dst_write_addr (cunpack
+    // _common.h:1015) with a paired restore in unpack_to_dest_tile_done (line 1009).
+    // Because this path asserts !unpack_to_dest at init, we can never be inside that
+    // transient window on entry -- the bit is guaranteed to be 1. NOTE: future FP8
+    // unpack_to_dest support would enter with the bit cleared and must either restore
+    // it explicitly or use a different addressing scheme.
+    // The active context selects between REG3_Base_address (cntx0) and REG3_Base_cntx1
+    // _address for both the base-address cfg write and the CFGSHIFTMASK target.
     //   num_faces==4: 4 UNPACRs (face 3 with SetDvalid) + CFGSHIFTMASK between top and
     //                 bottom face pairs (Ch1.Z keeps advancing across the CFGSHIFTMASK
     //                 since it touches REG3 only).

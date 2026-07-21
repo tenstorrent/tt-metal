@@ -41,11 +41,13 @@ def test_perf_pack_untilize(
     full_rt_dim,
     full_ct_dim,
 ):
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
+    if (
         formats.input_format == DataFormat.Fp8_e4m3
         or formats.output_format == DataFormat.Fp8_e4m3
-    ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
+    ) and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Pack Untilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
+        )
 
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b output")
