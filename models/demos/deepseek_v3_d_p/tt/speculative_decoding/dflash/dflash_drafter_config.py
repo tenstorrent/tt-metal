@@ -5,7 +5,7 @@
 """Config for the Kimi-K2.6-DFlash *drafter* (block-diffusion speculative-decoding draft model).
 
 Pure-Python (no ttnn/torch import) so both the device module
-(``tt/dflash/tt_dflash_drafter.py``) and the torch-side HF PCC test
+(``tt/speculative_decoding/dflash/tt_dflash_drafter.py``) and the torch-side HF PCC test
 (``tests/speculative_decoding/dflash/test_dflash.py``) can import it.
 
 Values are from the HF checkout ``Kimi-K2.6-DFlash/config.json`` (architecture

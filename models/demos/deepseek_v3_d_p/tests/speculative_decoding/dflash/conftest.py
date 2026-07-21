@@ -25,7 +25,7 @@ import os
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tt.dflash.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.dflash_drafter_config import DFlashDrafterConfig
 
 HF_ENV = "DFLASH_HF_MODEL"
 
