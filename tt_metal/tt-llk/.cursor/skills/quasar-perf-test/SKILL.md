@@ -1,6 +1,6 @@
 ---
 name: quasar-perf-test
-description: Create, extend, debug, and validate Quasar LLK performance tests and their PerfRunType kernel paths. Use when adding perf_<op>_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, or investigating implausible Quasar perf metrics and dvalid handshakes.
+description: Create, extend, debug, and validate Quasar LLK performance tests and their PerfRunType kernel paths. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, or investigating implausible Quasar perf metrics and dvalid handshakes.
 user_invocable: true
 ---
 
@@ -19,12 +19,9 @@ This skill covers two related workflows:
 - **Repair or extend**: implement or debug run-type behavior in an existing
   Quasar kernel.
 
-For running the complete suite and tagging CSVs by run type, use
-`quasar-perf-suite-by-run-type` instead.
-
 ## Choose the workflow
 
-1. If `tests/python_tests/quasar/perf_<op>_quasar.py` does not exist, follow
+1. If `tests/python_tests/quasar/perf_[op]_quasar.py` does not exist, follow
    **Create a perf test**.
 2. If the perf harness exists but run types are missing, hanging, or producing
    implausible metrics, follow **Repair PerfRunType paths**.
@@ -33,17 +30,17 @@ For running the complete suite and tagging CSVs by run type, use
 ## Create a perf test
 
 1. Read:
-   - `tests/python_tests/quasar/test_<op>_quasar.py`
-   - `tests/sources/quasar/<op>_quasar_test.cpp`
+   - `tests/python_tests/quasar/test_[op]_quasar.py`
+   - `tests/sources/quasar/[op]_quasar_test.cpp`
    - the closest current Quasar perf test with the same pipeline shape
 2. Move reusable parameter axes from inline lambdas into named helpers when
    the perf harness needs them.
-3. Add `tests/python_tests/quasar/perf_<op>_quasar.py`.
+3. Add `tests/python_tests/quasar/perf_[op]_quasar.py`.
 4. Mark it with `@pytest.mark.perf` and `@pytest.mark.quasar`.
 5. Import the correctness test as a helper, normally:
 
    ```python
-   from quasar.test_<op>_quasar import test_<op>_quasar as run_<op>_quasar
+   from quasar.test_[op]_quasar import test_[op]_quasar as run_[op]_quasar
    ```
 
 6. Use a narrow perf-oriented sweep:
@@ -71,7 +68,7 @@ For running the complete suite and tagging CSVs by run type, use
 
 ## C++ structure
 
-In `tests/sources/quasar/<op>_quasar_test.cpp`:
+In `tests/sources/quasar/[op]_quasar_test.cpp`:
 
 - Include `perf.h` and `profiler.h`.
 - Put setup in `ZONE_SCOPED("INIT")`.
@@ -83,10 +80,14 @@ In `tests/sources/quasar/<op>_quasar_test.cpp`:
 - Use current Quasar LLK signatures and TensorShape APIs; do not copy stale
   call signatures from older perf branches.
 
-Use these validated orchestration references:
+Use these existing perf kernels as references for generic orchestration:
 
-- `tests/sources/quasar/pack_untilize_quasar_test.cpp`
-- `tests/sources/quasar/eltwise_binary_broadcast_quasar_test.cpp`
+- `tests/sources/pack_untilize_perf.cpp`
+- `tests/sources/eltwise_binary_fpu_perf.cpp`
+
+Use the target Quasar correctness kernel for current Quasar LLK signatures.
+The generic perf references use older-architecture APIs and must not be copied
+verbatim.
 
 Do not copy loop counts blindly. Derive them from the target kernel's actual
 MOP and handshake behavior.
