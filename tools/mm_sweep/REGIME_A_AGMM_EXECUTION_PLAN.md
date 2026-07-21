@@ -109,9 +109,17 @@ The existing AGMM establishes these useful patterns:
   worker cores, generating compile/runtime connection arguments, and configuring packet routes.
 
 Do not copy its block policy blindly. It was optimized for large square matmuls with much larger payloads,
-a rectangular compute grid, and a different bottleneck.
+a rectangular compute grid, and a different bottleneck. Also treat its mux usage as a dataflow reference,
+not necessarily the implementation to copy: new work must use mux v2 as described below.
 
 ### Fabric and mux references
+
+**Use fabric mux v2.** Mux v2 was introduced by
+[`tenstorrent/tt-metal#48675`](https://github.com/tenstorrent/tt-metal/pull/48675) and is the new best-supported,
+preferred mux implementation. Before starting fabric integration, ensure the working branch contains that
+change, locate its current v2 factory/client/tests, and use those APIs for the new op. Do not build new code
+on the legacy mux merely because the older fused AGMM still demonstrates it. If a v2 capability is missing,
+report the precise gap before falling back rather than silently using the legacy path.
 
 For a minimal example isolated from matmul, read:
 
@@ -201,6 +209,12 @@ which can be only 4--32 KiB. Fabric packet, mux, and semaphore costs may dominat
 independent transport operation. Define a transport chunk as `C * kb` blocks. Transfer the coarser chunk but
 publish its `kb` subblocks progressively. `C` is an experimental/planner parameter, not a new public tuning
 knob until evidence supports it.
+
+Optimize the normal path around the default **4096-byte (4 KiB) fabric packet payload**. Transport chunks may
+span multiple packets, but their layout and scheduling should make full 4 KiB packets common and avoid
+unnecessary short tail packets. When profiling shows that fabric is the binding stage, repeat the same-config
+measurement with an **8192-byte (8 KiB) packet payload** and report the difference. Treat 8 KiB as a measured
+fabric-bound A/B, not as the unconditional default and not as a substitute for the 4 KiB production result.
 
 For bidirectional rings, initially stripe whole contiguous transport chunks clockwise and counter-clockwise.
 Do not split every small compute block into two fragments merely because the square AGMM does so.
@@ -299,8 +313,8 @@ Do not write fusion code yet.
    `config=None`; retain host and per-RISC timings.
 3. Measure standalone all-gather for the same per-device A shards and the unfused sequence
    `all_gather_async -> regime_a_matmul` using resident inputs and trace capture where supported.
-4. Record fabric topology, `D`, link count, workers per link, mux buffers, packet size, and effective fabric
-   bandwidth.
+4. Use mux v2 and the default 4 KiB fabric packet payload. Record fabric topology, `D`, link count, workers
+   per link, mux buffers, packet size, and effective fabric bandwidth.
 5. Produce a baseline table containing `T_mm`, `T_ag`, `T_unfused`, `max(T_mm,T_ag)`, PCC, and all relaunches.
 
 Gate: both parent ops correct, cached replay correct, profiler usable, and at least one D=2 or D=4 and one
@@ -354,6 +368,8 @@ timeline or per-RISC evidence that the first matmul begins before the full gathe
    cost, delivered/effective DRAM BW, and output-write cost.
 4. Determine whether DRAM staging is hidden, adds a second critical DRAM read, or perturbs in1 bank BW.
 5. Use the evidence to specify the direct-L1 slot size, depth, and expected maximum speedup.
+6. Use 4 KiB packets for the primary results. For every shape classified as fabric-bound, repeat the exact
+   same configuration at 8 KiB and report absolute time, effective fabric bandwidth, and delta versus 4 KiB.
 
 Gate: the implementation is a useful performance reference and the report identifies a measurable reason
 to proceed to direct L1. Do not claim direct L1 will win without a ceiling estimate.
@@ -397,6 +413,8 @@ Measure these independently before combining them:
 3. Current contiguous `Pk` ownership versus cyclic/balanced local-K distribution across `Pk` bands.
 4. Local-first versus nearest-remote-distance scheduling after the local work is exhausted.
 5. One- versus two-chunk in1 lookahead after remote readiness becomes predictable.
+6. Keep 4 KiB packets as the optimization baseline. On fabric-bound winners, include the controlled 8 KiB
+   packet A/B and retain both results even if 8 KiB wins.
 
 For each lever, hold the other decisions fixed and report payload sizes, packets, semaphores, credits,
 fabric utilization, first-remote stall, and per-RISC spans. Then test the best combination.
@@ -492,6 +510,8 @@ families and tails. Early tasks may use a four-shape subset, but every adoption 
 - Never infer overlap from aggregate wall time alone; retain profiler evidence.
 - Do not optimize fabric by sacrificing the bank-adjacent in1 path without showing a net corpus win.
 - Do not duplicate A over fabric for N partitions.
+- Use mux v2 for the implementation and all reported production candidates. Optimize and report the default
+  4 KiB packet path; additionally report an 8 KiB same-config A/B whenever fabric is the measured bottleneck.
 - Keep experimental mechanisms internal and cache-hashed. Expose only stable, supported policy through the
   public API.
 - When a lever fails its gate, revert its production code, preserve the report/raw evidence and recovery
