@@ -14,6 +14,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -32,8 +33,11 @@ void kernel_main() {
     constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(8);
+    // Bounds for validating untrusted device metadata (watcher-build asserts below).
+    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(9);  // length of region/counts vectors
+    constexpr uint32_t input_num_rows = get_compile_time_arg_val(10);     // M: output buffer row capacity
 
-    constexpr auto dst_args = TensorAccessorArgs<9>();
+    constexpr auto dst_args = TensorAccessorArgs<11>();
     constexpr auto region_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
@@ -65,16 +69,20 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_table_scratch_obj.get_write_ptr());
 
     // Valid prefix length = max over local experts of (region_offset[g] + ceil_tile(counts[g])).
+    // Device metadata is untrusted: the asserts (watcher build only) catch a stale/garbage table entry
+    // before it indexes past the region/counts scratch pages or drives a NoC write past the output buffer.
     uint32_t total_valid_rows = 0;
-    for (uint32_t s = 0; s < experts_per_chip; ++s) {
-        const uint32_t g = table_ptr[s];
-        const uint32_t c = counts_ptr[g];
-        const uint32_t c_ceil = ((c + tile_h - 1) / tile_h) * tile_h;
-        const uint32_t end = region_ptr[g] + c_ceil;
-        if (end > total_valid_rows) {
-            total_valid_rows = end;
+    for (uint32_t local_slot = 0; local_slot < experts_per_chip; ++local_slot) {
+        const uint32_t global_expert_id = table_ptr[local_slot];
+        ASSERT(global_expert_id < num_routed_experts);
+        const uint32_t token_count = counts_ptr[global_expert_id];
+        const uint32_t token_count_ceil = ((token_count + tile_h - 1) / tile_h) * tile_h;
+        const uint32_t region_end = region_ptr[global_expert_id] + token_count_ceil;
+        if (region_end > total_valid_rows) {
+            total_valid_rows = region_end;
         }
     }
+    ASSERT(total_valid_rows <= input_num_rows);
 
     // Balanced split over the FLATTENED compute-block space (identical formula to the reader), so the
     // reader/compute/writer on the same core agree on the exact (start_row, start_col) .. flattened range.

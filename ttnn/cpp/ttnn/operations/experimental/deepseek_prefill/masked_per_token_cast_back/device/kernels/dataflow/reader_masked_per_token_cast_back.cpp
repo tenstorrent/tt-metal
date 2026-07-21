@@ -20,16 +20,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#include "api/debug/dprint.h"
-
-// Per-core work-distribution debug: prints the device-computed valid prefix and this core's balanced
-// slice. Set to 0 to silence. Requires TT_METAL_DPRINT_CORES to be set so the print server captures it.
-#define ENABLE_MASKED_DECOMP_DEBUG 0
-#if ENABLE_MASKED_DECOMP_DEBUG
-#define DPRINT_MASKED(...) DPRINT(__VA_ARGS__)
-#else
-#define DPRINT_MASKED(...)
-#endif
+#include "api/debug/assert.h"
 
 void kernel_main() {
     uint32_t input_e4m3_addr = get_arg_val<uint32_t>(0);
@@ -64,6 +55,9 @@ void kernel_main() {
     // BFLOAT16. The bcast operand keeps the scale's own dtype (no conversion), so both the scratch read and
     // the operand strides use it.
     constexpr uint32_t scale_elem_bytes = get_compile_time_arg_val(17);
+    // Bounds for validating untrusted device metadata (watcher-build asserts below).
+    constexpr uint32_t num_routed_experts = get_compile_time_arg_val(18);  // length of region/counts vectors
+    constexpr uint32_t input_num_rows = get_compile_time_arg_val(19);      // M: input buffer row capacity
     constexpr uint32_t scale_elem_shift = scale_elem_bytes == 4 ? 2 : 1;
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
@@ -75,7 +69,7 @@ void kernel_main() {
 
     (void)block_ht;  // kept as a compile-time layout arg for tensor accessor offset stability
 
-    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<18>();
+    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<20>();
     constexpr auto scale_args = TensorAccessorArgs<input_e4m3_accessor_args.next_compile_time_args_offset()>();
     constexpr auto region_args = TensorAccessorArgs<scale_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
@@ -111,16 +105,20 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_table_scratch_obj.get_write_ptr());
 
     // Valid prefix length = max over local experts of (region_offset[g] + ceil_tile(counts[g])).
+    // Device metadata is untrusted: the asserts (watcher build only) catch a stale/garbage table entry
+    // before it indexes past the region/counts scratch pages or drives a NoC read past the input buffers.
     uint32_t total_valid_rows = 0;
-    for (uint32_t s = 0; s < experts_per_chip; ++s) {
-        const uint32_t g = table_ptr[s];
-        const uint32_t c = counts_ptr[g];
-        const uint32_t c_ceil = ((c + tile_h - 1) / tile_h) * tile_h;
-        const uint32_t end = region_ptr[g] + c_ceil;
-        if (end > total_valid_rows) {
-            total_valid_rows = end;
+    for (uint32_t local_slot = 0; local_slot < experts_per_chip; ++local_slot) {
+        const uint32_t global_expert_id = table_ptr[local_slot];
+        ASSERT(global_expert_id < num_routed_experts);
+        const uint32_t token_count = counts_ptr[global_expert_id];
+        const uint32_t token_count_ceil = ((token_count + tile_h - 1) / tile_h) * tile_h;
+        const uint32_t region_end = region_ptr[global_expert_id] + token_count_ceil;
+        if (region_end > total_valid_rows) {
+            total_valid_rows = region_end;
         }
     }
+    ASSERT(total_valid_rows <= input_num_rows);
 
     // Balanced split across the whole grid over the FLATTENED compute-block space (rows x col-blocks),
     // so all cores stay busy even when tile_rows < num_cores. Each compute-block is tile_h consecutive
@@ -139,19 +137,6 @@ void kernel_main() {
     const uint32_t start_col = start_flat % blocks_per_row;
     const uint32_t end_row = (end_flat == 0) ? 0 : ((end_flat - 1) / blocks_per_row) + 1;
     const uint32_t total_blocks = num_blocks * tile_h;  // per-core scale-blocks (exact multiple of tile_h)
-
-    DPRINT_MASKED(
-        "[masked_decomp] core={}/{} total_valid_rows={} total_cblocks={} cb_start={} cb_end={} start_row={} "
-        "start_col={} num_blocks={}\n",
-        core_id,
-        num_cores,
-        total_valid_rows,
-        total_compute_blocks,
-        cb_start,
-        cb_end,
-        start_row,
-        start_col,
-        num_blocks);
 
     // Publish num_blocks to the compute kernel (read via read_tile_value on the TRISCs).
     cb_control_obj.reserve_back(1);

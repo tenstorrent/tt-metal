@@ -51,6 +51,8 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
 
     const auto& shape = input_e4m3.logical_shape();
     auto [M, H] = fold_M_H(shape);  // M = rows (buffer capacity), H = width (last dim)
+    // Length of the region/counts vectors; the kernels assert every table entry stays within it.
+    const uint32_t num_routed_experts = static_cast<uint32_t>(expert_region_offsets.logical_shape()[-1]);
 
     // Tile / face dims come from the tensor's tile spec.
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
@@ -219,7 +221,9 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
         num_cores,
         operation_attributes.experts_per_chip,
         scale_col_offset,
-        scale_elem_bytes};
+        scale_elem_bytes,
+        num_routed_experts,
+        M};
     TensorAccessorArgs(src_e4m3_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(src_scale_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(region_buffer).append_to(reader_ct_args);
@@ -243,7 +247,9 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
         cb_counts_scratch_w_idx,
         cb_table_scratch_w_idx,
         num_cores,
-        operation_attributes.experts_per_chip};
+        operation_attributes.experts_per_chip,
+        num_routed_experts,
+        M};
     TensorAccessorArgs(dst_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(region_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(counts_buffer).append_to(writer_ct_args);
