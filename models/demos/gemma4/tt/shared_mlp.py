@@ -93,7 +93,7 @@ class SharedMLP:
         # makes down_k non-tile-aligned, so only gate_up can use the DRAM path.
         dram_shard = _DRAM_SHARD_MLP and tp > 1
 
-        if dram_shard and can_dram_shard(self.hidden_size, gu_n):
+        if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(
                 gate_up_weight,
                 mesh_device,
@@ -117,7 +117,7 @@ class SharedMLP:
             )
             self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
 
-        if dram_shard and can_dram_shard(down_k, self.hidden_size):
+        if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
                 down_proj_weight,
                 mesh_device,

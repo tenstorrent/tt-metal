@@ -47,7 +47,23 @@ def test_prefill_sdpa_max_seq_clamped_to_hard_max():
     assert PREFILL_SDPA_MAX_SEQ <= PREFILL_SDPA_HARD_MAX
 
 
-def test_shared_mlp_down_shard_unguarded_at_tp8():
+def test_shared_mlp_down_shard_unguarded_at_tp8(monkeypatch):
     """intermediate=2112 @ TP=8 → down_k=264 is not DRAM-shardable; gate_up is."""
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
     assert can_dram_shard(2816, 528)  # gate_up n at tp=8
     assert not can_dram_shard(264, 2816)  # down_k at tp=8
+
+
+def test_dram_shard_disabled_off_blackhole(monkeypatch):
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    assert not can_dram_shard(2816, 528)
+
+
+def test_dram_shard_31b_gate_up_fits_with_in0_cap(monkeypatch):
+    """31B fused gate_up @ TP=4 previously overflowed L1 at in0_block_w=6; cap=2 fits."""
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    import ttnn
+
+    # hidden=5376, gu_n=2*21504/4=10752
+    assert can_dram_shard(5376, 10752, dtype=ttnn.bfloat16)
+    assert can_dram_shard(5376, 10752, dtype=ttnn.bfloat8_b)
