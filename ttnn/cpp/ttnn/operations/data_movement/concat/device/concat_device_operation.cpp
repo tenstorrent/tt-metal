@@ -94,10 +94,6 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "ttnn.concat requires tile width {}, got {}",
             TILE_WIDTH,
             first_tile->get_width());
-        if (first_tile->get_height() < TILE_HEIGHT &&
-            (first_input.dtype() == DataType::BFLOAT8_B || first_input.dtype() == DataType::BFLOAT4_B)) {
-            TT_FATAL(false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
-        }
     }
 
     for (const auto& in_ref : input_tensors) {

@@ -417,12 +417,6 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
             name,
             tt::constants::TILE_WIDTH,
             tile.get_width());
-        const bool tiny_height = tile.get_height() < tt::constants::TILE_HEIGHT;
-        const bool blocked_dtype = tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B ||
-                                   args.get_dtype() == DataType::BFLOAT8_B || args.get_dtype() == DataType::BFLOAT4_B;
-        TT_FATAL(
-            !(tiny_height && blocked_dtype),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
     };
     validate_tile(input_a, "input A");
     if (input_b.has_value()) {

@@ -112,11 +112,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         const auto& tile = input_tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_width() == TILE_WIDTH, "Typecast requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
-        if (tile.get_height() < TILE_HEIGHT &&
-            (args.input_dtype == DataType::BFLOAT8_B || args.input_dtype == DataType::BFLOAT4_B ||
-             args.output_dtype == DataType::BFLOAT8_B || args.output_dtype == DataType::BFLOAT4_B)) {
-            TT_FATAL(false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
-        }
     }
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();

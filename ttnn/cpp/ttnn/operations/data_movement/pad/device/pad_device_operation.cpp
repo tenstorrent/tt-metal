@@ -158,10 +158,6 @@ void PadDeviceOperation::validate_on_program_cache_miss(
             (operation_attributes.output_padded_shape[3] % tile.get_width() == 0),
             "Can only pad tilized tensor with full tiles");
         TT_FATAL(
-            !(tile.get_height() < TILE_HEIGHT &&
-              (input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B)),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
-        TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
                 input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                 input_tensor.dtype() == DataType::UINT16 || input_tensor.dtype() == DataType::BFLOAT8_B,

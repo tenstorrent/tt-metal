@@ -81,10 +81,6 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
                     tile.get_height(),
                     tile.get_width())};
         }
-        if (tile.get_height() < tt::constants::TILE_HEIGHT &&
-            (input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B)) {
-            return {false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B"};
-        }
         if (tensor_args.preallocated_output.has_value()) {
             auto out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
             if (out_tile != tile) {

@@ -96,14 +96,6 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
         tile_a.get_width(),
         tile_b.get_height(),
         tile_b.get_width());
-    if (tile_a.get_height() < TILE_HEIGHT) {
-        const auto is_blocked = [](DataType dtype) {
-            return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B;
-        };
-        TT_FATAL(
-            !is_blocked(input_tensor_a.dtype()) && !is_blocked(input_tensor_b.dtype()),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
-    }
 
     if (tensor_args.preallocated_output.has_value()) {
         TT_FATAL(is_floating_point(tensor_args.preallocated_output->dtype()), "Unsupported data format");
