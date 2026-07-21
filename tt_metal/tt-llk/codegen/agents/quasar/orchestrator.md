@@ -35,6 +35,19 @@ and returning non-zero. **If it rejects, report the reason and stop.**
 
 ---
 
+## Out of Space — Abort Protocol
+
+Any step that prints the `NO SPACE LEFT ON DEVICE` banner means the device is full. STOP: spawn no agents and run no further steps. Run this one command — it retries the run.json failed-finalize every 30s for up to 10 minutes until the write lands:
+
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_report_no_space "{step where space ran out}"
+```
+
+Then report the run failed with reason "no space on device" and end. Do not run Step 8.
+
+---
+
 ## Pipeline Overview
 
 ```
@@ -43,7 +56,7 @@ analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimiz
 
 - **analyzer** (`llk-analyzer.md`) — returns `codegen/artifacts/{op}_analysis.md`.
 - **writer** (`llk-kernel-writer.md`) — returns `PASSED` or `FAILED`.
-- **tester** (`llk-tester.md`) — returns `PASS`, `STUCK`, or `ENV_ERROR` (never routed to the refiner).
+- **tester** (`llk-tester.md`) — returns `PASS`, `STUCK` (→ refiner, cycles 1-2), or `ENV_ERROR` (never routed to the refiner).
 - **refiner** (`llk-analysis-refiner.md`) — returns `REFINED` or `ESCALATE`.
 - **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 CANNOT (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
 - **optimizer** and **format** only run on success of tester.
@@ -53,6 +66,7 @@ Agent playbooks live in `codegen/agents/quasar/`.
 ### Agent I/O conventions
 
 - **An agent's status and report are its final message** — read them from the tool result, not from files.
+- **Spawn every agent synchronously in the foreground.** Never set `run_in_background` on an Agent or Bash call, and never end your turn while an agent or a `run_test.sh` sim is running. The tool's synchronous return is your wait.
 - **Prompt variables (`${CYCLE}`, `${KERNEL_NAME}`, …) are placeholders you fill in yourself** before spawning; the Agent tool does not expand them.
 - **The "first meaningful line" is a named field in the agent's report** (writer "Error summary", tester "Last failure signature") — copy it verbatim into the `execute_step_*` argument.
 
@@ -122,15 +136,14 @@ Grep that output for `{op}` (and its synonyms) to find the matching line:
 - Blackhole/Wormhole use letter-based names (`llk_unpack_A.h`); Quasar uses
   semantic names (`llk_unpack_unary_operand.h`) — expect to eyeball nearby
   matches rather than get an exact string hit.
-- **tt-llk-layer match** → `{kernel_path}` is the part after `tt_llk_{arch}/`,
-  e.g. `common/inc/sfpu/ckernel_sfpu_gelu.h` or `llk_lib/llk_math_matmul.h`.
-- **Metal-layer match** → `{kernel_path}` does not apply. The reference path
-  is the repo-root-relative
-  `tt_metal/hw/ckernels/{ref_arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h`
-  instead.
+- `{kernel_path}` is the matching path **exactly as `execute_step_discover_kernels` printed it** — tt-llk-relative and directly openable from `tt_metal/tt-llk`: e.g. `tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_gelu.h`, `tt_llk_{arch}/llk_lib/llk_math_matmul.h`, or (metal-layer) `../hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h`. Do **not** strip or rewrite the prefix — every consumer opens this value directly.
 - **SFPU only — `ckernel_sfpu_{op}.h` exists for the same `{ref_arch}` in both
   the tt-llk-layer and metal-layer loop output** → use the metal-layer file as
-  the reference, not the tt-llk one.
+  the reference, UNLESS it is only a thin wrapper: it `#include`s
+  `sfpu/ckernel_sfpu_{op}.h` and its `calculate_*` / `*_init` bodies just forward
+  to the tt-llk lib's `_calculate_*_` / `_init_*_` (no raw `TTI_`/`sfpi::` of its
+  own). A wrapper carries no algorithm — then use the tt-llk-layer file
+  `tt_llk_{ref_arch}/common/inc/sfpu/ckernel_sfpu_{op}.h` as the reference instead.
 
 Determine:
 - **Reference architecture** (default: blackhole; wormhole is also a valid
@@ -141,12 +154,16 @@ Determine:
 
 #### Where the generated kernel is written — `GENERATED_KERNEL`
 
-Pass the kernel type, reference arch, and reference path you determined above
-as arguments — the step records them and derives `GENERATED_KERNEL`:
+Pass the kernel type, reference arch, and reference path you determined above.
+For **SFPU** leave the 4th arg empty — `GENERATED_KERNEL` is derived as
+`ckernel_sfpu_{op}.h`. For **non-SFPU** (math/pack/unpack) the reference's name is
+letter-based but Quasar uses semantic names, so determine the correct Quasar
+semantic dest path yourself (from the discover output / the target survey) and
+pass it as the 4th arg:
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
-execute_step_set_kernel_identity "{kernel_type}" "{ref_arch}" "{kernel_path}"
+execute_step_set_kernel_identity "{kernel_type}" "{ref_arch}" "{kernel_path}" "{gen_path or empty for sfpu}"
 ```
 
 ## Step 2: Write the initial run.json
@@ -158,6 +175,14 @@ playbooks into `$LOG_DIR/instructions/`, and refreshes cost:
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_write_initial_run_json
+```
+
+## Step 2b: Hide Existing Implementation (blind regeneration)
+
+EXECUTE the following. When `HIDE_EXISTING_KERNEL=true` it git-removes and commits the target op's existing files (metal wrapper + tt-llk lib impl) on the worktree branch, so the analyzer and writer regenerate blind — following their normal git-read policy they find no prior implementation on the branch. No-op when the flag is unset:
+
+```bash
+execute_step_hide_existing_kernel
 ```
 
 ---
@@ -204,6 +229,7 @@ Agent tool:
 ```
 
 - Now WAIT for AGENT completion!
+- IF the analyzer's final message begins with `ANALYSIS_FAILED`, treat it as FAILED (skip verification) and use that first line as the failure line.
 - THEN **Verify** the analysis doc exists and has all required sections:
   ```bash
   source codegen/scripts/quasar/orchestrator_steps.sh
@@ -218,6 +244,7 @@ the step records it, writes the failure, and finalizes the run as `failed`:
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_analyzer_failed "{first meaningful line of the analyzer's failure}"
 ```
+The run is now finalized as `failed` — skip the writer/tester loop and jump straight to Step 8 (reporting). No kernel was generated, so metrics read 0.
 
 **IF analyzer passed, advance to next stage by EXECUTING the following** (advance
 to writer cycle 1, phase-start, refresh cost):
@@ -297,22 +324,28 @@ Agent tool:
     If a prior refinement occurred (cycle > 1), the analysis has been rewritten
     in place and a "Refinement History" section at the top lists what changed.
     Follow the refined analysis; do not reintroduce approaches from the prior
-    failed attempt (archived under codegen/artifacts/${KERNEL_NAME}_failed_attempt_v$((CYCLE - 1)).md).
+    failed attempt (archived under codegen/artifacts/${KERNEL_NAME}_failed_attempt_v$((CYCLE - 1))/).
 ```
 
 - Now WAIT for AGENT completion!
 - THEN writer returns `PASSED` / `FAILED` on its final compile check.
 
+**If `SKIP_TESTER` is true** (read it: `python codegen/scripts/state.py --log-dir "$(python codegen/scripts/state.py --worktree-dir "$WORKTREE_DIR" get LOG_DIR)" get SKIP_TESTER`): the writer already validated against the existing tests. Do **not** spawn the tester (Step 5b) or the refiner (Step 5c).
+- Writer `PASSED` → EXECUTE `execute_step_tester_passed` (it records success from the counts the writer wrote), then go to Step 6.
+- Writer `FAILED` → EXECUTE `execute_step_mark_status failed test_failure`, then jump to Step 8.
+- Writer `ENV_ERROR` (emulator/infra unavailable — kernel not implicated) → EXECUTE `execute_step_tester_env_error "{writer's Diagnosis line}"`, then jump to Step 8. Do **not** invoke the refiner or optimizer.
+
+Otherwise (normal flow):
+
 **If writer reports PASSED**: go to Step 5b.
 
-**If writer reports FAILED** (compile broken): pass two args — the first
-meaningful line from the writer's "Error summary", and how many compiles it
-ran (`2` if "Scaffold compiled: PASSED" and "Final compiled: FAILED"; `1` if
-the scaffold compile itself failed). The step records the error, updates the
-compile counters, writes the failure + phase-end, and refreshes cost:
+**If writer reports FAILED** (compile broken): pass the first meaningful line
+from the writer's "Error summary" and the compile count `1` (the writer runs a
+single compile-check). The step records the error, updates the compile counters,
+writes the failure + phase-end, and refreshes cost:
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
-execute_step_writer_failed "{first meaningful line from the writer's Error summary}" {2 or 1}
+execute_step_writer_failed "{first meaningful line from the writer's Error summary}" 1
 ```
 
 If the step printed `AT_CAP=yes` (cycle 3): EXECUTE the following, then jump to Step 8:
@@ -433,7 +466,7 @@ Loop back to Step 5a.
 
 ## Step 6: Optimizer (success path only)
 
-Only run after a cycle returned `PASS`. Skip if the tester never passed.
+Only run after a cycle returned `PASS`. Skip if the tester never passed, or if `KERNEL_TYPE` is not `sfpu` (replay-buffer and SFPI optimizations are SFPU-only) — in that case go straight to Step 7.
 
 ### Step 6a: Run the optimizer
 
@@ -500,6 +533,12 @@ Wait for completion.
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_gather_metrics
+```
+
+THEN EXECUTE (snapshot the final generated kernel into `$LOG_DIR` as the bare `ckernel_sfpu_{op}.h` — the optimized/final version the dashboard code section renders beside `pre_opt_*` — and record it in run.json):
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_snapshot_generated_kernel
 ```
 
 ### 8b: Finalize run.json

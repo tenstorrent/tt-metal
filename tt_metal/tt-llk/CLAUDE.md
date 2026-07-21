@@ -17,6 +17,19 @@ claude
 
 The codegen system discovers architectural patterns dynamically from Confluence, DeepWiki, assembly.yaml, and existing implementations. Each target architecture has its own orchestrator and agents under `codegen/agents/{arch}/`. See [codegen/CLAUDE.md](codegen/CLAUDE.md) for the routing table.
 
+### Editing CodeGen Workflows & Agent Playbooks
+
+**IMPORTANT: following these rules is MANDATORY.** When changing CodeGen workflow, orchestrator, or agent playbook files:
+
+- Replace the whole sentence with a correct one — do not patch around the existing wording.
+- Write every instruction as a command to follow; do not explain why it changed.
+- Keep it terse — do not overexplain.
+
+For the Quasar workflow specifically (`codegen/agents/quasar/*.md` and its step scripts):
+
+- Derive inputs from what the orchestrator passes and what `state.py` provides; do not hand-construct paths or duplicate state the store already holds.
+- Scope architecture- or kernel-type-specific rules to the type they apply to (e.g. "For SFPU kernels, …").
+
 ## Repository Structure
 
 ```
@@ -91,7 +104,7 @@ CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
 TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
 ```
 
-When running inside codegen agents, never call pytest or flock directly — use `.claude/scripts/run_test.sh` (`count` / `compile` / `simulate` / `run`), which serialises simulator access via a per-arch lock (`/tmp/tt-llk-test-{arch}.lock`), cleans up stale port processes, sets `TT_UMD_SIMULATOR_PATH`, and detects hangs (exit 5). See `.claude/skills/run-test/SKILL.md`.
+When running inside codegen agents, never call pytest or flock directly — use `.claude/scripts/run_test.sh` (`count` / `compile` / `simulate` / `run`), which serialises every invocation on one global lock (`/tmp/tt-llk-test.lock`), fetches SFPI when missing, sets `TT_UMD_SIMULATOR_PATH`, reaps stale emulator jobs, watches the run and kills a hang gracefully (exit 5). It is a single blocking call — invoke it like pytest and wait for the verdict; there is no resume loop and no timeout to tune (the only wait is on the lock). See `.claude/skills/run-test/SKILL.md`.
 
 ## Key Files
 

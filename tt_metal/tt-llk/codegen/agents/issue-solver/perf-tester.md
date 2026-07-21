@@ -126,7 +126,7 @@ run overwrites it.
 ```bash
 run_perf_once() {  # returns the local-runner exit code
   local ARGS=(run --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch "$TARGET_ARCH" \
-        --test "$PERF_TEST" --timeout 1800 --maxfail 0 --log-dir "$LOG_DIR")
+        --test "$PERF_TEST" --stall 1800 --maxfail 0 --log-dir "$LOG_DIR")
   [ -n "$PERF_K" ] && ARGS+=(--k "$PERF_K")
   bash .claude/scripts/run_test.sh "${ARGS[@]}"
 }

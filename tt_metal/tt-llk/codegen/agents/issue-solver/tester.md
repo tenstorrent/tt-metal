@@ -143,7 +143,6 @@ Add optional arguments from the plan:
 --test-id "$TEST_ID"
 --maxfail "$MAXFAIL"
 --no-split
---timeout "$TIMEOUT"
 ```
 
 Local runner exit code mapping:
