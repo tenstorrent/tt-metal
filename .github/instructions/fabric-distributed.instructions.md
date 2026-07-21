@@ -8,13 +8,13 @@ excludeAgent: "cloud-agent"
 
 ## 🔴 CRITICAL
 
-- **Use portable fabric APIs**: ops must use the public portable APIs from `tt_metal/fabric/hw/inc/linear/api.h` (e.g., `fabric_unicast_noc_unicast_write`), NOT the legacy private APIs from `tt_fabric_api.h`. The legacy APIs are not portable to 2D fabric topologies and will be removed.
 - **Routing plane count consistency**: the number of routing planes must be identical at every hop in the fabric. A mismatch between link-level plane count and the fabric-level routing plane count will cause silent misrouting.
 - **Channel buffer/semaphore parity**: in EDM channel setup, `local_buffer_addresses` and `local_semaphore_addresses` vectors must have identical sizes. A mismatch causes out-of-bounds access or silent data corruption.
 - **Overlay register vs L1 mode correctness**: when writing to connection semaphores, the NOC write mode (REG vs L1) must match the actual destination memory type. Writing with REG mode to an L1 address triggers a hardware bug. Use `auto` or conditional compilation for adapter code shared between worker (L1) and ERISC (overlay reg) paths.
 
 ## 🟡 IMPORTANT
 
+- **Prefer portable fabric APIs**: strongly prefer the public portable APIs from `tt_metal/fabric/hw/inc/linear/api.h` (e.g., `fabric_unicast_noc_unicast_write`) over the legacy private APIs from `tt_fabric_api.h`. The legacy APIs are not portable to 2D fabric topologies and are slated for removal. This is not a hard requirement, but reaching for the legacy APIs should be intentional and reasoned — call out why in the PR when you do.
 - **Naming must match scope**: function/variable names must accurately describe their behavior. A function named `write_to_all_chips` that targets a single chip is a bug waiting to happen. API names at the control plane layer should be generic (`reserve_routing_plane`) rather than implementation-specific (`reserve_dispatch_link`).
 - **Avoid performance-critical work in hot loops**: heartbeat/telemetry increments in the router main loop add per-iteration cost. Amortize by posting every N iterations (e.g., every 64–128 iterations), not every cycle.
 - **Hoist loop-invariant stores**: stores through volatile pointers that don't change between loop iterations (like `std::min` results or config writes) must be moved out of the loop. Repeated volatile stores on every iteration are redundant and expensive.
@@ -34,7 +34,7 @@ excludeAgent: "cloud-agent"
 
 ## Review Checklist
 
-- [ ] Uses portable fabric APIs (`linear/api.h`), not legacy `tt_fabric_api.h`
+- [ ] Prefers portable fabric APIs (`linear/api.h`); any use of legacy `tt_fabric_api.h` is intentional and justified
 - [ ] Routing plane count consistent across all hops
 - [ ] Buffer and semaphore address vectors same size in EDM channel setup
 - [ ] NOC write mode (REG/L1) matches actual destination memory type
