@@ -46,7 +46,7 @@ def golden_maxpool2d(
     return output_tensor
 
 
-if hasattr(ttnn, "max_pool2d"):  # nuked for agent evaluation
+if hasattr(ttnn, "max_pool2d"):  # not available in this build
     ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
@@ -254,7 +254,7 @@ def golden_avg_pool2d(
     return pool_output_to_flat_nhwc(output_tensor)
 
 
-if hasattr(ttnn, "avg_pool2d"):  # nuked for agent evaluation
+if hasattr(ttnn, "avg_pool2d"):  # not available in this build
     ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
 
 

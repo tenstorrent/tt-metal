@@ -185,7 +185,7 @@ def _golden_function(tensor, shape, **_):
 ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
 
 
-# upsample nuked for agent evaluation — golden function removed.
+# upsample not available in this build — golden function removed.
 
 
 def _golden_function(input_tensor, slice_start=None, slice_end=None, slice_step=None, *args, **kwargs):

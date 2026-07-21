@@ -587,8 +587,7 @@ from ttnn.operations.matmul import (
     matmul_select_program_factory,
 )
 
-# normalization ops (softmax/layer_norm/rms_norm/group_norm) nuked for agent
-# evaluation — their Python configs/helpers are reimplemented with the op.
+# normalization ops (softmax/layer_norm/rms_norm/group_norm) not available in this build — their Python configs/helpers are reimplemented with the op.
 
 from ttnn.operations.embedding import (
     EmbeddingsType,
@@ -610,7 +609,7 @@ from ttnn.operations.ccl import (
     MMSignalAggregatorMode,
 )
 
-# conv2d nuked for agent evaluation — Conv2d*/Conv1dConfig Python API removed.
+# conv2d not available in this build — Conv2d*/Conv1dConfig Python API removed.
 
 from ttnn.operations.pool import (
     prepare_grid_sample_grid,
@@ -642,15 +641,9 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
-
-from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
-
-transformer.SparseKVFormat = SparseKVFormat
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride
 
 QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
-
-IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 
