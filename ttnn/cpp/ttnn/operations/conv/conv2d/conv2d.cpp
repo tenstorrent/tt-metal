@@ -216,8 +216,8 @@ Result conv2d_L1(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        true,
-        orig_stride);
+        orig_stride,
+        true);
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
@@ -226,19 +226,19 @@ Result conv2d_L1(
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
     } else {
         // Check if device weights are properly prepared
-        const uint32_t expected_depthwise_kernel_taps = kernel_size[0] * kernel_size[1];
-        const uint32_t expected_depthwise_tap_height =
-            opt_conv_op_block_config.act_block_h_ntiles * tt::constants::TILE_HEIGHT;
-        const uint32_t padded_out_channels = tt::round_up(
+        const auto depthwise_weight_plan_shape = get_depthwise_conv1d_weight_plan_shape(
+            kernel_size[0],
+            kernel_size[1],
+            opt_conv_op_block_config.act_block_h_ntiles,
             out_channels,
-            get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
+            get_num_cores_channels_from_parallel_config(output_parallel_config));
         const bool valid_device_weights =
             conv_is_1d_depthwise ? is_valid_device_depthwise_conv1d_weights(
                                        weight_tensor_on_device,
-                                       expected_depthwise_kernel_taps,
-                                       expected_depthwise_tap_height,
+                                       depthwise_weight_plan_shape.kernel_taps,
+                                       depthwise_weight_plan_shape.tap_height,
                                        out_channels,
-                                       padded_out_channels,
+                                       depthwise_weight_plan_shape.padded_out_channels,
                                        conv_config.weights_dtype)
                                  : is_valid_device_conv_weights(
                                        weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype);

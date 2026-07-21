@@ -151,8 +151,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             ConvTranspose2dDimensions::CONV2D_PADDING,
             conv_groups,
             bias_tensor.has_value(),
-            compute_config,
-            false);
+            compute_config);
         auto_shard = true;
     }
     const bool should_deallocate_act = conv_config.deallocate_activation && !input_tensor.memory_config().is_dram();
@@ -168,8 +167,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         in_channels,
         out_channels,
         mm_conv,
-        auto_shard,
-        false);
+        auto_shard);
 
     // Call Conv2d u_op with Stride = 1, Padding = 0.
     // Pad out_channels to be divisible by (num_cores_channels * TILE_WIDTH) to ensure
@@ -259,7 +257,6 @@ ConvTranspose2dResult conv_transpose2d_L1(
             false,  // full_inner_dim
             false,  // enable_activation_reuse
             coalesce_1d_depthwise_kw_reads,
-            false,                                      // use_depthwise_weight_plan_shape
             ConvTranspose2dDimensions::CONV2D_STRIDE);  // stride (always {1,1} for transposed conv2d)
         ttnn::Tensor transformed_weight_tensor =
             transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
@@ -673,8 +670,8 @@ public:
         ShardOrientation shard_orientation =
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
-        sliding_window::ParallelConfig output_parallel_config = determine_output_parallel_config(
-            parallel_config, compute_grid, output_channels, shard_orientation, false, false);
+        sliding_window::ParallelConfig output_parallel_config =
+            determine_output_parallel_config(parallel_config, compute_grid, output_channels, shard_orientation, false);
 
         uint32_t padded_in_channels = tt::round_up(
             input_channels, tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
@@ -796,8 +793,7 @@ public:
                 ConvTranspose2dDimensions::CONV2D_PADDING,
                 conv_groups,
                 has_bias,
-                compute_config,
-                false);
+                compute_config);
         }
         TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
 
