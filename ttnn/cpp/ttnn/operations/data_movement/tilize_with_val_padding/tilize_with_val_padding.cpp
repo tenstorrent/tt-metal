@@ -128,8 +128,7 @@ ttnn::Tensor tilize_with_val_padding(
             use_multicore,
             enough_space_width,
             enough_space_height,
-            sub_core_grids,
-            tile);
+            sub_core_grids);
     };
 
     return operations::data_movement::build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
