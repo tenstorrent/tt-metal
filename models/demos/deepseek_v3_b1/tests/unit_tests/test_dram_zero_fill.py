@@ -82,8 +82,9 @@ def test_dram_zero_fill_row_major_formats(bh_2d_mesh_device, dtype, layout):
 )
 @pytest.mark.parametrize("max_seq_len", [1024 * 32, 1024 * 64, 1024 * 128])
 @pytest.mark.parametrize("num_users", [1, 32, 64])
+@pytest.mark.parametrize("k_chunk_size", [128, 256])
 @pytest.mark.requires_grid_size((12, 10))
-def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> None:
+def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int, k_chunk_size: int) -> None:
     """Zero-fill a KV-cache-shaped DRAM tensor and verify all zeros."""
     if is_slow_dispatch() and (num_users > 1 or max_seq_len > 1024 * 32):
         pytest.skip("Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode")
@@ -112,6 +113,7 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> 
         submesh,
         num_users=num_users,
         max_seq_len=max_seq_len,
+        k_chunk_size=k_chunk_size,
         kvpe_dim=KVPE_DIM,
         mesh_shape=(mesh_rows, mesh_cols),
     )
@@ -125,6 +127,7 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> 
         submesh,
         num_users=num_users,
         max_seq_len=max_seq_len,
+        k_chunk_size=k_chunk_size,
         kvpe_dim=KVPE_DIM,
         mesh_shape=(mesh_rows, mesh_cols),
     )

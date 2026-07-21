@@ -76,6 +76,8 @@ class DRAMZeroFill:
         if mesh_shape is None:
             mesh_shape = (mesh_rows, mesh_cols)
 
+        if k_chunk_size <= 0:
+            raise ValueError(f"k_chunk_size must be positive; got {k_chunk_size}")
         program_config = FlashMLADecode.ProgramConfig(k_chunk_size=k_chunk_size, exp_approx_mode=False)
         if per_device_seq % program_config.k_chunk_size != 0:
             raise ValueError(
