@@ -20,6 +20,35 @@ from .operations import (
 from .weights import AttentionWeights
 
 
+def _kv_cache_for_fill(cache: ttnn.Tensor, user_id: int, max_local_batch_size: int) -> tuple[ttnn.Tensor, int]:
+    """Return ``(cache_view, batch_idx)`` for ``ttnn.fill_cache`` / ``paged_fill_cache``.
+
+    Multi-slot prefill caches from ``kv_cache_prefill_only`` are SP-sharded.  The mesh
+    tensor may be ``[SP, num_slots, H, S, D]`` (slots on dim 1) while K/V activations
+    stay ``[1, H, S, D]``.      ``fill_cache`` requires ``input.shape[1] == cache.shape[1]`` (heads), so slice the
+    target migration slot on dim 1 before filling.  Do not reshape ND-sharded caches
+    (view is unsupported); the slot slice already has ``dim[1] == num_heads``.
+    """
+    if max_local_batch_size <= 1:
+        return cache, user_id
+
+    shape = cache.shape
+    if len(shape) == 4 and shape[0] == max_local_batch_size:
+        return cache, user_id
+
+    if len(shape) >= 4 and shape[1] == max_local_batch_size:
+        starts = [0] * len(shape)
+        ends = list(shape)
+        starts[1] = user_id
+        ends[1] = user_id + 1
+        # ND-sharded prefill cache cannot be reshaped after slice; dim[1] is already
+        # num_heads (1) so fill_cache's height check passes without collapsing ranks.
+        cache_slot = ttnn.slice(cache, tuple(starts), tuple(ends))
+        return cache_slot, 0
+
+    return cache, user_id
+
+
 def prefill_forward(
     hidden_states,
     rope_mats,
@@ -130,8 +159,10 @@ def prefill_forward(
             else:
                 tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
                 tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
-                ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+                k_cache_fill, k_batch_idx = _kv_cache_for_fill(k_cache, user_id, config.max_local_batch_size)
+                v_cache_fill, v_batch_idx = _kv_cache_for_fill(v_cache, user_id, config.max_local_batch_size)
+                ttnn.experimental.paged_fill_cache(k_cache_fill, tt_k_sliced, page_table, batch_idx=k_batch_idx)
+                ttnn.experimental.paged_fill_cache(v_cache_fill, tt_v_sliced, page_table, batch_idx=v_batch_idx)
                 if page_len < tt_k.shape[2]:
                     tt_k_sliced.deallocate(True)
                 if page_len < tt_v.shape[2]:
@@ -148,8 +179,10 @@ def prefill_forward(
                     k_b.deallocate(True)
                     v_b.deallocate(True)
             else:
-                ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
-                ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
+                k_cache_fill, k_batch_idx = _kv_cache_for_fill(k_cache, user_id, config.max_local_batch_size)
+                v_cache_fill, v_batch_idx = _kv_cache_for_fill(v_cache, user_id, config.max_local_batch_size)
+                ttnn.fill_cache(k_cache_fill, tt_k, batch_idx=k_batch_idx)
+                ttnn.fill_cache(v_cache_fill, tt_v, batch_idx=v_batch_idx)
 
     # Scaled dot-product attention — three paths based on SP factor and sliding window
     sp_factor = mesh_config.prefill.sp

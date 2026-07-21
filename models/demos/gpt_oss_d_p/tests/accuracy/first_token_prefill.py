@@ -24,9 +24,7 @@ Run (1×8):
 
 Run (4×8 Galaxy):
   export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x8_mesh_graph_descriptor.textproto
-  python3 models/demos/gpt_oss_d_p/tests/accuracy/first_token_prefill.py \\
-      --rows 4 --cols 8 \\
-      --prompt "What are the prime factors of 1?"
+  python3 models/demos/gpt_oss_d_p/tests/accuracy/first_token_prefill.py --rows 4 --cols 8   --prompt "What are the prime factors of 1?"
 """
 
 import argparse
@@ -164,7 +162,7 @@ def main():
         state_dict = ModelArgs.load_state_dict(model_args.weights_path, dummy_weights=False)
         cache = model_args.weight_cache_path(ttnn.bfloat8_b)
         mesh_config = MeshConfig(
-            shape, decode=ModeConfig(tp=shape[1], ep=shape[0]), prefill=ModeConfig(tp=shape[1], sp=1, ep=1)
+            shape, decode=ModeConfig(tp=shape[1], ep=shape[0]), prefill=ModeConfig(tp=shape[1], sp=shape[0], ep=1)
         )
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=topology)
 

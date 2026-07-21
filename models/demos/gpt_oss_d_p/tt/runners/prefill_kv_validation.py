@@ -24,25 +24,32 @@ def validate_migrations_pairwise(pipeline, kv_cache, pairs, *, real_len: int | N
     thr = float(os.environ.get("PREFILL_MIGRATE_PAIRWISE_PCC", "0.99"))
     max_seq_len = pipeline.max_seq_len
     sp = pipeline.sp_factor
-    seq_local = max_seq_len // sp
     compare_len = real_len if real_len is not None else max_seq_len
     compare_len = min(compare_len, max_seq_len)
+    isl_per_row = max_seq_len // sp
 
     def _read_slot_tensor(cache: ttnn.Tensor, slot: int) -> torch.Tensor:
-        sl = ttnn.slice(
-            cache,
-            [slot, 0, 0, 0],
-            [slot + 1, cache.shape[1], seq_local, cache.shape[3]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        block = ttnn.to_torch(
-            sl,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
-        ).to(torch.float32)
-        ttnn.deallocate(sl)
-        # Canonical [1, heads_local, seq_local, head_dim]
-        block = block.reshape(1, block.shape[-3], block.shape[-2], block.shape[-1])
-        return block[:, :, : min(compare_len // sp + 1, seq_local), :]
+        """Read one slot's K or V back to CPU as [1, num_kv_heads, compare_len, head_dim]."""
+        sp_rows, tp_cols = mesh_device.shape
+        device_tensors = ttnn.get_device_tensors(cache)
+        col_slices = []
+        for col in range(tp_cols):
+            row_shards = []
+            for row in range(sp_rows):
+                shard_len = min(isl_per_row, max(0, compare_len - row * isl_per_row))
+                if shard_len == 0:
+                    break
+                t = ttnn.to_torch(device_tensors[row * tp_cols + col]).float()
+                if len(t.shape) == 5:
+                    row_shards.append(t[0, slot, :, :shard_len, :])
+                elif len(t.shape) == 4:
+                    row_shards.append(t[slot, :, :shard_len, :])
+                else:
+                    raise ValueError(f"[kv-migrate-validate] unexpected cache shape {tuple(t.shape)} for slot={slot}")
+            if row_shards:
+                col_slices.append(torch.cat(row_shards, dim=1))
+        gathered = torch.cat(col_slices, dim=0)  # [num_kv_heads, compare_len, head_dim]
+        return gathered.unsqueeze(0)
 
     failures = []
     for src, dst in pairs:

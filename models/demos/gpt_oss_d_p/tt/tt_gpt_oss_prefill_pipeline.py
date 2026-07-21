@@ -93,6 +93,7 @@ class GptOssPrefillPipeline:
             kv_cache=self.kv_cache,
             get_last_token=get_last_token,
             skip_lm_head=True,
+            user_id=0,
         )
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
@@ -218,6 +219,7 @@ class GptOssPrefillPipeline:
             x=tt_input,
             kv_cache=self.kv_cache,
             get_last_token=get_last_token,
+            user_id=slot_id,
             on_layer_complete=callback,
         )
         first_token = self._extract_first_token(tt_logits, actual_isl, get_last_token)
@@ -288,8 +290,7 @@ class GptOssPrefillPipeline:
 
         actual_isl = actual_end - actual_start
         logger.info(
-            f"GptOssPrefillPipeline.prefill_chunk: slot={slot_id} "
-            f"[{actual_start},{actual_end}) isl={actual_isl}"
+            f"GptOssPrefillPipeline.prefill_chunk: slot={slot_id} " f"[{actual_start},{actual_end}) isl={actual_isl}"
         )
 
         tt_input = self._embed_chunk_tokens(tt_tokens)
@@ -305,6 +306,4 @@ class GptOssPrefillPipeline:
         )
         ttnn.deallocate(tt_input)
         dt_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(
-            f"[prefill timing] slot={slot_id} [{actual_start},{actual_end}) prefill_chunk={dt_ms:.2f} ms"
-        )
+        logger.info(f"[prefill timing] slot={slot_id} [{actual_start},{actual_end}) prefill_chunk={dt_ms:.2f} ms")

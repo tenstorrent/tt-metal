@@ -64,7 +64,7 @@ def build_pipeline(mesh_device: ttnn.MeshDevice):
     mesh_config = MeshConfig(
         mesh_shape=mesh_device.shape,
         decode=ModeConfig(tp=PREFILL_TP, ep=mesh_device.shape[0]),
-        prefill=ModeConfig(tp=PREFILL_TP, sp=1, ep=1),
+        prefill=ModeConfig(tp=PREFILL_TP, sp=PREFILL_SP, ep=1),
     )
 
     logger.info(
@@ -162,12 +162,64 @@ def _socket_next(h2d_service) -> tuple:
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
 
 
+def _migration_done_path() -> str:
+    return os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
+
+
+def _expected_h2d_chunks() -> int:
+    """Chunks the scheduler driver will push before writing MIGRATION_DONE_FILE (0 = unknown)."""
+    return int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0"))
+
+
+def _wait_migration_done_sentinel(
+    done_file: str,
+    *,
+    chunk_count: int,
+    poll_s: float,
+    wait_s: float,
+) -> None:
+    """After the last expected H2D chunk, poll until the driver creates done_file.
+
+    The scheduler sends a finite number of chunks then writes the DONE sentinel when
+    migration finishes. Do not call _socket_next here — the driver will not send more
+    chunks and blocking on H2D can hang after the driver shuts down its socket.
+    """
+    logger.info(
+        f"[request] processed {chunk_count} H2D chunk(s); waiting for migration DONE sentinel "
+        f"{done_file!r} (poll every {poll_s}s, timeout {wait_s}s). "
+        f"No further H2D chunks are expected from the scheduler."
+    )
+    deadline = time.time() + wait_s
+    while not _shutdown:
+        if os.path.exists(done_file):
+            logger.info(
+                f"[request] migration DONE sentinel at {done_file}; " f"exiting H2D loop after {chunk_count} chunk(s)"
+            )
+            return
+        if time.time() >= deadline:
+            raise TimeoutError(
+                f"[request] migration DONE sentinel {done_file} never appeared after {wait_s}s "
+                "(did Terminal C finish prefill + migration?)"
+            )
+        time.sleep(poll_s)
+    logger.info(f"[request] SIGTERM during DONE sentinel wait; exiting after {chunk_count} chunk(s)")
+
+
+def _all_h2d_chunks_received(chunk_count: int, expected_chunks: int) -> bool:
+    if expected_chunks > 0:
+        return chunk_count >= expected_chunks
+    # Migration loopback with validate: one scheduler SUBMIT => one chunk unless caller
+    # sets PREFILL_STANDALONE_CHUNKED_NCHUNKS explicitly for multi-chunk prompts.
+    return chunk_count > 0
+
+
 def run_request_loop(mesh_device: ttnn.MeshDevice, pipeline) -> None:
     """Production H2D request loop for migration tests (single-rank).
 
-    Blocks on inbound_socket_service_sync until scheduler closes the stream or SIGTERM.
-    When PREFILL_ENABLE_MIGRATION=1, publishes KV table + LayerAck before the loop and
-    validates slot-copy after the DONE sentinel.
+    Blocks on inbound_socket_service_sync until the scheduler closes the stream, the
+    migration DONE sentinel appears, or SIGTERM. When PREFILL_ENABLE_MIGRATION=1,
+    publishes KV table + LayerAck before the loop and validates slot-copy after the
+    DONE sentinel.
     """
     from models.demos.gpt_oss_d_p.tt.runners.prefill_kv_validation import validate_after_prefill
 
@@ -188,11 +240,24 @@ def run_request_loop(mesh_device: ttnn.MeshDevice, pipeline) -> None:
     )
 
     ack_channel = None
+    done_file = _migration_done_path()
+    validate_migration = PREFILL_ENABLE_MIGRATION == 1 and os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
+    done_poll_s = float(os.environ.get("PREFILL_MIGRATION_DONE_POLL_S", "0.5"))
+    done_wait_s = int(os.environ.get("PREFILL_MIGRATE_WAIT_S", "1200"))
+    expected_chunks = _expected_h2d_chunks()
+
     if PREFILL_ENABLE_MIGRATION:
-        done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         if os.path.exists(done_file):
             logger.warning(f"[migration] removing stale DONE sentinel {done_file}")
-            os.remove(done_file)
+            try:
+                os.remove(done_file)
+            except OSError as e:
+                raise RuntimeError(
+                    f"Cannot remove stale DONE sentinel {done_file}: {e}. "
+                    "Another user's file is blocking migration validation. "
+                    "Use a writable path in all three terminals, e.g. "
+                    "export MIGRATION_DONE_FILE=$HOME/migration_done.sentinel"
+                ) from e
 
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/gpt_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
@@ -213,13 +278,28 @@ def run_request_loop(mesh_device: ttnn.MeshDevice, pipeline) -> None:
         pipeline.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}")
 
-    logger.info("[request] entering H2D loop (unbounded until shutdown sentinel or SIGTERM)")
+    if validate_migration:
+        logger.info(
+            f"[request] entering H2D loop (after H2D chunk(s), wait for DONE file {done_file!r}; "
+            f"expected_chunks={expected_chunks or 'auto-after-first-chunk'})"
+        )
+    else:
+        logger.info("[request] entering H2D loop (unbounded until shutdown sentinel or SIGTERM)")
     t0 = time.perf_counter()
     chunk_count = 0
     last_real_end = 0
 
     try:
         while not _shutdown:
+            if validate_migration and _all_h2d_chunks_received(chunk_count, expected_chunks):
+                _wait_migration_done_sentinel(
+                    done_file,
+                    chunk_count=chunk_count,
+                    poll_s=done_poll_s,
+                    wait_s=done_wait_s,
+                )
+                break
+
             tt_tokens, meta = _socket_next(h2d_service)
             if _is_shutdown_sentinel(meta):
                 logger.info(f"[request] SHUTDOWN sentinel after {chunk_count} chunks")
@@ -235,8 +315,22 @@ def run_request_loop(mesh_device: ttnn.MeshDevice, pipeline) -> None:
             last_real_end = max(last_real_end, meta["actual_end"])
             chunk_count += 1
 
+            if validate_migration and os.path.exists(done_file):
+                logger.info(
+                    f"[request] migration DONE sentinel at {done_file}; "
+                    f"exiting H2D loop after {chunk_count} chunk(s)"
+                )
+                break
+
         ttnn.synchronize_device(mesh_device)
         logger.info(f"[request] processed {chunk_count} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
+
+        if chunk_count == 0:
+            logger.warning(
+                "[request] H2D loop exited with 0 chunks — scheduler may not have pushed tokens "
+                "(start Terminal C after WORKER_READY) or a stale shutdown sentinel was received. "
+                "Clear /dev/shm/tt_h2d_* between runs if unsure."
+            )
 
         validate_after_prefill(
             pipeline,
@@ -253,6 +347,10 @@ def run_request_loop(mesh_device: ttnn.MeshDevice, pipeline) -> None:
             ack_channel.shutdown()
             ack_channel = None
 
+    logger.info(
+        "[request] H2D loop finished — runner will exit after mesh teardown (expected after scheduler shutdown)"
+    )
+
 
 def _print_config() -> None:
     sep = "=" * 70
@@ -268,6 +366,7 @@ def _print_config() -> None:
         ("PREFILL_ENABLE_MIGRATION", str(PREFILL_ENABLE_MIGRATION)),
         ("PREFILL_VALIDATE_MIGRATION", os.environ.get("PREFILL_VALIDATE_MIGRATION", "0")),
         ("PREFILL_MIGRATE_PAIRWISE", os.environ.get("PREFILL_MIGRATE_PAIRWISE", "1")),
+        ("PREFILL_STANDALONE_CHUNKED_NCHUNKS", os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0")),
         ("PREFILL_STANDALONE", str(PREFILL_STANDALONE)),
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<default>")),
         ("PREFILL_STANDALONE_ITERS", str(PREFILL_STANDALONE_ITERS)),
@@ -287,9 +386,9 @@ def main() -> None:
 
     _print_config()
 
-    assert PREFILL_CHUNK_SIZE % PREFILL_SP == 0, (
-        f"PREFILL_CHUNK_SIZE={PREFILL_CHUNK_SIZE} must be divisible by PREFILL_SP={PREFILL_SP}"
-    )
+    assert (
+        PREFILL_CHUNK_SIZE % PREFILL_SP == 0
+    ), f"PREFILL_CHUNK_SIZE={PREFILL_CHUNK_SIZE} must be divisible by PREFILL_SP={PREFILL_SP}"
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(PREFILL_SP, PREFILL_TP))

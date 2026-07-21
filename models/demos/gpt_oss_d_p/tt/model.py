@@ -94,15 +94,21 @@ def _create_sp_rope_mats(mesh_device, hf_config, sp_axis, seq_total, datatype=tt
     cos_torch = cos_torch.unsqueeze(0).unsqueeze(0)
     sin_torch = sin_torch.unsqueeze(0).unsqueeze(0)
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis] = 2  # shard sequence dim on the SP mesh axis
+    sp = mesh_device.shape[sp_axis]
+    local_seq = seq_total // sp
+    # Reshape to [sp, 1, local_seq, head_dim] so ShardTensor2dMesh can place one
+    # row slice per mesh row (matches kv_cache_prefill.py / attention prefill).
+    cos_rows = torch.cat([cos_torch[..., row * local_seq : (row + 1) * local_seq, :] for row in range(sp)], dim=0)
+    sin_rows = torch.cat([sin_torch[..., row * local_seq : (row + 1) * local_seq, :] for row in range(sp)], dim=0)
 
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 0
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=tuple(shard_dims))
     cos_matrix = ttnn.from_torch(
-        cos_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=datatype, mesh_mapper=mapper
+        cos_rows, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=datatype, mesh_mapper=mapper
     )
     sin_matrix = ttnn.from_torch(
-        sin_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=datatype, mesh_mapper=mapper
+        sin_rows, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=datatype, mesh_mapper=mapper
     )
     return [cos_matrix, sin_matrix]
 
@@ -453,16 +459,13 @@ class Model:
                     start = b * per_user_seq + get_last_token
                     tile = ttnn.slice(logits, (0, 0, start, 0), (1, 1, start + 32, logits.shape[-1]))
                     tiles.append(tile)
-                logits.deallocate(True)
                 logits = ttnn.concat(tiles, dim=2)  # [1, 1, B*32, H]
                 for t in tiles:
                     t.deallocate(True)
             else:
-                logits_sliced = ttnn.slice(
-                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
-                )
-                logits.deallocate(True)
-                logits = logits_sliced
+                # Slice reuses the parent buffer; do not deallocate the pre-slice tensor
+                # until after downstream ops consume the view (see tt_transformers forward).
+                logits = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
             hidden_states = logits
 
         if skip_lm_head:
