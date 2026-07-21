@@ -16,7 +16,6 @@
 #include <list>
 
 namespace tt::tt_metal {
-using ttnn::Tensor;
 namespace {
 
 ttnn::distributed::MeshDevice* device = nullptr;

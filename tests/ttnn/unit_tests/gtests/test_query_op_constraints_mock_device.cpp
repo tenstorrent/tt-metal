@@ -38,7 +38,6 @@
 #include "ttnn/types.hpp"
 
 namespace tt::tt_metal {
-using ttnn::Tensor;
 
 class QueryOpConstraintsMockDevice : public ::testing::Test {
 protected:

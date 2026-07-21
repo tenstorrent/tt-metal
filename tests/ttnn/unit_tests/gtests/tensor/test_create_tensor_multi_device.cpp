@@ -27,7 +27,7 @@ using ::testing::SizeIs;
 using ::tt::tt_metal::BufferType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
-using tt::tt_metal::TensorMemoryLayout;
+using ::tt::tt_metal::TensorMemoryLayout;
 using ttnn::StorageType;
 
 using MultiDeviceTensorCreationTest = GenericMeshDeviceFixture;

@@ -26,8 +26,6 @@ using tt::tt_metal::PageConfig;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorMemoryLayout;
 using tt::tt_metal::distributed::MeshDevice;
-using ttnn::StorageType;
-using ttnn::Tensor;
 
 namespace detail {
 

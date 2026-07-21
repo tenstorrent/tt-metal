@@ -16,7 +16,6 @@
 #include <tt_stl/small_vector.hpp>
 
 namespace {
-using ttnn::Tensor;
 template <typename T>
 ttnn::Tensor GenInputTensor(const ttsl::SmallVector<uint32_t>& shape) {
     using namespace tt::tt_metal;

@@ -20,7 +20,6 @@
 #include "send_recv_op_utils.hpp"
 
 namespace tt::tt_metal {
-using ttnn::Tensor;
 
 class FabricSendRecv2x4Fixture : public MeshDevice2x4Fabric2DFixture,
                                  public testing::WithParamInterface<SocketTestArgs> {};
@@ -57,7 +56,7 @@ void test_send_recv_async_(
     auto layout = tensor_spec.layout();
     auto dtype = tensor_spec.data_type();
     // Replicate the tensor across (1, num_devices) submesh.
-    const Tensor md0_input_tensor =
+    const ttnn::Tensor md0_input_tensor =
         ttnn::distributed::distribute_tensor(
             ttnn::experimental::view(ttnn::arange(seed, seed + num_elems, 1, dtype), input_shape).to_layout(layout),
             *ttnn::distributed::replicate_tensor_to_mesh_mapper(*md0),

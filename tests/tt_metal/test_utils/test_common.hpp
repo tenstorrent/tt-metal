@@ -14,7 +14,7 @@
 #include <iostream>
 #include <sstream>
 
-using namespace tt::tt_metal;
+using namespace tt::tt_metal;  // test only
 
 namespace test_args {
 
