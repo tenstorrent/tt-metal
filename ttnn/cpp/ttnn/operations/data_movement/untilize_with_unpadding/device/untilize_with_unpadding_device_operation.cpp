@@ -39,9 +39,6 @@ uint32_t legacy_2d_shard_column_count(const ShardSpec& shard_spec, TensorMemoryL
 
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    if (input.layout() == Layout::ROW_MAJOR) {
-        return UntilizeWithUnpaddingRowMajorProgramFactory{};
-    }
     if (input.memory_config().is_sharded()) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
@@ -103,43 +100,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
-    TT_FATAL(
-        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
-        "Can only untilize tile major or row major data");
-
-    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        // ROW_MAJOR input has no tile padding to strip, so this degenerates to a plain unpad/copy -
-        // handled by UntilizeWithUnpaddingRowMajorProgramFactory, which reuses ttnn::slice's RM
-        // reader/writer kernels. Those kernels already split a logical row across multiple shards
-        // via noc_async_{read,write}_sharded when needed (see common/kernels/common.hpp), and address
-        // the destination via TensorAccessor (sharding-agnostic), so - unlike the TILE-path writers -
-        // sharded RM input/output is not blocked by a row-per-page assumption. The output shard spec
-        // is used verbatim from the caller (see compute_output_specs()) since RM shards have no
-        // tile-alignment constraint to derive.
-        //
-        // Rank > 4 is rejected here: the public wrapper's squeeze/unsqueeze composite
-        // (build_ndiml_untilize_val / untilize_with_unpadding.cpp) unconditionally replaces
-        // output_tensor_end with the full input extents for rank > 4 and reshapes the result back
-        // to the original shape, discarding any real truncation request regardless of layout. That
-        // is a pre-existing gap for the TILE path too, but this device op previously rejected
-        // ROW_MAJOR input outright at every rank, so it never surfaced there; reject rank > 4 until
-        // the wrapper is taught to propagate output_tensor_end through the reshape.
-        TT_FATAL(
-            input_tensor_a.logical_shape().rank() <= 4,
-            "ROW_MAJOR input with rank > 4 is not yet supported for untilize_with_unpadding (the rank > 4 "
-            "squeeze/unsqueeze wrapper does not yet propagate output_tensor_end)");
-        if (input_tensor_a.memory_config().is_sharded()) {
-            TT_FATAL(
-                input_tensor_a.shard_spec().has_value(),
-                "ND-sharded ROW_MAJOR input is not yet supported for untilize_with_unpadding");
-        }
-        if (operation_attributes.output_mem_config.is_sharded()) {
-            TT_FATAL(
-                operation_attributes.output_mem_config.shard_spec().has_value(),
-                "ND-sharded ROW_MAJOR output is not yet supported for untilize_with_unpadding");
-        }
-        return;
-    }
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_FATAL(
         input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0,
@@ -431,8 +392,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
         // Interleaved input can write directly to any 2D-sharded output. The MultiCoreInterleaved
         // writer (writer_unary_stick_layout_split_rows_multicore.cpp) now uses
         // noc_async_write_sharded, which splits a logical row across shards via a per-shard page
-        // size override - the same mechanism the ROW_MAJOR-input factory relies on - so
-        // WIDTH_SHARDED/BLOCK_SHARDED output (which split a row across multiple cores) is no longer
+        // size override, so WIDTH_SHARDED/BLOCK_SHARDED output (which split a row across multiple cores) is no longer
         // blocked by the old row-per-page assumption. An earlier naive host-side-only relaxation
         // (no kernel change) was hardware-tested and produced wrong data; this is the real fix.
         // The MultiCoreBlockInterleaved writer (used for the very-wide-row heuristic path) has NOT
@@ -456,14 +416,6 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
     }
     Shape output_shape(std::move(out_shape));
     DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
-    // ROW_MAJOR output shards have no tile-alignment constraint, so the caller's output_mem_config
-    // (including its shard_spec, when sharded) is used as-is via the final fallback return below -
-    // skip the TILE-only shard-shape derivations, which round to tile height/width.
-    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        return TensorSpec(
-            output_shape,
-            TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
-    }
     if (!input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded()) {
         // Interleaved input has no shard spec to inherit a shape from, so derive one the same way
         // the sharded-input "single matrix split across cores" case does below: round per-core

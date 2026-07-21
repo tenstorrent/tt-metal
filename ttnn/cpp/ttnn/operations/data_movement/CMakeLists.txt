@@ -324,7 +324,6 @@ target_sources(
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_shared_variables.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_row_major_program_factory.hpp
             # view/
             view/view.hpp
             view/view_nanobind.hpp

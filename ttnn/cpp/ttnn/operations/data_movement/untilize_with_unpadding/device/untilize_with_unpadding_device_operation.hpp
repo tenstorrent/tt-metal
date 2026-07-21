@@ -10,7 +10,6 @@
 #include "factories/untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
-#include "factories/untilize_with_unpadding_row_major_program_factory.hpp"
 #include <variant>
 #include "ttnn/operation.hpp"
 
@@ -27,8 +26,7 @@ struct UntilizeWithUnpaddingDeviceOperation {
         UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreShardedProgramFactory,
         UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory,
-        UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory,
-        UntilizeWithUnpaddingRowMajorProgramFactory>;
+        UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const Tensor& input);

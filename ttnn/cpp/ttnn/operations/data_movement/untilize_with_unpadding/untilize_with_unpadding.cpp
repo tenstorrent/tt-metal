@@ -76,17 +76,6 @@ Tensor untilize_with_unpadding(
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
     if (input_shape.rank() > 4) {
-        // squeeze_vector_shape()/build_ndiml_untilize_val() below unconditionally discard the
-        // caller's real output_tensor_end and substitute the full input extents (a full pass-
-        // through, reshaped back to the original shape by the post-transform) - a pre-existing
-        // limitation of this rank > 4 composite path for TILE input too, but ROW_MAJOR input newly
-        // reaches this same code now that the device op accepts it. Reject it here rather than
-        // silently return the wrong (untruncated) result until output_tensor_end is properly
-        // propagated through the squeeze/unsqueeze.
-        TT_FATAL(
-            input_tensor.layout() != Layout::ROW_MAJOR,
-            "ROW_MAJOR input with rank > 4 is not yet supported for untilize_with_unpadding (the rank > 4 "
-            "squeeze/unsqueeze wrapper does not yet propagate output_tensor_end)");
         for (auto index = 0; index < input_shape.rank(); ++index) {
             output_end_vector.push_back(input_shape[index] - 1);
         }
