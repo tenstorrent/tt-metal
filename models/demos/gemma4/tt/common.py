@@ -19,6 +19,30 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
+from loguru import logger
+from models.common.weight_cache import (
+    build_cached_state_dict,
+    mark_weight_cache_complete,
+    weight_cache_is_complete,
+)
+
+# Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
+# loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4/tt):
+#  - token embedding: F.embedding(tokens, _embed_weight_cpu)      (model.py:1218/1238/1421)
+#  - per-layer-input embed/proj/norm (E2B/E4B):                    (model.py:615-635)
+#  - per-layer learned scalar read via .item():                   (layer.py:122-123)
+# Everything else flows through ttnn.as_tensor(cache_file_name=...) and is placeholder-safe.
+_GEMMA4_HOST_WEIGHT_SUFFIXES = (
+    "embed_tokens.weight",
+    "embed_tokens_per_layer.weight",
+    "per_layer_model_projection.weight",
+    "per_layer_projection_norm.weight",
+    ".layer_scalar",
+)
+
+
+def _gemma4_is_host_weight(key):
+    return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
 def create_tt_model(
@@ -74,10 +98,25 @@ def create_tt_model(
     else:
         ccl_manager = None
 
+    # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
+    # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
+    # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
+    cache_dir = model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
+        n_layers=model_args.num_hidden_layers,
+        mesh_shape=tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1),
+    )
+    loaded_real_weights = False
     if state_dict is None:
-        state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
+        if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
+            state_dict = build_cached_state_dict(cache_dir)
+        else:
+            state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
+            loaded_real_weights = bool(state_dict)
 
-    tensor_cache_path = str(model_args.weight_cache_path(dtype))
+    tensor_cache_path = str(cache_dir)
 
     # Resolve per-module dtype overrides from precision_overrides.json. The
     # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
@@ -101,6 +140,11 @@ def create_tt_model(
         precision=precision,
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
     )
+
+    # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
+    # so future runs can skip the HF load.
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=_gemma4_is_host_weight, **cache_identity)
 
     return model_args, model, model.tt_kv_cache, state_dict
 
