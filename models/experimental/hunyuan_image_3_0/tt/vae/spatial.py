@@ -292,12 +292,15 @@ def enable_vae_spatial(module, ccl, *, h_mesh_axis, w_mesh_axis) -> None:
     """
     from models.tt_dit.layers.module import Module, ModuleList
     from .conv3d import HunyuanSymmetricConv3d
+    from .resnet_conv import HunyuanResnetConvPair
 
     if isinstance(module, HunyuanSymmetricConv3d):
         module.ccl = ccl
         module.h_mesh_axis = h_mesh_axis
         module.w_mesh_axis = w_mesh_axis
         module.spatial_sharded = True
+    if isinstance(module, HunyuanResnetConvPair):
+        module.enable_spatial(ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
     if type(module).__name__ in ("ResnetBlockTTNN", "AttnBlockTTNN", "NormOutTTNN", "EncoderHeadTTNN"):
         module._sp_ccl = ccl
         module._sp_h = h_mesh_axis
