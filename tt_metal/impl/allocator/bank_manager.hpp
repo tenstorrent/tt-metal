@@ -14,8 +14,11 @@
 #include <vector>
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
+
+#include <tt-metalium/allocator.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
 #include "core_coord.hpp"
@@ -129,13 +132,16 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
-    // High water mark tracking for all allocations (both bottom-up and top-down)
-    // Tracks the maximum address extent reached during the tracking period, including deallocated buffers
+    // Address-extent high-water mark (max address ever touched, incl. freed buffers) for trace-buffer placement.
     void begin_high_water_mark_tracking();
     DeviceAddr end_high_water_mark_tracking();
     DeviceAddr get_high_water_mark() const;
     DeviceAddr get_allocation_high_water_mark() const;
     DeviceAddr get_deletion_high_water_mark() const;
+    // DRAM footprint (peak usage + min largest-free block) for OOM analysis.
+    void begin_footprint_tracking();
+    DramFootprint end_footprint_tracking();
+    DramFootprint get_footprint() const;
 
     // Cross-allocator mirroring: mark a region as allocated/deallocated in a specific sub-allocator.
     // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
@@ -185,10 +191,15 @@ private:
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
 
-    // High water mark tracking for allocations and deallocations
+    // Address-extent high-water-mark window (trace-buffer placement).
     bool tracking_high_water_mark_ = false;
-    DeviceAddr allocation_high_water_mark_ = 0;
-    DeviceAddr deletion_high_water_mark_ = 0;
+    DeviceAddr allocation_high_water_mark_ = 0;  // max address extent of live allocations
+    DeviceAddr deletion_high_water_mark_ = 0;    // max address extent of freed allocations
+    // DRAM footprint window (OOM analysis); independent of the high-water-mark window above.
+    bool tracking_footprint_ = false;
+    size_t peak_allocated_bytes_ = 0;  // running max of live usage; identity 0 == none recorded
+    size_t min_largest_free_bytes_ =
+        std::numeric_limits<size_t>::max();  // running min; identity max() == none recorded
 
     /*********************************
      * Allocator-independent methods *
@@ -199,6 +210,9 @@ private:
     /*******************************
      * Allocator-dependent methods *
      *******************************/
+    // Sample peak usage / min largest-free block after an allocation (get_statistics is O(size classes)).
+    void record_footprint(const allocator::Algorithm* alloc);
+
     // Returns allocator for the given allocator ID; returns nullptr if allocator ID is invalid
     allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id);
     const allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id) const;

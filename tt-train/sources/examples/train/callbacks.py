@@ -16,6 +16,7 @@ from ttml.trainers import SFTTrainer, TrainerCallback
 import moe_activation_logger
 
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+DramFootprintTracker = ttml.core.utils.DramFootprintTracker
 
 
 class ThroughputCallback(TrainerCallback):
@@ -61,23 +62,78 @@ class ThroughputCallback(TrainerCallback):
 
 
 class MemoryTrackerCallback(TrainerCallback):
-    """In-loop FORWARD_PASS / BACKWARD_PASS / FIRST_ITERATION_COMPLETE snapshots over step 1, then deregister.
+    """In-loop per-micro-step snapshots over step 1, then deregister.
 
     run_training opens the capture session (so its ENTRY/MODEL_CREATION/OPTIMIZER_CREATION setup
     snapshots are included); this callback only adds the per-step snapshots and closes the session.
+
+    Each grad-accumulation micro-step gets a *uniquely named* snapshot (FORWARD_PASS_i / BACKWARD_PASS_i).
+    Reusing one name per pass overwrote the stored trace, collapsing every micro-step to the last one --
+    which hides the gradient buffers allocated on micro-step 1 and retained across the rest, so the
+    stitched cumulative peak under-reports by that amount. Unique names keep each micro-step's real net.
     """
 
+    def __init__(self) -> None:
+        self._micro_step = 0
+
     def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
-        MemoryUsageTracker.snapshot("FORWARD_PASS")
+        self._micro_step += 1
+        MemoryUsageTracker.snapshot(f"FORWARD_PASS_{self._micro_step}")
 
     def on_after_backward(self, trainer: SFTTrainer, batch: Batch) -> None:
-        MemoryUsageTracker.snapshot("BACKWARD_PASS")
+        MemoryUsageTracker.snapshot(f"BACKWARD_PASS_{self._micro_step}")
 
     def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
         MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
         MemoryUsageTracker.print_memory_usage()
         MemoryUsageTracker.clear()
         trainer.remove_callback(self)
+
+
+class DramFootprintCallback(TrainerCallback):
+    """Track the peak DRAM footprint over the step, then print it and stop.
+
+    The peak lands in the first step's backward (all activations + gradients + loss transients
+    co-resident) -- no need to track the whole run. Near-zero
+    overhead (a running max/min sampled on the allocation path), so it is always on.
+    Once the window closes (during training) it prints the footprint and deregisters.
+    """
+
+    # Peak usage lands in step 1. Tunable.
+    _PEAK_WINDOW_STEPS = 1
+
+    def __init__(self) -> None:
+        self.footprint: Any = None  # DramFootprint (per device) captured over the window
+        self._active = False
+
+    def on_train_begin(self, trainer: SFTTrainer) -> None:
+        DramFootprintTracker.begin()
+        self._active = True
+
+    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
+        if self._active and step >= self._PEAK_WINDOW_STEPS:
+            self._close_and_report(step)
+            trainer.remove_callback(self)
+
+    def on_train_end(self, trainer: SFTTrainer) -> None:
+        # Run ended before the window closed (fewer steps than the window): capture and report.
+        if self._active:
+            self._close_and_report(trainer.step)
+
+    def _close_and_report(self, steps: int) -> None:
+        self.footprint = DramFootprintTracker.end()
+        self._active = False
+        mb = 1024 * 1024
+        arena = ttml.core.utils.dram_arena_bytes()
+        reserved = ttml.core.utils.dram_reserved_bytes()
+        peak = self.footprint.peak_allocated_bytes
+        pct = 100 * peak / arena if arena else 0.0
+        print(f"=== DRAM footprint ===")
+        print(f"  peak usage: {peak / mb:,.0f} MB/device ({pct:.1f}% of {arena / mb:,.0f} MB arena)")
+        print(f"  reserved (outside arena): {reserved / mb:,.0f} MB/device")
+        print(
+            f"  largest allocatable block at the tightest point: {self.footprint.min_largest_free_bytes / mb:,.0f} MB/device"
+        )
 
 
 class MoECallback(TrainerCallback):

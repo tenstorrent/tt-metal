@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -71,6 +72,7 @@ FreeListOpt::FreeListOpt(
 void FreeListOpt::init() {
     max_size_bytes_ += shrink_size_;
     shrink_size_ = 0;
+    total_allocated_bytes_ = 0;
 
     block_address_.clear();
     block_size_.clear();
@@ -219,6 +221,9 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
 }
 
 size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size, size_t offset) {
+    // Every allocation funnels through here (both allocate() and allocate_at_address()), so it is the
+    // one place to keep the allocated-bytes counter current. The block ends up sized exactly alloc_size.
+    total_allocated_bytes_ += alloc_size;
     if (block_size_[block_index] == alloc_size && offset == 0) {
         block_is_allocated_[block_index] = true;
         insert_block_to_alloc_table(block_address_[block_index], block_index);
@@ -275,6 +280,8 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     }
     size_t block_index = *block_index_opt;
     block_is_allocated_[block_index] = false;
+    // block_size_ is still the allocated size here (coalescing below only grows the free block).
+    total_allocated_bytes_ -= block_size_[block_index];
     ssize_t prev_block = block_prev_block_[block_index];
     ssize_t next_block = block_next_block_[block_index];
 
@@ -409,34 +416,37 @@ void FreeListOpt::free_meta_block(size_t block_index) {
 void FreeListOpt::clear() { init(); }
 
 Statistics FreeListOpt::get_statistics() const {
-    // TODO: Cache the statistics
-    size_t total_allocated_bytes = 0;
-    size_t total_free_bytes = 0;
-    size_t largest_free_block_bytes = 0;
-
-    for (size_t i = 0; i < block_address_.size(); i++) {
-        if (!meta_block_is_allocated_[i]) {
-            continue;
-        }
-        if (block_is_allocated_[i]) {
-            total_allocated_bytes += block_size_[i];
-        } else {
-            total_free_bytes += block_size_[i];
-            largest_free_block_bytes = std::max(block_size_[i], largest_free_block_bytes);
-        }
+    // Aggregates are maintained incrementally, avoiding the old O(blocks) scan: allocated bytes is a
+    // running counter, free is its complement, and the largest free block is queried from the size classes.
+    if (total_allocated_bytes_ == 0) {
+        return Statistics{
+            .total_allocatable_size_bytes = max_size_bytes_,
+            .total_allocated_bytes = 0,
+            .total_free_bytes = max_size_bytes_,
+            .largest_free_block_bytes = max_size_bytes_,
+        };
     }
-
-    if (total_allocated_bytes == 0) {
-        total_free_bytes = max_size_bytes_;
-        largest_free_block_bytes = max_size_bytes_;
-    }
-
     return Statistics{
         .total_allocatable_size_bytes = max_size_bytes_,
-        .total_allocated_bytes = total_allocated_bytes,
-        .total_free_bytes = total_free_bytes,
-        .largest_free_block_bytes = largest_free_block_bytes,
+        .total_allocated_bytes = total_allocated_bytes_,
+        .total_free_bytes = max_size_bytes_ - total_allocated_bytes_,
+        .largest_free_block_bytes = largest_free_block_bytes(),
     };
+}
+
+DeviceAddr FreeListOpt::largest_free_block_bytes() const {
+    // Size classes partition free blocks by floor(log2(size / base)): every block in a higher class is
+    // larger than any in a lower one, so the largest free block is the max of the highest non-empty class.
+    for (const auto& free_blocks : free_blocks_segregated_by_size_ | std::views::reverse) {
+        DeviceAddr largest = 0;
+        for (size_t block_index : free_blocks) {
+            largest = std::max(largest, block_size_[block_index]);
+        }
+        if (largest != 0) {
+            return largest;
+        }
+    }
+    return 0;
 }
 
 void FreeListOpt::dump_blocks(std::ostream& out) const {

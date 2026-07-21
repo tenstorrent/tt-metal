@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <nlohmann/json.hpp>
 
 #include "ttnn/common/guard.hpp"
@@ -104,4 +105,67 @@ void print_memory_usage();
 void clear();
 
 }  // namespace MemoryUsageTracker
+
+/// Peak DRAM footprint over a tracking window, in bytes per device.
+struct DramFootprint {
+    uint64_t peak_allocated_bytes = 0;    ///< Highest usage reached.
+    uint64_t min_largest_free_bytes = 0;  ///< Largest single buffer still allocatable at the tightest point.
+};
+
+/**
+ * @brief Zero-overhead peak DRAM footprint tracking via the real device allocator.
+ *
+ * Unlike @ref MemoryUsageTracker (which captures the op graph, adding per-op overhead and modeling
+ * an *estimated* peak), this reads the device allocator directly. While active, each DRAM allocation
+ * samples the allocator on the allocation path itself -- no hooks, no capture buffers -- so it
+ * measures the true peak DRAM footprint of the enclosed region at effectively zero cost, without
+ * perturbing op timings.
+ *
+ * Reports a @ref DramFootprint: peak usage, and the min largest-free block (the contiguity that
+ * limits allocation under fragmentation -- the first number to run out). Operates on the active
+ * device from @ref ttml::autograd::ctx.
+ */
+namespace DramFootprintTracker {
+
+/// Begin tracking; resets the footprint. Throws if already active. Not nestable, not thread safe.
+void begin();
+
+/// The footprint so far (running values), or zeros if not active. Not thread safe.
+[[nodiscard]] DramFootprint footprint();
+
+/// Stop tracking and return the final footprint, or zeros (with a warning) if not active. Not thread safe.
+DramFootprint end();
+
+}  // namespace DramFootprintTracker
+
+/**
+ * @brief RAII scope for @ref DramFootprintTracker: begins on construction, ends on destruction (so
+ * tracking is always released, even on an exception). Read @ref footprint while the scope is alive:
+ * @code
+ *   ttml::utils::DramFootprintScope scope;
+ *   run_training_step();
+ *   auto peak = scope.footprint();
+ * @endcode
+ */
+class DramFootprintScope {
+public:
+    DramFootprintScope();
+    ~DramFootprintScope();
+    DramFootprintScope(const DramFootprintScope&) = delete;
+    DramFootprintScope& operator=(const DramFootprintScope&) = delete;
+    DramFootprintScope(DramFootprintScope&&) = delete;
+    DramFootprintScope& operator=(DramFootprintScope&&) = delete;
+
+    /// The DRAM footprint so far within this scope, in bytes per device.
+    [[nodiscard]] DramFootprint footprint() const;
+};
+
+/// DRAM reserved outside the allocator arena, in bytes per device (physical - arena). A static device
+/// property (firmware base + any trace region), independent of any footprint tracking window.
+[[nodiscard]] uint64_t dram_reserved_bytes();
+
+/// DRAM arena (allocatable) size, in bytes per device -- the budget peak usage competes for. OOM is
+/// gated by this, not by physical DRAM (reserved is never allocatable). physical = arena + reserved.
+[[nodiscard]] uint64_t dram_arena_bytes();
+
 }  // namespace ttml::utils

@@ -562,6 +562,77 @@ void py_module(nb::module_& m) {
                 Not thread safe.
             )doc");
     }
+
+    // DramFootprintTracker bindings under core.utils
+    {
+        auto py_utils = static_cast<nb::module_>(m.attr("utils"));
+
+        nb::class_<ttml::utils::DramFootprint>(
+            py_utils, "DramFootprint", "Peak DRAM footprint over a tracking window, bytes per device.")
+            .def_ro("peak_allocated_bytes", &ttml::utils::DramFootprint::peak_allocated_bytes, "Highest usage reached.")
+            .def_ro(
+                "min_largest_free_bytes",
+                &ttml::utils::DramFootprint::min_largest_free_bytes,
+                "Largest single buffer still allocatable at the tightest point (the OOM-limiting contiguity).");
+
+        py_utils.def(
+            "dram_reserved_bytes",
+            &ttml::utils::dram_reserved_bytes,
+            R"doc(
+            DRAM reserved outside the allocator arena, in bytes per device (physical - arena).
+            A static device property (firmware base + any trace region), independent of footprint tracking.
+            )doc");
+
+        py_utils.def(
+            "dram_arena_bytes",
+            &ttml::utils::dram_arena_bytes,
+            R"doc(
+            DRAM arena (allocatable) size, in bytes per device -- the budget peak usage competes for.
+            OOM is gated by this, not physical DRAM. physical = arena + reserved.
+            )doc");
+
+        py_utils.def_submodule(
+            "DramFootprintTracker", "Zero-overhead peak DRAM footprint tracking via the real device allocator.");
+        auto py_tracker = static_cast<nb::module_>(py_utils.attr("DramFootprintTracker"));
+
+        py_tracker.def(
+            "begin",
+            &ttml::utils::DramFootprintTracker::begin,
+            R"doc(
+            Begin zero-overhead peak DRAM footprint tracking on the active device; resets the footprint.
+
+            While active, every DRAM allocation samples the allocator on the allocation path itself
+            (O(size classes) -- no op hooks, no capture buffers), so it measures the true peak DRAM
+            footprint of the enclosed region at effectively zero cost, without perturbing op timings.
+            Unlike MemoryUsageTracker this reads the real device allocator rather than an op-graph estimate.
+
+            Raises:
+                RuntimeError: if tracking is already active (not nestable).
+
+            Note:
+                Not thread safe. Prefer the ttml.track_dram_footprint() context manager.
+            )doc");
+
+        py_tracker.def(
+            "footprint",
+            &ttml::utils::DramFootprintTracker::footprint,
+            R"doc(
+            The DramFootprint since begin() (peak_allocated_bytes, min_largest_free_bytes), or zeros if not active.
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "end",
+            &ttml::utils::DramFootprintTracker::end,
+            R"doc(
+            Stop tracking and return the final DramFootprint (zeros, with a warning, if not active).
+
+            Note:
+                Not thread safe.
+            )doc");
+    }
 }
 
 }  // namespace ttml::nanobind::core

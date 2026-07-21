@@ -87,6 +87,10 @@ public:
     DeviceAddr get_dram_high_water_mark() const;
     DeviceAddr get_dram_allocation_high_water_mark() const;
     DeviceAddr get_dram_deletion_high_water_mark() const;
+    void begin_dram_footprint_tracking();
+    DramFootprint end_dram_footprint_tracking();
+    DramFootprint get_dram_footprint() const;
+    DeviceAddr get_dram_reserved_bytes() const;
 
     // what does clear even mean on an allocator???
     void clear();

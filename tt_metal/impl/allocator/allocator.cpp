@@ -499,6 +499,29 @@ DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
     return dram_manager_->get_deletion_high_water_mark();
 }
 
+void AllocatorImpl::begin_dram_footprint_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->begin_footprint_tracking();
+}
+
+DramFootprint AllocatorImpl::end_dram_footprint_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->end_footprint_tracking();
+}
+
+DramFootprint AllocatorImpl::get_dram_footprint() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_footprint();
+}
+
+DeviceAddr AllocatorImpl::get_dram_reserved_bytes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Physical bank size minus what the allocator arena manages == the region carved off the top
+    // (firmware/unreserved base + any trace region) before allocation begins. Access members directly;
+    // get_bank_size() would re-lock the non-recursive mutex_ and deadlock.
+    return config_->dram_bank_size - dram_manager_->bank_size();
+}
+
 void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->clear();
@@ -642,6 +665,14 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
 uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl->get_alignment(buffer_type); }
 
 Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl->get_statistics(buffer_type); }
+
+void Allocator::begin_dram_footprint_tracking() const { impl->begin_dram_footprint_tracking(); }
+
+DramFootprint Allocator::end_dram_footprint_tracking() const { return impl->end_dram_footprint_tracking(); }
+
+DramFootprint Allocator::get_dram_footprint() const { return impl->get_dram_footprint(); }
+
+DeviceAddr Allocator::get_dram_reserved_bytes() const { return impl->get_dram_reserved_bytes(); }
 
 AllocatorState Allocator::extract_state() const { return impl->extract_state(); }
 
