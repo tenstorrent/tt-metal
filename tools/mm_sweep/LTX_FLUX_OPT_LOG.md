@@ -124,3 +124,22 @@ this shape's table entry was suboptimal.
 - Classification: geometry/near-floor. Speedup 0% (kept nothing). Artifacts: ltxflux_sweep_128x6144x2304.json.
 - PATTERN: Mt4 K=6144 shapes (768/2304/4608) all auto=Pk12 with Pk6 ~1-1.5% better — systematic sub-gate
   picker bias toward over-splitting K; not individually adoptable.
+
+### [6] 128x2304x6144 (Mt4, wide-N Nt192, shallow-K Kt72) — CLOSED: practical floor
+- Baseline: auto (2,3,1,1,6), us_med 68.4, ideal 59.5, wall/ideal 1.15, 446 GB/s, cobound (riscImb 2%,
+  NCRISC-crit), core_spread 20%.
+- Sweep (232 configs; ltxflux_sweep_128x2304x6144.json): best (2,3,2,1,6)=68.06µs vs auto 68.23 =>
+  **0.2% headroom**. Picker already uses the good Ns2/Pk3 direction (contrast 64x4608x6144 which did not).
+- Classification: practical floor/geometry. Speedup 0%. Artifacts: ltxflux_sweep_128x2304x6144.json.
+
+### [7] 64x15360x1536 (Mt2, deep-K W5, Nt48) — KEPT: picker win −2.3%
+- Baseline: auto (1,12,1,1,3), us_med 104.1, ideal 96.4, wall/ideal 1.08, 474 GB/s, cobound.
+- Sweep (260 configs; ltxflux_sweep_64x15360x1536.json): best (1,6,1,2,3)=101.44µs vs auto 103.54 =>
+  2.1% headroom. Direction = shallower split-K + kb2 (Pk6/kb2 vs Pk12/kb1).
+- A/B (3 interleaved paired): auto 103.67 [103.5–104.1] vs (1,6,1,2,3) 101.32 [101.3–101.3] =
+  **−2.3% cleanly separated**; (1,3,1,4,6) −1.2% (worse).
+- Fix: {{2,480,48}} {12,1,1,1,3} -> {6,1,1,2,3} + python mirror.
+- Production verify (config=None, mask 0): 101.85µs [runs the new cfg] = −1.8% single-pass / −2.3% A/B, 486 GB/s.
+- Regression: unit 111/111 + corpus 60/60 (config=None PCC fresh+cached; no other shape moved).
+- Decision: KEPT, −2.3% (A/B; low-boundary of gate but stable + cleanly separated + zero-regression keyed fix).
+- Artifacts: ltxflux_sweep_64x15360x1536.json.
