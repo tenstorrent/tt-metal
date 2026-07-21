@@ -83,3 +83,31 @@ def test_reset_devices_full_enum_fallback_when_no_per_board(monkeypatch):
     monkeypatch.setattr(run.subprocess, "run", lambda cmd, **k: seen.append(cmd) or _R("", 0))
     run._reset_devices("0")
     assert seen and seen[0][1:] == ["-r", "0,1,2,3"]
+
+
+def test_reset_devices_galaxy_uses_glx_not_r(monkeypatch):
+    import agent.probes as P
+
+    monkeypatch.setattr(P, "_reset_arg_sets", lambda: [["-glx_reset_auto"], ["-glx_reset"], ["-r"]])
+    monkeypatch.setattr(P, "_GALAXY_HOST", True, raising=False)
+    monkeypatch.setattr(P, "note_board", lambda **k: None, raising=False)
+    monkeypatch.setattr(run, "_reset_chip_list", lambda dev: "0,1")
+    monkeypatch.setattr(run.shutil, "which", lambda _x: __file__)
+    seen = []
+    monkeypatch.setattr(run.subprocess, "run", lambda cmd, **k: seen.append(cmd) or _R("", 0))
+    run._reset_devices("0")
+    assert seen and seen[0][1:] == ["-glx_reset_auto"]
+
+
+def test_reset_devices_galaxy_fallthrough_then_per_board_r(monkeypatch):
+    import agent.probes as P
+
+    monkeypatch.setattr(P, "_reset_arg_sets", lambda: [["-glx_reset_auto"], ["-glx_reset"], ["-r"]])
+    monkeypatch.setattr(P, "_GALAXY_HOST", True, raising=False)
+    monkeypatch.setattr(P, "note_board", lambda **k: None, raising=False)
+    monkeypatch.setattr(run, "_reset_chip_list", lambda dev: "0,1")
+    monkeypatch.setattr(run.shutil, "which", lambda _x: __file__)
+    seen = []
+    monkeypatch.setattr(run.subprocess, "run", lambda cmd, **k: seen.append(cmd) or _R("", 1))
+    run._reset_devices("0")
+    assert [c[1:] for c in seen] == [["-glx_reset_auto"], ["-glx_reset"], ["-r", "0,1"]]
