@@ -8,23 +8,24 @@
 namespace compute_kernel_lib {
 
 template <BroadcastDim Dim, uint32_t Cb, InputSpec Input, Dst DstSlot>
-struct UnaryBcast : InputStream<Cb, detail::InputSpecConfig::encode(Input)>, UnaryBcastTag {
+struct UnaryBcast : InputStream, UnaryBcastTag {
     static constexpr InputLifecycle Policy = Input.lifecycle;
-    static constexpr OperandKind Index = Input.index;
+    static constexpr OperandKind IndexMode = Input.index;
     static constexpr TileOffset Offset = Input.offset;
-    using Base = InputStream<Cb, detail::InputSpecConfig::encode(Input)>;
+    using Base = InputStream;
     using Base::tile_base;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
-        is_legal_kind_lifecycle(Index, Policy), "UnaryBcast: input lifecycle and operand kind are incompatible");
+        is_legal_kind_lifecycle(IndexMode, Policy), "UnaryBcast: input lifecycle and operand kind are incompatible");
     static_assert(
-        detail::valid_policy_mode_v<Policy, Index>,
+        detail::valid_policy_mode_v<Policy, IndexMode>,
         "UnaryBcast: Row and Col operand kinds require a non-streaming lifecycle");
     static_assert(
         Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
         "UnaryBcast: TileOffset::Set requires a Bulk-family or CallerManaged lifecycle");
 
+    static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t dfb_a_id() { return Cb; }
     static constexpr InputLifecycle a_policy() { return Policy; }
     static constexpr bool is_upfront =
@@ -68,7 +69,7 @@ struct UnaryBcast : InputStream<Cb, detail::InputSpecConfig::encode(Input)>, Una
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<Index>(i_flat, ht, wt);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
         ::unary_bcast<bt>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 

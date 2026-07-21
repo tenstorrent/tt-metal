@@ -66,6 +66,11 @@ def test_cba_cbb_index_mismatch_illegal(device, expect_error):
     _expect_build_failure(device, expect_error, "cba_cbb_index_mismatch.cpp", "AIndex and BIndex must match")
 
 
+def test_cba_cbb_lifecycle_mismatch_illegal(device, expect_error):
+    """BinaryFpu same CB for both operands with mismatched lifecycles — must not compile."""
+    _expect_build_failure(device, expect_error, "cba_cbb_lifecycle_mismatch.cpp", "same InputLifecycle")
+
+
 def test_setupowner_caller_not_hoistable_illegal(device, expect_error):
     """SetupOwner::Caller on a chain whose setup isn't fully boot-hoistable (non-uniform SFPU)
     — the caller can't own a once-before-the-loop setup that doesn't exist, so it must not compile."""

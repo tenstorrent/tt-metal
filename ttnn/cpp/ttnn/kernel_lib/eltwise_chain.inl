@@ -750,158 +750,36 @@ constexpr bool chain_requests_no_reconfig() {
 }  // namespace detail
 
 // =============================================================================
-// 0. Operand streams — the shared CB-lifecycle hook providers
+// 0. Operand streams — runtime state for driver-managed CB lifecycles
 //
 // Every CB-reader element's wait/pop hooks are a function of exactly one operand
 // tuple (Cb, Policy, IndexMode, Offset, tile_base); every CB-writer's reserve/push
-// hooks of one (Cb, Policy, Offset, tile_base). `InputStream` / `OutputStream`
-// define each hook ONCE. Single-stream elements (CopyTile / DestReuseBinary /
-// UnaryBcast) inherit `InputStream`; BinaryFpu HOLDS two and fans out with a
-// `same_dfb` dedup; PackTile inherits `OutputStream`. The driver calls the same
-// hook names either way (inherited member, or the element's own fan-out override).
+// hooks of one (Cb, Policy, Offset, tile_base). Cb and the spec remain compile-time
+// element metadata for planning/reconfig. The existing chain workers emit the lifecycle
+// operations directly and pass the CB ids to DataflowBuffer as ordinary values; ALWI
+// inlining constant-folds those values and the policy gates without creating one
+// stream-method specialization per element configuration.
+//
+// Single-stream elements (CopyTile / DestReuseBinary / UnaryBcast) inherit the
+// non-template `InputStream` state; BinaryFpu holds two and the driver handles its
+// second input explicitly; PackTile inherits `OutputStream`.
 //
 // All policy gates below are a verbatim transcription of the per-element bodies —
 // a wrong gate is a hang or a PCC failure, never benign.
 // =============================================================================
 
-template <uint32_t Cb, uint16_t ConfigBits>
 struct InputStream {
-    static constexpr InputSpec Config = detail::InputSpecConfig::decode(ConfigBits);
-    static constexpr InputLifecycle Policy = Config.lifecycle;
-    static constexpr WaitPolicy Wait = Policy.wait_policy;
-    static constexpr PopPolicy Pop = Policy.pop_policy;
-    static constexpr OperandKind IndexMode = Config.index;
-    static constexpr TileOffset Offset = Config.offset;
-
     uint32_t tile_base = 0;
 
     constexpr InputStream() noexcept = default;
     constexpr explicit InputStream(uint32_t base) noexcept : tile_base(base) {}
-
-    // Upfront (Bulk-family) window count: the index-mode window plus the runtime base.
-    ALWI uint32_t window_count(uint32_t Ht, uint32_t Wt) const {
-        return detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base);
-    }
-
-    // Gate-free count primitives — reused by BinaryFpu's same_dfb branch, which
-    // collapses both sides' bases into the single shared CB's window.
-    ALWI void wait_n(uint32_t n) const { DataflowBuffer(Cb).wait_front(n); }
-    ALWI void pop_n(uint32_t n) const { DataflowBuffer(Cb).pop_front(n); }
-
-    ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Wait == WaitPolicy::PerTile) {
-            DataflowBuffer(Cb).wait_front(1);
-        } else if constexpr (Wait == WaitPolicy::Cumulative) {
-            DataflowBuffer(Cb).wait_front(cumulative_count);
-        }
-    }
-    ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Wait == WaitPolicy::PerChunk) {
-            DataflowBuffer(Cb).wait_front(inner_count);
-        }
-    }
-    ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::BulkDrain>) {
-            // BulkDrain pops one tile per iter with no per-tile wait, so it must wait for the WHOLE
-            // walk (Ht*Wt, + TileOffset base) upfront — NOT window<IndexMode>, which is 1 for the
-            // Scalar index BulkDrain is restricted to. Waiting 1 would silently rely on the producer
-            // having already staged every tile.
-            DataflowBuffer(Cb).wait_front(Ht * Wt + tile_base_value<Offset>(tile_base));
-        } else if constexpr (Wait == WaitPolicy::Upfront) {
-            // Bulk stages its window once and pops at end; HeldBulk holds it — a held Scalar operand
-            // legitimately waits window<Scalar>=1 (see the Bulk+Scalar held-operand contract).
-            DataflowBuffer(Cb).wait_front(window_count(Ht, Wt));
-        }
-    }
-    ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Pop == PopPolicy::AtEnd) {
-            DataflowBuffer(Cb).pop_front(window_count(Ht, Wt));
-        }
-    }
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Pop == PopPolicy::PerTile) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
-    ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Pop == PopPolicy::PerChunk) {
-            DataflowBuffer(Cb).pop_front(inner_count);
-        }
-    }
-    ALWI void wait_per_row() const {
-        if constexpr (Wait == WaitPolicy::PerOuter) {
-            DataflowBuffer(Cb).wait_front(1);
-        }
-    }
-    ALWI void pop_per_row() const {
-        if constexpr (Pop == PopPolicy::PerOuter) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
 };
 
-template <uint32_t Cb, uint16_t ConfigBits>
 struct OutputStream {
-    static constexpr OutputSpec Config = detail::OutputSpecConfig::decode(ConfigBits);
-    static constexpr OutputLifecycle Policy = Config.lifecycle;
-    static constexpr ReservePolicy Reserve = Policy.reserve_policy;
-    static constexpr PushPolicy Push = Policy.push_policy;
-    static constexpr TileOffset Offset = Config.offset;
-
     uint32_t tile_base = 0;
 
     constexpr OutputStream() noexcept = default;
     constexpr explicit OutputStream(uint32_t base) noexcept : tile_base(base) {}
-
-    // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
-    // upfront-reserve policies reserve the whole window once and write distinct tiles into it
-    // (walk); per-tile/per-chunk-reserve policies advance the CB front, so the index stays pinned.
-    static constexpr bool walk = Reserve == ReservePolicy::Upfront;
-
-    ALWI void reserve_per_tile(uint32_t /*i*/) const {
-        if constexpr (Reserve == ReservePolicy::PerTile) {
-            DataflowBuffer(Cb).reserve_back(1);
-        }
-    }
-    ALWI void reserve_per_block(uint32_t inner_count) const {
-        if constexpr (Reserve == ReservePolicy::PerChunk) {
-            DataflowBuffer(Cb).reserve_back(inner_count);
-        }
-    }
-    ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Reserve == ReservePolicy::Upfront) {
-            DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
-        } else if constexpr (Reserve == ReservePolicy::OneUpfront) {
-            DataflowBuffer(Cb).reserve_back(1);
-        }
-    }
-    ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Push == PushPolicy::AtEnd) {
-            DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
-        } else if constexpr (Push == PushPolicy::OneAtEnd) {
-            DataflowBuffer(Cb).push_back(1);
-        }
-    }
-    ALWI void push_per_tile(uint32_t /*i*/) const {
-        if constexpr (Push == PushPolicy::PerTile) {
-            DataflowBuffer(Cb).push_back(1);
-        }
-    }
-    ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (Push == PushPolicy::PerChunk) {
-            DataflowBuffer(Cb).push_back(inner_count);
-        }
-    }
-    ALWI void reserve_per_row() const {
-        if constexpr (Reserve == ReservePolicy::PerOuter) {
-            DataflowBuffer(Cb).reserve_back(1);
-        }
-    }
-    ALWI void push_per_row() const {
-        if constexpr (Push == PushPolicy::PerOuter) {
-            DataflowBuffer(Cb).push_back(1);
-        }
-    }
 };
 
 // =============================================================================
@@ -909,11 +787,7 @@ struct OutputStream {
 // =============================================================================
 
 template <uint32_t Cb, uint32_t ConfigBits>
-struct detail::CopyTileImpl
-    : InputStream<
-          Cb,
-          detail::InputSpecConfig::encode(CopyTileConfig{ConfigBits}.input_spec())>,
-      CopyTileTag {
+struct detail::CopyTileImpl : InputStream, CopyTileTag {
     static constexpr CopyTileConfig Config{ConfigBits};
     static constexpr InputSpec Input = Config.input_spec();
     static constexpr Dst DstSlot = Config.dst();
@@ -921,7 +795,7 @@ struct detail::CopyTileImpl
     static constexpr DataFormatReconfig Reconfig = Input.reconfig;
     static constexpr OperandKind IndexMode = Input.index;
     static constexpr TileOffset Offset = Input.offset;
-    using Base = InputStream<Cb, detail::InputSpecConfig::encode(Input)>;
+    using Base = InputStream;
     using Base::tile_base;
 
     // ---- compile-time validation ----
@@ -972,8 +846,8 @@ struct detail::CopyTileImpl
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
-    // wait_per_tile / wait_per_block / wait_upfront / pop_upfront_end / pop_per_tile /
-    // pop_per_block / wait_per_row / pop_per_row inherited from InputStream.
+    // The chain driver emits wait/pop operations from the metadata above and the
+    // runtime `tile_base` inherited from InputStream.
 };
 
 // =============================================================================
@@ -981,11 +855,7 @@ struct detail::CopyTileImpl
 // =============================================================================
 
 template <uint32_t Cb, uint32_t ConfigBits>
-struct detail::PackTileImpl
-    : OutputStream<
-          Cb,
-          detail::OutputSpecConfig::encode(PackTileConfig{ConfigBits}.output_spec())>,
-      PackTileTag {
+struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr PackTileConfig Config{ConfigBits};
     static constexpr OutputSpec Output = Config.output_spec();
     static constexpr OutputLifecycle Policy = Output.lifecycle;
@@ -995,9 +865,11 @@ struct detail::PackTileImpl
     static constexpr DestAccumulation DestAccumulationMode = Output.dest_accumulation;
     static constexpr Dst DstSlot = Config.dst();
     static constexpr TileOffset Offset = Output.offset;
-    using Base = OutputStream<Cb, detail::OutputSpecConfig::encode(Output)>;
+    using Base = OutputStream;
     using Base::tile_base;
-    using Base::walk;
+    // Walk vs pinned output addressing is derived from the lifecycle: upfront-reserve
+    // policies write distinct tiles in one reserved window; front-advancing policies stay pinned.
+    static constexpr bool walk = Policy.reserve_policy == ReservePolicy::Upfront;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -1044,8 +916,7 @@ struct detail::PackTileImpl
     static constexpr bool uses_pack_relu = Relu != PackRelu::Disabled;
     static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
-    // `walk` (walk vs pinned output addressing) is derived from the OutputLifecycle and
-    // inherited from OutputStream (see `using Base::walk;` above).
+    // `walk` (walk vs pinned output addressing) is derived from OutputLifecycle above.
 
     // Prev-CB fold: PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
@@ -1096,8 +967,8 @@ struct detail::PackTileImpl
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
-    // reserve_per_tile / reserve_per_block / reserve_upfront / push_at_end / push_per_tile /
-    // push_per_block inherited from OutputStream.
+    // The chain driver emits reserve/push operations from the metadata above and the
+    // runtime `tile_base` inherited from OutputStream.
 };
 
 // =============================================================================
@@ -1134,11 +1005,15 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static_assert(is_legal_kind_lifecycle(BIndex, BPolicy),
                   "BinaryFpu: (BIndex, BPolicy) is illegal for Block — exclude "
                   "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
-    // same_dfb dedup safety: when CbA == CbB the B-side wait/pop is skipped, so the
-    // helper would under-wait if A and B walked different ranges of the shared CB.
+    // same_dfb dedup safety: when CbA == CbB the B-side wait/pop is skipped. Matching
+    // indices ensure both sides walk the same shared-CB range; matching lifecycles ensure
+    // the retained A-side wait/pop schedule also satisfies B.
     static_assert((CbA != CbB) || AIndex == BIndex,
                   "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
                   "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
+    static_assert((CbA != CbB) || APolicy == BPolicy,
+                  "BinaryFpu: when CbA == CbB, AInput and BInput must use the same "
+                  "InputLifecycle (B-side wait/pop is deduped).");
     // 2D: RowBcast / ColBcast on either side require non-streaming policy.
     static_assert(detail::valid_policy_mode_v<APolicy, AIndex>,
                   "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
@@ -1188,21 +1063,15 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         (BInput.reconfig == DataFormatReconfig::Enabled) ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
 
-    InputStream<CbA, detail::InputSpecConfig::encode(Config.a_input_spec())> a;
-    InputStream<CbB, detail::InputSpecConfig::encode(Config.b_input_spec())> b;
+    InputStream a;
+    InputStream b;
 
     constexpr BinaryFpuImpl() noexcept = default;
     constexpr BinaryFpuImpl(uint32_t base_a, uint32_t base_b) noexcept : a(base_a), b(base_b) {}
     constexpr explicit BinaryFpuImpl(uint32_t base_a) noexcept : a(base_a) {}
 
-    // Helper: when same_dfb, both bases live in the single shared wait window.
-    // Wait/pop count uses max(base_a, base_b) — caller must stage that many tiles
-    // in front of both reads.
-    ALWI uint32_t same_dfb_base_max() const noexcept {
-        const uint32_t bA = tile_base_value<OffsetA>(a.tile_base);
-        const uint32_t bB = tile_base_value<OffsetB>(b.tile_base);
-        return bA > bB ? bA : bB;
-    }
+    // Lifecycle fan-out lives in the chain driver. When same_dfb, it emits one
+    // physical wait/pop and uses max(base_a, base_b) for the shared window.
 
     // ---- init / reconfig ----
     // srca / srcb / pack reconfig are fold-driven (compile-time-elided
@@ -1239,36 +1108,6 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         }
     }
 
-    // ---- CB lifecycle ----
-    // Each hook fans out per side: A always, B only when !same_dfb (when CbA == CbB the
-    // B-side wait/pop is deduped). The per-side body lives in InputStream.
-    ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        a.wait_per_tile(cumulative_count);
-        if constexpr (!same_dfb) b.wait_per_tile(cumulative_count);
-    }
-
-    ALWI void wait_per_block(uint32_t inner_count) const {
-        a.wait_per_block(inner_count);
-        if constexpr (!same_dfb) b.wait_per_block(inner_count);
-    }
-
-    // 2D: per-side upfront wait — A uses AIndex's window, B uses BIndex's window.
-    // When same_dfb, both bases collapse into A's single shared window (max base) and the
-    // B side is skipped; otherwise each side delegates to its own InputStream.
-    ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (same_dfb) {
-            if constexpr (is_one_of_v<APolicy, InputLifecycle::BulkDrain>) {
-                // See InputStream::wait_upfront — BulkDrain waits the whole walk, not window<Scalar>.
-                a.wait_n(Ht * Wt + same_dfb_base_max());
-            } else if constexpr (is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk>) {
-                a.wait_n(detail::window<AIndex>(Ht, Wt) + same_dfb_base_max());
-            }
-        } else {
-            a.wait_upfront(Ht, Wt);
-            b.wait_upfront(Ht, Wt);
-        }
-    }
-
     // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The canonical
     // bcast walk is A=Block (walks the tile range) + B=Scalar (pins the
     // scaler/vector operand at tile 0). OffsetA / OffsetB add a runtime or
@@ -1276,32 +1115,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     // chunk-local index (`i_local`) and an absolute index (`i_abs`); each side
     // picks via `a_uses_local_idx` / `b_uses_local_idx`. The 2-arg overload is
     // the same-regime fast path and forwards with i_local == i_abs.
-
-
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
-
-    ALWI void pop_per_tile(uint32_t i) const {
-        a.pop_per_tile(i);
-        if constexpr (!same_dfb) b.pop_per_tile(i);
-    }
-
-    ALWI void pop_per_block(uint32_t inner_count) const {
-        a.pop_per_block(inner_count);
-        if constexpr (!same_dfb) b.pop_per_block(inner_count);
-    }
-
-    /// Per-outer-row wait/pop for streamed broadcasts (InputLifecycle::OuterStream) — per side,
-    /// same_dfb-deduped. One operand tile per row, re-read at the front across the row's cols.
-    /// OuterStream is restricted to OperandKind::Scalar, so exec reads the front (0) already.
-    ALWI void wait_per_row() const {
-        a.wait_per_row();
-        if constexpr (!same_dfb) b.wait_per_row();
-    }
-    ALWI void pop_per_row() const {
-        a.pop_per_row();
-        if constexpr (!same_dfb) b.pop_per_row();
-    }
-
 
     // 2D variants — per-side index + window. 3-arg form takes both chunk-local
     // (`i_local`) and absolute (`i_abs`) flat indices; each side picks via the
@@ -1338,17 +1152,6 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         exec(i_flat, i_flat, ht, wt, wt, slot_offset);
     }
-
-    ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (same_dfb) {
-            if constexpr (is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::Pipelined, InputLifecycle::DeferredPop>) {
-                a.pop_n(detail::window<AIndex>(Ht, Wt) + same_dfb_base_max());
-            }
-        } else {
-            a.pop_upfront_end(Ht, Wt);
-            b.pop_upfront_end(Ht, Wt);
-        }
-    }
 };
 
 // =============================================================================
@@ -1361,30 +1164,27 @@ template <uint32_t Cb,
           InputSpec Input,
           Dst DstIn,
           Dst DstOut>
-struct DestReuseBinary
-    : InputStream<
-          Cb,
-          detail::InputSpecConfig::encode(Input)>,
-      DestReuseBinaryTag {
+struct DestReuseBinary : InputStream, DestReuseBinaryTag {
     static constexpr InputSpec InputConfig = Input;
     static constexpr InputLifecycle Policy = InputConfig.lifecycle;
-    static constexpr OperandKind EffectiveIndexMode = InputConfig.index;
-    static constexpr TileOffset EffectiveOffset = InputConfig.offset;
-    using Base = InputStream<Cb, detail::InputSpecConfig::encode(InputConfig)>;
+    static constexpr OperandKind IndexMode = InputConfig.index;
+    static constexpr TileOffset Offset = InputConfig.offset;
+    using Base = InputStream;
     using Base::tile_base;
 
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(is_legal_kind_lifecycle(EffectiveIndexMode, Policy),
+    static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
                   "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
                   "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
-    static_assert(detail::valid_policy_mode_v<Policy, EffectiveIndexMode>,
+    static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
-    static_assert(EffectiveOffset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+    static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
                   "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle");
 
     // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (dfb_a),
     // DEST_TO_SRCA -> CB on srcB (dfb_b). The other side is the DEST register, not a CB (INVALID_DFB).
+    static constexpr uint32_t       dfb                = Cb;
     static constexpr uint32_t       dfb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : INVALID_DFB; }
     static constexpr uint32_t       dfb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : INVALID_DFB; }
     static constexpr InputLifecycle a_policy()        { return Policy; }
@@ -1427,15 +1227,15 @@ struct DestReuseBinary
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
         const uint32_t in_idx =
-            tile_base_value<EffectiveOffset>(tile_base) + detail::idx<EffectiveIndexMode>(i_flat, ht, wt);
+            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
 
     static constexpr uint32_t lane_width =
         (to_u32(DstIn) > to_u32(DstOut)) ? (to_u32(DstIn) + 1) : (to_u32(DstOut) + 1);
 
-    // wait_per_tile / wait_per_block / wait_upfront / pop_upfront_end / pop_per_tile /
-    // pop_per_block / wait_per_row / pop_per_row inherited from InputStream.
+    // The chain driver emits wait/pop operations from the metadata above and the
+    // runtime `tile_base` inherited from InputStream.
 };
 
 // Fill and random elements live in their feature headers so their LLK dependencies
@@ -2110,14 +1910,9 @@ inline constexpr bool chain_no_reconfig_requested_v = chain_no_reconfig_requeste
 
 namespace detail {
 
-// Per-block (chunked) lifecycle hooks — wait_per_block / pop_per_block / reserve_per_block /
-// push_per_block — are dispatched directly on the element, same as wait_per_tile / wait_upfront.
-// Every cb-reader / pack element defines them as policy-gated `if constexpr` bodies (a no-op that
-// compiles to nothing when the element's lifecycle doesn't chunk), exactly like the per_tile /
-// upfront hooks every element already defines for the policies it doesn't use. They're only ever
-// called inside the `is_cb_reader_op_v` / `is_pack_tile_op_v` branches, so only element kinds that
-// define them are instantiated. A new element kind must define them (loud compile error if not) —
-// no SFINAE no-op that would let a needed chunked wait/pop silently vanish.
+// CB lifecycles are emitted in the existing compute/pack workers and outer adapters below.
+// Their policy gates remain `if constexpr`, so unused operations disappear without creating a
+// separate lifecycle-method specialization for every element configuration.
 
 // init() dispatch convention — the compute-cohort init is emitted on the element
 // *instance* (`elem.init()`), exactly like `exec`, so an init can read the struct's
@@ -2338,8 +2133,32 @@ ALWI void elem_apply_compute(
         // block_size 1, so per_tile and per_block never both fire). The Bulk upfront wait is NOT
         // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
         // placed exactly once rather than re-issued per block-iter relying on idempotency.
-        elem.wait_per_tile(i_flat + inner_count);
-        elem.wait_per_block(inner_count);
+        if constexpr (is_binary_fpu_op_v<ElemT>) {
+            if constexpr (ElemT::APolicy.wait_policy == WaitPolicy::PerTile) {
+                DataflowBuffer(ElemT::dfb_a_id()).wait_front(1);
+            } else if constexpr (ElemT::APolicy.wait_policy == WaitPolicy::Cumulative) {
+                DataflowBuffer(ElemT::dfb_a_id()).wait_front(i_flat + inner_count);
+            } else if constexpr (ElemT::APolicy.wait_policy == WaitPolicy::PerChunk) {
+                DataflowBuffer(ElemT::dfb_a_id()).wait_front(inner_count);
+            }
+            if constexpr (!ElemT::same_dfb) {
+                if constexpr (ElemT::BPolicy.wait_policy == WaitPolicy::PerTile) {
+                    DataflowBuffer(ElemT::dfb_b_id()).wait_front(1);
+                } else if constexpr (ElemT::BPolicy.wait_policy == WaitPolicy::Cumulative) {
+                    DataflowBuffer(ElemT::dfb_b_id()).wait_front(i_flat + inner_count);
+                } else if constexpr (ElemT::BPolicy.wait_policy == WaitPolicy::PerChunk) {
+                    DataflowBuffer(ElemT::dfb_b_id()).wait_front(inner_count);
+                }
+            }
+        } else {
+            if constexpr (ElemT::Policy.wait_policy == WaitPolicy::PerTile) {
+                DataflowBuffer(ElemT::dfb).wait_front(1);
+            } else if constexpr (ElemT::Policy.wait_policy == WaitPolicy::Cumulative) {
+                DataflowBuffer(ElemT::dfb).wait_front(i_flat + inner_count);
+            } else if constexpr (ElemT::Policy.wait_policy == WaitPolicy::PerChunk) {
+                DataflowBuffer(ElemT::dfb).wait_front(inner_count);
+            }
+        }
         if constexpr (EmitMathInit) {
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
@@ -2359,8 +2178,26 @@ ALWI void elem_apply_compute(
                 elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
             }
         }
-        elem.pop_per_tile(i_flat);
-        elem.pop_per_block(inner_count);
+        if constexpr (is_binary_fpu_op_v<ElemT>) {
+            if constexpr (ElemT::APolicy.pop_policy == PopPolicy::PerTile) {
+                DataflowBuffer(ElemT::dfb_a_id()).pop_front(1);
+            } else if constexpr (ElemT::APolicy.pop_policy == PopPolicy::PerChunk) {
+                DataflowBuffer(ElemT::dfb_a_id()).pop_front(inner_count);
+            }
+            if constexpr (!ElemT::same_dfb) {
+                if constexpr (ElemT::BPolicy.pop_policy == PopPolicy::PerTile) {
+                    DataflowBuffer(ElemT::dfb_b_id()).pop_front(1);
+                } else if constexpr (ElemT::BPolicy.pop_policy == PopPolicy::PerChunk) {
+                    DataflowBuffer(ElemT::dfb_b_id()).pop_front(inner_count);
+                }
+            }
+        } else {
+            if constexpr (ElemT::Policy.pop_policy == PopPolicy::PerTile) {
+                DataflowBuffer(ElemT::dfb).pop_front(1);
+            } else if constexpr (ElemT::Policy.pop_policy == PopPolicy::PerChunk) {
+                DataflowBuffer(ElemT::dfb).pop_front(inner_count);
+            }
+        }
     } else if constexpr (is_dest_only_op_v<ElemT>) {
         if constexpr (EmitSfpuInit) {
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
@@ -2386,15 +2223,21 @@ ALWI void elem_apply_pack(
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
         emit_per_stage_pack_reconfig<ElemT, PrevPack, LastPackCb, PackHetero>();
-        elem.reserve_per_tile(i_flat);
-        elem.reserve_per_block(inner_count);
+        if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerTile) {
+            DataflowBuffer(ElemT::dfb).reserve_back(1);
+        } else if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerChunk) {
+            DataflowBuffer(ElemT::dfb).reserve_back(inner_count);
+        }
         if constexpr (AnyPackRelu) elem.configure_relu();
         for (uint32_t j = 0; j < inner_count; ++j) {
             const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
             elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
         }
-        elem.push_per_tile(i_flat);
-        elem.push_per_block(inner_count);
+        if constexpr (ElemT::Policy.push_policy == PushPolicy::PerTile) {
+            DataflowBuffer(ElemT::dfb).push_back(1);
+        } else if constexpr (ElemT::Policy.push_policy == PushPolicy::PerChunk) {
+            DataflowBuffer(ElemT::dfb).push_back(inner_count);
+        }
     }
 }
 
@@ -2415,37 +2258,136 @@ ALWI void elem_apply_seed_first_l1_pack(
 
 template <class E>
 ALWI void elem_wait_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
-    if constexpr (is_cb_reader_op_v<E>) e.wait_upfront(Ht, Wt);
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (E::same_dfb) {
+            const uint32_t base_a = tile_base_value<E::OffsetA>(e.a.tile_base);
+            const uint32_t base_b = tile_base_value<E::OffsetB>(e.b.tile_base);
+            const uint32_t base = base_a > base_b ? base_a : base_b;
+            if constexpr (E::APolicy == InputLifecycle::BulkDrain) {
+                DataflowBuffer(E::dfb_a_id()).wait_front(Ht * Wt + base);
+            } else if constexpr (E::APolicy.wait_policy == WaitPolicy::Upfront) {
+                DataflowBuffer(E::dfb_a_id()).wait_front(detail::window<E::AIndex>(Ht, Wt) + base);
+            }
+        } else {
+            if constexpr (E::APolicy == InputLifecycle::BulkDrain) {
+                DataflowBuffer(E::dfb_a_id()).wait_front(
+                    Ht * Wt + tile_base_value<E::OffsetA>(e.a.tile_base));
+            } else if constexpr (E::APolicy.wait_policy == WaitPolicy::Upfront) {
+                DataflowBuffer(E::dfb_a_id()).wait_front(
+                    detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
+            }
+            if constexpr (E::BPolicy == InputLifecycle::BulkDrain) {
+                DataflowBuffer(E::dfb_b_id()).wait_front(
+                    Ht * Wt + tile_base_value<E::OffsetB>(e.b.tile_base));
+            } else if constexpr (E::BPolicy.wait_policy == WaitPolicy::Upfront) {
+                DataflowBuffer(E::dfb_b_id()).wait_front(
+                    detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
+            }
+        }
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        if constexpr (E::Policy == InputLifecycle::BulkDrain) {
+            DataflowBuffer(E::dfb).wait_front(Ht * Wt + tile_base_value<E::Offset>(e.tile_base));
+        } else if constexpr (E::Policy.wait_policy == WaitPolicy::Upfront) {
+            DataflowBuffer(E::dfb).wait_front(
+                detail::window<E::IndexMode>(Ht, Wt) + tile_base_value<E::Offset>(e.tile_base));
+        }
+    }
 }
 template <class E>
 ALWI void elem_reserve_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
-    if constexpr (is_cb_writer_op_v<E>) e.reserve_upfront(Ht, Wt);
+    if constexpr (is_cb_writer_op_v<E>) {
+        if constexpr (E::Policy.reserve_policy == ReservePolicy::Upfront) {
+            DataflowBuffer(E::dfb).reserve_back((Ht * Wt) + tile_base_value<E::Offset>(e.tile_base));
+        } else if constexpr (E::Policy.reserve_policy == ReservePolicy::OneUpfront) {
+            DataflowBuffer(E::dfb).reserve_back(1);
+        }
+    }
 }
 template <class E>
 ALWI void elem_pop_upfront_end(const E& e, uint32_t Ht, uint32_t Wt) {
-    if constexpr (is_cb_reader_op_v<E>) e.pop_upfront_end(Ht, Wt);
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (E::same_dfb) {
+            if constexpr (E::APolicy.pop_policy == PopPolicy::AtEnd) {
+                const uint32_t base_a = tile_base_value<E::OffsetA>(e.a.tile_base);
+                const uint32_t base_b = tile_base_value<E::OffsetB>(e.b.tile_base);
+                const uint32_t base = base_a > base_b ? base_a : base_b;
+                DataflowBuffer(E::dfb_a_id()).pop_front(detail::window<E::AIndex>(Ht, Wt) + base);
+            }
+        } else {
+            if constexpr (E::APolicy.pop_policy == PopPolicy::AtEnd) {
+                DataflowBuffer(E::dfb_a_id()).pop_front(
+                    detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
+            }
+            if constexpr (E::BPolicy.pop_policy == PopPolicy::AtEnd) {
+                DataflowBuffer(E::dfb_b_id()).pop_front(
+                    detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
+            }
+        }
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        if constexpr (E::Policy.pop_policy == PopPolicy::AtEnd) {
+            DataflowBuffer(E::dfb).pop_front(
+                detail::window<E::IndexMode>(Ht, Wt) + tile_base_value<E::Offset>(e.tile_base));
+        }
+    }
 }
 template <class E>
 ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
-    if constexpr (is_cb_writer_op_v<E>) e.push_at_end(Ht, Wt);
+    if constexpr (is_cb_writer_op_v<E>) {
+        if constexpr (E::Policy.push_policy == PushPolicy::AtEnd) {
+            DataflowBuffer(E::dfb).push_back(
+                (E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Offset>(e.tile_base));
+        } else if constexpr (E::Policy.push_policy == PushPolicy::OneAtEnd) {
+            DataflowBuffer(E::dfb).push_back(1);
+        }
+    }
 }
 // Per-outer-row hooks (InputLifecycle::OuterStream readers): wait at row entry, pop at row exit.
 // Inert for every other policy.
 template <class E>
-ALWI void elem_wait_per_row(const E& e) {
-    if constexpr (is_cb_reader_op_v<E>) e.wait_per_row();
+ALWI void elem_wait_per_row([[maybe_unused]] const E& e) {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (E::APolicy.wait_policy == WaitPolicy::PerOuter) {
+            DataflowBuffer(E::dfb_a_id()).wait_front(1);
+        }
+        if constexpr (!E::same_dfb && E::BPolicy.wait_policy == WaitPolicy::PerOuter) {
+            DataflowBuffer(E::dfb_b_id()).wait_front(1);
+        }
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        if constexpr (E::Policy.wait_policy == WaitPolicy::PerOuter) {
+            DataflowBuffer(E::dfb).wait_front(1);
+        }
+    }
 }
 template <class E>
-ALWI void elem_pop_per_row(const E& e) {
-    if constexpr (is_cb_reader_op_v<E>) e.pop_per_row();
+ALWI void elem_pop_per_row([[maybe_unused]] const E& e) {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        if constexpr (E::APolicy.pop_policy == PopPolicy::PerOuter) {
+            DataflowBuffer(E::dfb_a_id()).pop_front(1);
+        }
+        if constexpr (!E::same_dfb && E::BPolicy.pop_policy == PopPolicy::PerOuter) {
+            DataflowBuffer(E::dfb_b_id()).pop_front(1);
+        }
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        if constexpr (E::Policy.pop_policy == PopPolicy::PerOuter) {
+            DataflowBuffer(E::dfb).pop_front(1);
+        }
+    }
 }
 template <class E>
-ALWI void elem_reserve_per_row(const E& e) {
-    if constexpr (is_cb_writer_op_v<E>) e.reserve_per_row();
+ALWI void elem_reserve_per_row([[maybe_unused]] const E& e) {
+    if constexpr (is_cb_writer_op_v<E>) {
+        if constexpr (E::Policy.reserve_policy == ReservePolicy::PerOuter) {
+            DataflowBuffer(E::dfb).reserve_back(1);
+        }
+    }
 }
 template <class E>
-ALWI void elem_push_per_row(const E& e) {
-    if constexpr (is_cb_writer_op_v<E>) e.push_per_row();
+ALWI void elem_push_per_row([[maybe_unused]] const E& e) {
+    if constexpr (is_cb_writer_op_v<E>) {
+        if constexpr (E::Policy.push_policy == PushPolicy::PerOuter) {
+            DataflowBuffer(E::dfb).push_back(1);
+        }
+    }
 }
 
 }  // namespace detail

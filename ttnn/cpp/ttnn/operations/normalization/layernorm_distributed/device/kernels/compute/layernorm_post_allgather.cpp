@@ -176,7 +176,7 @@ void kernel_main() {
          * E[x]**2  — same-CB Mul at index 1.
          * cb_stats_reduced: pre-waited for stats_tile_stride at line 171, held
          *   (popped at line 229). InputLifecycle::HeldBulk + Scalar + ckl::TileOffset::Set.
-         * Same-CB constraint: AIndex==BIndex (both Scalar + same TileBase).
+         * Same-CB constraints: both inputs use the same lifecycle and OperandKind.
          * Reconfig audit: explicit reconfig_data_format(cb_stats_reduced, cb_stats_reduced)
          *   + mul_tiles_init reconfigs (idempotent) -> Input. Explicit
          *   pack_reconfig_data_format(cb_mean_squared) -> Output.
