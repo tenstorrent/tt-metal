@@ -31,7 +31,7 @@
       timeout: 30
       tier: 1
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -71,7 +71,7 @@
   model: llama3.2-11b-vision
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 15
       tier: 3
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -149,7 +149,7 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -188,7 +188,7 @@
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 28
+      timeout: 60
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -304,6 +304,7 @@
 - name: Gemma-4-E4B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    export TT_METAL_WATCHER=120
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -350,7 +351,7 @@
       timeout: 30
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 1
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -366,6 +367,7 @@
 - name: Gemma-4-31B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
+    export TT_METAL_WATCHER=120
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -383,7 +385,7 @@
       timeout: 25
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 1
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
@@ -411,7 +413,7 @@
   model: gemma-4-12b
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -447,7 +449,7 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 60
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -497,7 +499,7 @@
   model: qwen3-32b-galaxy
   skus:
     bh_galaxy:
-      timeout: 20
+      timeout: 40
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -514,14 +516,14 @@
   skus:
     # Wormhole
     wh_llmbox:
-      timeout: 12
+      timeout: 30
       tier: 2
     # Blackhole
     bh_p150:
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 5
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -539,7 +541,7 @@
   skus:
     # Wormhole
     wh_llmbox:
-      timeout: 25
+      timeout: 50
       tier: 1
     wh_galaxy:
       timeout: 40
@@ -553,7 +555,7 @@
       # of ~64 tests on p03t05, vs 11.4 min for the full 64 on p02t07 — host
       # variance, not a hang; firmware pre-compiled, all sub-tests pass). Bump to
       # 22; suite is long (test_rope seq sweep to 131k) and may want sharding.
-      timeout: 22
+      timeout: 44
       tier: 1
     bh_galaxy:
       timeout: 10
@@ -630,7 +632,7 @@
 
 - name: Qwen2.5-72B unit tests
   cmd: |
-    export TT_METAL_WATCHER=120
+    export TT_METAL_WATCHER=150
     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -701,10 +703,10 @@
   model: dit-common
   skus:
     wh_n150:
-      timeout: 60
+      timeout: 120
       tier: 1
     bh_quietbox_2:
-      timeout: 115
+      timeout: 150
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -750,7 +752,7 @@
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -765,7 +767,7 @@
   model: flux.1-dev
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

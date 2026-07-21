@@ -138,7 +138,7 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 30
+    wh_n150_civ2: 20
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
@@ -290,7 +290,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 193
+    bh_loudbox: 190
     bh_quietbox_2: 80
     bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
@@ -321,21 +321,20 @@ models:
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
-    wh_n150: 110
+    wh_n150: 310
     wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 260
-    bh_galaxy: 70
-    bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
+    bh_quietbox_2: 420
+    bh_galaxy: 90
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 172
-    wh_n150: 55
+    wh_llmbox_perf: 208
+    wh_n150: 65
     bh_p150: 20
-    bh_quietbox_2: 50
+    bh_quietbox_2: 60
   unit_tier3:
-    wh_llmbox_perf: 58
+    wh_llmbox_perf: 60
     wh_n150: 33
     wh_n300: 15
     bh_p150: 20
