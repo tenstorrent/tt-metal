@@ -52,17 +52,20 @@ IMAGE_SIZE = tuple(int(x) for x in _SZ.replace("x", ",").split(","))
 OUT = os.environ.get("HUNYUAN_T2I_OUT", "hunyuan_t2i_perf.png")
 MAX_LATENCY_S = os.environ.get("HUNYUAN_T2I_MAX_LATENCY_S")
 MAX_LATENCY_S = float(MAX_LATENCY_S) if MAX_LATENCY_S else None
+USE_TRACE = os.environ.get("HUNYUAN_T2I_TRACE", "1") != "0"  # host-free traced replay (the ~10x lever)
 
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    # trace_region_size must hold the captured 32-layer forward (traced replay).
+    [{"l1_small_size": 24576, "trace_region_size": 200000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [_MESH], indirect=True)
 def test_t2i_e2e_perf(device_params, mesh_device):
     torch.manual_seed(0)
-    model, tt_pipe, _uninstall = gi.build_tt_backed_model(mesh_device, num_layers=NUM_LAYERS)
+    model, tt_pipe, _uninstall = gi.build_tt_backed_model(mesh_device, num_layers=NUM_LAYERS, use_trace=USE_TRACE)
+    print(f"\nt2i e2e PERF: num_layers={NUM_LAYERS} use_trace={USE_TRACE}")
     img, timing = gi.generate_image(
         model,
         tt_pipe,

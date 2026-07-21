@@ -543,6 +543,69 @@ class HunyuanImage3Pipeline:
             ttnn.deallocate(mask_tt)
         return out
 
+    # -- TRACED image-mode forward (host-free replay; trace + 2CQ copy) ----
+    # The N-layer image forward is captured ONCE and replayed via execute_trace,
+    # eliminating the per-op host dispatch that dominates the eager loop (~10x).
+    # cos/sin/mask are CONSTANT across CFG samples AND diffusion steps
+    # (position-based, not token-content), so a single trace serves every replay;
+    # only inputs_embeds is copied per step (on CQ1, overlapping CQ0 compute).
+    # Mirrors run_decode_traced. Call image_trace_setup once, image_trace_step per
+    # (sample, step), image_trace_release at the end.
+    def image_trace_setup(self, inputs_embeds, cos, sin, attn_mask):
+        dev = self.device
+        S = int(inputs_embeds.shape[1])
+        tb = {"S": S}
+        tb["embeds"] = self._upload_embeds(inputs_embeds)  # persistent, mutated per step
+        tb["cos"], tb["sin"] = self._upload_pos_img(cos, sin, S)  # constant
+        tb["mask"] = self._upload_mask(attn_mask, S)  # constant
+
+        def _run():
+            h = tb["embeds"]
+            for layer in self.layers:
+                h = layer(h, custom_pos_emb=(tb["cos"], tb["sin"]), return_l_aux=False, attn_mask=tb["mask"])
+            return h
+
+        _w = _run()  # warm-up: compile programs (required before capture)
+        ttnn.deallocate(_w)
+        tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        tb["out"] = _run()
+        ttnn.end_trace_capture(dev, tid, cq_id=0)
+        tb["tid"] = tid
+        self._img_trace = tb
+        return tb
+
+    def image_trace_step(self, inputs_embeds):
+        """Copy new inputs_embeds into the persistent buffer (CQ1), replay the
+        trace (CQ0), return post-layer hidden [1, S, hidden] as host torch."""
+        dev = self.device
+        tb = self._img_trace
+        host = ttnn.from_torch(inputs_embeds.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # 2CQ input-copy overlap (CQ1) if the device has a 2nd queue; else CQ0.
+        # Probe once — the box opens single-CQ (reference Galaxy convention), so
+        # don't re-trigger the "cq_id 1 out of range" fatal every step.
+        if getattr(self, "_img_copy_cq", 1) == 1:
+            try:
+                ttnn.copy_host_to_device_tensor(host, tb["embeds"], cq_id=1)
+            except Exception:
+                self._img_copy_cq = 0
+                ttnn.copy_host_to_device_tensor(host, tb["embeds"])
+        else:
+            ttnn.copy_host_to_device_tensor(host, tb["embeds"])
+        ttnn.execute_trace(dev, tb["tid"], cq_id=0, blocking=True)
+        out = _mesh_to_torch(tb["out"], dev).to(torch.float32)
+        if out.dim() == 4:
+            out = out.reshape(out.shape[0], out.shape[-2], out.shape[-1])
+        return out
+
+    def image_trace_release(self):
+        tb = getattr(self, "_img_trace", None)
+        if tb and tb.get("tid") is not None:
+            try:
+                ttnn.release_trace(self.device, tb["tid"])
+            except Exception:
+                pass
+        self._img_trace = None
+
     # ====================================================================
     # DECODE — real autoregressive incremental-KV decode (Option B).
     # prefill-via-decode: feed prompt tokens one-by-one through the per-layer

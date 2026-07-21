@@ -51,6 +51,7 @@ N_LAYERS = int(os.environ.get("HUNYUAN_GENIMG_NUM_LAYERS", "2"))
 N_STEPS = int(os.environ.get("HUNYUAN_GENIMG_STEPS", "8"))
 _SZ = os.environ.get("HUNYUAN_GENIMG_SIZE", "1024,1024")
 IMAGE_SIZE = tuple(int(x) for x in _SZ.replace("x", ",").split(","))
+USE_TRACE = os.environ.get("HUNYUAN_GENIMG_TRACE", "0") != "0"  # run the TT trajectory host-free (traced)
 
 
 @pytest.mark.parametrize(
@@ -70,6 +71,7 @@ def test_t2i_e2e_image_pcc(device_params, mesh_device):
         seed=0,
         pcc_target=PCC_TARGET,
         decode=True,
+        use_trace_tt=USE_TRACE,
     )
     # ALWAYS print achieved PCCs (pass or fail) before the asserts.
     print(

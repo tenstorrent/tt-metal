@@ -80,9 +80,30 @@ def _float_host_heads(model):
             pass  # optional submodule (e.g. no separate vae attr) -> skip
 
 
-def load_model(num_layers=32, model=None):
+def _force_trust_remote_code():
+    """Make HF custom-code loads non-interactive (we've already accepted this
+    model's code by loading it). Prevents the `Do you wish to run the custom
+    code? [y/N]` prompt from hanging/aborting a non-TTY run."""
+    try:
+        import transformers.dynamic_module_utils as _dmu
+
+        _dmu.resolve_trust_remote_code = lambda *a, **k: True
+    except Exception:
+        pass
+
+
+def load_model(num_layers=32, model=None, float_layers=None):
     """Load the HF model (host) + tokenizer; float the host heads; truncate the
-    decoder stack to `num_layers` (full=32). Returns the model."""
+    decoder stack to `num_layers` (full=32). Returns the model.
+
+    float_layers: cast the (truncated) decoder layers to fp32 so a HOST-golden
+    forward has a consistent dtype with the fp32 heads (the fp32 inputs_embeds
+    would otherwise hit `F.linear` fp32-input vs bf16-weight). Default = auto:
+    True only when small (<=8 layers, i.e. the host-golden PCC regime); at full
+    depth the layers run on TT (never on host), so leave them bf16 (fp32 x32 =
+    ~320GB is infeasible). Matches hf_reference_prefill, which floats the golden."""
+    torch.set_grad_enabled(False)
+    _force_trust_remote_code()
     if model is None:
         model = ttpipe.load_reference_model()
     # tokenizer wrapper is required by prepare_model_inputs (_tkwrapper).
@@ -98,14 +119,20 @@ def load_model(num_layers=32, model=None):
     if num_layers is not None and num_layers < len(model.model.layers):
         model.model.layers = nn.ModuleList(list(model.model.layers[:num_layers]))
     _float_host_heads(model)
+    if float_layers is None:
+        float_layers = len(model.model.layers) <= 8
+    if float_layers:
+        model.model.layers.float()
     model.eval()
     return model
 
 
-def install_tt_layer_stack(model, tt_pipe):
+def install_tt_layer_stack(model, tt_pipe, use_trace=False):
     """Monkeypatch HunyuanImage3Model.forward so the decoder-layer loop runs on
-    TT via tt_pipe.forward_image. Handles CFG (bsz>1) by running one TT forward
-    per sample (each has its own rope row + mask row). Returns an uninstall fn."""
+    TT. Handles CFG (bsz>1) by running one TT forward per sample. use_trace=True
+    uses the host-free traced replay (image_trace_setup on first call, then
+    image_trace_step); the trace is captured once and reused for every sample/step
+    (cos/sin/mask are constant). Returns an uninstall fn."""
     from transformers.modeling_outputs import BaseModelOutputWithPast
 
     inner = model.model  # HunyuanImage3Model
@@ -134,13 +161,15 @@ def install_tt_layer_stack(model, tt_pipe):
         bsz = inputs_embeds.shape[0]
         outs = []
         for i in range(bsz):
+            emb_i = inputs_embeds[i : i + 1].to(torch.float32)
+            cos_i, sin_i = cos[i].to(torch.float32), sin[i].to(torch.float32)
             mask_i = attention_mask[i] if attention_mask is not None else None  # [1,S,S]
-            h_i = tt_pipe.forward_image(
-                inputs_embeds[i : i + 1].to(torch.float32),
-                cos[i].to(torch.float32),
-                sin[i].to(torch.float32),
-                mask_i,
-            )
+            if use_trace:
+                if getattr(tt_pipe, "_img_trace", None) is None:
+                    tt_pipe.image_trace_setup(emb_i, cos_i, sin_i, mask_i)
+                h_i = tt_pipe.image_trace_step(emb_i)
+            else:
+                h_i = tt_pipe.forward_image(emb_i, cos_i, sin_i, mask_i)
             outs.append(h_i)
         hidden = torch.cat(outs, dim=0).to(inputs_embeds.dtype).to(inputs_embeds.device)
         return BaseModelOutputWithPast(
@@ -160,12 +189,13 @@ def install_tt_layer_stack(model, tt_pipe):
     return _uninstall
 
 
-def build_tt_backed_model(mesh_device, num_layers=32, model=None):
+def build_tt_backed_model(mesh_device, num_layers=32, model=None, use_trace=False):
     """Load the model + build the TT decoder pipeline + install the TT layer
-    stack. Returns (model, tt_pipe, uninstall_fn)."""
+    stack. use_trace=True enables the host-free traced replay. Returns
+    (model, tt_pipe, uninstall_fn)."""
     model = load_model(num_layers=num_layers, model=model)
     tt_pipe = ttpipe.HunyuanImage3Pipeline(mesh_device, model, num_layers=num_layers)
-    uninstall = install_tt_layer_stack(model, tt_pipe)
+    uninstall = install_tt_layer_stack(model, tt_pipe, use_trace=use_trace)
     return model, tt_pipe, uninstall
 
 
@@ -306,6 +336,7 @@ def e2e_image_pcc(
     pcc_target=0.95,
     decode=True,
     out_prefix=None,
+    use_trace_tt=False,
 ):
     """Full prompt->image e2e PCC (TT vs pure-host) over the real diffusion loop.
     Returns pcc_final_latent, pcc_image, pcc_velocity_step0, image_finite, etc."""
@@ -326,13 +357,15 @@ def e2e_image_pcc(
     ts = _reset_scheduler(sched, num_steps)
     host_lat, host_vel0 = _run_trajectory(model, kwargs, attn_mask, sched, ts, latents0(), guidance, cfg)
 
-    # pure-TT trajectory (TT stubs), same seed/start
+    # pure-TT trajectory (TT stubs), same seed/start (optionally traced)
     tt_pipe = ttpipe.HunyuanImage3Pipeline(mesh_device, model, num_layers=num_layers)
-    uninstall = install_tt_layer_stack(model, tt_pipe)
+    uninstall = install_tt_layer_stack(model, tt_pipe, use_trace=use_trace_tt)
     try:
         ts = _reset_scheduler(sched, num_steps)
         tt_lat, tt_vel0 = _run_trajectory(model, kwargs, attn_mask, sched, ts, latents0(), guidance, cfg)
     finally:
+        if use_trace_tt and hasattr(tt_pipe, "image_trace_release"):
+            tt_pipe.image_trace_release()
         uninstall()
 
     _, pcc_vel0 = comp_pcc(host_vel0, tt_vel0, pcc_target)  # step-0 velocity (identical start)
@@ -450,6 +483,9 @@ def generate_image(
         "seq_len": int(kwargs["input_ids"].shape[1]),
         "out_path": out_path,
     }
+    if hasattr(tt_pipe, "image_trace_release"):
+        tt_pipe.image_trace_release()
+
     # Parseable sentinel (mirrors the manual track's TRACE_PER_TOKEN_MS convention).
     print(f"E2E_T2I_TOTAL_LATENCY_S={total_latency_s:.4f}")
     print(
