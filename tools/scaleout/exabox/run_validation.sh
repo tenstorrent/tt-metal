@@ -39,15 +39,20 @@ tag_stream() {
 # Function to display help
 show_help() {
     cat << EOF
-Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
+Usage: $0 --hosts <comma-separated-host-list> [--image <docker-image>] [OPTIONS]
 
 Run cluster validation commands for multiple iterations.
 
 Required Options:
     --hosts <host-list>                     Comma-separated list of hosts
-    --image <docker-image>                  Docker image to use ("none" to use local build)
 
 Optional:
+    --image [docker-image]                  Docker image to use ("none" to use local build).
+                                            If an image is given, uses it; if the flag is passed with
+                                            no value, or omitted entirely, uses the default image:
+                                            $DOCKER_IMAGE_DEFAULT
+    --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
+                                            before validation (see minimum versions in utils/host_utils.sh)
     --cabling-descriptor-path <path>        Path to cabling descriptor file
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
     --deployment-descriptor-path <path>     Path to deployment descriptor file
@@ -57,7 +62,8 @@ Optional:
 
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
-    --output <directory>                    Output directory for log files (default: validation_output)
+    --output <directory>                    Output directory for log files
+                                            (default: "<comma-separated-hosts>-<timestamp>")
     --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
                                             /data/scaleout_configs is mounted by default when it exists on
                                             the host; each host path is mounted at the same path inside
@@ -89,12 +95,16 @@ EOF
 # Parse command line arguments
 HOSTS=""
 DOCKER_IMAGE=""
+# Default image used when --image is omitted (or passed with no value). Bump to the current
+# last-known-good tag as needed (see tools/scaleout/exabox/README.md).
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a"
+SKIP_VERSION_CHECK=false
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
-OUTPUT_DIR="validation_output"
+OUTPUT_DIR=""  # default computed after --hosts is known: "<comma-separated-hosts>-<timestamp>"
 # /data/scaleout_configs is a Markham-cluster convention. Only mount it when it
 # actually exists locally; otherwise Docker fails trying to auto-create the
 # missing bind-mount source path (mkdir: permission denied) and every rank dies
@@ -119,11 +129,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         --image)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --image requires a non-empty value"
-                exit 1
+                # No value provided: fall back to the default image.
+                DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
+                shift
+            else
+                DOCKER_IMAGE="$2"
+                shift 2
             fi
-            DOCKER_IMAGE="$2"
-            shift 2
+            ;;
+        --skip-version-check)
+            SKIP_VERSION_CHECK=true
+            shift
             ;;
         --cabling-descriptor-path)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
@@ -217,16 +233,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# --image is optional: fall back to the default image when omitted entirely.
+if [[ -z "$DOCKER_IMAGE" ]]; then
+    DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
+fi
+
 # If the operator forwarded --help / -h through --validation-args, just print
 # run_cluster_validation --help from the docker image and exit. Short-circuits
 # before --hosts validation since no cluster operation is performed.
 for _arg in "${VALIDATION_EXTRA_ARGS[@]}"; do
     if [[ "$_arg" == "--help" || "$_arg" == "-h" ]]; then
-        if [[ -z "$DOCKER_IMAGE" ]]; then
-            echo "Error: --validation-args \"--help\" requires --image <docker-image>"
-            echo "Example: $0 --image <ghcr-image> --validation-args \"--help\""
-            exit 1
-        fi
         exec docker run --rm --entrypoint='' "$DOCKER_IMAGE" \
             ./build/tools/scaleout/run_cluster_validation --help
     fi
@@ -242,13 +258,6 @@ fi
 
 check_duplicate_hosts "$HOSTS" || exit 1
 
-if [[ -z "$DOCKER_IMAGE" ]]; then
-    echo "Error: --image is required"
-    echo ""
-    show_help
-    exit 1
-fi
-
 # Validate/auto-detect MPI interface with first host from the list
 FIRST_HOST="${HOSTS%%,*}"
 if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
@@ -260,6 +269,12 @@ else
         echo "Error: MPI interface auto-detection failed" >&2
         exit 1
     fi
+fi
+
+# Default output dir when not overridden by --output: the comma-separated host list followed by a
+# timestamp, e.g. "bh-glx-c01u02,bh-glx-c01u08-20260720_131500". Keeps each run's artifacts distinct.
+if [[ -z "$OUTPUT_DIR" ]]; then
+    OUTPUT_DIR="${HOSTS}-$(date +%Y%m%d_%H%M%S)"
 fi
 
 run_cluster_validation() {
@@ -392,11 +407,27 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi
 echo "Number of iterations: $ITERATIONS"
+echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Output directory: $OUTPUT_DIR"
 if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
 fi
 echo ""
+
+# Assert minimum tt-smi / KMD / firmware versions on every host before validation (see
+# check_cluster_versions in utils/host_utils.sh). Host-level check, always via plain mpirun.
+if [[ "$SKIP_VERSION_CHECK" == false ]]; then
+    echo "Checking tt-smi/KMD/firmware versions on all hosts..."
+    if ! check_cluster_versions "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
+        echo ""
+        echo "Error: version check failed on one or more hosts (see above)."
+        echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
+        echo "       Re-run with --skip-version-check to bypass."
+        exit 1
+    fi
+    echo "Version check passed on all hosts."
+    echo ""
+fi
 
 # Create output directory if it doesn't exist and resolve to an absolute path so
 # that paths passed into Docker containers refer to the same location on the host.
