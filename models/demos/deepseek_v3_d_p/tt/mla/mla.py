@@ -21,11 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    SparseKVCache,
-    SparseKVCacheFormat,
-    reconstruct_scaled_fp8_kv_cache,
-)
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 
 class ttMLA:
@@ -268,7 +264,7 @@ class ttMLA:
         layer_num: int = 61,
         kv_only: bool = False,
         has_indexer: bool | None = None,
-        sparse_kv_cache_format: SparseKVCacheFormat = SparseKVCacheFormat.BF16,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -285,7 +281,7 @@ class ttMLA:
         self.is_chunked = is_chunked
         self.slot_num = slot_num
         self.layer_num = layer_num
-        self.sparse_kv_cache_format = SparseKVCacheFormat(sparse_kv_cache_format or SparseKVCacheFormat.BF16)
+        self.sparse_kv_cache_format = MlaKvCacheFormat(sparse_kv_cache_format or MlaKvCacheFormat.BF16_RM)
 
         # DSA indexer (v3.2 / GLM): resolve sparse mode EXPLICITLY — config DSA fields, then live host
         # weights, then a complete indexer cache — never from bool(idx_host), which silently went dense
@@ -496,25 +492,19 @@ class ttMLA:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
 
     @staticmethod
-    def kv_cache_to_host(kvpe_cache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
-        """Read KVPE cache from device to host tensor [1, 1, seq_total, kv_lora_rank + qk_rope_head_dim]."""
-        cache_tensor = kvpe_cache.tensor if isinstance(kvpe_cache, SparseKVCache) else kvpe_cache
+    def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0) -> torch.Tensor:
+        """Read and decode the logical KVPE cache in natural SP order."""
         host = ttnn.to_torch(
-            cache_tensor,
+            kvpe_cache.storage,
             mesh_composer=ttnn.create_mesh_composer(
                 mesh_device,
                 config=ttnn.MeshComposerConfig(
                     dims=(2, -1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        mesh_device.shape[sp_axis],  # concat SP shards
-                        1,  # collapse TP replicas
-                    ),
+                    mesh_shape_override=ttnn.MeshShape(mesh_device.shape[sp_axis], 1),
                 ),
             ),
         )
-        if isinstance(kvpe_cache, SparseKVCache) and kvpe_cache.format == SparseKVCacheFormat.SCALED_FP8:
-            return reconstruct_scaled_fp8_kv_cache(host)
-        return host.to(torch.bfloat16)
+        return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
         shapes = {
@@ -708,7 +698,7 @@ class ttMLA:
         *,
         tt_q: ttnn.Tensor,
         tt_kvpe: ttnn.Tensor,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         kv_actual_isl: int,
         cache_batch_idx: int,
         cache_layer_idx: int,
@@ -737,7 +727,7 @@ class ttMLA:
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            kvpe_cache,
+            kvpe_cache.storage,
             tt_kvpe,
             slot_idx=cache_user_id,
             layer_idx=cache_layer_idx,
@@ -751,7 +741,7 @@ class ttMLA:
         # user/layer's slot; kv_actual_isl drives the on-device rotation/causality offset.
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
-            kvpe_cache,
+            kvpe_cache.storage,
             persistent_output_buffer_kv=self._chunked_kv_buf,
             head_dim_v=self.kv_lora_rank,
             logical_n=kv_actual_isl + chunk_size_global,
@@ -880,33 +870,6 @@ class ttMLA:
         ttnn.deallocate(tt_q_rope)
         return tt_q
 
-    def _pack_scaled_kvpe(self, latent, rope, kv_intermediates=None) -> SparseKVCache:
-        """Quantize latent blocks and pack ``[FP8 latent | FP32 scales | BF16 RoPE]`` into one cache row."""
-        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
-        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-            latent_rm, round_scale_to_power_of_two=True
-        )
-        ttnn.deallocate(latent_rm)
-        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(rope)
-        packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
-
-        if kv_intermediates is not None:
-            reconstructed_latent = ttnn.experimental.deepseek_prefill.per_token_cast_back(
-                latent_fp8, scales, output_dtype=ttnn.bfloat16
-            )
-            kv_intermediates["tt_kvpe"] = ttnn.concat([reconstructed_latent, rope_rm], dim=-1)
-            ttnn.deallocate(reconstructed_latent)
-            kv_intermediates["tt_kvpe_latent"] = ttnn.clone(latent_fp8)
-            kv_intermediates["tt_kvpe_scales"] = ttnn.clone(scales)
-            kv_intermediates["tt_kvpe_rope"] = ttnn.clone(rope_rm)
-            kv_intermediates["tt_kvpe_packed"] = ttnn.clone(packed)
-
-        ttnn.deallocate(latent_fp8)
-        ttnn.deallocate(scales)
-        ttnn.deallocate(rope_rm)
-        return SparseKVCache(format=SparseKVCacheFormat.SCALED_FP8, tensor=packed)
-
     def _kv_stem(
         self,
         hidden_states: ttnn.Tensor,
@@ -914,8 +877,8 @@ class ttMLA:
         kv_actual_isl: Optional[int],
         seq_len_local: int,
         return_kv_intermediates: bool,
-        kvpe_cache: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor | SparseKVCache, Optional[ttnn.Tensor], dict | None]:
+        kvpe_cache: MlaKvCache,
+    ) -> tuple[ttnn.Tensor, Optional[ttnn.Tensor], dict | None]:
         """Shared KV stem.
 
         Returns tt_kvpe in the persistent cache representation. Dense and sparse-BF16 use one ordinary
@@ -967,26 +930,14 @@ class ttMLA:
         tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
 
         if return_kv_intermediates:
-            # post-RMSNorm latent ([.., 512]) and post-RoPE k_pe ([.., 64]); clone before concat.
             kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
             kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
 
-        if isinstance(kvpe_cache, SparseKVCache) and kvpe_cache.format == SparseKVCacheFormat.SCALED_FP8:
-            tt_kvpe = self._pack_scaled_kvpe(tt_kv_nope, tt_kv_rope, kv_intermediates)
+        tt_kvpe = kvpe_cache.pack(tt_kv_nope, tt_kv_rope, intermediates=kv_intermediates)
+        ttnn.deallocate(tt_kv_rope)
+        if kvpe_cache.format == MlaKvCacheFormat.SCALED_FP8:
             ttnn.deallocate(tt_kv_nope)
             tt_kv_nope = None
-        else:
-            # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
-            tt_kvpe_raw = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-            ttnn.deallocate(tt_kv_rope)
-            tt_kvpe = self._to_cache_format(
-                tt_kvpe_raw, kvpe_cache.tensor if isinstance(kvpe_cache, SparseKVCache) else kvpe_cache
-            )
-            ttnn.deallocate(tt_kvpe_raw)
-
-            if return_kv_intermediates:
-                # post-transform concat ([.., 576]) in the cache dtype -- what actually gets written.
-                kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe)
 
         return tt_kvpe, tt_kv_nope, kv_intermediates
 
@@ -998,30 +949,9 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
-    def _to_cache_format(self, t: ttnn.Tensor, cache: ttnn.Tensor) -> ttnn.Tensor:
-        """Convert the freshly computed kvpe `t` (bf16, TILE) to the persistent cache's dtype+layout
-        for a write. The write ops require input dtype AND layout to match the cache:
-          - bf8/TILE cache (dense): typecast bf16->bfloat8_b, stays TILE.
-          - bf16 or fp8_e4m3 / ROW_MAJOR cache (sparse): retile TILE->ROW_MAJOR, and typecast only for
-            fp8 (bf16 needs none) — so sparse_sdpa reads the prefix natively, no bf8->bf16 round-trip.
-        LAYOUT is converted BEFORE dtype: fp8_e4m3 is ROW_MAJOR-only, so it must be produced by
-        typecasting an already-ROW_MAJOR tensor (never a TILE fp8 intermediate, which is unsupported) —
-        matching how init_kvpe_cache builds the fp8 cache. bf8 (block-float, TILE-only) is the reverse
-        case, but its layout already matches (both TILE) so the layout step is a no-op there.
-        Always returns a fresh tensor (clones if `t` already matches the cache format)."""
-        out = t
-        if out.layout != cache.layout:
-            out = ttnn.to_layout(out, cache.layout)
-        if out.dtype != cache.dtype:
-            relaid = ttnn.typecast(out, cache.dtype)
-            if out is not t:
-                ttnn.deallocate(out)
-            out = relaid
-        return ttnn.clone(t) if out is t else out
-
     def _write_kvpe(self, kvpe_cache: ttnn.Tensor, tt_kvpe: ttnn.Tensor, cache_layer_idx: int) -> None:
         """DENSE single-shot cache fill: write this layer's whole kvpe slot (bf8/TILE, already in the
-        cache's dtype/layout via _to_cache_format). Chunked modes (dense + sparse) and sparse single-shot
+        cache's dtype/layout via MlaKvCache.pack). Chunked modes (dense + sparse) and sparse single-shot
         write through update_padded_kv_cache instead; only dense single-shot still uses this TILE-only
         fill_cache_for_user_ primitive.
 
@@ -1035,26 +965,15 @@ class ttMLA:
 
     def _update_kv_cache(
         self,
-        cache,
-        values,
+        cache: MlaKvCache,
+        values: ttnn.Tensor,
         *,
         cache_user_id: int,
         cache_layer_idx: int,
         kv_actual_isl: int,
     ) -> None:
-        if isinstance(cache, SparseKVCache):
-            if cache.format == SparseKVCacheFormat.SCALED_FP8:
-                assert (
-                    isinstance(values, SparseKVCache) and values.format == cache.format
-                ), "cache and write formats differ"
-                values = values.tensor
-            else:
-                assert not isinstance(values, SparseKVCache), "cache and write formats differ"
-            cache = cache.tensor
-        else:
-            assert not isinstance(values, SparseKVCache), "cache and write formats differ"
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache,
+            cache.storage,
             values,
             slot_idx=cache_user_id,
             layer_idx=cache_layer_idx,
@@ -1064,8 +983,8 @@ class ttMLA:
         )
 
     @staticmethod
-    def _deallocate_kv(value) -> None:
-        ttnn.deallocate(value.tensor if isinstance(value, SparseKVCache) else value)
+    def _deallocate_kv(value: ttnn.Tensor) -> None:
+        ttnn.deallocate(value)
 
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
@@ -1095,7 +1014,7 @@ class ttMLA:
         self,
         hidden_states: ttnn.Tensor,
         rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         cache_layer_idx: int = 0,
         actual_start: Optional[int] = None,
         cache_user_id: int = 0,
@@ -1136,20 +1055,9 @@ class ttMLA:
         # ROW_MAJOR. Require the cache to already be in that op-wanted format so the whole path is a single
         # kvpe tensor with NO compression round-trip (no bf8 typecast on write, no upcast on read-back).
         if self._has_indexer:
-            if isinstance(kvpe_cache, SparseKVCache):
-                assert (
-                    kvpe_cache.format == self.sparse_kv_cache_format
-                ), f"MLA configured for {self.sparse_kv_cache_format}, got {kvpe_cache.format} cache"
-            else:
-                assert (
-                    self.sparse_kv_cache_format == SparseKVCacheFormat.BF16
-                ), "scaled FP8 sparse MLA requires a SparseKVCache; a bare FP8 tensor is ambiguous"
-                assert (
-                    kvpe_cache.dtype == ttnn.bfloat16
-                ), f"BF16 sparse MLA cache must be bfloat16, got {kvpe_cache.dtype}"
-                assert (
-                    kvpe_cache.layout == ttnn.ROW_MAJOR_LAYOUT
-                ), f"sparse MLA requires a ROW_MAJOR KVPE cache, got {kvpe_cache.layout}"
+            assert (
+                kvpe_cache.format == self.sparse_kv_cache_format
+            ), f"MLA configured for {self.sparse_kv_cache_format}, got {kvpe_cache.format} cache"
 
         signpost(header="MLA_START")
 
@@ -1223,7 +1131,7 @@ class ttMLA:
 
     def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
         # Single-shot prefill: materialize V before causal ring SDPA.
-        self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
+        self._write_kvpe(kvpe_cache.storage, tt_kvpe, cache_layer_idx)
         tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
@@ -1329,7 +1237,7 @@ class ttMLA:
         self,
         hidden_states: ttnn.Tensor,
         rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         cache_layer_idx: int,
         kv_actual_isl: int,
         cache_user_id: int,
@@ -1407,14 +1315,6 @@ class ttMLA:
             cluster_axis=cluster_axis,
         )
 
-    def _all_gather_kv(self, value, dim, cluster_axis):
-        if not isinstance(value, SparseKVCache):
-            return self._all_gather(value, dim=dim, cluster_axis=cluster_axis)
-        gathered = self._all_gather(value.tensor, dim=dim, cluster_axis=cluster_axis)
-        if gathered is value.tensor:
-            return value
-        return SparseKVCache(format=value.format, tensor=gathered)
-
     @property
     def _needs_head_to_seq_reshard(self) -> bool:
         """True when the per-chip MLA head shard is too thin for sparse_sdpa (needs H % 32 == 0 and
@@ -1487,12 +1387,9 @@ class ttMLA:
             idx = idx_seq_sharded
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
-        kv_tensor = kvpe
-        if isinstance(kvpe, SparseKVCache):
-            kv_tensor = kvpe.tensor
         out = ttnn.transformer.sparse_sdpa(
             q_rm,
-            kv_tensor,
+            kvpe,
             idx,
             v_dim=self.kv_lora_rank,
             scale=self.scale,
@@ -1551,9 +1448,4 @@ class ttMLA:
                 ttnn.deallocate(cache_i)
             return full
 
-        if not isinstance(kvpe_cache, SparseKVCache):
-            return gather_one(kvpe_cache)
-        return SparseKVCache(
-            format=kvpe_cache.format,
-            tensor=gather_one(kvpe_cache.tensor),
-        )
+        return gather_one(kvpe_cache.storage)

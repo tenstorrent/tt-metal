@@ -62,9 +62,9 @@ class GLM51Adapter(MLAPrefillAdapter):
 
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_sparse_kv_cache
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
 
-        kvpe_cache = init_sparse_kv_cache(
+        kvpe_cache = init_mla_kv_cache(
             cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             mesh_device=mesh_device,
             seq_len=params.max_seq_len,
@@ -89,9 +89,9 @@ class GLM51Adapter(MLAPrefillAdapter):
     @property
     def default_sparse_kv_cache_format(self):
         """Use the model-native packed FP8 cache; callers can explicitly select BF16."""
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
-        return SparseKVCacheFormat.SCALED_FP8
+        return MlaKvCacheFormat.SCALED_FP8
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     hf_repo_id = "zai-org/GLM-5.1-FP8"

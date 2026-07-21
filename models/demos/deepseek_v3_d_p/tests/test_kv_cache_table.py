@@ -23,9 +23,11 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     BH_NUM_DRAM_BANKS,
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
+    MlaKvCacheFormat,
     create_kv_chunk_address_table_ds,
     create_kv_chunk_address_table_kimi,
     init_kvpe_cache,
+    init_mla_kv_cache,
     populate_kv_chunk_address_table_kimi,
 )
 from tests.ttnn.utils_for_testing import assert_equal
@@ -514,15 +516,13 @@ def test_glm_kv_cache_table(
     rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=chunk_size_global)
 
     # KVPE cache: uncompressed bf16 + ROW_MAJOR, the format sparse_sdpa reads natively (see MLA.forward).
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Indexer key cache: caller-owned (like the KVPE cache), NOT self-allocated by the indexer. Block-cyclic

@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rot
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
@@ -292,8 +292,8 @@ def run_chunked_transformer_padded(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
@@ -480,15 +480,14 @@ def run_chunked_transformer(
     # ring_mla wants. Match the cache format to the path.
     has_indexer = resolve_has_indexer(config)
     kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
-        **kvpe_dtype_layout,
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
@@ -1047,8 +1046,8 @@ def run_chunked_transformer_no_pcc(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE_NOPCC,
         mesh_shape=mesh_shape,

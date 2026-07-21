@@ -109,7 +109,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import m
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat, init_kvpe_cache, init_sparse_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 CACHE_TOKENS = int(os.environ.get("DS_PERF_CACHE", 51200))  # 50 * 1024 already cached
@@ -138,24 +138,24 @@ _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_co
 PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
 
 
-def _cache_format_id(cache_format: SparseKVCacheFormat) -> str:
+def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
     return {
-        SparseKVCacheFormat.BF16: "kv_bf16",
-        SparseKVCacheFormat.SCALED_FP8: "kv_scaled_fp8",
+        MlaKvCacheFormat.BF16_RM: "kv_bf16",
+        MlaKvCacheFormat.SCALED_FP8: "kv_scaled_fp8",
     }[cache_format]
 
 
-def _profile_case_id(mode: str, cache_format: SparseKVCacheFormat) -> str:
+def _profile_case_id(mode: str, cache_format: MlaKvCacheFormat) -> str:
     return f"{mode}-{_cache_format_id(cache_format)}" if mode == "sparse" else mode
 
 
-def _subdir(variant: str, mode: str, cache_format: SparseKVCacheFormat) -> str:
+def _subdir(variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
     """Format-specific tracy directory; matched sparse BF16/FP8 reports must never clobber each other."""
     profile_case = _profile_case_id(mode, cache_format).replace("-", "_")
     return f"{variant}_{profile_case}_mla_perf"
 
 
-def _csv_name(variant: str, mode: str, cache_format: SparseKVCacheFormat) -> str:
+def _csv_name(variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
     return os.environ.get(
         "DS_PERF_CSV" if mode == "sparse" else "DS_DENSE_PERF_CSV",
         f"{_subdir(variant, mode, cache_format)}.csv",
@@ -177,7 +177,7 @@ SCENARIOS = {
 SCENARIO = os.environ.get("DS_PERF_SCENARIO", "warm")
 
 
-def _scenario_csv(out_dir, scenario: str, variant: str, mode: str, cache_format: SparseKVCacheFormat) -> str:
+def _scenario_csv(out_dir, scenario: str, variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
     """Per-scenario summary CSV path under its format-specific tracy profiler directory."""
     root, ext = os.path.splitext(_csv_name(variant, mode, cache_format))
     return os.path.join(out_dir, f"{root}_{scenario}{ext}")
@@ -395,7 +395,7 @@ def _require_perf(request):
 @pytest.mark.parametrize("variant", [VARIANT], indirect=True, ids=[VARIANT])
 @pytest.mark.parametrize(
     "kv_cache_format",
-    [SparseKVCacheFormat.BF16, SparseKVCacheFormat.SCALED_FP8] if ATTN_MODE == "sparse" else [SparseKVCacheFormat.BF16],
+    [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8] if ATTN_MODE == "sparse" else [MlaKvCacheFormat.BF16_RM],
     ids=["kv_bf16", "kv_scaled_fp8"] if ATTN_MODE == "sparse" else ["dense_cache"],
 )
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
@@ -444,14 +444,14 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only,
         is_chunked=True,
         layer_num=1,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
-        sparse_kv_cache_format=kv_cache_format if has_indexer else SparseKVCacheFormat.BF16,
+        sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
     )
 
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
     # Sparse mode profiles the selected cache format. Dense ring attention retains its tiled bfloat8_b
     # cache because it has a different cache contract.
     if has_indexer:
-        kvpe_cache = init_sparse_kv_cache(
+        kvpe_cache = init_mla_kv_cache(
             cache_format=kv_cache_format,
             mesh_device=mesh_device,
             seq_len=total,
@@ -524,9 +524,9 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only,
 # Outer: drive the impl under tracy, post-process, print + write CSV
 # ============================================================================
 PERF_CASES = [
-    pytest.param("sparse", SparseKVCacheFormat.BF16, id="sparse-kv_bf16"),
-    pytest.param("sparse", SparseKVCacheFormat.SCALED_FP8, id="sparse-kv_scaled_fp8"),
-    pytest.param("dense", SparseKVCacheFormat.BF16, id="dense"),
+    pytest.param("sparse", MlaKvCacheFormat.BF16_RM, id="sparse-kv_bf16"),
+    pytest.param("sparse", MlaKvCacheFormat.SCALED_FP8, id="sparse-kv_scaled_fp8"),
+    pytest.param("dense", MlaKvCacheFormat.BF16_RM, id="dense"),
 ]
 
 

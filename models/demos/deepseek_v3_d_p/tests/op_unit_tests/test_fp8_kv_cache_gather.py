@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
     _dram_chunk_size_bytes,
     build_and_serialize_kv_chunk_table,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_OUTPUT_TOKENS, SparseKVCacheFormat
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_OUTPUT_TOKENS, MlaKvCacheFormat
 
 
 @pytest.mark.parametrize(
@@ -55,23 +55,23 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
         gate_mode_name="HOST_ALL",
         kv_only_last_layer=False,
         weight_cache_path=None,
-        sparse_kv_cache_format=SparseKVCacheFormat.SCALED_FP8,
+        sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
     )
     adapter = GLM51Adapter()
-    assert adapter.default_sparse_kv_cache_format == SparseKVCacheFormat.SCALED_FP8
-    assert adapter.resolve_sparse_kv_cache_format(None) == SparseKVCacheFormat.SCALED_FP8
-    assert adapter.resolve_sparse_kv_cache_format(SparseKVCacheFormat.BF16) == SparseKVCacheFormat.BF16
+    assert adapter.default_sparse_kv_cache_format == MlaKvCacheFormat.SCALED_FP8
+    assert adapter.resolve_sparse_kv_cache_format(None) == MlaKvCacheFormat.SCALED_FP8
+    assert adapter.resolve_sparse_kv_cache_format(MlaKvCacheFormat.BF16_RM) == MlaKvCacheFormat.BF16_RM
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=params)
     cache = caches.kvpe
     index_cache = caches.index
     assert index_cache is not None
-    assert cache.format == SparseKVCacheFormat.SCALED_FP8
-    assert cache.tensor.dtype == ttnn.fp8_e4m3
-    assert cache.tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert cache.tensor.shape[-1] == 656
+    assert cache.format == MlaKvCacheFormat.SCALED_FP8
+    assert cache.storage.dtype == ttnn.fp8_e4m3
+    assert cache.storage.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert cache.storage.shape[-1] == 656
     assert index_cache.dtype == ttnn.bfloat8_b
     assert index_cache.layout == ttnn.TILE_LAYOUT
-    assert _dram_chunk_size_bytes(cache.tensor) == 32 * cache.tensor.buffer_aligned_page_size()
+    assert _dram_chunk_size_bytes(cache.storage) == 32 * cache.storage.buffer_aligned_page_size()
 
     table_path = tmp_path / "scaled_fp8_kv_table.pb"
     build_and_serialize_kv_chunk_table(
@@ -89,15 +89,15 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
     table = ttnn.experimental.disaggregation.import_from_protobuf_file(str(table_path))
     assert table.num_configs() == 2  # packed KVPE, tiled index
 
-    bf16_params = replace(params, sparse_kv_cache_format=SparseKVCacheFormat.BF16)
+    bf16_params = replace(params, sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM)
     bf16_caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=bf16_params)
     bf16_cache = bf16_caches.kvpe
     bf16_index_cache = bf16_caches.index
     assert bf16_index_cache is not None
-    assert bf16_cache.format == SparseKVCacheFormat.BF16
-    assert bf16_cache.tensor.dtype == ttnn.bfloat16
-    assert cache.tensor.buffer_aligned_page_size() < bf16_cache.tensor.buffer_aligned_page_size()
-    ttnn.deallocate(bf16_cache.tensor, force=True)
+    assert bf16_cache.format == MlaKvCacheFormat.BF16_RM
+    assert bf16_cache.storage.dtype == ttnn.bfloat16
+    assert cache.storage.buffer_aligned_page_size() < bf16_cache.storage.buffer_aligned_page_size()
+    ttnn.deallocate(bf16_cache.storage, force=True)
     ttnn.deallocate(bf16_index_cache, force=True)
 
     torch.manual_seed(0)
@@ -111,17 +111,14 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None)),
     )
     latent_bf16 = ttnn.slice(source_bf16, [0, 0, 0, 0], [1, 1, seq_len // 2, config.kv_lora_rank])
-    source_fp8, source_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-        latent_bf16, round_scale_to_power_of_two=True
-    )
     source_rope = ttnn.slice(
         source_bf16,
         [0, 0, 0, config.kv_lora_rank],
         [1, 1, seq_len // 2, head_dim],
     )
-    source_packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(source_fp8, source_scales, source_rope)
+    source_packed = cache.pack(latent_bf16, source_rope)
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-        cache.tensor,
+        cache.storage,
         source_packed,
         slot_idx=0,
         layer_idx=0,
@@ -131,7 +128,7 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
     )
 
     # This is the exact prefix-gather preparation in ttMLA._gather_kvpe_prefix.
-    cache_interleaved = ttnn.to_memory_config(cache.tensor, ttnn.DRAM_MEMORY_CONFIG)
+    cache_interleaved = ttnn.to_memory_config(cache.storage, ttnn.DRAM_MEMORY_CONFIG)
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
     cores = ttnn.CoreRangeSet(

@@ -71,18 +71,20 @@ class GLM52Adapter(MLAPrefillAdapter):
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+            MlaKvCacheFormat,
+            init_kvpe_cache,
+            init_mla_kv_cache,
+        )
 
-        kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=hf_config.qk_rope_head_dim + hf_config.kv_lora_rank,
+        kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
             mesh_device=mesh_device,
             seq_len=params.max_seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         num_index_layers = num_full_indexer_layers(hf_config) or params.num_layers
         index_cache = init_kvpe_cache(

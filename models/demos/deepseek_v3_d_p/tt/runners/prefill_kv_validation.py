@@ -29,12 +29,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    SparseKVCache,
-    SparseKVCacheFormat,
-    reconstruct_scaled_fp8_kv_cache,
-)
 
 if TYPE_CHECKING:
     # Type-only: importing the runtime at module load would pull the device/model stack into the
@@ -189,13 +183,7 @@ def kv_cache_pcc_check(
     def _to_host(tensor):
         return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
 
-    if isinstance(kvpe_cache, SparseKVCache):
-        if kvpe_cache.format == SparseKVCacheFormat.SCALED_FP8:
-            cache_full = reconstruct_scaled_fp8_kv_cache(_to_host(kvpe_cache.tensor)).to(torch.float32)
-        else:
-            cache_full = _to_host(kvpe_cache.tensor).to(torch.float32)
-    else:
-        cache_full = _to_host(kvpe_cache).to(torch.float32)
+    cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
     p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")

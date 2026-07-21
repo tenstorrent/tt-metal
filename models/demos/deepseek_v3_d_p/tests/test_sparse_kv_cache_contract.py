@@ -7,10 +7,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    SparseKVCache,
-    SparseKVCacheFormat,
+    MlaKvCache,
+    MlaKvCacheFormat,
     reconstruct_scaled_fp8_kv_cache,
     unpack_scaled_fp8_kv_cache,
 )
@@ -20,20 +19,38 @@ def _tensor(shape, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
     return SimpleNamespace(shape=shape, dtype=dtype, layout=layout)
 
 
+def test_bfp8_tile_kv_contract_retains_physical_storage():
+    storage = _tensor((78, 1, 1024, 576), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
+    cache = MlaKvCache(MlaKvCacheFormat.BFP8_TILE, storage=storage)
+
+    assert cache.storage is storage
+
+
+def test_homogeneous_pack_is_conversion_free_when_storage_format_matches(monkeypatch):
+    storage = _tensor((78, 1, 1024, 576), ttnn.bfloat16)
+    logical = _tensor((1, 1, 32, 576), ttnn.bfloat16)
+    cache = MlaKvCache(MlaKvCacheFormat.BF16_RM, storage=storage)
+    monkeypatch.setattr(ttnn, "concat", lambda tensors, dim: logical)
+    monkeypatch.setattr(ttnn, "to_layout", lambda *_: pytest.fail("unexpected layout conversion"))
+    monkeypatch.setattr(ttnn, "typecast", lambda *_: pytest.fail("unexpected dtype conversion"))
+
+    assert cache.pack(object(), object()) is logical
+
+
 def test_bf16_sparse_kv_contract_retains_combined_cache():
     kvpe = _tensor((78, 1, 1024, 576), ttnn.bfloat16)
-    cache = SparseKVCache(SparseKVCacheFormat.BF16, tensor=kvpe)
+    cache = MlaKvCache(MlaKvCacheFormat.BF16_RM, storage=kvpe)
 
-    assert cache.tensor is kvpe
+    assert cache.storage is kvpe
 
 
 def test_scaled_fp8_sparse_kv_contract_owns_one_mixed_format_cache():
     packed = _tensor((78, 1, 1024, 656), ttnn.fp8_e4m3)
-    cache = SparseKVCache(SparseKVCacheFormat.SCALED_FP8, tensor=packed)
+    cache = MlaKvCache(MlaKvCacheFormat.SCALED_FP8, storage=packed)
 
-    assert cache.tensor is packed
-    assert SparseKVCache.PACKED_ROW_BYTES == 656
-    assert SparseKVCache.PACKED_ROW_BYTES < 0.59 * (SparseKVCache.LATENT_DIM + SparseKVCache.ROPE_DIM) * 2
+    assert cache.storage is packed
+    assert MlaKvCache.PACKED_ROW_BYTES == 656
+    assert MlaKvCache.PACKED_ROW_BYTES < 0.59 * (MlaKvCache.LATENT_DIM + MlaKvCache.ROPE_DIM) * 2
 
 
 def test_scaled_fp8_packed_host_codec_preserves_mixed_fields():
@@ -65,7 +82,7 @@ def test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate(monkeypatc
     scales = object()
     reconstructed_latent = object()
     logical_kvpe = object()
-    packed = _tensor((1, 1, 32, SparseKVCache.PACKED_ROW_BYTES), ttnn.fp8_e4m3)
+    packed = _tensor((1, 1, 32, MlaKvCache.PACKED_ROW_BYTES), ttnn.fp8_e4m3)
     deallocated = []
 
     def to_layout(tensor, layout):
@@ -99,9 +116,10 @@ def test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate(monkeypatc
     monkeypatch.setattr(ttnn.experimental.deepseek_prefill, "pack_scaled_fp8_kv_cache", pack)
 
     intermediates = {}
-    cache = ttMLA._pack_scaled_kvpe(None, latent, rope, intermediates)
+    cache = MlaKvCache(MlaKvCacheFormat.SCALED_FP8, packed)
+    result = cache.pack(latent, rope, intermediates=intermediates)
 
-    assert cache == SparseKVCache(SparseKVCacheFormat.SCALED_FP8, packed)
+    assert result is packed
     assert intermediates["tt_kvpe"] is logical_kvpe
     assert intermediates["tt_kvpe_latent"] == ("clone", latent_fp8)
     assert intermediates["tt_kvpe_scales"] == ("clone", scales)
@@ -115,21 +133,21 @@ def test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate(monkeypatc
     [
         (
             _tensor((1, 1, 32, 656), ttnn.bfloat16),
-            "packed cache must use",
+            "cache must use",
         ),
         (
             _tensor((1, 1, 32, 512), ttnn.fp8_e4m3),
-            "packed cache width must be 656",
+            "cache width must be 656",
         ),
         (
             _tensor((1, 1, 32, 656), ttnn.fp8_e4m3, ttnn.TILE_LAYOUT),
-            "row-major",
+            "cache must use",
         ),
     ],
 )
 def test_scaled_fp8_sparse_kv_contract_rejects_invalid_packed_storage(packed, match, expect_error):
     with expect_error(ValueError, match):
-        SparseKVCache(SparseKVCacheFormat.SCALED_FP8, tensor=packed)
+        MlaKvCache(MlaKvCacheFormat.SCALED_FP8, storage=packed)
 
 
 def test_index_cache_contract_remains_tiled_bfloat8_b():

@@ -43,7 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPT_5K_PATH,
@@ -366,8 +366,8 @@ def run_model(
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=isl_total,
         mesh_shape=mesh_shape,

@@ -16,7 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 
 @dataclass
@@ -60,7 +60,7 @@ class TtPrefillRuntimeConfig:
     first_layer_idx: int = 0
     is_first_rank: bool = True
     is_last_rank: bool = True
-    sparse_kv_cache_format: SparseKVCacheFormat = SparseKVCacheFormat.BF16
+    sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM
 
     @property
     def sp_factor(self) -> int:
@@ -340,7 +340,8 @@ class TtPrefillRuntime:
         read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
-        kvpe = kv_caches.kvpe
+        kvpe_cache = kv_caches.kvpe
+        kvpe = kvpe_cache.storage
         s = list(kvpe.shape)
         sl = ttnn.slice(
             kvpe,

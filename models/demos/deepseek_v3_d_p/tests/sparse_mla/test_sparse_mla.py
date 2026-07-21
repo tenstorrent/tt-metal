@@ -32,9 +32,9 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    SparseKVCacheFormat,
+    MlaKvCacheFormat,
     init_kvpe_cache,
-    init_sparse_kv_cache,
+    init_mla_kv_cache,
     reconstruct_scaled_fp8_kv_cache,
 )
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -51,9 +51,9 @@ SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1", "glm_5_2"]
 
 def _collect_kvpe_cache(cache, mesh_device):
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    if cache.format == SparseKVCacheFormat.BF16:
-        return ttnn.to_torch(cache.tensor, mesh_composer=composer).to(torch.bfloat16)
-    packed = ttnn.to_torch(cache.tensor, mesh_composer=composer)
+    if cache.format == MlaKvCacheFormat.BF16_RM:
+        return ttnn.to_torch(cache.storage, mesh_composer=composer).to(torch.bfloat16)
+    packed = ttnn.to_torch(cache.storage, mesh_composer=composer)
     return reconstruct_scaled_fp8_kv_cache(packed)
 
 
@@ -122,9 +122,9 @@ def _sparse_accuracy_cases():
     cases = []
     for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False):
         variant, mesh, seq_len = case.values
-        formats = [SparseKVCacheFormat.BF16]
+        formats = [MlaKvCacheFormat.BF16_RM]
         if seq_len == SPARSE_SEQS_ANCHOR[0]:
-            formats.append(SparseKVCacheFormat.SCALED_FP8)
+            formats.append(MlaKvCacheFormat.SCALED_FP8)
         for cache_format in formats:
             cases.append(
                 pytest.param(
@@ -259,7 +259,7 @@ def run_sparse_mla_accuracy_case(
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
     logger.debug(f"[{variant.name}] sparse MLA accuracy: initializing KVPE cache mesh_shape={mesh_shape}")
-    tt_kvpe_cache = init_sparse_kv_cache(
+    tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         mesh_device=mesh_device,
         seq_len=seq_len,
@@ -331,15 +331,13 @@ def run_sparse_mla_determinism_case(
     for run_idx in range(n_runs):
         logger.info(f"[{variant.name}] sparse MLA determinism run {run_idx + 1}/{n_runs}: running TT inference")
         logger.debug(f"[{variant.name}] sparse MLA determinism run {run_idx + 1}: initializing KVPE cache")
-        tt_kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+        tt_kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
             mesh_device=mesh_device,
             seq_len=seq_len,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         tt_output, _, _, shard_dims = run_mla_inference(
             config=config,
@@ -397,7 +395,7 @@ def run_sparse_mla_chunked_case(
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
     logger.debug(f"[{variant.name}] sparse MLA chunked: initializing KVPE cache mesh_shape={mesh_shape}")
-    tt_kvpe_cache = init_sparse_kv_cache(
+    tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         mesh_device=mesh_device,
         seq_len=seq_len,
@@ -488,8 +486,8 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
     config.max_seq_len = seq_len
     mesh_shape = list(mesh_device.shape)
     sp_axis, tp_axis = 0, 1
-    cache_format = SparseKVCacheFormat.SCALED_FP8
-    tt_kvpe_cache = init_sparse_kv_cache(
+    cache_format = MlaKvCacheFormat.SCALED_FP8
+    tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         mesh_device=mesh_device,
         seq_len=seq_len,
@@ -612,15 +610,13 @@ def run_sparse_mla_rotated_case(
     rope_tensors = rope.get_rope_tensors_indexed(
         cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
     )
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
@@ -808,7 +804,7 @@ def test_sparse_mla_determinism(
 @pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
 @pytest.mark.parametrize(
     "cache_format",
-    [SparseKVCacheFormat.BF16, SparseKVCacheFormat.SCALED_FP8],
+    [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
     ids=["kv_bf16", "kv_scaled_fp8"],
 )
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")

@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat, init_kvpe_cache, init_sparse_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
 # gathered cache slot must byte-match the input we sent (read back through the same dtype
@@ -70,8 +70,8 @@ def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
     num_users, num_layers = 1, 2
     cache_tokens = 64
     chunk_tokens = 32
-    sparse_cache = init_sparse_kv_cache(
-        cache_format=SparseKVCacheFormat.SCALED_FP8,
+    sparse_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.SCALED_FP8,
         mesh_device=mesh_device,
         seq_len=cache_tokens,
         mesh_shape=list(mesh_device.shape),
@@ -79,7 +79,7 @@ def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
     )
-    cache = sparse_cache.tensor
+    cache = sparse_cache.storage
 
     torch.manual_seed(17)
     source = torch.randn(1, 1, chunk_tokens, head_dim, dtype=torch.bfloat16)

@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
     PROMPT_25K_PATH,
@@ -563,8 +563,8 @@ def test_prefill_block_loop(
 
     for iteration in range(1, num_iters + 1):
         # Fresh KV cache each iteration (prefill writes full seq range)
-        tt_kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=kvpe_cache_head_dim,
+        tt_kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BFP8_TILE,
             mesh_device=mesh_device,
             seq_len=isl_total,
             mesh_shape=mesh_shape,

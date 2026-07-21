@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     partition_iters,
     single_trace,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCache, SparseKVCacheFormat, init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -92,9 +92,7 @@ def run_mla_inference(
         # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
         # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
         layer_num=1,
-        sparse_kv_cache_format=(
-            tt_kvpe_cache.format if isinstance(tt_kvpe_cache, SparseKVCache) else SparseKVCacheFormat.BF16
-        ),
+        sparse_kv_cache_format=(tt_kvpe_cache.format),
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     # Sparse (DSA) single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
@@ -245,9 +243,8 @@ def run_model(
     logger.info("=" * 80)
 
     # Initialize KVPE cache
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
@@ -682,8 +679,8 @@ def _run_chunked_prefill(
     indexed_rope = rope_setup.get_rope_tensors_indexed(
         cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
     )
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,

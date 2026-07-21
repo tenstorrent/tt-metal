@@ -24,32 +24,25 @@ BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
-class SparseKVCacheFormat(str, Enum):
-    """Persistent MLA cache formats supported by sparse attention.
+class MlaKvCacheFormat(str, Enum):
+    """Physical encodings supported by the persistent MLA cache."""
 
-    This is deliberately a semantic format rather than a bare tensor dtype:
-    ``SCALED_FP8`` is a mixed-format byte row and must never be inferred from
-    an ``fp8_e4m3`` tensor alone.
-    """
-
-    BF16 = "bf16"
+    BFP8_TILE = "bfp8_tile"
+    BF16_RM = "bf16_rm"
     SCALED_FP8 = "scaled_fp8"
 
 
 @dataclass(frozen=True)
-class SparseKVCache:
-    """Typed ownership contract for the persistent sparse-MLA cache.
+class MlaKvCache:
+    """Persistent storage paired with the encoding of its physical rows.
 
-    BF16 retains the established combined ``[latent || rope]`` tensor. Scaled
-    FP8 owns one 656-byte row-major tensor whose byte layout matches FlashMLA:
-    512 E4M3 latent bytes, four FP32 scales (16 bytes), and 64 BF16 RoPE values
-    (128 bytes). The tensor is typed ``fp8_e4m3`` as byte-addressable storage;
-    each consumer interprets the scale and RoPE regions by their byte offsets.
-    The indexer cache is intentionally separate and remains tiled bfloat8_b.
+    Logical MLA values are ``[latent || RoPE]``. Homogeneous formats store that
+    row directly; scaled FP8 stores latent bytes, FP32 scales, and BF16 RoPE in
+    one mixed-format row. Physical operations use ``storage`` as a bare tensor.
     """
 
-    format: SparseKVCacheFormat
-    tensor: ttnn.Tensor
+    format: MlaKvCacheFormat
+    storage: ttnn.Tensor
 
     LATENT_DIM = 512
     SCALE_BLOCK_SIZE = 128
@@ -62,33 +55,80 @@ class SparseKVCache:
     ROPE_BYTES = ROPE_DIM * 2
     PACKED_ROW_BYTES = ROPE_OFFSET_BYTES + ROPE_BYTES
 
-    def __post_init__(self):
-        if self.format == SparseKVCacheFormat.BF16:
-            self._validate_tensor(
-                self.tensor,
-                name="BF16 KVPE",
-                width=self.LATENT_DIM + self.ROPE_DIM,
-                dtype=ttnn.bfloat16,
-            )
-            return
+    def __post_init__(self) -> None:
+        specs = {
+            MlaKvCacheFormat.BFP8_TILE: (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 576),
+            MlaKvCacheFormat.BF16_RM: (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 576),
+            MlaKvCacheFormat.SCALED_FP8: (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, self.PACKED_ROW_BYTES),
+        }
+        try:
+            dtype, layout, width = specs[self.format]
+        except KeyError as error:
+            raise ValueError(f"unsupported MLA KV cache format: {self.format}") from error
+        if self.storage.dtype != dtype:
+            raise ValueError(f"{self.format} cache must use {dtype}, got {self.storage.dtype}")
+        if self.storage.layout != layout:
+            raise ValueError(f"{self.format} cache must use {layout}, got {self.storage.layout}")
+        if self.storage.shape[-1] != width:
+            raise ValueError(f"{self.format} cache width must be {width}, got {self.storage.shape[-1]}")
 
-        if self.format != SparseKVCacheFormat.SCALED_FP8:
-            raise ValueError(f"unsupported sparse KV cache format: {self.format}")
-        self._validate_tensor(
-            self.tensor,
-            name="packed",
-            width=self.PACKED_ROW_BYTES,
-            dtype=ttnn.fp8_e4m3,
+    def pack(
+        self,
+        latent: ttnn.Tensor,
+        rope: ttnn.Tensor,
+        *,
+        intermediates: dict[str, ttnn.Tensor] | None = None,
+    ) -> ttnn.Tensor:
+        """Encode logical values for a physical cache write without mutating storage."""
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            return self._pack_scaled_fp8(latent, rope, intermediates=intermediates)
+        logical = ttnn.concat([latent, rope], dim=-1)
+        packed = logical
+        if packed.layout != self.storage.layout:
+            packed = ttnn.to_layout(packed, self.storage.layout)
+        if packed.dtype != self.storage.dtype:
+            cast = ttnn.typecast(packed, self.storage.dtype)
+            if packed is not logical:
+                ttnn.deallocate(packed)
+            packed = cast
+        if packed is not logical:
+            ttnn.deallocate(logical)
+        if intermediates is not None:
+            intermediates["tt_kvpe"] = ttnn.clone(packed)
+        return packed
+
+    def _pack_scaled_fp8(
+        self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, intermediates: dict[str, ttnn.Tensor] | None
+    ) -> ttnn.Tensor:
+        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
+        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            latent_rm, round_scale_to_power_of_two=True
         )
+        if latent_rm is not latent:
+            ttnn.deallocate(latent_rm)
+        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
+        if intermediates is not None:
+            reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                latent_fp8, scales, output_dtype=ttnn.bfloat16
+            )
+            intermediates["tt_kvpe"] = ttnn.concat([reconstructed, rope_rm], dim=-1)
+            ttnn.deallocate(reconstructed)
+            intermediates["tt_kvpe_latent"] = ttnn.clone(latent_fp8)
+            intermediates["tt_kvpe_scales"] = ttnn.clone(scales)
+            intermediates["tt_kvpe_rope"] = ttnn.clone(rope_rm)
+            intermediates["tt_kvpe_packed"] = ttnn.clone(packed)
+        ttnn.deallocate(latent_fp8)
+        ttnn.deallocate(scales)
+        if rope_rm is not rope:
+            ttnn.deallocate(rope_rm)
+        return packed
 
-    @staticmethod
-    def _validate_tensor(tensor, *, name, width, dtype):
-        if tensor.dtype != dtype:
-            raise ValueError(f"{name} cache must use {dtype}, got {tensor.dtype}")
-        if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-            raise ValueError(f"{name} cache must be row-major, got {tensor.layout}")
-        if tensor.shape[-1] != width:
-            raise ValueError(f"{name} cache width must be {width}, got {tensor.shape[-1]}")
+    def unpack_host(self, physical: torch.Tensor) -> torch.Tensor:
+        """Decode host physical rows into logical BF16 [latent || RoPE] values."""
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            return reconstruct_scaled_fp8_kv_cache(physical)
+        return physical.to(torch.bfloat16)
 
 
 def unpack_scaled_fp8_kv_cache(packed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -98,29 +138,26 @@ def unpack_scaled_fp8_kv_cache(packed: torch.Tensor) -> tuple[torch.Tensor, torc
     scale and RoPE fields be reconstructed using their native dtypes. Returns FP8 latent values widened
     to float32, FP32 scales, and BF16 RoPE values.
     """
-    if packed.shape[-1] != SparseKVCache.PACKED_ROW_BYTES:
-        raise ValueError(f"packed sparse KV width must be {SparseKVCache.PACKED_ROW_BYTES}, got {packed.shape[-1]}")
+    if packed.shape[-1] != MlaKvCache.PACKED_ROW_BYTES:
+        raise ValueError(f"packed sparse KV width must be {MlaKvCache.PACKED_ROW_BYTES}, got {packed.shape[-1]}")
 
     prefix = packed.shape[:-1]
     raw = packed.contiguous().view(torch.uint8)
     latent = (
-        raw[..., : SparseKVCache.SCALE_OFFSET_BYTES]
+        raw[..., : MlaKvCache.SCALE_OFFSET_BYTES]
         .contiguous()
         .view(packed.dtype)
-        .reshape(*prefix, SparseKVCache.LATENT_DIM)
+        .reshape(*prefix, MlaKvCache.LATENT_DIM)
         .float()
     )
     scales = (
-        raw[..., SparseKVCache.SCALE_OFFSET_BYTES : SparseKVCache.ROPE_OFFSET_BYTES]
+        raw[..., MlaKvCache.SCALE_OFFSET_BYTES : MlaKvCache.ROPE_OFFSET_BYTES]
         .contiguous()
         .view(torch.float32)
-        .reshape(*prefix, SparseKVCache.NUM_SCALES)
+        .reshape(*prefix, MlaKvCache.NUM_SCALES)
     )
     rope = (
-        raw[..., SparseKVCache.ROPE_OFFSET_BYTES :]
-        .contiguous()
-        .view(torch.bfloat16)
-        .reshape(*prefix, SparseKVCache.ROPE_DIM)
+        raw[..., MlaKvCache.ROPE_OFFSET_BYTES :].contiguous().view(torch.bfloat16).reshape(*prefix, MlaKvCache.ROPE_DIM)
     )
     return latent, scales, rope
 
@@ -128,7 +165,7 @@ def unpack_scaled_fp8_kv_cache(packed: torch.Tensor) -> tuple[torch.Tensor, torc
 def reconstruct_scaled_fp8_kv_cache(packed: torch.Tensor) -> torch.Tensor:
     """Reconstruct the logical BF16 ``[scaled latent || RoPE]`` cache from packed host bytes."""
     latent, scales, rope = unpack_scaled_fp8_kv_cache(packed)
-    scaled = latent * scales.repeat_interleave(SparseKVCache.SCALE_BLOCK_SIZE, dim=-1)
+    scaled = latent * scales.repeat_interleave(MlaKvCache.SCALE_BLOCK_SIZE, dim=-1)
     return torch.cat((scaled.to(torch.bfloat16), rope), dim=-1)
 
 
@@ -494,24 +531,25 @@ def init_kvpe_cache(
     return tt_kvpe_cache
 
 
-def init_sparse_kv_cache(
+def init_mla_kv_cache(
     *,
-    cache_format: SparseKVCacheFormat,
-    mesh_device,
-    seq_len,
-    mesh_shape,
-    sp_axis,
-    num_kvpe_cache_layers,
-    num_users=1,
-) -> SparseKVCache:
-    """Allocate and zero the typed persistent cache used by sparse MLA.
+    cache_format: MlaKvCacheFormat,
+    mesh_device: ttnn.MeshDevice,
+    seq_len: int,
+    mesh_shape: list[int] | tuple[int, ...],
+    sp_axis: int,
+    num_kvpe_cache_layers: int,
+    num_users: int = 1,
+) -> MlaKvCache:
+    """Allocate and zero a persistent MLA cache in the selected physical format.
 
-    BF16 preserves the established combined 576-wide cache. Scaled FP8 owns
-    one ND-sharded, 656-byte mixed-format row per token. Physical DRAM usage is
+    BFP8 tile and BF16 row-major store one homogeneous 576-wide row. Scaled
+    FP8 stores one ND-sharded, 656-byte mixed-format row per token. Physical DRAM usage is
     derived from the tensor's aligned page size, not the logical row width.
     """
-    cache_format = SparseKVCacheFormat(cache_format)
+    cache_format = MlaKvCacheFormat(cache_format)
 
+    layout = ttnn.TILE_LAYOUT if cache_format == MlaKvCacheFormat.BFP8_TILE else ttnn.ROW_MAJOR_LAYOUT
     common = dict(
         mesh_device=mesh_device,
         seq_len=seq_len,
@@ -519,29 +557,31 @@ def init_sparse_kv_cache(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_kvpe_cache_layers,
         num_users=num_users,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=layout,
     )
-    if cache_format == SparseKVCacheFormat.BF16:
-        return SparseKVCache(
+    if cache_format in (MlaKvCacheFormat.BFP8_TILE, MlaKvCacheFormat.BF16_RM):
+        return MlaKvCache(
             format=cache_format,
-            tensor=init_kvpe_cache(
-                kvpe_cache_head_dim=SparseKVCache.LATENT_DIM + SparseKVCache.ROPE_DIM,
-                dtype=ttnn.bfloat16,
+            storage=init_kvpe_cache(
+                kvpe_cache_head_dim=MlaKvCache.LATENT_DIM + MlaKvCache.ROPE_DIM,
+                dtype=ttnn.bfloat8_b if cache_format == MlaKvCacheFormat.BFP8_TILE else ttnn.bfloat16,
                 **common,
             ),
         )
-    if cache_format != SparseKVCacheFormat.SCALED_FP8:
-        raise ValueError(f"unsupported sparse KV cache format: {cache_format}")
+    if cache_format != MlaKvCacheFormat.SCALED_FP8:
+        raise ValueError(f"unsupported MLA KV cache format: {cache_format}")
 
     packed = init_kvpe_cache(
-        kvpe_cache_head_dim=SparseKVCache.PACKED_ROW_BYTES,
+        kvpe_cache_head_dim=MlaKvCache.PACKED_ROW_BYTES,
         dtype=ttnn.fp8_e4m3,
         **common,
     )
-    return SparseKVCache(format=cache_format, tensor=packed)
+    return MlaKvCache(format=cache_format, storage=packed)
 
 
-def allocate_mla_kvpe_cache(*, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users):
+def allocate_mla_kvpe_cache(
+    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users
+) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
     The MLA per-token cache row is ``qk_rope_head_dim + kv_lora_rank`` wide; ONE
@@ -549,9 +589,8 @@ def allocate_mla_kvpe_cache(*, mesh_device, hf_config, max_seq_len, mesh_shape, 
     ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
     and the MLA model adapter, so the MLA KV layout has one definition.
     """
-    kvpe_head_dim = hf_config.qk_rope_head_dim + hf_config.kv_lora_rank
-    return init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_head_dim,
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=max_seq_len,
         mesh_shape=list(mesh_shape),

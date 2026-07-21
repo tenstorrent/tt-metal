@@ -22,7 +22,6 @@ from models.demos.common.prefill.runners.migration import serialize_kv_chunk_tab
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
-    SparseKVCache,
     create_kv_chunk_address_table_kimi,
     populate_kv_chunk_address_table_kimi,
 )
@@ -98,7 +97,7 @@ def build_and_serialize_kv_chunk_table(
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
 
-    primary_cache = kvpe_cache.tensor if isinstance(kvpe_cache, SparseKVCache) else kvpe_cache
+    primary_cache = kvpe_cache.storage
     all_caches = (primary_cache,) + ((index_kv_cache,) if index_kv_cache is not None else ())
     if len(all_caches) > 1:
         return _build_and_serialize_merged_kv_chunk_table(

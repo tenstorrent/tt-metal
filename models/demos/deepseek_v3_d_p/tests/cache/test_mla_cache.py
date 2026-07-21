@@ -13,7 +13,7 @@ from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_mla")
@@ -112,8 +112,8 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
 
     # Initialize KVPE cache (required by MLA forward)
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,

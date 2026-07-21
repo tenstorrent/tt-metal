@@ -11,16 +11,15 @@ import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 
 if TYPE_CHECKING:
-    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCache
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
 
 
 @dataclass
 class MlaKvCaches(KvCaches):
     """DeepSeek-family prefill caches owned by the common prefill engine.
 
-    ``kvpe`` is the primary MLA cache and may carry either a plain TT tensor or the explicit sparse-cache
-    format wrapper. ``index`` is the optional DSA indexer cache used by GLM variants.
+    ``kvpe`` is the primary MLA cache with explicit physical encoding. ``index`` is the optional DSA indexer cache used by GLM variants.
     """
 
-    kvpe: ttnn.Tensor | SparseKVCache
+    kvpe: MlaKvCache
     index: Optional[ttnn.Tensor] = None

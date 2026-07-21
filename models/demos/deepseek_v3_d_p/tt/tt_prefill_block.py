@@ -16,7 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCache, SparseKVCacheFormat
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 # Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
 # col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
@@ -205,7 +205,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
-        sparse_kv_cache_format: SparseKVCacheFormat = SparseKVCacheFormat.BF16,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -483,7 +483,7 @@ class TtPrefillBlock(LightweightModule):
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
-            cache_tensor = kvpe_cache.tensor if isinstance(kvpe_cache, SparseKVCache) else kvpe_cache
+            cache_tensor = kvpe_cache.storage
             if cache_tensor.layout == ttnn.TILE_LAYOUT:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                     cache_tensor,
