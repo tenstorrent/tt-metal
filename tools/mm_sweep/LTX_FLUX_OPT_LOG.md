@@ -61,3 +61,28 @@ near the DRAM floor (wall/ideal ≤1.05, ≥488 GB/s) — likely "practical floo
   mechanism (all 3 RISCs saturated, coalescing already adopted; no idle engine to recover).
 - **Decision: CLOSED, practical floor.** No lossless kernel/picker opportunity. Speedup 0% (kept nothing).
 - Artifacts: ltxflux_sweep_128x15360x768.json, ablate_128x15360x768.log. Commit: (harness) this branch.
+
+### [2] 128x6144x768 (Mt4, narrow-N Nt24) — CLOSED: geometry/quantization limit
+Selected out of rank order (highest wall/ideal of any meaningful shape = best genuine-win candidate).
+- **Baseline** (config=None, mask 0): auto (1,12,1,2,1), us_med 30.3, ideal 21.9, excess 8.4µs, wall/ideal
+  1.38, 370 GB/s, per-RISC B/N/T 30.2/29.5/29.7 (all cobound ~30µs), **core_spread 73%**, PCC 1.0 (corpus).
+- **Sweep** (104 configs, exhaustive; ltxflux_sweep_128x6144x768.json): best (1,6,2,4,3 Sm2)=30.02µs vs
+  auto 30.44µs => **1.4% headroom, below the 2-3% gate**. Top cluster (30.0-30.7) within noise. => picker
+  effectively optimal (the lookup table already encodes the sweep winner for LTX/FLUX shapes by construction).
+- **Ablation** (auto; ablate_128x6144x768.log): NO_REDUCE −12.3% (reduction ~3.7µs, lossy); FULL_IN0_WAIT
+  +9.7%, BARRIER_DRAIN +4.9% (both adopted, active); NO_COALESCE +0.4% (narrow-N, tiny reads).
+- **Hypotheses**: H1 tree-reduction to cut the split-K tail / 73% core-spread — **FALSIFIED by the sweep's own
+  Pk6 control**: halving chain depth (Pk12->Pk6) gains only 1.4%, so the reduction cost is per-core
+  reduce-add WORK + CB traffic, not chain depth => a tree (same work, shallower) cannot recover it. Confirms
+  the prior reduction-tree rejection mechanism holds for this class too. H2 picker M-split (Sm2) — real
+  direction but sub-gate (1.4%), not adopted.
+- **Decision: CLOSED, geometry limit.** Narrow-N forces deep split-K for core utilization; reduction work is
+  inherent. No lossless config or kernel lever. Speedup 0% (kept nothing).
+- Artifacts: ltxflux_sweep_128x6144x768.json, ablate_128x6144x768.log.
+
+### Structural finding (applies to whole corpus)
+The Picker-v3 LOOKUP TABLE already stores the hand-measured sweep-winning config for every real LTX/FLUX
+shape (trained to 100% on exactly these 20). => config=None already selects the sweep optimum, so **picker
+headroom is ~0 by construction** on this corpus. All remaining gains must be KERNEL/dataflow improvements
+(which then trigger a re-sweep + table refresh). Per-shape work therefore centers on the ablation: is there
+an IDLE-RISC recoverable stall (kernel opportunity) or is the shape RISC-cobound/geometry-bound (floor)?
