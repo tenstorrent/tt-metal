@@ -354,9 +354,6 @@ jobs:
       - name: 🤖 AI job summary
         if: always() && !cancelled()
         continue-on-error: true
-        # Clear job-level VIRTUAL_ENV=/opt/venv so the action uses an ephemeral venv.
-        env:
-          VIRTUAL_ENV: ""
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:
           config: |
