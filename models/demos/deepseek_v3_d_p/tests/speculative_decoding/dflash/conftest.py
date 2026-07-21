@@ -36,23 +36,48 @@ def _is_drafter(m) -> bool:
 
 
 def _normalize_rope_config(config):
-    """K2.6 uses the new ``rope_parameters`` schema with ``rope_type: deepseek_yarn``. Older transformers
-    ignore it → ``rope_type='default'`` + wrong ``theta`` (10000) → plain RoPE, no yarn. Translate it into
-    the ``rope_scaling`` schema transformers understands (mapping deepseek_yarn→standard yarn, which is
-    numerically equivalent here since mscale==mscale_all_dim==1), and set rope_theta, so the reference
-    actually applies yarn. No-op if the config already carries a usable ``rope_scaling``."""
+    """K2.6 ships its yarn rope under DeepSeek's ``deepseek_yarn`` type in the new ``rope_parameters``
+    schema. transformers' ROPE_INIT_FUNCTIONS has no ``deepseek_yarn`` entry, so the reference's rotary
+    embedding raises ``KeyError: 'deepseek_yarn'`` at build time. Remap it to the standard ``yarn`` init in
+    whichever field this transformers version actually reads (``rope_parameters`` and/or ``rope_scaling``),
+    keeping factor/beta*/mscale so yarn's attention_factor still resolves to 1 — numerically equivalent to
+    deepseek_yarn here since mscale == mscale_all_dim == 1. Also lift rope_theta to the top level so the base
+    (50000, not the 10000 default) isn't lost."""
+
+    def _fix_type(d):
+        if isinstance(d, dict):
+            for key in ("rope_type", "type"):
+                if d.get(key) == "deepseek_yarn":
+                    d[key] = "yarn"
+
+    theta = None
     rp = getattr(config, "rope_parameters", None)
-    if isinstance(rp, dict) and not getattr(config, "rope_scaling", None):
-        if rp.get("rope_theta") is not None:
-            config.rope_theta = float(rp["rope_theta"])
-        rtype = rp.get("rope_type") or rp.get("type") or "yarn"
-        if rtype == "deepseek_yarn":
-            rtype = "yarn"
-        rs = {"rope_type": rtype}
-        for k in ("factor", "original_max_position_embeddings", "beta_fast", "beta_slow", "mscale", "mscale_all_dim"):
-            if k in rp:
-                rs[k] = rp[k]
-        config.rope_scaling = rs
+    if isinstance(rp, dict):
+        theta = rp.get("rope_theta")
+        _fix_type(rp)  # the field new transformers reads — remap in place
+
+    rs = getattr(config, "rope_scaling", None)
+    if isinstance(rs, dict):
+        theta = theta or rs.get("rope_theta")
+        _fix_type(rs)
+    elif isinstance(rp, dict):
+        # Older transformers read rope_scaling instead; mirror the (now-fixed) yarn params into it.
+        config.rope_scaling = {
+            k: rp[k]
+            for k in (
+                "rope_type",
+                "factor",
+                "original_max_position_embeddings",
+                "beta_fast",
+                "beta_slow",
+                "mscale",
+                "mscale_all_dim",
+            )
+            if k in rp
+        }
+
+    if theta is not None:
+        config.rope_theta = float(theta)
     return config
 
 
