@@ -106,15 +106,7 @@ OPS_CSV_HEADER = [
     "DATA MOVEMENT KERNEL HASH",
     "PROGRAM HASH",
     "PROGRAM CACHE HIT",
-    "TENSIX DM 0 MAX KERNEL SIZE [B]",
-    "TENSIX DM 1 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 1 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 2 MAX KERNEL SIZE [B]",
-    "ACTIVE ETH DM 0 MAX KERNEL SIZE [B]",
-    "ACTIVE ETH DM 1 MAX KERNEL SIZE [B]",
-    "IDLE ETH DM 0 MAX KERNEL SIZE [B]",
-    "IDLE ETH DM 1 MAX KERNEL SIZE [B]",
+    # "... MAX KERNEL SIZE [B]" columns are inserted here dynamically
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -130,6 +122,74 @@ OPS_CSV_HEADER = [
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
+
+# Kernel-size columns ("<PROCESSOR CLASS> <index> MAX KERNEL SIZE [B]") are grouped by processor class
+# in this fixed order and by ascending processor index within a class
+_KERNEL_SIZE_SUFFIX = " MAX KERNEL SIZE [B]"
+_KERNEL_SIZE_CLASS_ORDER = ["TENSIX DM", "TENSIX COMPUTE", "ACTIVE ETH DM", "IDLE ETH DM"]
+
+
+def _kernel_size_sort_key(column):
+    group, _, index = column[: -len(_KERNEL_SIZE_SUFFIX)].rpartition(" ")
+    rank = _KERNEL_SIZE_CLASS_ORDER.index(group) if group in _KERNEL_SIZE_CLASS_ORDER else len(_KERNEL_SIZE_CLASS_ORDER)
+    return rank, int(index)
+
+
+# On Quasar, device durations that belong to a single processor type are reported per type in ns.
+# Each per-type value is (max <type>-<phase> ZONE_END - min <type>-<phase> ZONE_START, over all cores
+# of that type) / clock.
+_QUASAR_DM_KERNEL_COL = "DEVICE QUASAR_DM KERNEL DURATION [ns]"
+_QUASAR_TRISC_KERNEL_COL = "DEVICE QUASAR_NEO_TRISC KERNEL DURATION [ns]"
+_QUASAR_DM_FW_COL = "DEVICE DM FW DURATION [ns]"
+_QUASAR_TRISC_FW_COL = "DEVICE TRISC FW DURATION [ns]"
+# Per-type columns copied verbatim from the C++ device perf report onto each Quasar op row.
+_QUASAR_DEVICE_DURATION_COLS = [
+    _QUASAR_DM_KERNEL_COL,
+    _QUASAR_TRISC_KERNEL_COL,
+    _QUASAR_DM_FW_COL,
+    _QUASAR_TRISC_FW_COL,
+]
+# Op-to-op latency on Quasar is reported per processor type: the gap from the previous op's last
+# <type>-KERNEL end to this op's first <type>-KERNEL start.
+_QUASAR_OP2OP_DM_COL = "OP TO OP DM LATENCY [ns]"
+_QUASAR_OP2OP_TRISC_COL = "OP TO OP TRISC LATENCY [ns]"
+# Stock columns replaced in place by the per-type columns above.
+_QUASAR_COL_REPLACEMENTS = {
+    "DEVICE BRISC KERNEL DURATION [ns]": [_QUASAR_DM_KERNEL_COL, _QUASAR_TRISC_KERNEL_COL],
+    "DEVICE FW DURATION [ns]": [_QUASAR_DM_FW_COL, _QUASAR_TRISC_FW_COL],
+    "OP TO OP LATENCY [ns]": [_QUASAR_OP2OP_DM_COL, _QUASAR_OP2OP_TRISC_COL],
+}
+_QUASAR_COLS_TO_REMOVE = {
+    "DEVICE NCRISC KERNEL DURATION [ns]",
+    "DEVICE TRISC0 KERNEL DURATION [ns]",
+    "DEVICE TRISC1 KERNEL DURATION [ns]",
+    "DEVICE TRISC2 KERNEL DURATION [ns]",
+    "DEVICE ERISC KERNEL DURATION [ns]",
+    # cross-clock-domain aggregate durations (span DM + Neo-TRISC) -> no single-clock ns
+    "DEVICE KERNEL DURATION [ns]",
+    "DEVICE KERNEL DURATION DM START [ns]",
+    "DEVICE KERNEL FIRST TO LAST START [ns]",
+    # DM-start op-to-op (mixes DM+Neo-TRISC cycles)
+    "OP TO OP LATENCY BR/NRISC START [ns]",
+}
+# Stale [ns] row keys to strip so the strict DictWriter accepts the reshaped rows.
+_QUASAR_STALE_ROW_KEYS = list(_QUASAR_COLS_TO_REMOVE) + list(_QUASAR_COL_REPLACEMENTS)
+
+
+def shape_device_headers_for_quasar(headers):
+    """Rewrite the fixed device-timing headers for a Quasar report: replace certain single-processor-type
+    columns in place with two per-type [ns] columns (DM / Neo-TRISC), and drop the cross-clock-domain
+    aggregate durations. All other columns are unchanged."""
+    shaped = []
+    for header in headers:
+        if header in _QUASAR_COL_REPLACEMENTS:
+            shaped.extend(_QUASAR_COL_REPLACEMENTS[header])
+        elif header in _QUASAR_COLS_TO_REMOVE:
+            continue
+        else:
+            shaped.append(header)
+    return shaped
+
 
 DEVICE_PERF_INT_FIELDS = {
     "GLOBAL CALL COUNT",
@@ -156,6 +216,16 @@ DEVICE_PERF_INT_FIELDS = {
     "DEVICE TRISC1 KERNEL DURATION [ns]",
     "DEVICE TRISC2 KERNEL DURATION [ns]",
     "DEVICE ERISC KERNEL DURATION [ns]",
+    # Quasar per-processor-type aggregated durations
+    "DEVICE QUASAR_DM KERNEL DURATION [ns]",
+    "DEVICE QUASAR_NEO_TRISC KERNEL DURATION [ns]",
+    "DEVICE DM FW DURATION [ns]",
+    "DEVICE TRISC FW DURATION [ns]",
+    # Quasar per-type KERNEL start/end cycles
+    "DEVICE QUASAR_DM KERNEL START CYCLE",
+    "DEVICE QUASAR_DM KERNEL END CYCLE",
+    "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+    "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE",
 }
 
 
@@ -235,6 +305,18 @@ def build_sub_device_id_lookup_from_device_csv(
         lookup[key] = sub_device_id
 
     return lookup
+
+
+def is_quasar_device_log(device_log_path: Path) -> bool:
+    """Whether the device log is from a Quasar run. The first line is the
+    "ARCH: <arch>, CHIP_FREQ[MHz]: ..." preamble; only Quasar carries the per-processor-type ns columns
+    (computed C++-side with hardcoded clocks) and needs its device-timing header reshaped."""
+    device_log_path = Path(device_log_path)
+    if not device_log_path.is_file():
+        return False
+    with device_log_path.open() as f:
+        preamble = f.readline()
+    return "quasar" in preamble.lower()
 
 
 def attach_sub_device_ids_to_ops(
@@ -1347,6 +1429,8 @@ def generate_reports(
     name = OUT_NAME
     outFolder = os.path.abspath(outFolder)
 
+    is_quasar_report = is_quasar_device_log(Path(logFolder) / PROFILER_DEVICE_SIDE_LOG)
+
     if nameAppend:
         name += f"_{nameAppend}"
         outFolder = os.path.join(outFolder, nameAppend)
@@ -1373,7 +1457,8 @@ def generate_reports(
 
         prev_device_kernel_end_cycle = {}
         prev_device_dm_start_cycle = {}
-        prev_device_fw_end_cycle: Dict[int, int] = {}
+        prev_device_dm_kernel_end_cycle: Dict[int, int] = {}
+        prev_device_trisc_kernel_end_cycle: Dict[int, int] = {}
         device_ns_per_cycle: Dict[int, Optional[float]] = {}
 
         tensorCSVData = {
@@ -1637,6 +1722,39 @@ def generate_reports(
                     if "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row and perf_device_id is not None:
                         csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
 
+                    # Quasar: per-type op-to-op latency — gap from the previous op's last <type>-KERNEL end
+                    # to this op's first <type>-KERNEL start, per processor type.
+                    if is_quasar_report and perf_device_id is not None:
+                        for start_col, end_col, dur_col, prev_map, out_col in (
+                            (
+                                "DEVICE QUASAR_DM KERNEL START CYCLE",
+                                "DEVICE QUASAR_DM KERNEL END CYCLE",
+                                _QUASAR_DM_KERNEL_COL,
+                                prev_device_dm_kernel_end_cycle,
+                                _QUASAR_OP2OP_DM_COL,
+                            ),
+                            (
+                                "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+                                "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE",
+                                _QUASAR_TRISC_KERNEL_COL,
+                                prev_device_trisc_kernel_end_cycle,
+                                _QUASAR_OP2OP_TRISC_COL,
+                            ),
+                        ):
+                            kernel_start = device_perf_row.get(start_col)
+                            kernel_end = device_perf_row.get(end_col)
+                            kernel_dur_ns = device_perf_row.get(dur_col)
+                            if kernel_start is not None:
+                                prev_end = prev_map.get(perf_device_id)
+                                span = (kernel_end - kernel_start) if kernel_end is not None else 0
+                                ns_per_cycle_type = (kernel_dur_ns / span) if (kernel_dur_ns and span > 0) else None
+                                if prev_end is not None and ns_per_cycle_type is not None:
+                                    csv_row[out_col] = round((kernel_start - prev_end) * ns_per_cycle_type)
+                                else:
+                                    csv_row[out_col] = 0
+                            if kernel_end is not None:
+                                prev_map[perf_device_id] = kernel_end
+
                     skip_headers = {
                         "GLOBAL CALL COUNT",
                         "DEVICE ID",
@@ -1739,6 +1857,19 @@ def generate_reports(
                         except ZeroDivisionError:
                             csv_row["PM FPU UTIL (%)"] = 0.0
 
+            # Quasar: copy the per-type DM / Neo-TRISC kernel & FW durations (ns) straight from the device
+            # perf report and drop the WH/BH per-RISC / cross-clock-domain [ns] columns they replace.
+            if is_quasar_report and isinstance(row, int) and active_op_record is not None:
+                if device_perf_row:
+                    for col in _QUASAR_DEVICE_DURATION_COLS:
+                        val = device_perf_row.get(col)
+                        if val not in (None, ""):
+                            csv_row[col] = val
+                # Strip the stock [ns] columns the Quasar-shaped header no longer carries (replaced or
+                # dropped) so the writer (which rejects unknown fields) doesn't choke on their values.
+                for stale_column in _QUASAR_STALE_ROW_KEYS:
+                    csv_row.pop(stale_column, None)
+
             csv_rows.append(csv_row)
 
         # Determine which perf counter headers have data in any row
@@ -1748,11 +1879,24 @@ def generate_reports(
         active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
+        head_part = list(OPS_CSV_HEADER[:ioHeaderIndex])
+        tail_part = list(OPS_CSV_HEADER[ioHeaderIndex + 2 :])
+        # Quasar: replace the WH/BH per-RISC KERNEL DURATION block with the per-type DM / Neo-TRISC
+        # kernel- and FW-duration columns (ns).
+        if is_quasar_report:
+            head_part = shape_device_headers_for_quasar(head_part)
+        kernel_size_headers = sorted(
+            {key for row in csv_rows for key in row if key.endswith(_KERNEL_SIZE_SUFFIX)},
+            key=_kernel_size_sort_key,
+        )
+        if kernel_size_headers:
+            anchor = tail_part.index("PROGRAM CACHE HIT") + 1
+            tail_part[anchor:anchor] = kernel_size_headers
         allHeaders = (
-            OPS_CSV_HEADER[:ioHeaderIndex]
+            head_part
             + tensorCSVData["INPUT"]["headers"]
             + tensorCSVData["OUTPUT"]["headers"]
-            + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+            + tail_part
             + active_perf_headers
             + sorted(list(childCallKeys))
         )
