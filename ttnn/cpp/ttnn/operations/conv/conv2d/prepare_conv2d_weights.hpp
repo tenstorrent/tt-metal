@@ -152,8 +152,8 @@ struct Conv2dWeightsBiasPrepConfig {
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
         bool coalesce_1d_depthwise_kw_reads_ = false,
-        bool use_depthwise_weight_plan_shape_ = false,
-        std::array<uint32_t, 2> stride_ = {1, 1}) :
+        std::array<uint32_t, 2> stride_ = {1, 1},
+        bool use_depthwise_weight_plan_shape_ = false) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
         weight_block_h_ntiles(weight_block_h_ntiles_),
