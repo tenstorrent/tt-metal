@@ -455,7 +455,7 @@ uint32_t input_addr = get_arg_val<uint32_t>(0);
 
 // Metal 2.0:
 auto input = TensorAccessor(tensor::input);
-uint32_t input_addr = input.get_bank_base_address(bank_id);  // when truly needed
+uint32_t input_addr = input.get_bank_base_address();  // arg-less; when truly needed
 ```
 
 Most ports don't reach for the raw pointer at all — `TensorAccessor`'s normal page-access methods are the standard path (**Case 1** bindings, the common case; they never touch the bridge). `get_bank_base_address` is the escape hatch for **Case 2** bindings — a kernel that used a raw base address with explicit arithmetic. The binding still flows through the typed channel; only the base pointer is extracted here, and the raw arithmetic is left unchanged (no conversion to `TensorAccessor` iteration).
