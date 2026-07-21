@@ -7,11 +7,11 @@ follow the route.
 
 | You are… | Start with | Then |
 |---|---|---|
+| **A human** getting oriented | [`human/READ_ME_FIRST.md`](human/READ_ME_FIRST.md) | [`human/intro_to_metal_2.0.md`](human/Cintro_to_metal_2.0.md)|
 | **An AI porter** (Claude) porting an op | [`ai/audit/metal2_audit.md`](ai/audit/metal2_audit.md) — host/spec port-readiness audit | [`ai/port/metal2_port.md`](ai/port/metal2_port.md) — do the port |
 | **An AI porter** uplifting a Metal 2.0 op to **Quasar** | [`ai/audit/quasar_audit.md`](ai/audit/quasar_audit.md) — Quasar-uplift feasibility audit | uplift / semantic recipes forthcoming |
 | **An AI porter / reviewer** auditing **kernel CB→DFB** readiness | [`ai/audit/cb_dfb_quasar_audit_helper.md`](ai/audit/cb_dfb_quasar_audit_helper.md) — **standalone device-side CB audit** ([How to use](ai/audit/cb_dfb_quasar_audit_helper.md#how-to-use-this-doc)) | Optional: cross-ref the host audit if doing a full op port |
-| **A human** getting oriented | [`human/user_orientation.md`](human/user_orientation.md) | [`human/CB-to-DFB-flowchart.svg`](human/CB-to-DFB-flowchart.svg) — the CB→DFB decision flowchart |
-| **Anyone** who needs the concepts / API reference | [`ai/shared/migration_guide.md`](ai/shared/migration_guide.md) | — |
+| **An AI** who needs the concepts / API reference | [`ai/shared/migration_guide.md`](ai/shared/migration_guide.md) | — |
 
 ## Directory map
 
@@ -40,7 +40,8 @@ forthcoming) — over a `shared/` pool of reference docs the phases draw on.
     - `workspace_setup.md` — environment / workspace setup.
     - `cb_dfb_api_whitelist.md` — the CB→DFB API-swap whitelist.
 - **[`human/`](human/)** — human-facing material.
-  - `user_orientation.md` — orientation for people.
+  - `READ_ME_FIRST.md` — orientation for people.
+  - `intro_to_metal_2.0.md` - Metal 2.0 overview
   - `CB-to-DFB-flowchart.svg` — the CB→DFB classification flowchart.
 - **`analyses/`** — reference tables (data, not procedures): op port-readiness, the
   TensorAccessor 3rd-arg taxonomy, pre-port-issue sweep results. These are *decaying
