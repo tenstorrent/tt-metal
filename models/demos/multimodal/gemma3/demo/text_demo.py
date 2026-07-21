@@ -113,9 +113,19 @@ def create_tt_model(
                 tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
             tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
-        state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => skip the HF from_pretrained host load and build from .tensorbin. The
+    # gemma3 text path builds the tt_transformers Transformer (on-device embedding), so the
+    # dataless placeholder applies as-is -- no hybrid needed (#45400). ModelArgs subclasses the
+    # tt_transformers ModelArgs, so weight_cache_is_complete/placeholder_state_dict are inherited.
+    # None=decide, placeholder=skip/DP-reuse, populated=reuse.
+    loaded_real_weights = False
+    if state_dict is None:
+        if not tt_model_args.dummy_weights and tt_model_args.weight_cache_is_complete(dtype):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+            state_dict = tt_model_args.placeholder_state_dict(dtype)
+        else:
+            state_dict = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
 
     model = Transformer(
         args=tt_model_args,
@@ -127,6 +137,9 @@ def create_tt_model(
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+
+    if loaded_real_weights and num_layers is None:
+        tt_model_args.mark_weight_cache_complete(dtype, state_dict)
 
     return tt_model_args, model, tt_kv_cache, state_dict
 
