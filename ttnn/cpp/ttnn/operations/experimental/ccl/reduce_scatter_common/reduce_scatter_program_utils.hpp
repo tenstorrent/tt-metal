@@ -41,6 +41,47 @@ uint32_t reduce_scatter_default_workers(
 uint32_t reduce_scatter_default_chunks_per_sync(
     ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity);
 
+// Sizing for the chunk-paged "contiguous" intermediate used by the ring reduce-scatter fast path.
+//
+// The contiguous path replaces scatter-writes to the intermediate with a single contiguous
+// fused-unicast write per fabric packet. To make each chunk's tiles land at contiguous
+// destination bytes, the intermediate is laid out as a row-major interleaved-DRAM UINT8 tensor
+// whose page (row) holds exactly one chunk (tile_granularity tiles). See
+// rs-contiguous-interm-design for the addressing contract.
+struct RingIntermStagingParams {
+    bool use_contiguous;               // true => allocate/address the chunk-paged staging intermediate
+    uint32_t normalized_dim;           // canonical 4D scatter dim
+    uint32_t tile_granularity;         // tiles per chunk (compute/CB granularity)
+    uint32_t single_tile_bytes;        // bytes per tile
+    uint32_t interm_tiles_per_packet;  // max tiles carried in one fabric packet (payload / single_tile_bytes)
+    uint32_t chunks_per_channel;       // ceil(output_channel_num_pages / tile_granularity)
+    uint32_t total_chunks;             // ring_size * slice_C * chunks_per_channel (== staging num pages)
+    uint32_t page_bytes;               // tile_granularity * single_tile_bytes (staging row width, must be DRAM-aligned)
+};
+
+// Derives the contiguous-intermediate sizing from the input tensor + op parameters. Shared by
+// compute_output_specs (to size the staging tensor) and the ring program factory (to wire kernel
+// args) so both agree exactly. page_bytes must be a multiple of the device DRAM alignment (checked
+// by the program factory). The contiguous path applies to Ring + dim != 0 regardless of whether the
+// intermediate is internally allocated or a caller-provided persistent buffer.
+RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en);
+
+// Builds the TensorSpec for the contiguous chunk-paged staging intermediate (row-major UINT8,
+// interleaved DRAM, page = one chunk). Returns nullopt when the contiguous path does not apply.
+// Single source of truth shared by compute_output_specs and the python-exposed allocation helper, so
+// an internally allocated intermediate and a caller-provided persistent buffer are byte-identical.
+std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en);
+
 // Maps an ND tensor shape + dim to a canonical 4D (normalized_dim, C, B) representation.
 // Requires rank >= 3.
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim);

@@ -10,6 +10,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -107,6 +108,80 @@ uint32_t reduce_scatter_default_chunks_per_sync(
         topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
     uint32_t total_chunks = std::max(num_tiles_to_process_per_slice / tile_granularity / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
+}
+
+RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto& shape = input_tensor.padded_shape();
+
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (shape.rank() == 2) ? reduce_scatter_map_2d_to_4d(dim) : reduce_scatter_map_nd_to_4d(shape, dim);
+
+    // Only the batch/channel divisions affect output_channel_num_pages (per-channel tile count); the
+    // Ht/Wt scatter splits are absorbed into that count and don't need to be tracked separately.
+    uint32_t slice_B = input_tensor_B, slice_C = input_tensor_C;
+    if (normalized_dim == 0) {
+        slice_B /= ring_size;
+    } else if (normalized_dim == 1) {
+        slice_C /= ring_size;
+    }
+
+    const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t num_pages_per_packet = packet_size_bytes / single_tile_bytes;
+    const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
+    const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
+    const uint32_t tile_granularity = std::min(4u * num_tiles_to_write_per_packet, max_dst_size);
+
+    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t output_num_pages = input_num_pages / ring_size;
+    const uint32_t output_batch_num_pages = output_num_pages / slice_B;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
+
+    const uint32_t chunks_per_channel = (output_channel_num_pages + tile_granularity - 1) / tile_granularity;
+    const uint32_t total_chunks = ring_size * slice_C * chunks_per_channel;
+    const uint32_t page_bytes = tile_granularity * single_tile_bytes;
+
+    // The contiguous fast path covers the ring topology on dims 1/2/3 (dim 0 uses distinct kernels).
+    // It applies whether the intermediate is internally allocated or a caller-provided persistent
+    // buffer; persistent callers must allocate the buffer via reduce_scatter_ring_interm_staging_spec.
+    const bool use_contiguous = topology == ttnn::ccl::Topology::Ring && normalized_dim != 0;
+
+    return RingIntermStagingParams{
+        use_contiguous,
+        normalized_dim,
+        tile_granularity,
+        single_tile_bytes,
+        num_pages_per_packet,
+        chunks_per_channel,
+        total_chunks,
+        page_bytes};
+}
+
+std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto params =
+        reduce_scatter_ring_interm_staging_params(input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (!params.use_contiguous) {
+        return std::nullopt;
+    }
+    // Opaque byte-staging: row-major UINT8, page (row) = one chunk (page_bytes). Interleaved DRAM so
+    // chunks spread across banks. UINT8 makes page bytes == width with no element-size divisibility
+    // constraint; page_bytes is DRAM-aligned (asserted in the program factory).
+    return ttnn::TensorSpec(
+        ttnn::Shape({params.total_chunks, params.page_bytes}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT8,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim) {

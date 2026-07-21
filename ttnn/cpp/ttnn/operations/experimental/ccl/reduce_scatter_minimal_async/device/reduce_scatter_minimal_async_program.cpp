@@ -512,6 +512,28 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t cb_num_pages = 2 * tile_granularity;  // double buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
+    // Contiguous fast path: when enabled, the intermediate is a chunk-paged row-major staging tensor
+    // (allocated by compute_output_specs) and the writer sends whole chunks with fused-unicast writes
+    // instead of scatter. The sizing must match compute_output_specs exactly, so both derive it from the
+    // same helper. See rs-contiguous-interm-design.
+    const auto staging = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
+        input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    const bool use_contiguous_interm = staging.use_contiguous;
+    if (use_contiguous_interm) {
+        TT_FATAL(
+            staging.tile_granularity == tile_granularity,
+            "contiguous-interm tile_granularity mismatch: {} vs {}",
+            staging.tile_granularity,
+            tile_granularity);
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        TT_FATAL(
+            staging.page_bytes % dram_alignment == 0,
+            "contiguous-interm page bytes ({}) must be a multiple of DRAM alignment ({}); otherwise the "
+            "device page stride (aligned_page_size) would not match chunk_id*page_bytes addressing",
+            staging.page_bytes,
+            dram_alignment);
+    }
+
     // input_tensor from reader -> compute
     uint32_t input_cb_index = tt::CB::c_in0;
     CreateCircularBuffer(
@@ -598,6 +620,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Wt,
         fuse_op,
         normalized_dim);
+    if (use_contiguous_interm) {
+        reader_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+    }
 
     // Positional args: TensorAccessorArgs
     std::vector<uint32_t> reader_compile_args;
@@ -605,11 +630,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
-    std::string reader_kernel_path = normalized_dim == 0
-                                         ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                           "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_reader.cpp"
-                                         : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                           "device/kernels/ring_reduce_scatter_minimal_async_reader.cpp";
+    std::string reader_kernel_path =
+        normalized_dim == 0     ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                  "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_reader.cpp"
+        : use_contiguous_interm ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                  "device/kernels/ring_contig_reduce_scatter_minimal_async_reader.cpp"
+                                : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                  "device/kernels/ring_reduce_scatter_minimal_async_reader.cpp";
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -638,6 +665,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Ht,
         slice_Wt,
         normalized_dim);
+    if (use_contiguous_interm) {
+        writer_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+        writer_named_compile_args["interm_tiles_per_packet"] = staging.interm_tiles_per_packet;
+    }
 
     // Positional args: routing info, TensorAccessorArgs. The V2 fabric mux client needs no worker-side
     // compile-time args (the device-side FabricMuxV2Sender is built entirely from runtime args).
@@ -650,11 +681,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
-    std::string writer_kernel_path = normalized_dim == 0
-                                         ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                           "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_writer.cpp"
-                                         : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                           "device/kernels/ring_reduce_scatter_minimal_async_writer.cpp";
+    std::string writer_kernel_path =
+        normalized_dim == 0     ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                  "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_writer.cpp"
+        : use_contiguous_interm ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                  "device/kernels/ring_contig_reduce_scatter_minimal_async_writer.cpp"
+                                : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                  "device/kernels/ring_reduce_scatter_minimal_async_writer.cpp";
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
