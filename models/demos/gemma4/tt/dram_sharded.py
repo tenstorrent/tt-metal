@@ -18,8 +18,15 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 TILE_SIZE = 32
+# P150 Blackhole DRAM bank count. Wormhole meshes differ — can_dram_shard is
+# BH-only so this constant is never applied on WH (wrong bank count → garbage).
 DRAM_CORES = 8
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
+# BH QuietBox / P150 usable L1 for statically allocated CBs.
+_L1_MAX_BYTES = 1_572_864
+_L1_HEADROOM_BYTES = 64_000
+# Cap decode in0_block_w: unbounded divisors (e.g. 6) blow L1 on 31B gate_up bf16.
+_DECODE_IN0_BLOCK_W_MAX = 2
 
 
 def _roundup(a, b):
@@ -103,7 +110,7 @@ def decode_progcfg(m, k, n):
     if k_tiles_per_core == 0:
         k_tiles_per_core = k_tiles
         num_cores = 1
-    in0_block_w = _find_largest_divisor(k_tiles_per_core)
+    in0_block_w = _find_largest_divisor(k_tiles_per_core, max_div=_DECODE_IN0_BLOCK_W_MAX)
     per_core_N = n_tiles // num_cores if n_tiles >= num_cores else 1
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w,
@@ -127,12 +134,38 @@ def activation_memcfg(k):
     )
 
 
-def can_dram_shard(k, n):
-    """True if a [k, n] weight shard factors cleanly for the DRAM-sharded path.
+def _tile_size_bytes(dtype=None):
+    """Approximate single-tile footprint for L1 CB budgeting."""
+    if dtype in (ttnn.bfloat8_b, getattr(ttnn, "bfloat4_b", None)):
+        return 1088
+    return 2048  # bfloat16 / unknown — conservative
 
-    Guards against grid/divisibility asserts so callers can safely fall back to
-    an interleaved weight for shapes that don't fit.
+
+def _estimate_decode_l1_bytes(k, n, dtype=None):
+    """Rough static-CB estimate for the DRAM-sharded decode kernel (in1-dominated)."""
+    k_tiles = k // TILE_SIZE
+    n_padded = _roundup(n, TILE_SIZE * DRAM_CORES)
+    n_tiles = n_padded // TILE_SIZE
+    rows, cols = _find_grid(k_tiles)
+    num_cores = rows * cols
+    k_tiles_per_core = max(1, k_tiles // num_cores)
+    in0_block_w = _find_largest_divisor(k_tiles_per_core, max_div=_DECODE_IN0_BLOCK_W_MAX)
+    tile_aligned = _roundup(_tile_size_bytes(dtype), 64)
+    # in1 triple-buffer × padded-N/DRAM_CORES × in0_block_w (factory layout).
+    in1 = math.ceil(n_tiles / DRAM_CORES) * in0_block_w * 3 * tile_aligned
+    # in0 / out / interm / reshard overhead (order-of-magnitude pad).
+    return in1 + 200_000
+
+
+def can_dram_shard(k, n, dtype=None):
+    """True if a [k, n] weight shard is safe for the DRAM-sharded decode path.
+
+    Blackhole-only: ``DRAM_CORES`` matches P150; Wormhole bank counts differ and
+    produce garbage (CI PCC ~0). Also rejects shapes that would overflow L1 CBs
+    (e.g. 31B fused gate_up @ TP=4 with bf16).
     """
+    if not is_blackhole():
+        return False
     if k % TILE_SIZE != 0 or n <= 0:
         return False
     try:
@@ -141,7 +174,11 @@ def can_dram_shard(k, n):
         return False
     num_cores = rows * cols
     # Activation width-shard needs k evenly split across the core grid.
-    return (k // TILE_SIZE) % num_cores == 0 and (k // num_cores) % TILE_SIZE == 0
+    if (k // TILE_SIZE) % num_cores != 0 or (k // num_cores) % TILE_SIZE != 0:
+        return False
+    if _estimate_decode_l1_bytes(k, n, dtype) > _L1_MAX_BYTES - _L1_HEADROOM_BYTES:
+        return False
+    return True
 
 
 def _get_out_subblock_w(per_core_n, out_subblock_h):
