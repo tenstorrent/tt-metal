@@ -11,9 +11,9 @@ message FactorySystemDescriptor {
         uint32 rack = 4;
         uint32 shelf_u = 5;
         string motherboard = 6;
-        // Full instance path of this host in the cabling descriptor's resolved graph,
-        // slash-delimited from the root (e.g. "bh_galaxy_sp_0/bh_galaxy_node_0/node_0").
-        string instance_path = 7;
+        // Instance path segments from the root to this host, e.g.
+        // ["bh_galaxy_sp_0", "bh_galaxy_node_0", "node_0"].
+        repeated string instance_path = 7;
     }
 
     message BoardLocationType {

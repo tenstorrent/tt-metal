@@ -19,21 +19,21 @@
 namespace tt::scaleout_tools {
 namespace {
 
+using ::testing::_;
 using ::testing::Each;
 using ::testing::ElementsAre;
-using ::testing::StartsWith;
 
 constexpr std::string_view kCabling = "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto";
 constexpr std::string_view kDeploy = "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto";
 
 CablingGenerator make_gen() { return CablingGenerator(std::string(kCabling), std::string(kDeploy)); }
 
-// FSD instance_path for each host, indexed by host_id.
-std::vector<std::string> instance_paths(const CablingGenerator& gen) {
+// FSD instance_path segments for each host, indexed by host_id.
+std::vector<std::vector<std::string>> instance_paths(const CablingGenerator& gen) {
     auto fsd = gen.generate_factory_system_descriptor();
-    std::vector<std::string> paths;
+    std::vector<std::vector<std::string>> paths;
     for (const auto& host : fsd.hosts()) {
-        paths.push_back(host.instance_path());
+        paths.emplace_back(host.instance_path().begin(), host.instance_path().end());
     }
     return paths;
 }
@@ -83,8 +83,8 @@ TEST(InstanceFilterTest, BaselineUnfiltered) {
     EXPECT_EQ(gen.get_deployment_hosts().size(), 16u);
     auto paths = instance_paths(gen);
     ASSERT_EQ(paths.size(), 16u);
-    EXPECT_EQ(paths.front(), "superpod1/node1");
-    EXPECT_EQ(paths.back(), "superpod4/node4");
+    EXPECT_THAT(paths.front(), ElementsAre("superpod1", "node1"));
+    EXPECT_THAT(paths.back(), ElementsAre("superpod4", "node4"));
     EXPECT_EQ(cross_host_pairs(gen).size(), 30u);
     EXPECT_EQ(max_referenced_host_id(gen), 15u);
 }
@@ -102,14 +102,19 @@ TEST(InstanceFilterTest, IncludeSubtreeSelectsAllDescendants) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod1"}}, {});
     EXPECT_THAT(
-        instance_paths(gen), ElementsAre("superpod1/node1", "superpod1/node2", "superpod1/node3", "superpod1/node4"));
+        instance_paths(gen),
+        ElementsAre(
+            ElementsAre("superpod1", "node1"),
+            ElementsAre("superpod1", "node2"),
+            ElementsAre("superpod1", "node3"),
+            ElementsAre("superpod1", "node4")));
     EXPECT_EQ(cross_host_pairs(gen).size(), 6u);  // K4 intra-superpod; inter-superpod edges dropped
 }
 
 TEST(InstanceFilterTest, IncludeExactLeafPathSelectsOneNode) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod2", "node3"}}, {});
-    EXPECT_THAT(instance_paths(gen), ElementsAre("superpod2/node3"));
+    EXPECT_THAT(instance_paths(gen), ElementsAre(ElementsAre("superpod2", "node3")));
     EXPECT_TRUE(cross_host_pairs(gen).empty());  // no surviving inter-node edges
 }
 
@@ -121,7 +126,8 @@ TEST(InstanceFilterTest, RelativeExcludeDropsNameUnderEveryParent) {
     auto paths = instance_paths(gen);
     EXPECT_EQ(paths.size(), 12u);  // node1 removed from each of the 4 superpods
     for (const auto& path : paths) {
-        EXPECT_FALSE(path.ends_with("node1")) << path;
+        ASSERT_FALSE(path.empty());
+        EXPECT_NE(path.back(), "node1");
     }
     EXPECT_EQ(cross_host_pairs(gen).size(), 15u);
     EXPECT_EQ(max_referenced_host_id(gen), 11u);
@@ -132,7 +138,7 @@ TEST(InstanceFilterTest, RelativeIncludeSelectsNameUnderEveryParent) {
     gen.apply_instance_filter({{"node1"}}, {});
     auto paths = instance_paths(gen);
     EXPECT_EQ(paths.size(), 4u);
-    EXPECT_THAT(paths, Each(::testing::EndsWith("node1")));
+    EXPECT_THAT(paths, Each(ElementsAre(_, "node1")));
     // Only the node1<->node1 inter-superpod edge has both endpoints in the selection.
     EXPECT_EQ(cross_host_pairs(gen).size(), 1u);
 }
@@ -142,7 +148,7 @@ TEST(InstanceFilterTest, RootLevelNameDoesNotMatchDeeperInstances) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod1"}}, {});
     EXPECT_EQ(gen.get_deployment_hosts().size(), 4u);
-    EXPECT_THAT(instance_paths(gen), Each(StartsWith("superpod1/")));
+    EXPECT_THAT(instance_paths(gen), Each(ElementsAre("superpod1", _)));
 }
 
 // ---- Include / exclude precedence ----
@@ -151,7 +157,7 @@ TEST(InstanceFilterTest, ExcludeOverridesInclude) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod1"}, {"superpod2"}}, {{"superpod2"}});
     EXPECT_EQ(gen.get_deployment_hosts().size(), 4u);
-    EXPECT_THAT(instance_paths(gen), Each(StartsWith("superpod1/")));
+    EXPECT_THAT(instance_paths(gen), Each(ElementsAre("superpod1", _)));
     EXPECT_EQ(cross_host_pairs(gen).size(), 6u);
 }
 
@@ -168,7 +174,12 @@ TEST(InstanceFilterTest, DenseHostIdRemapAndDeploymentSourcing) {
     EXPECT_THAT(
         hostnames(gen), ElementsAre(baseline_names[8], baseline_names[9], baseline_names[10], baseline_names[11]));
     EXPECT_THAT(
-        instance_paths(gen), ElementsAre("superpod3/node1", "superpod3/node2", "superpod3/node3", "superpod3/node4"));
+        instance_paths(gen),
+        ElementsAre(
+            ElementsAre("superpod3", "node1"),
+            ElementsAre("superpod3", "node2"),
+            ElementsAre("superpod3", "node3"),
+            ElementsAre("superpod3", "node4")));
 }
 
 TEST(InstanceFilterTest, ConnectionsRemappedIntoDenseRange) {

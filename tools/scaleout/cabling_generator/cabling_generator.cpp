@@ -1495,14 +1495,20 @@ const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connecti
     return chip_connections_;
 }
 
-// Collect host_id -> slash-delimited instance path by walking the resolved graph.
+// Collect host_id -> instance path segments (root..host) by walking the resolved graph.
 static void collect_instance_paths(
-    const ResolvedGraphInstance& graph, const std::string& prefix, std::map<HostId, std::string>& out) {
+    const ResolvedGraphInstance& graph,
+    const std::vector<std::string>& prefix,
+    std::map<HostId, std::vector<std::string>>& out) {
     for (const auto& [name, node] : graph.nodes) {
-        out[node.host_id] = prefix.empty() ? name : prefix + "/" + name;
+        auto path = prefix;
+        path.push_back(name);
+        out[node.host_id] = std::move(path);
     }
     for (const auto& [name, subgraph] : graph.subgraphs) {
-        collect_instance_paths(*subgraph, prefix.empty() ? name : prefix + "/" + name, out);
+        auto child_prefix = prefix;
+        child_prefix.push_back(name);
+        collect_instance_paths(*subgraph, child_prefix, out);
     }
 }
 
@@ -1511,7 +1517,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
     const std::vector<Host>& deployment_hosts,
     const std::map<HostId, Node*>& host_id_to_node,
     const std::vector<LogicalChannelConnection>& chip_connections,
-    const std::map<HostId, std::string>& host_id_to_instance_path) {
+    const std::map<HostId, std::vector<std::string>>& host_id_to_instance_path) {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id: the i-th entry is host_id i)
@@ -1525,7 +1531,9 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         host->set_shelf_u(deployment_host.shelf_u);
         host->set_motherboard(deployment_host.motherboard);
         if (auto it = host_id_to_instance_path.find(HostId(i)); it != host_id_to_instance_path.end()) {
-            host->set_instance_path(it->second);
+            for (const auto& segment : it->second) {
+                host->add_instance_path(segment);
+            }
         }
     }
 
@@ -1568,9 +1576,9 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
 
 // Method to emit textproto factory system descriptor
 void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
-    std::map<HostId, std::string> host_id_to_instance_path;
+    std::map<HostId, std::vector<std::string>> host_id_to_instance_path;
     if (root_instance_) {
-        collect_instance_paths(*root_instance_, "", host_id_to_instance_path);
+        collect_instance_paths(*root_instance_, {}, host_id_to_instance_path);
     }
     auto fsd = build_factory_system_descriptor(
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
@@ -1606,9 +1614,9 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
 
 // Method to generate factory system descriptor as protobuf object (uses shared helper)
 tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::generate_factory_system_descriptor() const {
-    std::map<HostId, std::string> host_id_to_instance_path;
+    std::map<HostId, std::vector<std::string>> host_id_to_instance_path;
     if (root_instance_) {
-        collect_instance_paths(*root_instance_, "", host_id_to_instance_path);
+        collect_instance_paths(*root_instance_, {}, host_id_to_instance_path);
     }
     return build_factory_system_descriptor(
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
