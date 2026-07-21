@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/int8.hpp>
 #include <tt-metalium/uint8.hpp>
@@ -82,6 +83,10 @@ struct TestConfig {
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
     bool fast_tilize = false;
+    // UNPACK_A tilize only: tilize the whole block with a nonzero input_tile_index per tile-row
+    // (via tilize_across_tile_rows.cpp) so the cross-tile-row stride in llk_unpack_tilize_block is
+    // exercised, instead of the default tilize.cpp which uses input_tile_index=0 + pop_front.
+    bool tilize_cross_tile_rows = false;
     std::uint32_t input_single_tile_size;
     std::uint32_t output_single_tile_size;
     // Block height in tiles:
@@ -244,6 +249,15 @@ void run_single_core_tilize_program(
         // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
         output_dfb_spec.unpack_face_geometry_metadata =
             tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+    } else if (
+        test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A &&
+        (test_config.num_faces_per_tile != 4 || test_config.face_r_dim != 16)) {
+        // Tiny/shortened-face tilize (e.g. 16x32, or face_r_dim < 16): the unpack/pack LLKs read the
+        // tile's face geometry from the CB metadata, so tag both the input and output buffers with it.
+        // Gate on either fewer faces or a shorter face row dim so shortened four-face tiles are caught too.
+        const auto fg = tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+        input_dfb_spec.unpack_face_geometry_metadata = fg;
+        output_dfb_spec.unpack_face_geometry_metadata = fg;
     }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
@@ -311,7 +325,9 @@ void run_single_core_tilize_program(
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
     } else if (is_unpack_a_tilize) {
-        compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
+        compute_kernel = test_config.tilize_cross_tile_rows
+                             ? "tests/tt_metal/tt_metal/test_kernels/compute/tilize_across_tile_rows.cpp"
+                             : "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
     } else {
         log_fatal(tt::LogTest, "run_single_core_tilize_program: unsupported config (UNPACK_A_B uses dedicated helper)");
     }
@@ -327,13 +343,13 @@ void run_single_core_tilize_program(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -652,13 +668,13 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -849,6 +865,34 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     }
 }
 
+// Exercises llk_unpack_tilize_block with a 16x32 tiny tile across multiple tile-rows, using a
+// nonzero input_tile_index (tilize_across_tile_rows.cpp) so the cross-tile-row stride is hit.
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    // 16x32 tiny tile = one face-row, TILE_WIDTH/FACE_WIDTH face-columns.
+    constexpr std::uint32_t num_faces = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes = num_faces * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // num_tiles_r >= 2 so the cross-tile-row stride in llk_unpack_tilize_block is exercised.
+    vector<vector<std::uint32_t>> num_tiles = {{2, 1}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool dst_full_sync_en : {false, true}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .tilize_cross_tile_rows = true,
+                .input_single_tile_size = tile_bytes,
+                .output_single_tile_size = tile_bytes,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .num_faces_per_tile = num_faces,
+                .face_r_dim = face_r_dim,
+                .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                .golden_function = ::unit_tests::compute::gold_standard_tilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
+    }
+}
+
 TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
@@ -1004,13 +1048,13 @@ static void run_quasar_tilize_untilize_test(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !dst_full_sync_en,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .double_buffer_dest = !dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{

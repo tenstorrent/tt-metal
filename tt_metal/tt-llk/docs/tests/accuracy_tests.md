@@ -14,12 +14,15 @@ These are ordinary pytest tests. Just set the device arch via `CHIP_ARCH`.
 The examples below use paths relative to `tests/python_tests/` and `CHIP_ARCH = wormhole`.
 
 ```bash
-# one op
-CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py -k Reciprocal -s
+# one op (--op selects by MathOperation name; repeatable for several)
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --op=Reciprocal -s
 
 # runs every op in the given test file
 CHIP_ARCH=wormhole pytest accuracy/test_examples_accuracy.py -s
 ```
+
+`--op` takes a `MathOperation` name (case-insensitive, exact), is repeatable
+(`--op=Exp --op=Log`), and composes with `-k`/`-m`.
 
 ## Output
 
@@ -36,7 +39,7 @@ source of truth. Parquet isn't human-readable, so there are two ways to get CSV:
 
 ```bash
 # 1. Write CSV directly instead of Parquet:
-CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py -k Reciprocal --csv
+CHIP_ARCH=wormhole pytest accuracy/test_sfpu_accuracy.py --op=Reciprocal --csv
 
 # 2. Convert an existing Parquet file to CSV (no hardware run needed):
 python -m accuracy.to_csv accuracy/_csv_output/wh/exp.parquet   # one file

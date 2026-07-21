@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
+#include "ckernel.h"
 #include "noc_parameters.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -176,6 +177,16 @@ void kernel_main() {
             auto p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
+
+            // Force both L1 stores to be processed into their L1 banks before we signal the sender,
+            // which immediately NoC-reads these exact addresses back. Without this, the baby-RISC
+            // store can still be in flight when the sender's read-back reaches the L1 bank -> the
+            // sender aggregates a stale partial. A blocking load of the same address orders after the
+            // store and stalls the pipeline until the store has landed (see ckernel.h load_blocking /
+            // MemoryOrdering.md). Both addresses are drained because they lie in different L1 words
+            // (single_tile_size_bytes apart) and may map to different L1 banks.
+            ckernel::load_blocking(p_global_means);
+            ckernel::load_blocking(p_global_vars);
 
             // Signal to sender that our partial data is ready
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);

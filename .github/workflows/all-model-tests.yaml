@@ -46,7 +46,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
+        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy]"
         required: false
         type: string
         default: "all"
@@ -94,7 +94,7 @@ permissions:
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
       has-t1-unit: ${{ steps.check.outputs.has-t1-unit }}
@@ -118,9 +118,20 @@ jobs:
         id: resolve-skus
         run: |
           WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
-          BH_SKUS="bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          BH_SKUS="bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
+          # NOTE: exabox multihost SKUs (bh_sc1/bh_sc4/bh_sc4-blitz/bh_sc4-mgd/bh_sc16) are intentionally NOT
+          # dispatchable from all-model-tests yet — exabox model-unit tests are dispatched via the
+          # standalone models-t1/t2/t3-unit-tests workflows (which grant ttop OIDC on their caller
+          # jobs). TODO: to dispatch exabox jobs here alongside everything else, we must:
+          #   1. add the exabox SKUs to VALID_SKUS below (keep them out of ALL_SKUS/bh_all so `all`
+          #      never auto-allocates scarce exabox hardware);
+          #   2. grant `id-token: write` on the t1/t2/t3-unit-tests caller jobs (ttop OIDC);
+          #   3. fix run reconciliation — models-unit-tests-impl exposes multihost legs in a separate
+          #      `matrix_multihost` output that the "Aggregate child matrices" step here does not
+          #      union, and the multihost job emits no per-leg summary artifact; without both,
+          #      dispatched multihost legs would be misreported as INFRA_FAILURE.
+          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p150b_civ2 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -137,7 +148,7 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
+                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy]"
                 exit 1
               fi
               if [[ "$item" == "wh_all" ]]; then
