@@ -417,7 +417,7 @@ void kernel_main() {
         WAIT(cb_q, ck);
         WAIT(cb_k, ck);
         WAIT(cb_v, cv);
-        WAIT(cb_g, Ct);
+        WAIT(cb_g, ck);  // KDA: g is [C,K] = ck tiles (was scalar Ct)
         WAIT(cb_beta, Ct);
 
         // ---- OPT-B: in-kernel L2-norm of q,k over K (fold q's scale). Consumes the raw reader q/k

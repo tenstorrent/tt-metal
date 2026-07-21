@@ -221,7 +221,7 @@ tt::tt_metal::ProgramDescriptor ChunkKdaPrepProgramFactory::create_descriptor(
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, cv);
+    add_cb(pcb::u, cv < 3 ? 3 : cv);  // reused as cb_mask (3 WY-inverse quadrant tiles); needs >=3 (V<96 -> cv<3)
     add_cb(pcb::w, ck);
     add_cb(pcb::qdecay, ck);
     add_cb(pcb::intra, cc);
