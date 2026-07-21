@@ -8,6 +8,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/format.h>
 #include <mesh_coord.hpp>
+#include <tt-metalium/mesh_coord_error.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -72,12 +73,10 @@ int32_t normalize_index(int32_t index, int32_t size) {
     if (normalized_index < 0) {
         normalized_index += size;
     }
-    TT_FATAL(
-        normalized_index >= 0 && normalized_index < size,
-        "Index out of bounds: {} not in [{}, {})",
-        index,
-        -size,
-        size);
+    if (!(normalized_index >= 0 && normalized_index < size)) {
+        throw tt::tt_metal::MeshCoordIndexOutOfBounds(
+            fmt::format("Index out of bounds: {} not in [{}, {})", index, -size, size));
+    }
 
     return normalized_index;
 }

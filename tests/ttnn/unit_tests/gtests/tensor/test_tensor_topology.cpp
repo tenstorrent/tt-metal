@@ -12,11 +12,11 @@
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
+#include <tt-metalium/mesh_coord_error.hpp>
 
 namespace ttnn::distributed::test {
 
-using ::testing::HasSubstr;
-using ::testing::ThrowsMessage;
+using ::testing::Throws;
 using tt::tt_metal::distributed::MeshMapperConfig;
 
 using TensorTopologyTest = GenericMeshDeviceFixture;
@@ -53,7 +53,7 @@ TEST_F(TensorTopologyTest, SingleDevice) {
     // Check that get_neighbor throws for invalid dimension
     EXPECT_THAT(
         std::function<void()>([&tensor_topology, &coord]() { tensor_topology.get_neighbor(coord, 0, 1); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Index out of bounds: 1 not in [-1, 1)")));
+        Throws<tt::tt_metal::MeshCoordIndexOutOfBounds>());
 
     // Check that get_next_neighbor and get_prev_neighbor return the correct neighbor coordinate
     EXPECT_EQ(tensor_topology.get_next_neighbor(coord, 0), coord);
