@@ -10,21 +10,34 @@ from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
-def generate_reference_outputs(total_length, output_file, model_name):
+def generate_reference_outputs(total_length, output_file, model_name, trust_remote_code=False):
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
     # Load model and tokenizer from HuggingFace
-    config = AutoConfig.from_pretrained(model_name)
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
 
     # Qwen only: add rope scaling to the config
     # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
     if "Qwen" in model_name:
         config.rope_scaling = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name, config=config, device_map="auto")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+
+    # Text LLMs load as AutoModelForCausalLM. Multimodal models (e.g. Janus) do not,
+    # but their conditional-generation class runs a text-only forward (no pixel_values)
+    # and still returns vocab .logits from the LM head — which is all we score here.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, config=config, device_map="auto", trust_remote_code=trust_remote_code
+        )
+    except ValueError:
+        from transformers import AutoModelForImageTextToText
+
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_name, config=config, device_map="auto", trust_remote_code=trust_remote_code
+        )
     model.eval()
 
     # Load the book text
@@ -140,9 +153,19 @@ def main():
     parser.add_argument(
         "--model", type=str, required=True, help="HuggingFace model name (e.g., 'meta-llama/Llama-3.1-8B-Instruct')"
     )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Pass trust_remote_code=True to HF loaders (auto-enabled for Janus).",
+    )
     args = parser.parse_args()
 
-    generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, model_name=args.model)
+    generate_reference_outputs(
+        total_length=args.total_length,
+        output_file=args.output_file,
+        model_name=args.model,
+        trust_remote_code=args.trust_remote_code,
+    )
 
 
 if __name__ == "__main__":
