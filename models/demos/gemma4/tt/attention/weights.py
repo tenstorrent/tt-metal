@@ -166,7 +166,7 @@ def load_attention_weights(
     qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
     oproj_cache_ws = (oproj_cache + ".ws") if oproj_cache else None
 
-    if dram_shard and can_dram_shard(hidden_size, qkv_n):
+    if dram_shard and can_dram_shard(hidden_size, qkv_n, dtype=weight_dtype):
         wqkv = DramShardedLinear(
             qkv, mesh_device, col_mapper, k=hidden_size, n=qkv_n, dtype=weight_dtype, cache_file_name=qkv_cache_ws
         )
@@ -181,7 +181,7 @@ def load_attention_weights(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n):
+    if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
         o_proj = DramShardedLinear(
             o_w, mesh_device, row_mapper, k=oproj_k, n=oproj_n, dtype=weight_dtype, cache_file_name=oproj_cache_ws
         )
