@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,86 +11,72 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>  // for tt::tt_fabric::Topology
 #include "all_gather.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 
-// Explicit cast to resolve ambiguous overload with deprecated function.
-// Delete this once the deprecated function is deleted.
-using AllGatherFn = ttnn::Tensor (*)(
-    const ttnn::Tensor&,
-    int32_t,
-    std::optional<uint32_t>,
-    const std::optional<ttnn::MemoryConfig>&,
-    const std::optional<ttnn::Tensor>&,
-    const std::optional<tt::tt_metal::SubDeviceId>&,
-    const std::optional<CoreRangeSet>&,
-    std::optional<uint32_t>,
-    std::optional<tt::tt_fabric::Topology>,
-    std::optional<uint32_t>,
-    std::optional<uint32_t>,
-    std::optional<uint32_t>,
-    bool);
-
 void bind_all_gather(nb::module_& mod) {
-    const auto* doc = R"doc(
-        Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified :attr:`dim`. If the :attr:`input_tensor` has unaligned row-major pages or padded tiles on the gather :attr:`dim`, a slower composite all-gather implementation is used.
+    const auto* doc =
+        R"doc(
+        All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis, resulting in identical tensor shards across all devices along the cluster axis. If it is not specified, then we gather across all devices in the mesh. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified `dim`. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis. When the layout is row-major or we have tile padding on the gather dim, we use the composite all-gather implementation that falls back to all-broadcast.
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor to be gathered.
-            dim (int): Dimension along which to concatenate.
+            dim (int): Dimension along which to gather.
 
         Keyword Args:
-            cluster_axis (int, optional): Axis on the 2D mesh device grid to gather along. Each of the non-cluster_axis dimensions perform independent all-gathers along the devices on the cluster_axis. Irrelevant for 1D mesh grids.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to the input tensor's memory config.
-            output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor, can improve performance if provided. This must be allocated before invoking any op to avoid races. Defaults to None (op allocates a new output tensor).
-            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores. Defaults to the first subdevice on the mesh device.
-            sub_core_grids (CoreRangeSet, optional): Restricts worker core selection to this sub-grid. Defaults to all cores on the chosen subdevice.
-            num_links (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
-            topology (ttnn.Topology, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
-            chunks_per_sync (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
-            num_workers_per_link (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
-            num_buffers_per_channel (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
-            use_l1_small_for_semaphores (bool, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
+            cluster_axis (int, optional): The axis on the mesh device to gather across. Defaults to `None`.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
+            num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
+            topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+            chunks_per_sync (int, optional): Hyperparameter.
+            num_workers_per_link (int, optional): Hyperparameter.
+            num_buffers_per_channel (int, optional): Hyperparameter.
+            sub_core_grids (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
-            ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices in the mesh.
+            ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
         Supported dtypes and layouts:
+
             .. list-table::
                 :header-rows: 1
 
                 * - Dtypes
                   - Layouts
-                * - Any
+                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32
                   - TILE, ROW_MAJOR
 
+            All-gather is a data-movement collective and does not restrict the input dtype (e.g. UINT32 is supported and tested); the output preserves the input dtype. Input must be rank 2 or greater. Row-major inputs, and tiled inputs whose gather dim is not tile-aligned, are routed through the composite (all-broadcast based) implementation.
+
         Memory Support:
-            - Interleaved: DRAM and L1
-            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (DRAM and L1)
-            - Input and output memory configs are independent; any supported combination may be used.
+            - Interleaved: DRAM and L1 (input and output)
+            - Sharded input: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED; a BLOCK_SHARDED input must be in L1 (DRAM block sharding is rejected), the others may be in DRAM or L1.
+            - Sharded output: the output memory config may differ from the input's and is not subject to the input BLOCK_SHARDED/DRAM restriction.
         )doc";
 
     ttnn::bind_function<"all_gather">(
         mod,
         doc,
-        static_cast<AllGatherFn>(&ttnn::all_gather),
+        &ttnn::all_gather,
         nb::arg("input_tensor").noconvert(),
         nb::arg("dim"),
         nb::kw_only(),
         nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("subdevice_id") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none(),
-        // below args are deprecated
         nb::arg("num_links") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("chunks_per_sync") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
         nb::arg("use_l1_small_for_semaphores") = false);
 }
 

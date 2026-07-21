@@ -109,9 +109,10 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
     auto all_gathered_tensor = ttnn::all_gather(
         aggregated_tensor,
         /* dim */ 0,
-        /*cluster_axis=*/std::nullopt,
-        /*memory_config=*/std::nullopt,
-        /*persistent_output_tensor=*/aggregated_output_tensor);
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        aggregated_output_tensor);
 
     // Quiesce parent mesh after all gather
     mesh_device_->quiesce_devices();

@@ -86,7 +86,7 @@ jobs:
             chips_per_container: 8
             container_prefix: tray
             mesh_descriptor: t3k_mesh_graph_descriptor.textproto
-            test_path: tests/nightly/t3000/ccl/test_all_gather.py
+            test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
             # Exclude fabric_ring tests for tray: t3k tray topology and mesh descriptor are mismatched, causing these cases to fail in CI.
             test_args: "-k 'not fabric_ring'"
           # Blackhole configuration
@@ -118,7 +118,7 @@ jobs:
             # ("Device N init: failed to initialize FW") due to a BH-specific firmware layer issue,
             # not a tt-metal issue. Since this CI only needs one representative test to verify
             # inter-container isolation, we narrow down to a single test combination to avoid the problem.
-            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
+            test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and 2_links and not DRAM'"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}

@@ -18,8 +18,7 @@ set(TTNN_OP_CCL_SRCS
     all_broadcast/device/all_broadcast_program_factory.cpp
     all_gather/all_gather.cpp
     all_gather/device/all_gather_device_operation.cpp
-    all_gather/device/all_gather_multicast_factory.cpp
-    all_gather/device/all_gather_unicast_factory.cpp
+    all_gather/device/all_gather_program_factory.cpp
     all_reduce/all_reduce.cpp
     all_to_all_combine/all_to_all_combine.cpp
     all_to_all_combine/device/all_to_all_combine_device_operation.cpp
@@ -43,10 +42,6 @@ set(TTNN_OP_CCL_SRCS
 
 set(TTNN_OP_CCL_API_HEADERS
     all_gather/all_gather.hpp
-    all_gather/device/all_gather_device_operation.hpp
-    all_gather/device/all_gather_device_operation_types.hpp
-    all_gather/device/all_gather_multicast_factory.hpp
-    all_gather/device/all_gather_unicast_factory.hpp
     all_reduce/all_reduce.hpp
     reduce_scatter/reduce_scatter.hpp
     all_broadcast/device/all_broadcast_device_operation_types.hpp

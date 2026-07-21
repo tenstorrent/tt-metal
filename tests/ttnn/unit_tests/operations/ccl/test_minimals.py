@@ -37,8 +37,10 @@ from conftest import is_6u
 
 def run_allgather_only_with_trace(
     mesh_device,
+    all_gather_topology,
     input_tensor_mesh,
     dim,
+    num_links,
     output_mem_config,
     ccl_semaphore_handles,
     barrier_semaphore_handles,
@@ -50,11 +52,15 @@ def run_allgather_only_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.all_gather(
+    tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
+        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+        num_links=num_links,
         memory_config=output_mem_config,
+        topology=all_gather_topology,
         subdevice_id=subdevice_id,
+        barrier_semaphore=barrier_semaphore_handles[0] if use_barrier else None,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -63,22 +69,30 @@ def run_allgather_only_with_trace(
     if warmup_iters > 0:
         trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(warmup_iters):
-            tt_out_tensor = ttnn.all_gather(
+            tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
+                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                num_links=num_links,
                 memory_config=output_mem_config,
+                topology=all_gather_topology,
                 subdevice_id=subdevice_id,
+                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
         ttnn.synchronize_device(mesh_device)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.all_gather(
+        tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
+            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+            num_links=num_links,
             memory_config=output_mem_config,
+            topology=all_gather_topology,
             subdevice_id=subdevice_id,
+            barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
         )
         if i != num_iter - 1:
             tt_out_tensor.deallocate(True)
@@ -109,11 +123,13 @@ def run_all_gather_impl(
     num_devices,
     output_shape,
     dim,
+    num_links,
     input_dtype,
     layout,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
+    all_gather_topology,
     num_iters=1,
     trace_mode=False,
     output_shard_shape=None,
@@ -237,8 +253,10 @@ def run_all_gather_impl(
     if trace_mode:
         tt_out_tensor = run_allgather_only_with_trace(
             mesh_device,
+            all_gather_topology,
             input_tensor_mesh_list[0],
             dim,
+            num_links,
             output_mem_config,
             ccl_semaphore_handles=ccl_semaphore_handles,
             barrier_semaphore_handles=barrier_semaphore_handles,
@@ -250,11 +268,15 @@ def run_all_gather_impl(
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
-            tt_out_tensor = ttnn.all_gather(
+            tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh_list[i],
                 dim,
+                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                num_links=num_links,
                 memory_config=output_mem_config,
+                topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -344,6 +366,7 @@ def run_all_gather_impl(
         ),
     ],
 )
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
@@ -360,6 +383,7 @@ def test_all_gather_only(
     num_devices,
     output_shape,
     dim,
+    num_links,
     input_dtype,
     layout,
     num_iters,
@@ -376,11 +400,13 @@ def test_all_gather_only(
         num_devices,
         output_shape,
         dim,
+        num_links,
         input_dtype,
         layout,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
+        all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
@@ -407,6 +433,7 @@ def test_all_gather_only(
         ),
     ],
 )
+@pytest.mark.parametrize("num_links", [3])
 @pytest.mark.parametrize(
     "input_dtype",
     [
@@ -430,6 +457,7 @@ def test_bh_trace_ag(
     num_devices,
     output_shape,
     dim,
+    num_links,
     trace_mode,
     input_dtype,
     layout,
@@ -450,12 +478,14 @@ def test_bh_trace_ag(
         num_devices,
         output_shape,
         dim,
+        num_links,
         input_dtype,
         layout,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
         use_barrier=True,
+        all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,

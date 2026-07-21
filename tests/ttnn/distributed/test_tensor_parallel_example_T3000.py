@@ -23,8 +23,9 @@ class TtFalconMLP:
         ff1_linear: ttnn.Tensor = ttnn.linear(x, self.dense_h_to_4h_weights)
         gelu = ttnn.gelu(ff1_linear)
 
-        # Invoke CCL Ring All-Gather on gelu before passing to ff2_linear.
-        gelu = ttnn.all_gather(gelu, dim=3)
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Invoke CCL Ring All-Gather on gelu before passing to ff2_linear
+        # gelu = ttnn.all_gather(gelu, dim=3, num_links=1)
 
         ff2_linear: ttnn.Tensor = ttnn.linear(gelu, self.dense_4h_to_h_weights)
 
@@ -32,11 +33,13 @@ class TtFalconMLP:
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-def test_tensor_parallel_falcon_mlp(mesh_device):
+def test_tensor_parallel_falcon_mlp():
     if ttnn.get_num_devices() < 8:
         pytest.skip()
+
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, 8),
+    )
 
     # Set PyTorch seed for reproducibility
     torch.manual_seed(0)
@@ -76,3 +79,5 @@ def test_tensor_parallel_falcon_mlp(mesh_device):
 
     with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=3)):
         assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
+
+    ttnn.close_mesh_device(mesh_device)

@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 
-from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
@@ -16,6 +16,7 @@ def ti_cond_skip(condition, reason):
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -65,24 +66,32 @@ def ti_cond_skip(condition, reason):
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, all_gather_topology",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
-    indirect=True,
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("chunks_per_sync", [20])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_linear_2D_nightly(
     bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
+    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
     enable_trace,
+    all_gather_topology,
     num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     cluster_axis,
 ):
     if cluster_axis == 0:
@@ -91,15 +100,21 @@ def test_all_gather_linear_2D_nightly(
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
+        num_devices,
         ag_output_shape,
         dim,
+        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -107,6 +122,7 @@ def test_all_gather_linear_2D_nightly(
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -148,24 +164,32 @@ def test_all_gather_linear_2D_nightly(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, all_gather_topology",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
-    indirect=True,
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("chunks_per_sync", [20])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_linear_4D_nightly(
     bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
+    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
     enable_trace,
+    all_gather_topology,
     num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     cluster_axis,
 ):
     if cluster_axis == 0:
@@ -174,15 +198,21 @@ def test_all_gather_linear_4D_nightly(
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
+        num_devices,
         ag_output_shape,
         dim,
+        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -190,6 +220,7 @@ def test_all_gather_linear_4D_nightly(
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout",
     [
@@ -230,23 +261,31 @@ def test_all_gather_linear_4D_nightly(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, all_gather_topology",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
-    indirect=True,
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("chunks_per_sync", [20])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_ring_nightly(
     bh_2d_mesh_device,
     ag_output_shape,
     dim,
+    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
     enable_trace,
+    all_gather_topology,
     num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     cluster_axis,
 ):
     num_devices = bh_2d_mesh_device.shape[cluster_axis]
@@ -256,15 +295,21 @@ def test_all_gather_ring_nightly(
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
+        num_devices,
         ag_output_shape,
         dim,
+        num_links,
         ag_input_dtype,
         layout,
         mem_config_input,
         mem_config_ag,
+        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

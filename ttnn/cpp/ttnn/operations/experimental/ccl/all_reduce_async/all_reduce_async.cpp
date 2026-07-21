@@ -408,7 +408,14 @@ ttnn::Tensor all_reduce_async(
             /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
-            scattered_tensor, dim, cluster_axis, out_memory_config, std::nullopt, worker_subdevice_id_opt);
+            scattered_tensor,
+            dim,
+            cluster_axis,
+            worker_subdevice_id_opt,
+            out_memory_config,
+            std::nullopt,
+            num_preferred_links,
+            topology_);
     }
     scattered_tensor.deallocate();
 

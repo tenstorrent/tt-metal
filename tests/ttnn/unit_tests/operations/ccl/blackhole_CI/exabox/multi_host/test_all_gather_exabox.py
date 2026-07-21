@@ -11,6 +11,7 @@ Tests cover:
 - Multiple fabric configs (FABRIC_1D, FABRIC_1D_RING) and topologies (Linear, Ring)
 - Both cluster axes (0 and 1)
 - DRAM and L1 memory configs
+- num_links variation (1 and 2 links for BH Galaxy)
 - bfloat16, bfloat8_b, and float32 dtypes
 """
 
@@ -80,7 +81,9 @@ def _run_all_gather_test(
     cluster_axis,
     buffer_type,
     dtype,
+    topology,
     enable_trace,
+    num_links=None,
 ):
     tt_input, torch_reference, output_mem_config = _get_tensors(
         input_shape, tuple(mesh_device.shape), dim, cluster_axis, buffer_type, dtype, ttnn.TILE_LAYOUT, mesh_device
@@ -88,8 +91,11 @@ def _run_all_gather_test(
 
     all_gather_kwargs = dict(
         cluster_axis=cluster_axis,
+        topology=topology,
         memory_config=output_mem_config,
     )
+    if num_links is not None:
+        all_gather_kwargs["num_links"] = num_links
 
     def run_op():
         return ttnn.all_gather(tt_input, dim, **all_gather_kwargs)
@@ -105,10 +111,12 @@ def _run_all_gather_test(
 FABRIC_TOPOLOGY_COMBOS = [
     pytest.param(
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+        ttnn.Topology.Linear,
         id="fabric_1d-linear",
     ),
     pytest.param(
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        ttnn.Topology.Ring,
         id="fabric_1d_ring-ring",
     ),
 ]
@@ -121,10 +129,11 @@ FABRIC_TOPOLOGY_COMBOS = [
 
 @pytest.mark.requires_device(["DUAL_BH"])
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, topology",
     [
         pytest.param(
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            ttnn.Topology.Linear,
             id="fabric_1d-linear",
         ),
     ],
@@ -133,6 +142,7 @@ FABRIC_TOPOLOGY_COMBOS = [
 @pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
@@ -146,12 +156,16 @@ def test_all_gather_16x4(
     mesh_device,
     cluster_axis,
     dim,
+    topology,
     enable_trace,
     input_shape,
     dtype,
     buffer_type,
+    num_links,
 ):
-    _run_all_gather_test(mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace)
+    _run_all_gather_test(
+        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, topology, enable_trace, num_links=num_links
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +175,14 @@ def test_all_gather_16x4(
 
 @pytest.mark.requires_device(["QUAD_BH"])
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, topology",
     FABRIC_TOPOLOGY_COMBOS,
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
@@ -181,9 +196,13 @@ def test_all_gather_32x4(
     mesh_device,
     cluster_axis,
     dim,
+    topology,
     enable_trace,
     input_shape,
     dtype,
     buffer_type,
+    num_links,
 ):
-    _run_all_gather_test(mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace)
+    _run_all_gather_test(
+        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, topology, enable_trace, num_links=num_links
+    )

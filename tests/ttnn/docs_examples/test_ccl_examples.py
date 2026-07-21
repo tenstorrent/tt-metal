@@ -24,19 +24,11 @@ from loguru import logger
 
 import ttnn
 
-
-def _fabric_router(max_packet_payload_size_bytes):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_packet_payload_size_bytes
-    return config
-
-
 FABRIC_1D = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}]
-FABRIC_1D_4K_PACKET = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": _fabric_router(4096)}]
 FABRIC_2D = [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}]
 
 
-@pytest.mark.parametrize("device_params", FABRIC_1D_4K_PACKET, indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_all_gather(mesh_device):
     torch_input = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)

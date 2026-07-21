@@ -12,8 +12,8 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("ag_output_shape", [[1, 1, 256, 256]])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("ag_output_shape", [[1, 1, 128, 128]])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
@@ -28,6 +28,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 )
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("use_semaphore_free_all_gather_impl", [True])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -35,11 +36,11 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-def test_all_gather_2d_fabric_linear(
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0_row", "axis_1_col"])
+def test_all_gather_2d_fabric_turning(
     bh_2d_mesh_device,
     ag_output_shape,
     dim,
@@ -54,18 +55,33 @@ def test_all_gather_2d_fabric_linear(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
+    use_semaphore_free_all_gather_impl,
     cluster_axis,
 ):
-    # On bh-llmbox (4,1 mesh), use 2 devices to avoid fabric routing issues
-    # On other machines, use all devices in first dimension
-    if bh_2d_mesh_device.shape == ttnn.MeshShape(4, 1):
-        num_devices = 2
-    else:
-        num_devices = bh_2d_mesh_device.shape[0]
-    cluster_axis = 0
+    """
+    Turning test that exercises FABRIC_2D routing along both cluster_axis 0 (row) and 1 (column).
+    This tests the 2D fabric's ability to route data in both dimensions, requiring "turning corners"
+    in the routing network - behavior that is unique to FABRIC_2D and cannot be tested with FABRIC_1D.
+    """
+    # Determine number of devices and create appropriate submesh based on cluster_axis
+    mesh_shape = bh_2d_mesh_device.shape
 
-    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    # For axis 0: use devices along first dimension (row)
+    # For axis 1: use devices along second dimension (column)
+    if cluster_axis == 0:
+        # On bh-llmbox (4,1 mesh), use 2 devices to avoid fabric routing issues
+        if mesh_shape == ttnn.MeshShape(4, 1):
+            num_devices = 2
+        else:
+            # On other machines, use all devices in first dimension
+            num_devices = mesh_shape[0]
+        submesh_shape = ttnn.MeshShape(num_devices, 1)
+    else:  # cluster_axis == 1
+        num_devices = mesh_shape[1]
+        submesh_shape = ttnn.MeshShape(1, num_devices)
+
+    validate_test(num_devices, ttnn.Topology.Linear, mesh_shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(submesh_shape)
 
     run_all_gather_impl(
         submesh_device,
@@ -85,4 +101,5 @@ def test_all_gather_2d_fabric_linear(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
+        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )

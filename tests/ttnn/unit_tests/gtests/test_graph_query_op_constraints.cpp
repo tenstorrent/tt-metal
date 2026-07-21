@@ -1151,7 +1151,12 @@ TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
         this->device_,
         dist_input,
         /*dim=*/3,
-        /*cluster_axis=*/std::optional<uint32_t>(1));
+        /*cluster_axis=*/std::optional<uint32_t>(1),
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*optional_output_tensor=*/std::optional<Tensor>{},
+        /*num_links=*/std::optional<uint32_t>(1),
+        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
 
     if (query.status == ttnn::graph::ExecutionStatus::Error) {
         GTEST_LOG_(INFO) << "all_gather query error: " << query.error_message.value_or("unknown");

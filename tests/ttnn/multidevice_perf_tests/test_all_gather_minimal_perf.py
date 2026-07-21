@@ -22,16 +22,15 @@ def test_all_gather_minimal_perf_t3000(warmup_iters, arch_type, perf_target_avg_
     step_name = "all_gather_minimal_T3K_perf"
 
     subdir = "ag_perf"
-    file = "pytest tests/nightly/t3000/ccl/test_all_gather.py"
+    file = "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
 
-    # Target the coalesced production ttnn.all_gather DiT-shape perf case on T3K (ring fabric).
-    command = file + '::test_all_gather -k "dit_shape and perf and fabric_ring"'
+    # Target a single minimal all_gather case on T3K with specific ids
+    command = (
+        file + '::test_all_gather_async -k "dit_shape and perf and barrier_without_persistent_buffers and fabric_ring"'
+    )
 
     cols = ["DEVICE KERNEL"]
-    # Production ttnn.all_gather emits the AllGather device op (not AllGatherAsync).
-    # NOTE: op_name and the perf_target_avg window above are inherited from the old
-    # experimental op and must be confirmed/recalibrated against the production op on T3K hardware.
-    op_name = "AllGather"
+    op_name = "AllGatherAsync"
 
     profiler.start("run")
     profiler.start(step_name)
