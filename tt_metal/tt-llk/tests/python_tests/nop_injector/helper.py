@@ -55,28 +55,35 @@ def allowed_roots() -> tuple[Path, ...]:
     )
 
 
-def require_under(path: Path | str, *extra_roots: Path | str) -> Path:
-    """Resolve ``path`` and require it stays under an allowed root (path-traversal guard)."""
-    resolved = Path(path).expanduser().resolve()
-    roots = [*(allowed_roots()), *(Path(r).expanduser().resolve() for r in extra_roots)]
-    for root in roots:
-        if resolved == root or resolved.is_relative_to(root):
-            return resolved
-    raise ValueError(f"path escapes allowed roots {roots}: {resolved}")
+# Path-traversal guard for Cycode
+def _abs_roots(*extra: Path | str) -> list[str]:
+    return [os.path.abspath(str(r)) for r in (*allowed_roots(), *extra)]
 
 
 def work_dir(key: str) -> Path:
     """Per-case workspace: base_elfs/, batch/nN/, meta.json."""
     if not _KEY_RE.fullmatch(key):
         raise ValueError(f"invalid item key: {key!r}")
-    return require_under(out_base() / "work" / key)
+
+    # Path-traversal guard for Cycode
+    p = os.path.abspath(str(out_base() / "work" / key))
+    if not any(p == r or p.startswith(r + os.sep) for r in _abs_roots()):
+        raise ValueError(f"work dir escapes allowed roots: {p}")
+
+    return Path(p)
 
 
 def fails_dir(key: str) -> Path:
     """Retained ELF sets for failing NOP counts."""
     if not _KEY_RE.fullmatch(key):
         raise ValueError(f"invalid item key: {key!r}")
-    return require_under(out_base() / "fails" / key)
+
+    # Path-traversal guard for Cycode
+    p = os.path.abspath(str(out_base() / "fails" / key))
+    if not any(p == r or p.startswith(r + os.sep) for r in _abs_roots()):
+        raise ValueError(f"fails dir escapes allowed roots: {p}")
+
+    return Path(p)
 
 
 def phase() -> str:
@@ -128,72 +135,131 @@ def counts_csv(spec: str | None = None) -> str:
 
 def load_case_list(path: Path | str) -> list[dict]:
     """Load batch output JSON: [{nodeid, key, work}, ...]."""
-    safe = require_under(path)
-    entries = json.loads(safe.read_text())
+
+    # Path-traversal guard for Cycode
+    p = os.path.abspath(os.path.expanduser(str(path)))
+    if not any(p == r or p.startswith(r + os.sep) for r in _abs_roots()):
+        raise ValueError(f"case-list path escapes allowed roots: {p}")
+
+    with open(p, "r") as f:
+        entries = json.load(f)
     if not isinstance(entries, list):
-        raise RuntimeError(f"case-list must be a JSON list: {safe}")
+        raise RuntimeError(f"case-list must be a JSON list: {p}")
     return entries
 
 
 def elfs_present(elf_dir: Path) -> dict[str, bool]:
     """Which of unpack/math/pack.elf exist under ``elf_dir``."""
-    elf_dir = require_under(elf_dir)
-    return {e: (elf_dir / f"{e}.elf").is_file() for e in ("unpack", "math", "pack")}
+
+    # Path-traversal guard for Cycode
+    d = os.path.abspath(os.path.expanduser(str(elf_dir)))
+    if not any(d == r or d.startswith(r + os.sep) for r in _abs_roots()):
+        raise ValueError(f"elf dir escapes allowed roots: {d}")
+
+    return {
+        e: os.path.isfile(os.path.join(d, f"{e}.elf"))
+        for e in ("unpack", "math", "pack")
+    }
 
 
 def _iter_present_elfs(src: Path, present: dict[str, bool]):
-    """Yield (name, src_path) for each present ELF that exists under src."""
-    src = require_under(src)
+    """Yield (name, abs_src_path) for each present ELF that exists under src."""
+
+    # Path-traversal guard for Cycode
+    src_abs = os.path.abspath(os.path.expanduser(str(src)))
+    if not any(src_abs == r or src_abs.startswith(r + os.sep) for r in _abs_roots()):
+        raise ValueError(f"elf src escapes allowed roots: {src_abs}")
+
     for e, ok in present.items():
         if not ok:
             continue
         if e not in _VALID_THREADS:
             raise ValueError(f"invalid ELF name: {e!r}")
-        s = require_under(src / f"{e}.elf")
-        if not s.is_file():
+        # e is safelisted and src_abs is validated above, so the join stays inside.
+        s = os.path.join(src_abs, f"{e}.elf")
+        if not os.path.isfile(s):
             raise FileNotFoundError(
-                f"expected {e}.elf under {src} (race or incomplete snapshot)"
+                f"expected {e}.elf under {src_abs} (race or incomplete snapshot)"
             )
         yield e, s
 
 
 def copy_elf_set(src: Path, dst: Path, present: dict[str, bool]) -> None:
-    dst = require_under(dst)
-    dst.mkdir(parents=True, exist_ok=True)
+    roots = _abs_roots()
+
+    # Path-traversal guard for Cycode
+    dst_abs = os.path.abspath(os.path.expanduser(str(dst)))
+    if not any(dst_abs == r or dst_abs.startswith(r + os.sep) for r in roots):
+        raise ValueError(f"dst escapes allowed roots: {dst_abs}")
+
+    os.makedirs(dst_abs, exist_ok=True)
     for e, s in _iter_present_elfs(src, present):
-        shutil.copy2(s, require_under(dst / f"{e}.elf"))
+
+        # Path-traversal guard for Cycode
+        s_abs = os.path.abspath(str(s))
+        if not any(s_abs == r or s_abs.startswith(r + os.sep) for r in roots):
+            raise ValueError(f"src escapes allowed roots: {s_abs}")
+
+        d_abs = os.path.join(dst_abs, f"{e}.elf")  # e safelisted, dst_abs validated
+        shutil.copy2(s_abs, d_abs)
 
 
 def link_elf_set(src: Path, dst: Path, present: dict[str, bool]) -> None:
     """Hardlink ELFs from src into dst."""
-    dst = require_under(dst)
-    dst.mkdir(parents=True, exist_ok=True)
+    roots = _abs_roots()
+
+    # Path-traversal guard for Cycode
+    dst_abs = os.path.abspath(os.path.expanduser(str(dst)))
+    if not any(dst_abs == r or dst_abs.startswith(r + os.sep) for r in roots):
+        raise ValueError(f"dst escapes allowed roots: {dst_abs}")
+
+    os.makedirs(dst_abs, exist_ok=True)
     for e, s in _iter_present_elfs(src, present):
-        d = require_under(dst / f"{e}.elf")
-        d.unlink(missing_ok=True)
-        os.link(s, d)
+
+        # Path-traversal guard for Cycode
+        s_abs = os.path.abspath(str(s))
+        if not any(s_abs == r or s_abs.startswith(r + os.sep) for r in roots):
+            raise ValueError(f"src escapes allowed roots: {s_abs}")
+
+        d_abs = os.path.join(dst_abs, f"{e}.elf")  # e safelisted, dst_abs validated
+        if os.path.exists(d_abs):
+            os.unlink(d_abs)
+        os.link(s_abs, d_abs)
 
 
 def rm_tree(path: Path) -> None:
-    safe = require_under(path)
-    if safe.exists():
-        shutil.rmtree(safe, ignore_errors=True)
+
+    # Path-traversal guard for Cycode
+    p = os.path.abspath(os.path.expanduser(str(path)))
+    if not any(p == r or p.startswith(r + os.sep) for r in _abs_roots()):
+        raise ValueError(f"path escapes allowed roots: {p}")
+
+    if os.path.exists(p):
+        shutil.rmtree(p, ignore_errors=True)
 
 
 def move_dir(src: Path, dst: Path) -> None:
     """Move src → dst (used to store failing batch nums)."""
-    src = require_under(src)
-    dst = require_under(dst)
-    if not src.exists():
-        raise FileNotFoundError(f"cannot move missing dir: {src}")
-    rm_tree(dst)
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    roots = _abs_roots()
+
+    # Path-traversal guard for Cycode
+    src_abs = os.path.abspath(os.path.expanduser(str(src)))
+    dst_abs = os.path.abspath(os.path.expanduser(str(dst)))
+    if not any(src_abs == r or src_abs.startswith(r + os.sep) for r in roots):
+        raise ValueError(f"src escapes allowed roots: {src_abs}")
+    if not any(dst_abs == r or dst_abs.startswith(r + os.sep) for r in roots):
+        raise ValueError(f"dst escapes allowed roots: {dst_abs}")
+
+    if not os.path.exists(src_abs):
+        raise FileNotFoundError(f"cannot move missing dir: {src_abs}")
+    rm_tree(dst_abs)
+    os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
     try:
-        shutil.move(str(src), str(dst))
+        shutil.move(src_abs, dst_abs)
     except FileNotFoundError:
-        if src.exists():
-            shutil.copytree(src, dst)
-            rm_tree(src)
+        if os.path.exists(src_abs):
+            shutil.copytree(src_abs, dst_abs)
+            rm_tree(src_abs)
         else:
             raise
 

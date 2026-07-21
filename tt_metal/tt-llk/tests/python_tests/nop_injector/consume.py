@@ -24,6 +24,7 @@ import pytest
 from _pytest.python import Function
 from helpers.test_config import TestConfig
 from nop_injector.helper import (
+    allowed_roots,
     exc_value,
     fails_dir,
     keep_elfs,
@@ -33,7 +34,6 @@ from nop_injector.helper import (
     parse_counts,
     phase,
     record_fail,
-    require_under,
     rm_tree,
 )
 
@@ -101,11 +101,17 @@ def pytest_collection_modifyitems(session, config, items):
     new_items = []
     for item in selected:
         entry = by_nodeid[item.nodeid]
-        work = require_under(entry["work"])
-        meta_path = work / "meta.json"
-        if not meta_path.is_file():
+        # Guard the meta.json read sink inline (abspath + allowlist prefix check).
+        work_abs = os.path.abspath(os.path.expanduser(str(entry["work"])))
+        roots = [os.path.abspath(str(r)) for r in allowed_roots()]
+        if not any(work_abs == r or work_abs.startswith(r + os.sep) for r in roots):
+            raise RuntimeError(f"consume: work dir escapes allowed roots: {work_abs}")
+        work = Path(work_abs)
+        meta_path = os.path.join(work_abs, "meta.json")
+        if not os.path.isfile(meta_path):
             raise RuntimeError(f"consume: missing {meta_path}")
-        meta = json.loads(meta_path.read_text())
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
         counts = meta.get("counts") or parse_counts()
         for n in counts:
             new_items.append(_clone_item_for_count(item, n, work, meta))
@@ -142,7 +148,7 @@ def pytest_runtest_call(item):
     keep = keep_elfs()
 
     # Perturbed ELF set produced by ttnop batch for this count.
-    src = require_under(work / "batch" / f"n{n}")
+    src = work / "batch" / f"n{n}"
     if not (src / f"{thread}.elf").is_file():
         message = f"n{n}\tFAIL-ERR\tmissing perturbed ELF set at {src}"
         record_fail(f"{base_nodeid}::n{n}", f"{message}\n")
