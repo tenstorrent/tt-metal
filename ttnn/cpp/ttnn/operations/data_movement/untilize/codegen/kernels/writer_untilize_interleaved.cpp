@@ -39,7 +39,11 @@ void kernel_main() {
 
     constexpr uint32_t tile_height = 32;
 
-    const auto d = TensorAccessor(dst_args, dst_addr, unpadded_row_size_bytes);
+    // The logical row payload can be narrower than the destination buffer's
+    // aligned physical page. Use the accessor pitch for page addressing and
+    // retain ``unpadded_row_size_bytes`` only as the write length.
+    const uint32_t destination_page_size = dst_args.get_aligned_page_size();
+    const auto d = TensorAccessor(dst_args, dst_addr, destination_page_size);
 
     uint32_t stick_id = start_stick_id;
     uint32_t out_stick_id = (H_unpadded > 0) ? out_page_start : start_stick_id;
