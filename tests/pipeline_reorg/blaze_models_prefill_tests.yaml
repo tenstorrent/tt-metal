@@ -380,3 +380,20 @@
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
+
+- name: "Blaze - Kimi DFlash drafter"
+  cmd: |
+    export MESH_DEVICE=TG
+    export DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash
+
+    mpirun --pernode --tag-output bash -lc '
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/speculative_decoding/dflash/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and sliced and pretrained" -vvv --tb=short --timeout=280
+    '
+  test_type: kimi_dflash
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 5
+  owner_id: U09L76N1MAT
+  team: models
+  sp_config: sc1
