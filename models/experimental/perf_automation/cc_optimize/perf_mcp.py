@@ -75,13 +75,35 @@ _CONSEC_CRASH = {"n": 0}
 _TT_SMI = _shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
 
 
-def _device_recover(where: str) -> None:
-    """Best-effort board reset after a likely wedge (2+ consecutive device crashes)."""
+def _reset_cmds(fallback: list) -> list:
+    """The board/galaxy-aware `tt-smi` reset invocations to try, in order, from the SINGLE SOURCE OF
+    TRUTH (agent.probes._reset_arg_sets — same one run.py's watchdog uses): a non-galaxy host resets
+    the FULL enumerated chip list (`-r 0,1,..,N-1`), never a partial subset that wedges device-open.
+    Falls back to `fallback` only if that source is unavailable."""
     try:
-        _sp.run([_TT_SMI, "-r", "0"], capture_output=True, text=True, timeout=180)
-        sys.stderr.write(f"[perf-mcp] device recovered via tt-smi -r after wedge at {where}\n")
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}: {exc}\n")
+        from agent.probes import _reset_arg_sets
+
+        arg_sets = _reset_arg_sets()
+    except Exception:  # noqa: BLE001
+        arg_sets = None
+    return [[_TT_SMI, *a] for a in arg_sets] if arg_sets else [fallback]
+
+
+def _run_reset_cmds(cmds: list, where: str, note: str, timeout: int) -> None:
+    for _cmd in cmds:
+        try:
+            r = _sp.run(_cmd, capture_output=True, text=True, timeout=timeout)
+            sys.stderr.write(f"[perf-mcp] {note} via {' '.join(_cmd[1:])} at {where}\n")
+            if r.returncode == 0:
+                return
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}: {exc}\n")
+
+
+def _device_recover(where: str) -> None:
+    """Best-effort reset after a likely wedge (2+ consecutive device crashes), using the shared
+    full-enumerated reset (a single-chip `-r 0` half-resets a p300c and breaks its enumeration)."""
+    _run_reset_cmds(_reset_cmds([_TT_SMI, "-r", "0"]), where, "device recovered", 180)
 
 
 def _note_device_crash(where: str) -> None:
@@ -117,11 +139,7 @@ def _is_l1_overflow(msg) -> bool:
 
 
 def _reclaim_mesh(where: str) -> None:
-    try:
-        _sp.run([_TT_SMI, "-r"], capture_output=True, text=True, timeout=420)
-        sys.stderr.write(f"[perf-mcp] full-mesh reset (L1 overflow) at {where}\n")
-    except Exception as exc:  # noqa: BLE001
-        sys.stderr.write(f"[perf-mcp] full-mesh reset failed at {where}: {exc}\n")
+    _run_reset_cmds(_reset_cmds([_TT_SMI, "-r"]), where, "full-mesh reset (L1 overflow)", 420)
     _CONSEC_CRASH["n"] = 0
 
 
@@ -213,6 +231,7 @@ _EAGER_NOTE = (
 
 def _trace_on():
     return os.environ.get("TT_PERF_TRACE", "1") != "0"
+
 
 # kernel-authoring evidence markers, searched in the model source tree (grounds a recorded attempt)
 _KERNEL_MARKERS = ("generic_op", "ProgramDescriptor", "KernelDescriptor", "@ttl.", "ttl.operation", "import ttl")
@@ -603,13 +622,17 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         if not _tl_clean and _ttl_available():
             if _tl_wedged:
                 if _tr:
-                    _r = "apply the PROVEN trace-safe recipe (do NOT switch to cpp — the same recipe applies): %s (attempt %d)" % (
-                        _TRACE_SAFE_HINT,
-                        _tl_wedged + 1,
+                    _r = (
+                        "apply the PROVEN trace-safe recipe (do NOT switch to cpp — the same recipe applies): %s (attempt %d)"
+                        % (
+                            _TRACE_SAFE_HINT,
+                            _tl_wedged + 1,
+                        )
                     )
                 else:
-                    _r = "the tt-lang kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)" % (
-                        _tl_wedged + 1
+                    _r = (
+                        "the tt-lang kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)"
+                        % (_tl_wedged + 1)
                     )
                 return (False, "tt-lang", _r)
             return (
@@ -620,19 +643,24 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         if (_tl_clean or not _ttl_available()) and not _cpp_clean:
             if _cpp_wedged:
                 if _tr:
-                    _r = "apply the PROVEN trace-safe recipe (fix the recipe application, do NOT bounce rungs): %s (attempt %d)" % (
-                        _TRACE_SAFE_HINT,
-                        _cpp_wedged + 1,
+                    _r = (
+                        "apply the PROVEN trace-safe recipe (fix the recipe application, do NOT bounce rungs): %s (attempt %d)"
+                        % (
+                            _TRACE_SAFE_HINT,
+                            _cpp_wedged + 1,
+                        )
                     )
                 else:
-                    _r = "the C++ kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)" % (
-                        _cpp_wedged + 1
+                    _r = (
+                        "the C++ kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)"
+                        % (_cpp_wedged + 1)
                     )
                 return (False, "cpp", _r)
             return (
                 False,
                 "cpp",
-                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it." + _suffix,
+                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it."
+                + _suffix,
             )
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (
