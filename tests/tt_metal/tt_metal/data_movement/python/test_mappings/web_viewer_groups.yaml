@@ -1,5 +1,6 @@
 one_from_one:
   name: One from One
+  tags: [read, unicast, L1, single_core]
   image: web_images/bad-one-from-one.svg
   faq:
     - q: What does the One from One test measure?
@@ -33,57 +34,76 @@ one_from_one:
 
 one_to_one:
   name: One to One
+  tags: [write, unicast, L1, single_core]
 
 one_from_all:
   name: One from All
+  tags: [read, unicast, L1, multi_core]
 
 one_to_all:
   name: One to All
+  tags: [write, unicast, multicast, L1, multi_core]
 
 one_packet:
   name: One Packet
+  tags: [read, write, unicast, L1, single_core]
 
 all_to_all:
   name: All to All
+  tags: [write, unicast, L1, multi_core]
 
 all_from_all:
   name: All from All
+  tags: [read, unicast, L1, multi_core]
 
 multi_interleaved:
   name: Multi Interleaved
+  tags: [read, write, unicast, DRAM, multi_core]
 
 atomics:
   name: Atomic Semaphore
+  tags: [write, unicast, L1, multi_core, atomics]
 
 core_bidirectional:
   name: Core Bidirectional
+  tags: [read, write, unicast, L1, single_core]
 
 direct_write:
   name: Direct Write
+  tags: [write, unicast, L1, single_core]
 
 dram_neighbour:
   name: DRAM Neighbour
+  tags: [read, unicast, DRAM, multi_core]
 
 dram_sharded:
   name: DRAM Sharded Read
+  tags: [read, unicast, DRAM, multi_core]
 
 dram_unary:
   name: DRAM Unary
+  tags: [read, write, unicast, DRAM, single_core]
 
 interleaved:
   name: Interleaved
+  tags: [read, write, unicast, DRAM, L1, multi_core]
 
 loopback:
   name: Loopback
+  tags: [read, write, unicast, L1, single_core]
 
 noc_estimator_tests:
   name: Noc Estimator
+  tags: [read, write, unicast, multicast, L1, DRAM, multi_core]
 
 pcie_read_bw:
   name: PCIe Read
+  tags: [read, unicast, DRAM, single_core]
 
 pcie_write_bw:
   name: PCIe Write
+  tags: [write, unicast, DRAM, single_core]
 
 transaction_id:
   name: Transaction ID
+  tags: [read, write, unicast, L1, single_core]
