@@ -263,3 +263,54 @@ skus:
   sim_blackhole_galaxy:
     runs_on:
       - tt-ubuntu-2204-large-stable
+
+  # ---------------------------------------------------------------------------
+  # ttnn sweeps runner SKUs
+  #
+  # Single source of truth for the runner labels used by the ttnn-run-sweeps
+  # pipeline (model_traced / lead_models). These mirror the runner-label sets
+  # that previously lived hardcoded in
+  # tests/sweep_framework/framework/matrix_runner_config.py::RUNNER_PROFILES;
+  # matrix_runner_config now resolves `runs_on` from here by SKU name so HW
+  # representation is abstracted into this file (the pipeline-reorg convention).
+  #
+  # NOTE: these intentionally preserve the sweeps' EXISTING labels (e.g.
+  # tt-ubuntu-2204-n150-stable, not the -N150-viommu-stable civ2 labels) so the
+  # migration does not change which runner pool sweep jobs land on. Consolidating
+  # sweeps onto the shared civ2 SKUs is a separate, HW-validated change.
+  # ---------------------------------------------------------------------------
+  wh_n150_sweeps:
+    runs_on:
+      - tt-ubuntu-2204-n150-stable
+  wh_n300_sweeps:
+    runs_on:
+      - tt-ubuntu-2204-n300-stable
+  wh_n300_llmbox_sweeps:
+    runs_on:
+      - tt-ubuntu-2204-n300-llmbox-viommu-stable
+  bh_p150b_sweeps:
+    runs_on:
+      - tt-ubuntu-2204-p150b-viommu-stable
+  bh_p100a_sweeps:
+    runs_on:
+      - tt-ubuntu-2204-p100a-viommu-stable
+  bh_p300a_sweeps:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P300-viommu
+  wh_t3k_sweeps:
+    runs_on:
+      - config-t3000
+      - arch-wormhole_b0
+      - in-service
+      - pipeline-functional
+  wh_galaxy_sweeps:
+    runs_on:
+      - topology-6u
+      - arch-wormhole_b0
+      - in-service
+      - bare-metal
+  wh_galaxy_g04glx03_sweeps:
+    runs_on:
+      - g04glx03
