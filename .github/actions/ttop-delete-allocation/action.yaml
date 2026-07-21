@@ -13,15 +13,50 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Get github ID token
-      shell: bash
-      id: token
-      run: |
-        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
-        echo "::add-mask::${IDTOKEN}"
-        echo "idToken=${IDTOKEN}" >> $GITHUB_OUTPUT
-
     - name: Delete Allocation
       shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }}
+        POLL_INTERVAL=5
+        OVERALL_TIMEOUT=300 #5 minutes: long enough to ride out a token expiry/transient blip. Prevent long waits.
+        MAX_AUTH_FAILURES=3
+
+        mint_token() {
+          curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL" \
+            -H "Accept: application/json; api-version=2.0" \
+            -H "Content-Type: application/json" -d "{}" | jq -r '.value'
+        }
+
+        IDTOKEN=$(mint_token) || true
+        echo "::add-mask::${IDTOKEN}"
+
+        auth_failures=0
+        start=$SECONDS
+        while true; do
+          if (( SECONDS - start >= OVERALL_TIMEOUT )); then
+            echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for allocation to be deleted."
+            exit 1
+          fi
+
+          output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" delete "allocation/${ALLOCATION_NAME}" --ignore-not-found 2>&1) && rc=0 || rc=$?
+          
+          if ((rc==0)); then
+            echo "::notice::Allocation ${ALLOCATION_NAME} is deleted."
+            exit 0
+          elif echo "$output" | grep -qiE 'unauthorized|must be logged in|401'; then
+            auth_failures=$((auth_failures + 1))
+            echo "::warning::Auth failure (${auth_failures}/${MAX_AUTH_FAILURES}) while deleting; reissuing token."
+            if (( auth_failures >= MAX_AUTH_FAILURES )); then
+              echo "::error::Repeated auth failures despite token reissue; failing."
+              exit 1
+            fi
+            IDTOKEN=$(mint_token) || true
+            echo "::add-mask::${IDTOKEN}"
+          else
+            echo "::warning::Transient error deleting (rc=${rc}): ${output}"
+          fi
+          sleep "$POLL_INTERVAL"
+        done
