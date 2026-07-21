@@ -27,10 +27,10 @@ from pathlib import Path
 import torch
 import ttnn
 from loguru import logger
-
 from ttnn.operations.examples.reduce_block import (
-    BASELINE,
     DIMS,
+    POLICIES,
+    RELOADS,
     VARIANTS,
     create_sharded_memory_config,
     input_shape,
@@ -39,6 +39,18 @@ from ttnn.operations.examples.reduce_block import (
     run_accumulate,
     run_op,
 )
+
+# Cross-path (reduce_tile vs accumulate_via_add) tolerance. The two datapaths sum differently (FPU
+# matmul-with-ones vs pairwise add + SFPU) and reduce_tile's AVG scaler is stored at the accum dtype, so
+# agreement is approximate, not bitwise; fp32 lands ~1e-4, bf16 carries the scaler-rounding gap.
+_CROSS_ATOL = {"fp32": 1e-2, "bf16": 0.2}
+
+
+def _cross_check(out_a, out_b, dim, atol, label):
+    d = (_readout(out_a, dim) - _readout(out_b, dim)).abs().max().item()
+    assert d < atol, f"{label}: cross-path max_abs {d:.5f} >= {atol}"
+    return d
+
 
 TILE = 32
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
@@ -198,6 +210,14 @@ def test_reduce_block_device_perf(device):
     """
     trials = _int("REDBLK_TRIALS", "5")
     kernel_iters = _int("REDBLK_KERNEL_ITERS", "200")
+    _FIDELITY = {
+        "LoFi": ttnn.MathFidelity.LoFi,
+        "HiFi2": ttnn.MathFidelity.HiFi2,
+        "HiFi3": ttnn.MathFidelity.HiFi3,
+        "HiFi4": ttnn.MathFidelity.HiFi4,
+    }
+    fidelity_name = os.environ.get("REDBLK_FIDELITY", "HiFi4")
+    fidelity = _FIDELITY[fidelity_name]
     # reduce_tile = library default (matmul-reduce); accumulate_via_add = library opt-in AccumulateViaAdd;
     # accumulate_via_add_inline = the hand-written standalone kernel (init hoisted out of the perf loop).
     _PERF_VARIANTS = ("reduce_tile", "accumulate_via_add", "accumulate_via_add_inline")
@@ -226,6 +246,7 @@ def test_reduce_block_device_perf(device):
                         NC=shape[2],
                         accum=accum,
                         kernel_iters=1,
+                        math_fidelity=fidelity,
                     )
                     acc[(variant, dim, shape, accum)] = _check(
                         out, goldens[(dim, shape)], dim, accum, f"{variant}/{dim}/{accum} {shape}"
@@ -235,7 +256,15 @@ def test_reduce_block_device_perf(device):
     runners = {
         (variant, dim, shape): (
             lambda v=variant, d=dim, s=shape: run_op(
-                inputs[(d, s)], variant=v, dim=d, Ht=s[0], Wt=s[1], NC=s[2], accum="fp32", kernel_iters=kernel_iters
+                inputs[(d, s)],
+                variant=v,
+                dim=d,
+                Ht=s[0],
+                Wt=s[1],
+                NC=s[2],
+                accum="fp32",
+                kernel_iters=kernel_iters,
+                math_fidelity=fidelity,
             )
         )
         for dim in sel_dims
@@ -262,7 +291,7 @@ def test_reduce_block_device_perf(device):
         "",
         f"box={socket.gethostname()}  arch={_arch_label(device)}  cores=1  placement=single-core sharded-L1  "
         f"N={trials} (median)  kernel-iters={kernel_iters}",
-        "problem: reduce a 2-D tile block along ONE dim -> MANY output tiles. Input bf16, output fp32, HiFi4.",
+        f"problem: reduce a 2-D tile block along ONE dim -> MANY output tiles. Input bf16, output fp32, {fidelity_name}.",
         "perf = median ns per whole-block reduce (fp32 accum). accuracy = bf16 accum, max_abs | max ULP_bf16.",
         "",
         "| dim | Ht×Wt×NC | out | reduce_tile ns | acc_via_add ns (×) | inline ns (×) | reduce_tile acc | acc_via_add acc |",
@@ -284,10 +313,11 @@ def test_reduce_block_device_perf(device):
         "Variants: reduce_tile = library default (ReduceAlgorithm::Auto -> ReduceTile, FPU matmul-with-ones); "
         "acc_via_add = library with the opt-in ReduceAlgorithm::AccumulateViaAdd; inline = the same algorithm "
         "as a hand-written standalone kernel with the one-time init hoisted OUT of the kernel_iters loop. "
-        "acc_via_add runs its init per reduce() call (like the library's own reduce_init), so it trails inline "
-        "by that fixed per-call cost but is the apples-to-apples library-vs-library number. Accuracy of "
-        "acc_via_add matches inline (same algorithm). AccumulateViaAdd uses one DST register per output tile, "
-        "so it reduces an arbitrary block without the REDUCE_COL DST/chunk limit the library default chunks around.",
+        "The library no longer runs the heavy binary_op_init_common per call (that is a once-per-kernel boot "
+        "init); per reduce() call acc_via_add does only a light format reconfig + SFPU-macro load, so it now "
+        "matches inline to within a small fixed per-call cost. Accuracy of acc_via_add matches inline (same "
+        "algorithm). AccumulateViaAdd uses one DST register per output tile, so it reduces an arbitrary block "
+        "without the REDUCE_COL DST/chunk limit the library default chunks around.",
     ]
     report = "\n".join(lines) + "\n"
     logger.info("\n" + report)
@@ -439,7 +469,7 @@ def test_reduce_block_partial_row(device):
     GARBAGE, and the masked accumulate must exclude them (result = mean over the L valid columns only).
     Proves the DEST-accumulating masked broadcast-mul folds the partial tile in correctly."""
     GARBAGE = 999.0
-    for Wt, L in [(2, 48), (3, 80), (4, 100), (2, 40), (3, 65)]:
+    for Wt, L in [(1, 20), (2, 48), (3, 80), (4, 100), (2, 40), (3, 65)]:  # Wt=1 -> full_cnt==0 edge
         P = L - (Wt - 1) * TILE  # valid columns in the last tile
         assert 1 <= P < TILE, (Wt, L, P)
         torch.manual_seed(13)
@@ -475,7 +505,7 @@ def test_reduce_block_partial_col(device):
     """Non-tile-aligned COL reduce via accumulate_via_add_inline: the last row-tile's invalid rows hold
     GARBAGE; the col-0 masked accumulate (mul_tiles_bcast_cols) must exclude them."""
     GARBAGE = 999.0
-    for Ht, L in [(2, 48), (3, 80), (4, 100), (2, 40), (3, 65)]:
+    for Ht, L in [(1, 20), (2, 48), (3, 80), (4, 100), (2, 40), (3, 65)]:  # Ht=1 -> full_cnt==0 edge
         P = L - (Ht - 1) * TILE  # valid rows in the last row-tile
         assert 1 <= P < TILE, (Ht, L, P)
         torch.manual_seed(13)
@@ -600,6 +630,112 @@ def test_reduce_block_streaming(device):
         assert ma < 0.05, f"streaming {dim} Ht={Ht} Wt={Wt}: max_abs {ma:.4f}"
 
 
+def test_reduce_block_reconfig_none(device):
+    """reconfig_mode=NONE on AccumulateViaAdd: after the first (INPUT_AND_OUTPUT) call, every later reduce()
+    in the loop passes RECFG::NONE — the per-call binary_op_init_common + sfpu_reduce_init is SKIPPED, reusing
+    the config the first call established (was silently ignored before; the path always re-inited). The output
+    read is from the last iter (a NONE call), so it must (a) match the fp64 golden and (b) be byte-identical to
+    the INPUT_AND_OUTPUT-every-call result — no divergence from skipping the re-init."""
+    for dim, Ht, Wt, NC in [("row", 2, 4, 1), ("col", 4, 2, 1), ("scalar", 2, 4, 1), ("row", 2, 3, 2)]:
+        x, golden = _make_input(device, dim, Ht, Wt, NC)
+        base = run_op(x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=3)
+        none = run_op(
+            x,
+            variant="accumulate_via_add",
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=3,
+            reconfig="none_after_first",
+        )
+        gb, gn = _readout(base, dim), _readout(none, dim)
+        assert gb.numel() == golden.numel() and gn.numel() == golden.numel()
+        vs_golden = (gn - golden).abs().max().item()
+        vs_io = (gb - gn).abs().max().item()
+        logger.info(f"reconfig NONE {dim:6s} Ht={Ht} Wt={Wt} NC={NC}  vs-golden={vs_golden:.5f} vs-IO={vs_io:.6f}")
+        assert (gb - golden).abs().max().item() < 0.05, f"reconfig base {dim}: wrong vs golden"
+        assert vs_golden < 0.05, f"reconfig NONE {dim}: wrong vs golden ({vs_golden:.4f})"
+        assert vs_io == 0.0, f"reconfig NONE {dim}: diverged from INPUT_AND_OUTPUT by {vs_io} (skipped init not reused)"
+
+
+def _make_input_strided(device, dim, Ht, Wt, NC, row_stride, seed=13):
+    """Resident tensor with `row_stride` tiles per row (row_stride > Wt): reduce only the first Wt columns of
+    each row; the padding columns [Wt*32, row_stride*32) hold GARBAGE the strided indexing must skip. Golden
+    is the mean over the Wt*32 real columns only."""
+    assert dim in ("row", "col") and row_stride > Wt
+    GARBAGE = 999.0
+    torch.manual_seed(seed)
+    h = NC * Ht * TILE
+    w_full, w_real = row_stride * TILE, Wt * TILE
+    data = torch.full((h, w_full), GARBAGE, dtype=torch.float32)
+    data[:, :w_real] = torch.rand(h, w_real)
+    b = data[:, :w_real].view(NC, Ht * TILE, w_real).to(torch.float64)  # real region only
+    golden = (b.mean(dim=2) if dim == "row" else b.mean(dim=1)).reshape(-1)
+    x_dev = ttnn.from_torch(
+        data.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=create_sharded_memory_config((h, w_full)),
+    )
+    return x_dev, golden
+
+
+def test_reduce_block_row_stride(device):
+    """AccumulateViaAdd over a WIDER resident tensor via ReduceInputMemoryLayout::with_row_stride: reduce only
+    the first Wt columns of each row_stride-wide row. The padding tiles hold GARBAGE the per-output indexing
+    must skip (row pitch = row_stride, not Wt). Was silently ignored before — passing a padded layout gave the
+    contiguous (wrong) result."""
+    cases = [
+        # (dim, Ht, Wt, NC, row_stride)
+        ("row", 1, 2, 1, 4),
+        ("row", 2, 3, 1, 5),
+        ("row", 1, 4, 1, 6),
+        ("row", 2, 2, 2, 4),  # batched
+        ("col", 2, 1, 1, 4),
+        ("col", 3, 2, 1, 5),
+    ]
+    for dim, Ht, Wt, NC, rs in cases:
+        x, golden = _make_input_strided(device, dim, Ht, Wt, NC, rs)
+        out = run_op(
+            x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2, row_stride=rs
+        )
+        got = _readout(out, dim)
+        assert got.numel() == golden.numel(), f"{dim}: {got.numel()} values, expected {golden.numel()}"
+        ma = (got - golden).abs().max().item()
+        logger.info(f"row_stride {dim:4s} Ht={Ht} Wt={Wt} NC={NC} rs={rs}  max_abs={ma:.5f}")
+        assert ma < 0.05, f"row_stride {dim} Ht={Ht} Wt={Wt} rs={rs}: max_abs {ma:.4f} — padding leaked"
+
+
+def test_reduce_block_col_chunk_limit(device):
+    """REDUCE_COL with Wt >= 16 output columns — the headline structural claim, at the boundary it exists to
+    remove. The standard reduce_tile path holds ONE DEST register per output column, so it CHUNKS the columns
+    by DEST_AUTO_LIMIT (8 for fp32 DEST, 16 for bf16 DEST) and, fed a resident row-major block, reads the
+    wrong tiles once Wt exceeds the chunk size (probe-confirmed: reduce_tile diverges ~0.15+ at Wt>=16, while
+    AccumulateViaAdd stays ~3e-4). AccumulateViaAdd uses ONE DEST per output tile (accumulate its Ht
+    column-tiles at stride row_pitch -> finalize in place -> pack -> release), so it reduces an arbitrary-width
+    resident block one output at a time and NEVER hits the chunk limit. This drives col well past the limit
+    (incl. odd / non-power-of-2 widths) and confirms no hang + correct vs the fp64 mean.
+
+    Wt=32 forces >1 chunk in EVERY DEST mode (fp32->4, bf16->2); Wt in {17,24} shows arbitrary width; both
+    accum modes cover the fp32-DEST (limit 8) and bf16-DEST (limit 16) chunk boundaries."""
+    _TOL = {"fp32": 0.05, "bf16": 0.10}
+    for Ht, Wt, NC in [(2, 16, 1), (2, 17, 1), (3, 24, 1), (2, 32, 1), (4, 32, 1), (2, 16, 2)]:
+        x, golden = _make_input(device, "col", Ht, Wt, NC)
+        for accum in ("fp32", "bf16"):
+            out = run_op(x, variant="accumulate_via_add", dim="col", Ht=Ht, Wt=Wt, NC=NC, accum=accum, kernel_iters=2)
+            assert list(out.shape) == list(output_shape("col", Ht, Wt, NC))
+            got = _readout(out, "col")
+            assert got.numel() == golden.numel(), f"col Wt={Wt} NC={NC}: {got.numel()} vs {golden.numel()}"
+            ma = (got - golden).abs().max().item()
+            logger.info(f"col chunk-limit Ht={Ht} Wt={Wt} NC={NC} {accum}  outputs={got.numel()} max_abs={ma:.5f}")
+            assert (
+                ma < _TOL[accum]
+            ), f"acc_via_add col Wt={Wt} NC={NC} {accum}: max_abs {ma:.4f} (chunk-limit regression?)"
+
+
 def _make_input_sum(device, dim, Ht, Wt, NC, num_chunks, seed=13):
     """Input tensor + the SUM golden for the accumulate path: `num_chunks` chunks each re-reduce the SAME
     block, so the result is num_chunks * sum(block, reduce_dim). Golden is taken from the bf16-rounded data
@@ -662,3 +798,448 @@ def test_reduce_block_accumulate(device):
         if not (rel < 0.02):
             failures.append(f"{dim} Ht={Ht} Wt={Wt} NC={NC} chunks={num_chunks} cnt={cnt}: rel {rel:.3e}")
     assert not failures, "accumulate mismatches:\n" + "\n".join(failures)
+
+
+def _make_input_mean_bf16(device, dim, Ht, Wt, NC, seed=13):
+    """Input + the single-block MEAN golden from the bf16-rounded data (fp64), so the only residual error is
+    the on-device fp32 accumulation. For the cross-chunk accumulate-mean test."""
+    torch.manual_seed(seed)
+    h, w = input_shape(Ht, Wt, NC)
+    data_bf16 = torch.rand(h, w).to(torch.bfloat16)
+    b = data_bf16.to(torch.float64).view(NC, Ht * TILE, Wt * TILE)
+    if dim == "row":
+        g = b.mean(dim=2).reshape(-1)
+    elif dim == "col":
+        g = b.mean(dim=1).reshape(-1)
+    else:
+        g = b.mean(dim=(1, 2)).reshape(-1)
+    x_dev = ttnn.from_torch(
+        data_bf16,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=create_sharded_memory_config((h, w)),
+    )
+    return x_dev, g
+
+
+def test_reduce_block_accumulate_mean(device):
+    """Cross-chunk MEAN via reduce_mean — the motivating case for the interface change. Accumulate `num_chunks`
+    copies of the SAME block (SUM fold), then divide by the GRAND total (num_chunks * per-block element count)
+    on the last chunk. Because every chunk is the same block, sum = num_chunks*block_sum and the mean =
+    block_mean, INDEPENDENT of num_chunks. The divisor MUST span all chunks: a per-chunk 1/N (the old internal
+    derivation) would give ~num_chunks x the mean. This asserts we get exactly the single-block mean."""
+    cases = [
+        # (dim, Ht, Wt, NC, num_chunks)
+        ("row", 2, 3, 1, 3),
+        ("row", 1, 4, 1, 4),
+        ("col", 3, 2, 1, 2),
+        ("scalar", 2, 2, 1, 4),  # cnt=4 tiles, 4 chunks -> divide by 4*4*1024, not 4*1024
+        ("row", 2, 3, 2, 2),  # batched
+    ]
+    failures = []
+    for dim, Ht, Wt, NC, num_chunks in cases:
+        x, golden = _make_input_mean_bf16(device, dim, Ht, Wt, NC)
+        out = run_accumulate(
+            x, dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2, num_chunks=num_chunks, mean=True
+        )
+        assert list(out.shape) == list(output_shape(dim, Ht, Wt, NC))
+        got = _readout(out, dim)
+        assert got.numel() == golden.numel(), f"{dim}: {got.numel()} vs {golden.numel()}"
+        ma = (got - golden).abs().max().item()
+        logger.info(f"accumulate-mean {dim:6s} Ht={Ht} Wt={Wt} NC={NC} chunks={num_chunks}  max_abs={ma:.5f}")
+        if not (ma < 0.02):
+            failures.append(
+                f"{dim} Ht={Ht} Wt={Wt} NC={NC} chunks={num_chunks}: max_abs {ma:.4f} "
+                f"(a per-chunk 1/N would give ~{num_chunks}x the mean)"
+            )
+    assert not failures, "accumulate-mean mismatches:\n" + "\n".join(failures)
+
+
+# =============================================================================
+# CB / input-policy parity — the headline: AccumulateViaAdd reaches every ReduceInputPolicy that ReduceTile
+# supports.
+# =============================================================================
+# Which reduce dims each policy is exercised on in this example. stream (WaitAndPopPerTile) is contiguous-only
+# (row/scalar); the row-major resident shard cannot feed a column stream. The no-pop policies index a resident
+# block, so all dims.
+_POLICY_DIMS = {
+    "bulk": ("row", "col", "scalar"),
+    "stream": ("row", "scalar"),
+    "wait_upfront": ("row", "col", "scalar"),
+    "no_wait": ("row", "col", "scalar"),
+}
+
+
+def test_reduce_block_policy_parity(device):
+    """Every ReduceInputPolicy on AccumulateViaAdd -> correct multi-tile output, and matches reduce_tile where
+    reduce_tile is trustworthy.
+
+    - bulk / stream: cross-checked against reduce_tile on ALL shapes.
+    - wait_upfront / no_wait (no-pop): the STANDARD reduce_tile no-pop body packs every output to CB page 0 (a
+      pre-existing standard-path defect — correct only for a single output tile), so it is cross-checked only on
+      single-output shapes; multi-output no-pop is validated on the fast path vs the fp64 golden. The fast path
+      packs output o -> page o explicitly, so multi-output no-pop is correct there."""
+    for dim in DIMS:
+        for Ht, Wt, NC in _SHAPES[dim]:
+            n_out = out_tile_count(dim, Ht, Wt, NC)
+            x, golden = _make_input(device, dim, Ht, Wt, NC)
+            for accum in ("fp32", "bf16"):
+                for policy in POLICIES:
+                    if dim not in _POLICY_DIMS[policy]:
+                        continue
+                    lbl = f"{policy}/{dim}/{accum} {Ht}x{Wt}x{NC} n_out={n_out}"
+                    av = run_op(
+                        x,
+                        variant="accumulate_via_add",
+                        dim=dim,
+                        Ht=Ht,
+                        Wt=Wt,
+                        NC=NC,
+                        accum=accum,
+                        kernel_iters=2,
+                        policy=policy,
+                    )
+                    assert list(av.shape) == list(output_shape(dim, Ht, Wt, NC))
+                    ma = _check(av, golden, dim, accum, "av " + lbl)[0]
+                    # reduce_tile is trustworthy for bulk/stream (any n_out) and no-pop only at n_out == 1.
+                    rt_ok = policy in ("bulk", "stream") or n_out == 1
+                    cross = "golden-only"
+                    if rt_ok:
+                        rt = run_op(
+                            x,
+                            variant="reduce_tile",
+                            dim=dim,
+                            Ht=Ht,
+                            Wt=Wt,
+                            NC=NC,
+                            accum=accum,
+                            kernel_iters=2,
+                            policy=policy,
+                        )
+                        _check(rt, golden, dim, accum, "rt " + lbl)
+                        cross = f"{_cross_check(rt, av, dim, _CROSS_ATOL[accum], lbl):.5f}"
+                    logger.info(
+                        f"policy {policy:12s} {dim:6s}/{accum} {Ht}x{Wt}x{NC} n_out={n_out:2d} "
+                        f"max_abs={ma:.5f} cross={cross}"
+                    )
+
+
+def test_reduce_block_avg_direct(device):
+    """reduce<AVG, ..., AccumulateViaAdd> derives 1/N from tile geometry and must be BIT-IDENTICAL to reduce_mean
+    (same sfpu_reduce -> mul_unary_tile with the same 1/N bits) and correct vs the fp64 golden. This is the AVG
+    API-parity lever (so a future Auto can route AVG to the fast path for the standalone full-block case)."""
+    for dim in DIMS:
+        for Ht, Wt, NC in _SHAPES[dim]:
+            x, golden = _make_input(device, dim, Ht, Wt, NC)
+            for accum in ("fp32", "bf16"):
+                direct = run_op(
+                    x,
+                    variant="accumulate_via_add",
+                    dim=dim,
+                    Ht=Ht,
+                    Wt=Wt,
+                    NC=NC,
+                    accum=accum,
+                    kernel_iters=2,
+                    avg_direct=True,
+                )
+                mean = run_op(  # reduce_mean (explicit caller N)
+                    x,
+                    variant="accumulate_via_add",
+                    dim=dim,
+                    Ht=Ht,
+                    Wt=Wt,
+                    NC=NC,
+                    accum=accum,
+                    kernel_iters=2,
+                )
+                lbl = f"{dim}/{accum} {Ht}x{Wt}x{NC}"
+                _check(direct, golden, dim, accum, "avg_direct " + lbl)
+                d = (_readout(direct, dim) - _readout(mean, dim)).abs().max().item()
+                logger.info(f"avg_direct {lbl:24s} vs reduce_mean d={d}")
+                assert d == 0.0, f"avg_direct != reduce_mean for {lbl}: {d} (expected bit-identical)"
+
+
+def test_reduce_block_partial_stream(device):
+    """ROW partial under WaitAndPopPerTile streaming: the pure-add part streams full_cnt tiles through DST, then
+    the masked last tile folds in as the final streamed op. Includes the full_cnt==0 edge (Wt=1: the whole
+    reduce is a single masked partial tile). Result = mean over the L valid columns only (garbage excluded)."""
+    GARBAGE = 999.0
+    for Wt, L in [(1, 20), (2, 48), (3, 80), (4, 100)]:
+        P = L - (Wt - 1) * TILE  # valid columns in the last tile
+        assert 1 <= P < TILE, (Wt, L, P)
+        torch.manual_seed(13)
+        data = torch.full((TILE, Wt * TILE), GARBAGE, dtype=torch.float32)
+        data[:, :L] = torch.rand(TILE, L)
+        golden = data[:, :L].to(torch.float64).mean(dim=1)  # per-row mean over the L valid columns
+        x = ttnn.from_torch(
+            data.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=create_sharded_memory_config((TILE, Wt * TILE)),
+        )
+        out = run_op(
+            x,
+            variant="accumulate_via_add",
+            dim="row",
+            Ht=1,
+            Wt=Wt,
+            NC=1,
+            accum="fp32",
+            kernel_iters=2,
+            partial_elems=P,
+            policy="stream",
+        )
+        got = ttnn.to_torch(out).to(torch.float64)[:, 0]
+        ma = (got - golden).abs().max().item()
+        logger.info(f"partial-stream row Wt={Wt} L={L} P={P} full_cnt={Wt - 1}  max_abs={ma:.5f}")
+        assert ma < 0.05, f"partial-stream row L={L} P={P}: max_abs {ma:.4f} — garbage leaked or fold wrong"
+
+
+def test_reduce_block_accumulate_partial(device):
+    """PARTIAL + cross-call Accumulate (ROW/COL): each chunk folds the masked last reduce-dim tile into its
+    sum, so summing num_chunks re-reductions of the SAME partial block = num_chunks * masked_block_sum. The
+    invalid region holds garbage the mask must exclude. Covers even/odd reduce-tile counts, multi-output, and
+    the full_cnt==0 (single partial tile) edge."""
+    GARBAGE = 999.0
+    # (dim, Ht, Wt, L, num_chunks): L = valid reduce-dim elements; cnt = Wt(row)/Ht(col); P = L-(cnt-1)*32
+    cases = [
+        ("row", 1, 1, 20, 2),  # cnt=1 -> full_cnt==0 edge
+        ("row", 1, 3, 80, 3),  # cnt=3 odd
+        ("row", 2, 2, 48, 2),  # cnt=2 even, multi-output (Ht=2)
+        ("col", 1, 1, 20, 2),  # cnt=1 edge
+        ("col", 3, 1, 80, 2),  # cnt=3 odd, strided
+        ("col", 2, 2, 48, 3),  # cnt=2 even, multi-output
+    ]
+    failures = []
+    for dim, Ht, Wt, L, num_chunks in cases:
+        cnt = Wt if dim == "row" else Ht
+        P = L - (cnt - 1) * TILE
+        assert 1 <= P < TILE, (dim, Ht, Wt, L, P)
+        torch.manual_seed(13)
+        h, w = Ht * TILE, Wt * TILE
+        data = torch.full((h, w), GARBAGE, dtype=torch.float32)
+        if dim == "row":
+            data[:, :L] = torch.rand(h, L)
+            g = data.to(torch.bfloat16).to(torch.float64)[:, :L].sum(dim=1)  # per-row sum over L valid cols
+        else:
+            data[:L, :] = torch.rand(L, w)
+            g = data.to(torch.bfloat16).to(torch.float64)[:L, :].sum(dim=0)  # per-col sum over L valid rows
+        golden = g * num_chunks
+        x = ttnn.from_torch(
+            data.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=create_sharded_memory_config((h, w)),
+        )
+        out = run_accumulate(
+            x,
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=1,
+            accum="fp32",
+            kernel_iters=2,
+            num_chunks=num_chunks,
+            partial_elems=P,
+        )
+        got = _readout(out, dim)
+        assert got.numel() == golden.numel(), f"{dim}: {got.numel()} vs {golden.numel()}"
+        scale = golden.abs().max().clamp_min(1.0).item()
+        rel = (got - golden).abs().max().item() / scale
+        logger.info(f"accum-partial {dim:4s} Ht={Ht} Wt={Wt} L={L} P={P} chunks={num_chunks} cnt={cnt} rel={rel:.2e}")
+        if not (rel < 0.02):
+            failures.append(f"{dim} Ht={Ht} Wt={Wt} L={L} P={P} chunks={num_chunks}: rel {rel:.3e}")
+    assert not failures, "accumulate-partial mismatches:\n" + "\n".join(failures)
+
+
+def test_reduce_block_accumulate_row_stride(device):
+    """row_stride + cross-call Accumulate (ROW/COL): each chunk reduces the first Wt columns of a wider
+    row_stride-wide resident block (the padding tiles are skipped by the row-pitch indexing), so summing
+    num_chunks re-reductions = num_chunks * sum(first Wt cols)."""
+    GARBAGE = 999.0
+    num_chunks = 2
+    cases = [
+        ("row", 1, 2, 1, 4),  # dim, Ht, Wt, NC, row_stride
+        ("row", 2, 3, 1, 5),
+        ("row", 2, 2, 2, 4),  # batched
+        ("col", 3, 2, 1, 5),
+    ]
+    failures = []
+    for dim, Ht, Wt, NC, rs in cases:
+        torch.manual_seed(13)
+        h = NC * Ht * TILE
+        w_full, w_real = rs * TILE, Wt * TILE
+        data = torch.full((h, w_full), GARBAGE, dtype=torch.float32)
+        data[:, :w_real] = torch.rand(h, w_real)
+        b = data.to(torch.bfloat16).to(torch.float64)[:, :w_real].view(NC, Ht * TILE, w_real)
+        s = (b.sum(dim=2) if dim == "row" else b.sum(dim=1)).reshape(-1)
+        golden = s * num_chunks
+        x = ttnn.from_torch(
+            data.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=create_sharded_memory_config((h, w_full)),
+        )
+        out = run_accumulate(
+            x,
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=2,
+            num_chunks=num_chunks,
+            row_stride=rs,
+        )
+        got = _readout(out, dim)
+        assert got.numel() == golden.numel(), f"{dim}: {got.numel()} vs {golden.numel()}"
+        scale = golden.abs().max().clamp_min(1.0).item()
+        rel = (got - golden).abs().max().item() / scale
+        logger.info(f"accum-rowstride {dim:4s} Ht={Ht} Wt={Wt} NC={NC} rs={rs} rel={rel:.2e}")
+        if not (rel < 0.02):
+            failures.append(f"{dim} Ht={Ht} Wt={Wt} NC={NC} rs={rs}: rel {rel:.3e}")
+    assert not failures, "accumulate-row_stride mismatches:\n" + "\n".join(failures)
+
+
+def test_reduce_block_accumulate_reload_correctness(device):
+    """Reload-mode correctness matrix (the bake-off's correctness half). CopySeed* must be correct for BOTH a
+    Default and an UnpackToDestFp32 accumulator. FoldViaAdd is Default-acc only — on a U2D accumulator it reads
+    the acc via SrcB (disabled for a to-dest CB), now a library-ASSERT'd contract violation, so it is skipped
+    here. SUM over num_chunks re-reductions of the same block = num_chunks * block_sum."""
+    cases = [
+        # (dim, Ht, Wt, NC, num_chunks)  cnt = reduce tiles per output = Wt(row)/Ht(col)/Ht*Wt(scalar)
+        ("col", 3, 2, 1, 3),  # cnt=3 odd, strided, multi-output
+        ("col", 4, 2, 1, 3),  # cnt=4 even, strided
+        ("row", 1, 3, 1, 3),  # cnt=3 odd, single output
+        ("row", 2, 4, 1, 2),  # cnt=4 even, multi-output
+        ("scalar", 2, 2, 1, 2),  # cnt=4 even
+        ("row", 2, 1, 1, 2),  # cnt=1 (odd, N==1 fold)
+    ]
+    safe_failures = []
+    for dim, Ht, Wt, NC, nch in cases:
+        cnt = Wt if dim == "row" else (Ht if dim == "col" else Ht * Wt)
+        x, golden = _make_input_sum(device, dim, Ht, Wt, NC, nch)
+        scale = golden.abs().max().clamp_min(1.0).item()
+        for reload in RELOADS:
+            for u2d in (False, True):
+                # fold+U2D is now a library-ASSERT'd contract violation (fold reads the acc via SrcB, disabled
+                # for a to-dest CB); don't exercise it. fold is Default-acc only; CopySeed* covers U2D.
+                if reload == "fold" and u2d:
+                    continue
+                out = run_accumulate(
+                    x,
+                    dim=dim,
+                    Ht=Ht,
+                    Wt=Wt,
+                    NC=NC,
+                    accum="fp32",
+                    kernel_iters=2,
+                    num_chunks=nch,
+                    reload=reload,
+                    acc_unpack_to_dest=u2d,
+                )
+                got = _readout(out, dim)
+                assert got.numel() == golden.numel()
+                rel = (got - golden).abs().max().item() / scale
+                tag = f"{dim}/cnt={cnt}/{reload}/u2d={int(u2d)}"
+                logger.info(f"reload {tag:40s} rel_err={rel:.3e}")
+                if reload in ("copy_pairs", "copy_uniform", "copy_sfpu", "copy_zero") and not (rel < 0.02):
+                    safe_failures.append(f"{tag}: rel {rel:.3e}")
+    assert not safe_failures, "CopySeed modes must be correct for ANY accumulator (incl. U2D):\n" + "\n".join(
+        safe_failures
+    )
+
+
+def test_reduce_block_accumulate_reload_perf(device):
+    """Reload-mode PERF bake-off (device ns per chunked reduce). Measures FoldViaAdd / CopySeedPairs /
+    CopySeedUniform on a Default accumulator, plus CopySeedPairs on an UnpackToDestFp32 accumulator, across
+    odd/even and narrow/wide reduce counts. Answers: is FoldViaAdd meaningfully faster than the safe CopySeed
+    for a Default accumulator (worth keeping as an opt-in)? Correctness is gated elsewhere; this is ns only."""
+    trials = _int("REDBLK_TRIALS", "5")
+    ki = _int("REDBLK_KERNEL_ITERS", "200")
+    num_chunks = _int("REDBLK_CHUNKS", "4")
+    # (dim, Ht, Wt): cnt = Wt (row) / Ht (col). Cover odd/even and narrow/wide reduce counts.
+    cases = [
+        ("row", 1, 3),
+        ("row", 1, 4),
+        ("row", 1, 7),
+        ("row", 1, 8),
+        ("col", 3, 2),
+        ("col", 4, 2),
+        ("col", 7, 2),
+        ("col", 8, 2),
+    ]
+    # (reload, acc_unpack_to_dest) — fold only on Default (fold+U2D is incorrect, see reload_correctness).
+    modes = [
+        ("fold", False),
+        ("copy_pairs", False),
+        ("copy_uniform", False),
+        ("copy_sfpu", False),
+        ("copy_zero", False),
+        ("copy_pairs", True),
+        ("copy_sfpu", True),
+        ("copy_zero", True),
+    ]
+    inputs = {(d, h, w): _make_input_sum(device, d, h, w, 1, num_chunks)[0] for d, h, w in cases}
+    runners = {}
+    for d, h, w in cases:
+        for rl, u in modes:
+            runners[(d, h, w, rl, u)] = lambda dd=d, hh=h, ww=w, rr=rl, uu=u: run_accumulate(
+                inputs[(dd, hh, ww)],
+                dim=dd,
+                Ht=hh,
+                Wt=ww,
+                NC=1,
+                accum="fp32",
+                kernel_iters=ki,
+                num_chunks=num_chunks,
+                reload=rr,
+                acc_unpack_to_dest=uu,
+            )
+    samples = _measure(device, runners, trials, ki)
+
+    def med(d, h, w, rl, u):
+        return statistics.median(samples[(d, h, w, rl, u)])
+
+    lines = [
+        "# Reduce-block cross-call Accumulate: reload-mode ns bake-off (single core)",
+        "",
+        f"box={socket.gethostname()}  arch={_arch_label(device)}  N={trials} (median)  kernel-iters={ki}  "
+        f"num_chunks={num_chunks}  fp32 accum",
+        "ns = median device-kernel ns per chunked reduce. fold = FoldViaAdd (Default only); cp = CopySeedPairs; "
+        "cu = CopySeedUniform; cs = CopySeedSfpuAdd; (U2D) suffix = UnpackToDestFp32 accumulator (lossless).",
+        "",
+        "| dim | cnt | par | fold ns | cp (×) | cu (×) | cs (×) | cp(U2D) (×) | cs(U2D) (×) |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for d, h, w in cases:
+        cnt = w if d == "row" else h
+        par = "odd" if cnt & 1 else "even"
+        f = med(d, h, w, "fold", False)
+        cp = med(d, h, w, "copy_pairs", False)
+        cu = med(d, h, w, "copy_uniform", False)
+        cs = med(d, h, w, "copy_sfpu", False)
+        cpu = med(d, h, w, "copy_pairs", True)
+        csu = med(d, h, w, "copy_sfpu", True)
+        lines.append(
+            f"| {d} | {cnt} | {par} | {f:.0f} | {cp:.0f} ({cp / f:.2f}×) | {cu:.0f} ({cu / f:.2f}×) | "
+            f"{cs:.0f} ({cs / f:.2f}×) | {cpu:.0f} ({cpu / f:.2f}×) | {csu:.0f} ({csu / f:.2f}×) |"
+        )
+    report = "\n".join(lines) + "\n"
+    logger.info("\n" + report)
+    for d, h, w in cases:
+        cnt = w if d == "row" else h
+        logger.info(
+            f"RELOAD-PERF {d:6s} cnt={cnt} {'odd ' if cnt & 1 else 'even'}  "
+            f"fold={med(d, h, w, 'fold', False):.0f}  cp={med(d, h, w, 'copy_pairs', False):.0f}  "
+            f"cu={med(d, h, w, 'copy_uniform', False):.0f}  cs={med(d, h, w, 'copy_sfpu', False):.0f}  "
+            f"cz={med(d, h, w, 'copy_zero', False):.0f}  cp_U2D={med(d, h, w, 'copy_pairs', True):.0f}  "
+            f"cs_U2D={med(d, h, w, 'copy_sfpu', True):.0f}  cz_U2D={med(d, h, w, 'copy_zero', True):.0f} ns"
+        )
+    if report_path := os.environ.get("REDBLK_RELOAD_REPORT"):
+        Path(report_path).write_text(report)
