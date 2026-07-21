@@ -186,8 +186,20 @@ def create_multimodal_model(
         dtype = ttnn.bfloat8_b
         logger.info("Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
 
+    # The two vision model families cache their weights under different dtypes; pick the one
+    # this build will actually use so the warm-cache check/mark target the right directory.
+    cache_dtype = ttnn.bfloat8_b if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE else dtype
+
+    # Warm ttnn cache => skip the HF from_pretrained host load (the load that OOMs in prefill,
+    # #48509). checkpoint is None => decide here; {} => explicit/DP-reuse skip; populated => reuse.
+    loaded_real_weights = False
     if checkpoint is None:
-        checkpoint = tt_model_args.load_state_dict()
+        if not tt_model_args.dummy_weights and tt_model_args.weight_cache_is_complete(cache_dtype):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+            checkpoint = {}
+        else:
+            checkpoint = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights
 
     if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE:
         model = MistralTransformer(
@@ -207,6 +219,12 @@ def create_multimodal_model(
             configuration=tt_model_args,
             use_paged_kv_cache=use_paged_kv_cache,
         )
+
+    # If this run populated the cache from a cold host load, record completion so future runs
+    # can skip the load.
+    if loaded_real_weights:
+        tt_model_args.mark_weight_cache_complete(cache_dtype)
+
     return tt_model_args, model, checkpoint
 
 
