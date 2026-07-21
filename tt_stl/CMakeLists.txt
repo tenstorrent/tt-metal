@@ -18,10 +18,12 @@ target_sources(
             tt_stl/cleanup.hpp
             tt_stl/concepts.hpp
             tt_stl/fmt.hpp
+            tt_stl/hash.hpp
             tt_stl/indestructible.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
+            tt_stl/reflection_detail/reflection_traits.hpp
             tt_stl/small_vector.hpp
             tt_stl/llvm/llvm_small_vector.hpp
             tt_stl/span.hpp
