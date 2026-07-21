@@ -30,7 +30,7 @@ void kernel_main() {
     uint32_t width = get_arg_val<uint32_t>(5);      // H (elements per row)
 
     constexpr uint32_t cb_input_e4m3 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_scale_bcast_fp32 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(2);
     constexpr uint32_t input_e4m3_block_bytes = get_compile_time_arg_val(3);    // 128 (1 byte/elem)
     constexpr uint32_t block_ht = get_compile_time_arg_val(4);                  // BlockHt = 1
@@ -56,7 +56,7 @@ void kernel_main() {
     const auto scale = TensorAccessor(scale_args, scale_addr);
     Noc noc;
     CircularBuffer cb_input_e4m3_obj(cb_input_e4m3);
-    CircularBuffer cb_scale_bcast_obj(cb_scale_bcast);
+    CircularBuffer cb_scale_bcast_fp32_obj(cb_scale_bcast_fp32);
     CircularBuffer cb_scale_scratch_obj(cb_scale_scratch);
 
     // Reader-private scratch: up to tile_h tokens' full scale rows (one slot per token in a block).
@@ -121,9 +121,9 @@ void kernel_main() {
 
         // --- build the bcast operand: column 0 row r = scale[token_r][block_r] (face-aware walk) ---
         // (tok_off, block_idx_b) cursor walks the block rows in face order -> no per-row div/mod.
-        cb_scale_bcast_obj.reserve_back(1);
+        cb_scale_bcast_fp32_obj.reserve_back(1);
         CoreLocalMem<volatile uint32_t> scratch_mem(scratch);
-        CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_obj.get_write_ptr());
+        CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_fp32_obj.get_write_ptr());
         uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
         uint32_t block_idx_b = block_start_idx;
         uint32_t s = 0;
@@ -145,7 +145,7 @@ void kernel_main() {
             }
             face_base_off += FACE_ROW_STRIDE_BYTES;
         }
-        cb_scale_bcast_obj.push_back(1);
+        cb_scale_bcast_fp32_obj.push_back(1);
         cb_input_e4m3_obj.push_back(tiles_per_block);
     }
 }

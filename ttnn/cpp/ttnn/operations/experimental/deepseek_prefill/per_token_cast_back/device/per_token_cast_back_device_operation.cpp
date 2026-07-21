@@ -168,10 +168,11 @@ ttnn::Tensor per_token_cast_back(
     const Tensor& input_e4m3,
     const Tensor& input_scale,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool compute_is_bf16) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_dtype = output_dtype, .output_memory_config = output_memory_config};
+        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .compute_is_bf16 = compute_is_bf16};
     auto tensor_args = OperationType::tensor_args_t{.input_e4m3 = input_e4m3, .input_scale = input_scale};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

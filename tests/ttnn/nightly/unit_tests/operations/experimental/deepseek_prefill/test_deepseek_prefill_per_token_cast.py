@@ -238,9 +238,10 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("scale_dtype", ["fp32", "bf16"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_cast_back_dequant(device, out_dtype, shape):
+def test_cast_back_dequant(device, out_dtype, shape, scale_dtype):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, out_dtype)
     ttnn_dtype = getattr(ttnn, out_dtype)
@@ -256,10 +257,15 @@ def test_cast_back_dequant(device, out_dtype, shape):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn_dtype)
+    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        e4m3_tt, scale_tt, output_dtype=ttnn_dtype, compute_is_bf16=scale_dtype == "bf16"
+    )
     out = ttnn.to_torch(out_tt).float()
 
-    golden = input_e4m3.float() * input_scale.repeat_interleave(BLOCK_W, dim=-1)
+    # apples-to-apples: on the bf16 path the device narrows the scale to bf16 before the multiply,
+    # so the golden narrows it too
+    golden_scale = input_scale.to(torch.bfloat16).float() if scale_dtype == "bf16" else input_scale
+    golden = input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)
     if out_dtype == "bfloat16":
         golden = golden.to(torch_dtype).float()
 
@@ -269,13 +275,16 @@ def test_cast_back_dequant(device, out_dtype, shape):
 
     # Restrict to normal e4m3 values where relative tolerance is meaningful.
     normal = input_e4m3.float().abs() > 2.0**-6
+    # compute_is_bf16 runs the multiply in bf16/HiFi2 (vs fp32/HiFi4)
+    # which has a real precision cost, not a golden mismatch, so allow a slightly looser rtol.
+    rtol = 1.5e-2 if scale_dtype == "bf16" else 1e-2
     assert_quality(
         out[normal],
         golden[normal],
         pcc_threshold=0.999,
-        rtol=1e-2,
+        rtol=rtol,
         atol=1e-3,
-        label=f"dequant {out_dtype} shape={shape}",
+        label=f"dequant {out_dtype} scale={scale_dtype} shape={shape}",
     )
 
 

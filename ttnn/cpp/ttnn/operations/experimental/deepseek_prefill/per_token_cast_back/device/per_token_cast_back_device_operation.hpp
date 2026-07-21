@@ -34,5 +34,6 @@ ttnn::Tensor per_token_cast_back(
     const Tensor& input_e4m3,
     const Tensor& input_scale,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config);
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool compute_is_bf16 = false);
 }  // namespace ttnn::prim
