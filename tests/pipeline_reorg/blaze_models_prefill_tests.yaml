@@ -157,10 +157,10 @@
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
-    export DS_SPARSE_FABRIC=line
+    export DS_SPARSE_FABRIC=fabric2d
 
     mpirun --pernode --tag-output bash -lc '
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and line" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and fabric2d" -vvv --tb=short
     '
 
   test_type: dsa_mla
@@ -176,12 +176,12 @@
   cmd: |
     export MESH_DEVICE=TG
     export GLM51_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_1_mla_ref_cache
-    export DS_SPARSE_FABRIC=line
+    export DS_SPARSE_FABRIC=fabric2d
     # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference, plus the GLM-5.2 indexer-reuse
     # equivalence case (inject a prior-layer top-k == recompute). Random weights + on-the-fly CPU truth
     # -> no staged weights. Reuse shares the warm sparse-MLA JIT for this job (same op graph; glm_5_2 == glm_5_1 dims).
     mpirun --pernode --tag-output bash -lc '
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "(glm_5_1 and 8x4 and line) or indexer_reuse" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "(glm_5_1 and 8x4 and fabric2d) or indexer_reuse" -vvv --tb=short
     '
   test_type: dsa_mla_glm
   test_group: module
@@ -211,17 +211,16 @@
 - name: "Blaze - GLM-5.1 Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    export DS_SPARSE_FABRIC=line
     export GLM51_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.1-FP8/
     export TT_GLM51_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/GLM-5.1-Cache/CI
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm
     export GLM51_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_1_mla_ref_cache
     # Fused GLM-5.1 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
-    # composed CPU reference. Real weights via the prebuilt ttnn cache when present (random fallback
-    # otherwise; never rebuilds). -k glm51 so the shared glm_5_2 parametrization is not run here: its MoE
-    # block is skipped under the degenerate gate, and GLM-5.2 is covered by the DSA-MLA and MoE jobs.
+    # composed CPU reference on the fabric2d transport. Real weights via the prebuilt ttnn cache when present
+    # (random fallback otherwise; never rebuilds). -k glm51 so the shared glm_5_2 parametrization is not run
+    # here: its MoE block is skipped under the degenerate gate, and GLM-5.2 is covered by the DSA-MLA/MoE jobs.
     mpirun --pernode --tag-output bash -lc '
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and mesh-8x4 and glm51" -vvv --tb=short --timeout=300
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and fabric2d-mesh-8x4 and glm51" -vvv --tb=short --timeout=300
     '
   test_type: glm_prefill_block
   test_group: module
@@ -353,7 +352,7 @@
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
     mpirun --pernode --tag-output bash -lc '
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-chunks_eleven-ten_iters-margin5pct] -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-preload0-chunks_eleven-ten_iters-margin5pct] -xvs
     '
   test_type: kimi_chunked
   test_group: module

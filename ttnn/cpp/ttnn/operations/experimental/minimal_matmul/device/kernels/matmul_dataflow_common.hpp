@@ -324,9 +324,12 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Drain this row's outstanding write-source reads out of the cb_out L1 slot BEFORE cb_pop_front
+        // releases it back to the compute producer. Otherwise the producer can repack the freed slot while
+        // the noc_async_write_page reads are still in flight (WAR on the output CB source) -> corrupt output.
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -453,7 +456,9 @@ void write_block_sync_granular_split(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Flush this row's write-source reads out of the cb_out slot before releasing it (same WAR on the
+        // output CB as write_block_sync_granular above).
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }

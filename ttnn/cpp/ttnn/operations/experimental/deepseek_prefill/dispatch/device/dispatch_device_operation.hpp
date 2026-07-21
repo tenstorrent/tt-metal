@@ -52,12 +52,14 @@ prefill_dispatch(
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
     const std::optional<ttnn::Tensor>& padding_config,
+    const std::optional<ttnn::Tensor>& scales_tensor,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_dispatch = false,
-    uint32_t num_untilizers_per_sender = 2);
+    bool fp8_output = false,
+    bool fp8_scaled_input = false,
+    uint32_t num_workers_per_sender = 2);
 }  // namespace ttnn::prim

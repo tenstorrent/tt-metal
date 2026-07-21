@@ -45,9 +45,9 @@ public:
     //                                  Hi Level APIs
     // ======================================================================================
     [[nodiscard]] explicit Tensor() = default;
-    [[nodiscard]] Tensor(const Tensor& other);
+    [[nodiscard]] Tensor(const Tensor& other) = default;
     [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(const Tensor& other);
+    Tensor& operator=(const Tensor& other) = default;
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
@@ -245,7 +245,7 @@ public:
     const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
-    // Throws if the tensor is not allocated on a device.
+    // Returns nullptr if the tensor is not allocated on a device (on host/ deallocated).
     distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
@@ -264,11 +264,6 @@ public:
     static std::uint64_t next_tensor_id();
 
 private:
-    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
-    // If not set, the tensor can either be on host or allocated on a single device.
-    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
     void deallocate_impl(bool force);
 };
 

@@ -91,9 +91,13 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
 
 #ifdef ARCH_QUASAR
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
-// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers.
-FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(uint32_t stream, uint32_t first_stream_used) {
-    return uncached_l1_ptr<uint32_t>(DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (stream - first_stream_used));
+// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
+// selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
+// is the index of the first stream used by this CQ.
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
+    uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
+    return uncached_l1_ptr<uint32_t>(
+        DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + stream - first_stream_used));
 }
 #endif
 
