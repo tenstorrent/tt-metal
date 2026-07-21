@@ -3033,14 +3033,17 @@ class ModelArgs:
     WEIGHT_CACHE_MARKER = ".weights_complete"
     # Cache-format version embedded in the marker. Bump this whenever the set/naming/layout of
     # cached weight tensors changes in a way that an existing cache would not satisfy (e.g. a
-    # weight tensor is added or renamed without changing the layer count). A marker written by an
-    # older format is then rejected -> the run cold-loads and regenerates the cache, rather than
-    # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
-    WEIGHT_CACHE_FORMAT_VERSION = 1
+    # weight tensor is added or renamed without changing the layer count), OR when the marker
+    # schema itself changes. A marker written by an older format is rejected -> the run
+    # cold-loads and regenerates the cache, rather than building from a stale/incompatible cache.
+    #   v1: model/n_layers/mesh_shape validation only.
+    #   v2: also embeds a {key: [shape, dtype]} manifest so warm runs can build a dataless
+    #       placeholder state_dict (see placeholder_state_dict) instead of loading HF weights.
+    WEIGHT_CACHE_FORMAT_VERSION = 2
 
     def weight_cache_is_complete(self, dtype):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
-        fully built by a previous run.
+        fully built by a previous run and carries a weight manifest.
 
         When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
         state_dict is never read, so the caller can skip the expensive from_pretrained host
@@ -3069,14 +3072,28 @@ class ModelArgs:
             return False
         if meta.get("mesh_shape") != str(self.mesh_device.shape):
             return False
+        # Need the shape/dtype manifest to build the placeholder state_dict for a warm run.
+        if not meta.get("weights"):
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
 
-    def mark_weight_cache_complete(self, dtype):
+    def mark_weight_cache_complete(self, dtype, state_dict=None):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
-        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
+        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
+
+        state_dict (the real, just-loaded weights) is captured as a {key: [shape, dtype]}
+        manifest so a later warm run can reconstruct a dataless placeholder without touching HF."""
         cache_path = self.weight_cache_path(dtype)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
+        weights = {}
+        if state_dict is not None:
+            for k, v in state_dict.items():
+                shape = getattr(v, "shape", None)
+                dt = getattr(v, "dtype", None)
+                if shape is None or dt is None:
+                    continue  # skip non-tensor entries
+                weights[k] = [list(shape), str(dt)]
         try:
             cache_path.mkdir(parents=True, exist_ok=True)
             marker.write_text(
@@ -3087,12 +3104,64 @@ class ModelArgs:
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
                         "mesh_shape": str(self.mesh_device.shape),
+                        "is_moe": bool(getattr(self, "is_mixture_of_experts", False)),
+                        "weights": weights,
                     }
                 )
             )
-            logger.info(f"Marked ttnn weight cache complete: {marker}")
+            logger.info(f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights)")
         except OSError as e:
             logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
+
+    def placeholder_state_dict(self, dtype):
+        """Warm-cache build: return a lazy, dataless stand-in for the HF state_dict.
+
+        Every weight is served as an uninitialized CPU torch.empty of the shape/dtype recorded
+        in the marker manifest -- no from_pretrained, no weight bytes read from disk, so the
+        prefill host-OOM (#48509) is avoided. ttnn.as_tensor(cache_file_name=...) ignores this
+        placeholder on a cache hit (ttnn/operations/core.py) and loads the real weight from its
+        .tensorbin; the placeholder exists only to satisfy the host-side reshape ops
+        (permute/chunk/cat/transpose) the modules run before calling as_tensor. Guarded by
+        weight_cache_is_complete, so every as_tensor is guaranteed to hit and discard it.
+
+        The mapping is falsy (__bool__ -> False) so reference-building callers that test
+        `if not state_dict` (e.g. test_model_prefill) load real weights explicitly, while
+        modules that index it during construction still work."""
+        import collections.abc
+
+        marker = self.weight_cache_path(dtype) / self.WEIGHT_CACHE_MARKER
+        meta = json.loads(marker.read_text())
+        manifest = meta["weights"]
+        self.is_mixture_of_experts = bool(meta.get("is_moe", False))
+
+        dtype_cache = {}
+
+        def _to_dtype(s):
+            if s not in dtype_cache:
+                dtype_cache[s] = getattr(torch, s.rsplit(".", 1)[-1])
+            return dtype_cache[s]
+
+        class _PlaceholderStateDict(collections.abc.Mapping):
+            is_placeholder = True
+
+            def __init__(self, spec):
+                self._spec = spec  # key -> (shape, dtype_str)
+
+            def __bool__(self):
+                return False
+
+            def __getitem__(self, key):
+                shape, dt = self._spec[key]
+                return torch.empty(tuple(shape), dtype=_to_dtype(dt))
+
+            def __iter__(self):
+                return iter(self._spec)
+
+            def __len__(self):
+                return len(self._spec)
+
+        logger.info(f"Warm ttnn weight cache: built placeholder state_dict for {len(manifest)} weights (no HF load).")
+        return _PlaceholderStateDict(manifest)
 
     def get_model_config(self):
         return self.model_config
