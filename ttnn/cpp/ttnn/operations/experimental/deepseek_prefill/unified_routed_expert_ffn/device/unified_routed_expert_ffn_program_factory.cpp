@@ -60,6 +60,13 @@ constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 // bf8_b path's L1). The CT-arg index is passed either way; the CB just isn't
 // created (and never touched by the kernels) when x is already TILE.
 constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
+// Optional per-expert projection biases (gpt-oss, FUSE_BIAS). Each holds this
+// core's N-column slice of the (1, N) bias, read once by the reader and added
+// by the compute kernel (gate/up before the activation, down after the down
+// matmul). Allocated only when op.fuse_bias.
+constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
+constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
+constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -159,6 +166,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t p_ts = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t im_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
     const uint32_t out_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype()));
+    // Bias tile size (FUSE_BIAS): all three bias CBs share the gate-bias dtype
+    // (enforced in validation). Zero when unused so the estimators are unchanged
+    // on the bias-free path.
+    const uint32_t bias_ts =
+        op.fuse_bias ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_bias->dtype())) : 0;
     auto est_l1_bytes = [&](uint32_t gx, uint32_t pcM, uint32_t ibw_gu) -> uint64_t {
         const uint32_t pcN_gu = (N_gate_tiles_full + gx - 1) / gx;
         const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
@@ -179,6 +191,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         b += 2ull * 8 * out_ts;              // CB_OUT (subblock <= 8 tiles, staged x2)
         b += 2ull * pcM * ibw_d * im_ts;     // CB_IN0_DOWN_FULL
         b += 8192;                           // counts + idx scratch
+        // Bias CBs (single-buffered, one full per-core N-slice each): gate/up use
+        // pcN_gu tiles, down uses pcN_d. Must be accounted here or a shape near the
+        // L1 limit can pass GRID_X selection and then overflow at program build.
+        b += 1ull * (2 * pcN_gu + pcN_d) * bias_ts;
         return b;
     };
 
@@ -328,6 +344,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;                  // cb_mm_partials_d
         total += static_cast<uint64_t>(d_out_subblock_h * d_out_subblock_w * 2) * out_tile_size;  // cb_out
         total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;               // cb_in0_down_full
+        // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
+        // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
+        total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
         return total;
     };
 
@@ -638,6 +657,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             .set_page_size(CB_START_SCRATCH_READER, start_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_reader_cb_cfg);
 
+    // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
+    // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
+    // per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
+    const bool fuse_bias = op.fuse_bias;
+    if (fuse_bias) {
+        // Validation enforces gate/up/down biases share one dtype, so all three CBs
+        // (and the compute kernel's single unpack reconfig for gate/up) use it safely.
+        const tt::DataFormat bias_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_bias->dtype());
+        const uint32_t bias_tile_size = tt::tile_size(bias_df);
+        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
+        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
+        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/per_core_N_d, bias_tile_size);
+    }
+
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
     // kernel reads via get_compile_time_arg_val(idx) and the TensorAccessor
@@ -703,12 +736,27 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // (unread when read_x_at_offset is 0), keeping the CT-arg layout stable.
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
+    // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
+    // bias tensor accessors (gate, up, down). The reader reads them at the
+    // offset after start_args.next_compile_time_args_offset(). Only present when
+    // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
+    std::map<std::string, std::string> reader_defines{};
+    if (fuse_bias) {
+        reader_ct_args.push_back(CB_GATE_BIAS);
+        reader_ct_args.push_back(CB_UP_BIAS);
+        reader_ct_args.push_back(CB_DOWN_BIAS);
+        tt::tt_metal::TensorAccessorArgs(t.gate_bias->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.up_bias->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_bias->buffer()).append_to(reader_ct_args);
+        reader_defines["FUSE_BIAS"] = "1";
+    }
+
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_reader.cpp",
         core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args, reader_defines));
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
@@ -831,6 +879,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         {"cb_counts_scratch", CB_COUNTS_SCRATCH},
         {"cb_idx_scratch", CB_IDX_SCRATCH},
     };
+    if (fuse_bias) {
+        compute_named_args["cb_gate_bias"] = CB_GATE_BIAS;
+        compute_named_args["cb_up_bias"] = CB_UP_BIAS;
+        compute_named_args["cb_down_bias"] = CB_DOWN_BIAS;
+    }
 
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
@@ -844,6 +897,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
+    }
+    if (fuse_bias) {
+        // FUSE_BIAS: add gate/up bias (broadcast across rows) before the
+        // SwiGLU-OAI activation and down bias after the down matmul (gpt-oss).
+        compute_defines["FUSE_BIAS"] = "1";
     }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -976,9 +1034,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
-        // start_addr — last reader arg (see layout comment). Same buffer the
-        // writer gets; read by the reader only when read_x_at_offset.
+        // start_addr — reader arg at M_ROW_NOC_RT_OFFSET + 2*GRID_X (see layout
+        // comment). Same buffer the writer gets; read by the reader only when
+        // read_x_at_offset.
         reader_args.push_back(start_buffer->address());
+        // FUSE_BIAS: 3 bias addrs immediately after start_addr (read by the
+        // reader at start_offset + 1..3). Kept last so override can update them.
+        if (fuse_bias) {
+            reader_args.push_back(t.gate_bias->buffer()->address());
+            reader_args.push_back(t.up_bias->buffer()->address());
+            reader_args.push_back(t.down_bias->buffer()->address());
+        }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
@@ -1029,6 +1095,9 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t out_addr = tensor_return_value.buffer()->address();
     const uint32_t start_addr =
         t.expert_region_offsets.has_value() ? t.expert_region_offsets->buffer()->address() : out_addr;
+    // FUSE_BIAS appends 3 bias addrs after start_addr, so start is no longer the
+    // last reader arg. Recover its index from the presence of the bias tensors.
+    const bool has_bias = t.gate_bias.has_value();
 
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_id, core);
@@ -1038,8 +1107,14 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
-        // start_addr is the last reader arg (after the M-row NoC table).
-        reader_args[reader_args.size() - 1] = start_addr;
+        // start_addr sits before the (optional) 3 trailing bias addrs.
+        const size_t start_idx = reader_args.size() - 1 - (has_bias ? 3 : 0);
+        reader_args[start_idx] = start_addr;
+        if (has_bias) {
+            reader_args[reader_args.size() - 3] = t.gate_bias->buffer()->address();
+            reader_args[reader_args.size() - 2] = t.up_bias->buffer()->address();
+            reader_args[reader_args.size() - 1] = t.down_bias->buffer()->address();
+        }
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
