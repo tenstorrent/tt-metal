@@ -116,9 +116,11 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     auto device_id = device->id();
     auto& sysmem_mgr = device->sysmem_manager();
 
-    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size_);
+    // Allocate the FIFO plus a trailing slot for bytes_sent CONTIGUOUSLY (bytes_sent at data + fifo_size), so
+    // an L2CPU sender can derive the bytes_sent addr from the single FIFO addr param (see init_common's else).
+    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size_ + 64);
     hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
-    std::memset(hugepage_data_host_ptr_, 0, fifo_size_);
+    std::memset(hugepage_data_host_ptr_, 0, fifo_size_ + 64);
 
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
@@ -275,7 +277,13 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    bool can_use_pinned_memory = cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing();
+    // An X280 (L2CPU) sender writes to the host FIFO via the PCIe tile's OUTBOUND window, which covers the
+    // statically-mapped hugepage/sysmem channel -- NOT arbitrary IOMMU-pinned IOVAs. So for an L2CPU sender we
+    // MUST take the hugepage path (sysmem_manager region, reachable at pcie_base+offset like a normal device
+    // ring); the PinnedMemory/IOMMU path gives an IOVA the X280's posted write cannot reach. (Tensix senders go
+    // through the Tensix->PCIe ATU and can use PinnedMemory; the L2CPU cannot.)
+    bool can_use_pinned_memory =
+        (cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing()) && !sender_is_l2cpu_;
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -300,16 +308,14 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         connector_state_->clean_shutdown = 1;
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
-
-        auto* device = mesh_device->get_device(sender_core_.device_coord);
-        auto& sysmem_mgr = device->sysmem_manager();
-        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
-        hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
+        // bytes_sent lives contiguously right after the FIFO (init_host_buffer_hugepage reserved the slot), so
+        // the sender derives it as data_addr + fifo_size -- one FIFO addr param suffices (no separate region).
+        hugepage_bytes_sent_host_ptr_ = hugepage_data_host_ptr_ + fifo_size_ / sizeof(uint32_t);
         *const_cast<uint32_t*>(hugepage_bytes_sent_host_ptr_) = 0;
-
+        uint64_t bs_dev = ((static_cast<uint64_t>(data_info.addr_hi) << 32) | data_info.addr_lo) + fifo_size_;
         bytes_sent_info = data_info;
-        bytes_sent_info.addr_lo = bs_dev_addr;
-        bytes_sent_info.addr_hi = 0;
+        bytes_sent_info.addr_lo = static_cast<uint32_t>(bs_dev & 0xFFFFFFFFull);
+        bytes_sent_info.addr_hi = static_cast<uint32_t>(bs_dev >> 32);
     }
 
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);

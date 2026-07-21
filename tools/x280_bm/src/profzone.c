@@ -842,10 +842,14 @@ int main(uint64_t hartid) {
          * the X280 reads params fresh on the FIRST (cold) load but a later re-read of the same param returns
          * STALE 0 (the params line is evicted and refetches 0 -- the same reason the raw path caches host_base
          * in a local and never re-reads it). This was the whole bug. */
-        uint64_t packed = host_base; /* socket0 fifo lo32 | socket1 fifo lo32 << 32 */
+        uint64_t packed = host_base; /* socket0 fifo lo32 | socket1 fifo lo32 << 32 (hugepage dev addrs) */
         uint64_t total = hring_words * 4ull;
-        sk_fifo[0] = packed & 0xffffffffull;
-        sk_fifo[1] = (packed >> 32) & 0xffffffffull;
+        /* OR in the PCIe-outbound routing (NOC_XY_PCIE_ENCODING bit60). The socket FIFO now lives in the
+         * hugepage/sysmem channel (D2HSocket forces the hugepage path for L2CPU senders), reachable at
+         * pcie_base|offset exactly like the raw ring. get_noc_addr gave a bare sysmem offset (hi=0). */
+        uint64_t pbase = 0x1000000000000000ull;
+        sk_fifo[0] = pbase | (packed & 0xffffffffull);
+        sk_fifo[1] = pbase | ((packed >> 32) & 0xffffffffull);
         for (uint64_t h = 0; h < nread && h < 2; h++) {
             sk_fbytes[h] = total;
             sk_bsent[h] = sk_fifo[h] + total; /* D2HSocket: bytes_sent buffer immediately follows the FIFO */
