@@ -26,7 +26,6 @@ from .configuration_vibevoice import VibeVoiceConfig
 
 
 from .modeling_vibevoice import VibeVoiceModel, VibeVoicePreTrainedModel
-from .streamer import AudioStreamer, AsyncAudioStreamer
 
 logger = logging.get_logger(__name__)
 
@@ -352,7 +351,6 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
         prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
         synced_gpus: Optional[bool] = None,
         assistant_model: Optional["PreTrainedModel"] = None,
-        audio_streamer: Optional[Union[AudioStreamer, AsyncAudioStreamer]] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         speech_tensors: Optional[torch.FloatTensor] = None,
@@ -473,17 +471,7 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
             if stop_check_fn is not None and stop_check_fn():
                 if verbose:
                     print(f"Generation stopped externally at step {step + 1}")
-                # End the audio streamer if it exists
-                if audio_streamer is not None:
-                    audio_streamer.end()
                 break
-
-            # Check if audio_streamer has been ended (stopped externally)
-            if audio_streamer is not None and hasattr(audio_streamer, "finished_flags"):
-                if any(audio_streamer.finished_flags):
-                    if verbose:
-                        print(f"Audio generation stopped externally at step {step + 1}")
-                    break
 
             if finished_tags.all():
                 if hasattr(progress_bar, "set_description"):
@@ -578,8 +566,6 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
                     finished_tags[new_eos_indices] = True
                     if verbose:
                         print(f"Samples {new_eos_indices.tolist()} reached EOS token at step {step + 1}.", flush=True)
-                    if audio_streamer is not None:
-                        audio_streamer.end(new_eos_indices)
 
             # Check if any sample reached its maximum generation length
             max_length_reached = step >= max_step_per_sample
@@ -592,8 +578,6 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
                         f"Samples {new_max_length_indices.tolist()} reached max generation length at step {step + 1}.",
                         flush=True,
                     )
-                if audio_streamer is not None:
-                    audio_streamer.end(new_max_length_indices)
 
             # speech_end
             diffusion_end_indices = (next_tokens == generation_config.speech_end_id).nonzero(as_tuple=False).squeeze(1)
@@ -744,11 +728,6 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
                     if not finished_tags[idx]:
                         audio_chunks[idx].append(audio_chunk[i])
 
-                # Add streaming support here
-                if audio_streamer is not None:
-                    # Stream the audio chunks immediately
-                    audio_streamer.put(audio_chunk, diffusion_indices)
-
                 # Encode audio to semantic features using semantic streaming cache
                 semantic_features = self.model.semantic_tokenizer.encode(
                     audio_chunk,
@@ -768,9 +747,6 @@ class VibeVoiceForConditionalGenerationInference(VibeVoicePreTrainedModel, Gener
 
             # Set inputs_embeds for next iteration
             inputs_embeds = next_inputs_embeds
-
-        if audio_streamer is not None:
-            audio_streamer.end()
 
         # Concatenate audio chunks for each sample
         final_audio_outputs = []
