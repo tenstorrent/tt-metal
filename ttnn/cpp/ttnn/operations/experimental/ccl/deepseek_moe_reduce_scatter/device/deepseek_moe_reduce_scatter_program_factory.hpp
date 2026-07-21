@@ -6,38 +6,25 @@
 
 #include "deepseek_moe_reduce_scatter_device_operation_types.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
 struct DeepseekMoEReduceScatterMeshWorkloadFactory {
-    struct shared_variables_t {
-        tt::tt_metal::GlobalSemaphore op_semaphore;
-        tt::tt_metal::GlobalSemaphore pre_op_barrier_semaphore;
-        DeepseekMoEReduceScatterProgramArtifacts program_artifacts;
-    };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    // Contract (2): declarative WorkloadDescriptor.  Builds one
+    // ProgramDescriptor per coord.
+    //
+    // The two workload-scoped GlobalSemaphores (op + pre_op_barrier) are
+    // allocated up front and parked in wd.semaphores so they outlive the
+    // cached MeshWorkload.  Dynamic CBs that point at input/intermediate
+    // tensor buffers are wired up via CBDescriptor::buffer so the framework
+    // patches their addresses on every dispatch.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const DeepseekMoEReduceScatterParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const DeepseekMoEReduceScatterInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const DeepseekMoEReduceScatterParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
         const DeepseekMoEReduceScatterInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value,
-        const tt::tt_metal::GlobalSemaphore& op_semaphore,
-        const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const DeepseekMoEReduceScatterParams& operation_attributes,
-        const DeepseekMoEReduceScatterInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim

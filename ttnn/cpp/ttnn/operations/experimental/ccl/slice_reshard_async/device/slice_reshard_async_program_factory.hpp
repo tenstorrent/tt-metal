@@ -6,40 +6,27 @@
 
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation_types.hpp"
 
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct SliceReshardAsyncSharedVariables {
-    uint32_t num_directions = 0;
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-};
-
 struct SliceReshardAsyncProgramFactory {
-    using shared_variables_t = SliceReshardAsyncSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    // Contract (2): declarative WorkloadDescriptor.  Builds one
+    // ProgramDescriptor per coord (ring_index varies across the mesh).
+    //
+    // GlobalSemaphores (final_semaphore, barrier_semaphore) live on
+    // SliceReshardAsyncParams — caller-allocated, so no workload-scoped
+    // semaphore allocation needed here.  Tensor buffer addresses are patched on
+    // cache hit via BufferBindings (emplace_runtime_args); workload-scoped
+    // semaphores have stable addresses and are written as raw uint32_t (there
+    // is no slow-path rebuild in contract (2)).
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const SliceReshardAsyncParams& args,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const Tensor& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const SliceReshardAsyncParams& args,
-        const Tensor& tensor_args,
-        Tensor& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const SliceReshardAsyncParams& args,
-        const ttnn::MeshCoordinate& mesh_coord,
-        const Tensor& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim

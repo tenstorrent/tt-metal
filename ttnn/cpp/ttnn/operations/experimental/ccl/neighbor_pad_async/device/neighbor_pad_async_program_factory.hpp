@@ -5,52 +5,26 @@
 #pragma once
 
 #include "neighbor_pad_async_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/distributed/types.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct NeighborPadAsyncSharedVariables {
-    // H fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
-    tt::tt_metal::KernelHandle h_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle h_writer_kernel_id = 0;
-
-    // Local copy (1 consolidated reader kernel, 1 consolidated writer kernel)
-    tt::tt_metal::KernelHandle local_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle local_writer_kernel_id = 0;
-
-    // W fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
-    tt::tt_metal::KernelHandle w_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle w_writer_kernel_id = 0;
-
-    bool has_local_copy = false;
-    bool has_w_fabric = false;
-};
-
 struct NeighborPadAsyncMeshWorkloadFactory {
-    using shared_variables_t = NeighborPadAsyncSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const NeighborPadAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const NeighborPadAsyncInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+    // Contract (2): declarative WorkloadDescriptor.  Builds one
+    // ProgramDescriptor per coord (forward / backward neighbour availability,
+    // device index, etc. vary across the mesh).
+    //
+    // The GlobalSemaphores (h, w, barrier) live on NeighborPadAsyncParams
+    // (caller allocated) so the factory needs no workload-scoped resources.
+    // Buffer base addresses (input/output) are wired up via Buffer* runtime
+    // args so the framework patches them on every dispatch.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const NeighborPadAsyncParams& operation_attributes,
         const NeighborPadAsyncInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const NeighborPadAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const NeighborPadAsyncInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim

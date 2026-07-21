@@ -28,7 +28,6 @@ struct SliceReshardAsyncDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<SliceReshardAsyncProgramFactory>;
-    using shared_variables_t = SliceReshardAsyncProgramFactory::shared_variables_t;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

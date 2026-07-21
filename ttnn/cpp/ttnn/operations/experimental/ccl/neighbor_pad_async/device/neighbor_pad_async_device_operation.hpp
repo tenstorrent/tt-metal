@@ -6,6 +6,7 @@
 
 #include "neighbor_pad_async_device_operation_types.hpp"
 #include "neighbor_pad_async_program_factory.hpp"
+#include <variant>
 
 namespace ttnn::experimental::prim {
 

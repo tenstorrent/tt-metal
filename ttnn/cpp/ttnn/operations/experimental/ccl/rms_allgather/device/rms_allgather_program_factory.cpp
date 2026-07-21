@@ -9,11 +9,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
@@ -31,7 +31,16 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactory::create_at(
+namespace {
+
+// Build a ProgramDescriptor for one coord.  Globally-allocated CBs (input,
+// residual, stats, output) are wired up via CBDescriptor::buffer so the
+// framework patches their addresses on every dispatch.  Local semaphores
+// (mcast, reduce, stats_filled) are program-scoped, reserved via
+// SemaphoreDescriptor slots.  The fabric GlobalSemaphore lives on
+// operation_attributes; its address is re-emitted as a plain uint32_t runtime
+// arg on each dispatch.
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const RMSAllGatherParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coord,
     const RMSAllGatherInputs& tensor_args,
@@ -90,7 +99,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -381,12 +390,23 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         // (Both operands are already in absolute coords here.)
         not_all_to_all_workers = all_cores.subtract(all_to_all_cores);
     }
-    // Mcast args
-    auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto post_reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto stats_filled_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    // Mcast semaphores — program-scoped.  Reserve slots via SemaphoreDescriptor;
+    // the framework hands out the real semaphore allocations on cache miss.
+    auto reserve_sem = [&desc](const CoreRangeSet& crs, uint32_t initial) -> uint32_t {
+        const uint32_t id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = crs,
+            .initial_value = initial,
+        });
+        return id;
+    };
+    auto reduce_sender_semaphore_id = reserve_sem(all_cores, INVALID);
+    auto reduce_receiver_semaphore_id = reserve_sem(all_cores, INVALID);
+    auto reduce_second_stage_semaphore_id = reserve_sem(all_cores, INVALID);
+    auto post_reduce_sender_semaphore_id = reserve_sem(all_cores, INVALID);
+    auto stats_filled_semaphore = reserve_sem(all_cores, INVALID);
 
     // reader defines
     std::map<std::string, std::string> reader_mcast_sender_defines;
@@ -404,63 +424,55 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     }
 
     // Create pre circular buffers
-
-    // in1 sharded
+    // Helper to push a CBDescriptor with a single format and optional buffer.
+    auto add_cb = [&desc](
+                      const CoreRangeSet& crs,
+                      uint32_t total_size,
+                      uint8_t cb_index,
+                      tt::DataFormat data_format,
+                      uint32_t page_size,
+                      Buffer* buf = nullptr) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = crs,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = cb_index,
+                .data_format = data_format,
+                .page_size = page_size,
+            }},
+            .buffer = buf,
+        });
+    };
 
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig in2_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in2_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
-    // in4 scaler-c
+    add_cb(all_cores, in2_CB_size, in2_cb_index, tt::DataFormat::Float16_b, bfloat16_tile_size);
+    // in4 scaler-c (pre)
     uint32_t pre_in4_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig pre_in4_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{pre_in4_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(pre_in4_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in4_cb_config);
+    add_cb(all_cores, in2_CB_size, pre_in4_cb_index, tt::DataFormat::Float16_b, bfloat16_tile_size);
     // ex_partial2
     uint32_t ex_cb_partial2_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
-        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
-            .set_page_size(ex_cb_partial2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
+    add_cb(all_cores, ex_partial_CB_size, ex_cb_partial2_index, cb_data_format, single_tile_size);
     // ex2
     uint32_t ex2_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig ex2_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
-            .set_page_size(ex2_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
-
+    add_cb(all_cores, ex_CB_size, ex2_cb_index, cb_data_format, single_tile_size);
     // ex_external2
     uint32_t ex_cb_external2_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
-        tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
-            .set_page_size(ex_cb_external2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
-
-    // x
+    add_cb(all_cores, ex_external_CB_size, ex_cb_external2_index, cb_data_format, single_tile_size);
+    // x (pre)
     uint32_t pre_x_cb_index = tt::CBIndex::c_6;
-    tt::tt_metal::CircularBufferConfig pre_x_cb_config =
-        tt::tt_metal::CircularBufferConfig(x_CB_size, {{pre_x_cb_index, cb_data_format}})
-            .set_page_size(pre_x_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_x_cb_config);
-
-    // out
+    add_cb(all_cores, x_CB_size, pre_x_cb_index, cb_data_format, single_tile_size);
+    // cb_to_allgather_writer (stats output before allgather)
     uint32_t cb_to_allgather_writer = tt::CBIndex::c_7;
-    tt::tt_metal::CircularBufferConfig cb_to_allgather_config =
-        tt::tt_metal::CircularBufferConfig(stats_single_tile_size, {{cb_to_allgather_writer, stats_data_format}})
-            .set_page_size(cb_to_allgather_writer, stats_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_to_allgather_config);
-
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
+    add_cb(all_cores, stats_single_tile_size, cb_to_allgather_writer, stats_data_format, stats_single_tile_size);
+    // reserved packet header CB
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_8;
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
+    add_cb(
+        all_cores,
+        num_packet_headers_storable * packet_header_size_bytes * 2,
+        reserved_packet_header_CB_index,
+        tt::DataFormat::RawUInt32,
+        packet_header_size_bytes);
 
     uint32_t updated_residual_index = tt::CBIndex::c_21;
     uint32_t original_input_index = tt::CBIndex::c_22;
@@ -468,138 +480,94 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t in0_cb_index = tt::CBIndex::c_12;
     uint32_t pre_in0_cb_index = tt::CBIndex::c_5;
 
-    CBHandle cb_in1 = 0;
-    CBHandle cb_add_out = 0;
-    CBHandle cb_in0 = 0;
-    CBHandle pre_cb_in0 = 0;
-
+    // Globally-allocated CBs over input/residual tensors.  Setting
+    // CBDescriptor::buffer wires the framework's dynamic-CB patcher: on cache
+    // hits the CB address is updated from the bound buffer.
     if (b) {
-        // Tensors that do the b fusing
-        tt::tt_metal::CircularBufferConfig in1_cb_config =
-            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{original_input_index, in_data_format}})
-                .set_page_size(original_input_index, in_single_tile_size)
-                .set_globally_allocated_address(*a.buffer());
-        cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
-
-        tt::tt_metal::CircularBufferConfig add_out_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{updated_residual_index, residual_data_format}})
-                .set_page_size(updated_residual_index, residual_single_tile_size)
-                .set_globally_allocated_address(*b.value().buffer());
-        cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
-
-        // Other CBs should use the now updated b as an input
-        tt::tt_metal::CircularBufferConfig in0_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in0_cb_index, residual_data_format}})
-                .set_page_size(in0_cb_index, residual_single_tile_size)
-                .set_globally_allocated_address(*b.value().buffer());
-        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
-
-        tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{pre_in0_cb_index, residual_data_format}})
-                .set_page_size(pre_in0_cb_index, residual_single_tile_size)
-                .set_globally_allocated_address(*b.value().buffer());
-        pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
+        // Tensors that do the b fusing.  cb_in1 is over a (input).
+        add_cb(all_cores, in0_CB_size, original_input_index, in_data_format, in_single_tile_size, a.buffer());
+        // cb_add_out / cb_in0 / pre_cb_in0 are over b (residual).
+        add_cb(
+            all_cores,
+            in1_CB_size,
+            updated_residual_index,
+            residual_data_format,
+            residual_single_tile_size,
+            b.value().buffer());
+        add_cb(
+            all_cores, in1_CB_size, in0_cb_index, residual_data_format, residual_single_tile_size, b.value().buffer());
+        add_cb(
+            all_cores,
+            in1_CB_size,
+            pre_in0_cb_index,
+            residual_data_format,
+            residual_single_tile_size,
+            b.value().buffer());
     } else {
         // There is no b so just use a as the input
-        tt::tt_metal::CircularBufferConfig in0_cb_config =
-            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
-                .set_page_size(in0_cb_index, in_single_tile_size)
-                .set_globally_allocated_address(*a.buffer());
-        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
-
-        tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
-            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{pre_in0_cb_index, in_data_format}})
-                .set_page_size(pre_in0_cb_index, in_single_tile_size)
-                .set_globally_allocated_address(*a.buffer());
-        pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
+        add_cb(all_cores, in0_CB_size, in0_cb_index, in_data_format, in_single_tile_size, a.buffer());
+        add_cb(all_cores, in0_CB_size, pre_in0_cb_index, in_data_format, in_single_tile_size, a.buffer());
     }
     // Create post circular buffers
 
     // ex_global
     uint32_t ex_global_cb_index = tt::CBIndex::c_9;
-    tt::tt_metal::CircularBufferConfig ex_global_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
-            .set_page_size(ex_global_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
+    add_cb(all_cores, ex_global_CB_size, ex_global_cb_index, cb_data_format, single_tile_size);
 
-    // out
+    // out — backed by output buffer when skipping write-back (RMS in-place).
     uint32_t output_cb_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig output_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
-            .set_page_size(output_cb_index, out_single_tile_size);
-    if (skip_write_back) {
-        output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
-    }
-    CBHandle cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    add_cb(
+        all_cores,
+        out_CB_size,
+        output_cb_index,
+        out_data_format,
+        out_single_tile_size,
+        skip_write_back ? output.buffer() : nullptr);
 
     // gamma
     uint32_t in5_cb_index = tt::CBIndex::c_11;
     if (gamma.has_value()) {
-        tt::tt_metal::CircularBufferConfig in5_cb_config =
-            tt::tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_cb_data_format}})
-                .set_page_size(in5_cb_index, gamma_single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
+        add_cb(all_cores, in5_CB_size, in5_cb_index, gamma_cb_data_format, gamma_single_tile_size);
     }
 
     // in3 eps
     uint32_t in3_cb_index = tt::CBIndex::c_13;
-    tt::tt_metal::CircularBufferConfig in3_cb_config =
-        tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in3_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+    add_cb(all_cores, in3_CB_size, in3_cb_index, tt::DataFormat::Float16_b, bfloat16_tile_size);
 
     // in4 scaler-c
     uint32_t in4_cb_index = tt::CBIndex::c_14;
-    tt::tt_metal::CircularBufferConfig in4_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in4_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    add_cb(all_cores, in2_CB_size, in4_cb_index, tt::DataFormat::Float16_b, bfloat16_tile_size);
 
     // x
-    uint32_t x_cb_index;
-    x_cb_index = tt::CBIndex::c_15;
-    tt::tt_metal::CircularBufferConfig x_cb_config =
-        tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
-            .set_page_size(x_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
+    uint32_t x_cb_index = tt::CBIndex::c_15;
+    add_cb(all_cores, x_CB_size, x_cb_index, cb_data_format, single_tile_size);
 
     uint32_t output_reshard_cb_index = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
-            .set_page_size(output_reshard_cb_index, out_single_tile_size);
-    CBHandle cb_output_reshard = 0;
     if (!skip_write_back) {
-        output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
-        cb_output_reshard = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_reshard_cb_config);
+        add_cb(
+            all_cores,
+            out_reshard_CB_size,
+            output_reshard_cb_index,
+            out_data_format,
+            out_single_tile_size,
+            output.buffer());
     }
 
     // cb_var
     uint32_t cb_var_index = tt::CBIndex::c_17;
-    tt::tt_metal::CircularBufferConfig cb_var_config =
-        tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
-            .set_page_size(cb_var_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_var_config);
+    add_cb(sender_cores, ex_global_CB_size, cb_var_index, cb_data_format, single_tile_size);
 
     // cb_stats_reduced
-    uint32_t cb_stats_reduced_index;
-    cb_stats_reduced_index = tt::CBIndex::c_18;
-    tt::tt_metal::CircularBufferConfig stats_reduced_cb_config =
-        tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
-            .set_page_size(cb_stats_reduced_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_reduced_cb_config);
+    uint32_t cb_stats_reduced_index = tt::CBIndex::c_18;
+    add_cb(sender_cores, stats_reduced_cb_size, cb_stats_reduced_index, cb_data_format, single_tile_size);
 
-    // cb_stats
+    // cb_stats — backed by stats buffer
     uint32_t cb_stats_index = tt::CBIndex::c_19;
-    tt::tt_metal::CircularBufferConfig stats_cb_config =
-        tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
-            .set_page_size(cb_stats_index, single_tile_size)
-            .set_globally_allocated_address(*stats.value().buffer());
-    auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
+    add_cb(sender_cores, stats_cb_size, cb_stats_index, cb_data_format, single_tile_size, stats.value().buffer());
+
+    // signaling CB
     uint32_t signaling_cb = tt::CBIndex::c_20;
-    tt::tt_metal::CircularBufferConfig signaling_cb_config =
-        tt::tt_metal::CircularBufferConfig(2, {{signaling_cb, tt::DataFormat::Float16_b}})
-            .set_page_size(signaling_cb, 2);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, signaling_cb_config);
+    add_cb(all_cores, 2, signaling_cb, tt::DataFormat::Float16_b, 2);
 
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
@@ -750,109 +718,120 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
 
-    auto reader_mcast_sender_kernels_id = CreateKernel(
-        program,
+    auto push_kernel = [&desc](
+                           const std::string& kernel_source,
+                           const CoreRangeSet& crs,
+                           const std::vector<uint32_t>& ct_args,
+                           const std::map<std::string, std::string>& defines,
+                           KernelDescriptor::ConfigDescriptor config) -> size_t {
+        KernelDescriptor kd;
+        kd.kernel_source = kernel_source;
+        kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        kd.core_ranges = crs;
+        kd.compile_time_args = ct_args;
+        for (const auto& [k, v] : defines) {
+            kd.defines.emplace_back(k, v);
+        }
+        kd.config = std::move(config);
+        desc.kernels.push_back(std::move(kd));
+        return desc.kernels.size() - 1;
+    };
+
+    size_t reader_mcast_sender_idx = push_kernel(
         sender_reader_kernel_file,
         sender_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        reader_mcast_sender_compile_time_args,
+        reader_mcast_sender_defines,
+        DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
             .noc = reader_noc,
-            .noc_mode =
-                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = reader_mcast_sender_compile_time_args,
-            .defines = reader_mcast_sender_defines});
-    KernelHandle reader_mcast_receiver_kernels_id_all_to_all = -1;
-    KernelHandle reader_mcast_receiver_kernels_id = -1;
+            .noc_mode = (use_noc1_only) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC,
+        });
+    size_t reader_mcast_receiver_all_to_all_idx = static_cast<size_t>(-1);
+    size_t reader_mcast_receiver_idx = static_cast<size_t>(-1);
     if (use_mcast) {
-        reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
-            program,
+        reader_mcast_receiver_all_to_all_idx = push_kernel(
             receiver_reader_kernel_file,
             all_to_all_workers_except_sender,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            reader_mcast_receiver_all_to_all_compile_time_args,
+            reader_mcast_receiver_defines,
+            DataMovementConfigDescriptor{
+                .processor = DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
-                .noc_mode =
-                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-                .compile_args = reader_mcast_receiver_all_to_all_compile_time_args,
-                .defines = reader_mcast_receiver_defines});
+                .noc_mode = (use_noc1_only) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC,
+            });
     }
     if (num_none_all_to_all_workers > 0) {
-        reader_mcast_receiver_kernels_id = CreateKernel(
-            program,
+        reader_mcast_receiver_idx = push_kernel(
             receiver_reader_kernel_file,
             not_all_to_all_workers,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            reader_mcast_receiver_compile_time_args,
+            reader_mcast_receiver_defines,
+            DataMovementConfigDescriptor{
+                .processor = DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
-                .noc_mode =
-                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-                .compile_args = reader_mcast_receiver_compile_time_args,
-                .defines = reader_mcast_receiver_defines});
+                .noc_mode = (use_noc1_only) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC,
+            });
     }
 
     // writer kernel + all gather kernel
     std::string writer_kernel =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_writer.cpp";
-    auto writer_mcast_sender_kernels_id = CreateKernel(
-        program,
+    size_t writer_mcast_sender_idx = push_kernel(
         writer_kernel,
         all_to_all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        writer_compile_time_args,
+        writer_defines,
+        DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
-            .noc_mode =
-                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = writer_compile_time_args,
-            .defines = writer_defines});
-    KernelHandle writer_mcast_receiver_kernels_id = -1;
+            .noc_mode = (use_noc1_only) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC,
+        });
+    size_t writer_mcast_receiver_idx = static_cast<size_t>(-1);
     if (num_none_all_to_all_workers > 0) {
         writer_compile_time_args.at(0) = 0;
-        writer_mcast_receiver_kernels_id = CreateKernel(
-            program,
+        writer_mcast_receiver_idx = push_kernel(
             writer_kernel,
             not_all_to_all_workers,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            writer_compile_time_args,
+            writer_defines,
+            DataMovementConfigDescriptor{
+                .processor = DataMovementProcessor::RISCV_1,
                 .noc = writer_noc,
-                .noc_mode =
-                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-                .compile_args = writer_compile_time_args,
-                .defines = writer_defines});
+                .noc_mode = (use_noc1_only) ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC,
+            });
     }
 
     // compute kernel
-    std::string compute_kernel_file;
-    compute_kernel_file =
+    std::string compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/compute/"
         "rms_compute.cpp";
-    KernelHandle compute_kernels_id = -1;
-    auto compute_kernels_id_all_to_all = CreateKernel(
-        program,
+    size_t compute_kernel_idx = static_cast<size_t>(-1);
+    size_t compute_kernel_all_to_all_idx = push_kernel(
         compute_kernel_file,
         all_to_all_cores,
-        tt::tt_metal::ComputeConfig{
+        compute_compile_time_args,
+        compute_defines,
+        ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = compute_defines});
+        });
     if (num_none_all_to_all_workers > 0) {
         compute_compile_time_args.at(4) = 0;
-        compute_kernels_id = CreateKernel(
-            program,
+        compute_kernel_idx = push_kernel(
             compute_kernel_file,
             not_all_to_all_workers,
-            tt::tt_metal::ComputeConfig{
+            compute_compile_time_args,
+            compute_defines,
+            ComputeConfigDescriptor{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
-                .compile_args = compute_compile_time_args,
-                .defines = compute_defines});
+            });
     }
 
     // Runtime Args
-    std::vector<KernelHandle> writer_kernel_ids;
-    writer_kernel_ids.reserve(cores.size());
     float cinv_pre = (1.0f / num_blocks);  // bcast-cores scaler
     float cinv = (1.0f / num_distributed_devices);
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
@@ -932,9 +911,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             compute_args.push_back((uint32_t)is_second_stage_reader);
             compute_args.push_back((uint32_t)(!(use_two_stage_reduce && (!is_second_stage_reader))));
             compute_args.push_back((uint32_t)num_distributed_devices);
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
+            desc.kernels[compute_kernel_all_to_all_idx].runtime_args.emplace_back(core, std::move(compute_args));
         } else {
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
+            TT_FATAL(compute_kernel_idx != static_cast<size_t>(-1), "non-all-to-all compute kernel was not created");
+            desc.kernels[compute_kernel_idx].runtime_args.emplace_back(core, std::move(compute_args));
         }
 
         if (width_index == 0) {
@@ -958,7 +938,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             mcast_sender_args.push_back(core.y - start_core.y);
             mcast_sender_args.insert(mcast_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mcast_sender_args.insert(mcast_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-            tt::tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id, core, mcast_sender_args);
+            desc.kernels[reader_mcast_sender_idx].runtime_args.emplace_back(core, std::move(mcast_sender_args));
         } else if (
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
@@ -976,8 +956,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             mcast_receiver_args.push_back(core.y - start_core.y);
             mcast_receiver_args.insert(mcast_receiver_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mcast_receiver_args.insert(mcast_receiver_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-            tt::tt_metal::SetRuntimeArgs(
-                program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
+            desc.kernels[reader_mcast_receiver_all_to_all_idx].runtime_args.emplace_back(
+                core, std::move(mcast_receiver_args));
         } else {
             std::vector<uint32_t> mcast_receiver_args;
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
@@ -986,7 +966,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             mcast_receiver_args.push_back(0);
             mcast_receiver_args.push_back(in0_mcast_noc_x[0]);
             mcast_receiver_args.push_back(in0_mcast_noc_y[0]);
-            tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
+            desc.kernels[reader_mcast_receiver_idx].runtime_args.emplace_back(core, std::move(mcast_receiver_args));
         }
         // Set all gather runtime args
 
@@ -1009,10 +989,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 (device_index + input_tile_id_start) % stats_tensor_shard_num_pages;
             std::vector<uint32_t> stats_tensor_cores_x;
             std::vector<uint32_t> stats_tensor_cores_y;
-            for (uint32_t i = input_tile_id_start / stats_tensor_shard_num_pages;
-                 i < (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages;
-                 i++) {
-                auto this_core = mesh_device->worker_core_from_logical_core(stats_cores_this_device[i]);
+            for (uint32_t j = input_tile_id_start / stats_tensor_shard_num_pages;
+                 j < (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages;
+                 j++) {
+                auto this_core = mesh_device->worker_core_from_logical_core(stats_cores_this_device[j]);
                 stats_tensor_cores_x.push_back(this_core.x);
                 stats_tensor_cores_y.push_back(this_core.y);
             }
@@ -1034,15 +1014,15 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             all_gather_rts.push_back(forward_fabric_node_id.has_value());
             if (forward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, forward_fabric_node_id.value(), i, program, {core}, all_gather_rts);
+                tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    target_device_fabric_node_id, forward_fabric_node_id.value(), i, desc, core, all_gather_rts);
             }
 
             all_gather_rts.push_back(backward_fabric_node_id.has_value());
             if (backward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, backward_fabric_node_id.value(), i, program, {core}, all_gather_rts);
+                tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    target_device_fabric_node_id, backward_fabric_node_id.value(), i, desc, core, all_gather_rts);
             }
         }
         // Set writer runtime args
@@ -1123,6 +1103,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 writer_mcast_sender_args.push_back(cinv_pre_bits);
             }
             writer_mcast_sender_args.push_back(i);  // Core ID to limit number of cores to do all gather on
+            // stats address is at index 2 of all_gather_rts; track its final index in writer args.
+            const size_t stats_final_idx_s = writer_mcast_sender_args.size() + 2;
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_sender_args.at(0) = writer_mcast_sender_args.size();
@@ -1137,18 +1119,29 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 writer_mcast_post_sender_args.push_back(cinv_bits);
             }
             writer_mcast_post_sender_args.push_back(e.u);
+            // Record the index where gamma_dram_addr lives (within writer_mcast_post_sender_args).
+            const size_t gamma_post_idx = writer_mcast_post_sender_args.size();
             writer_mcast_post_sender_args.push_back(gamma_dram_addr);
             writer_mcast_post_sender_args.push_back(gamma_tile_start_id);
 
             // Add args for write back (reshard)
             writer_mcast_post_sender_args.insert(
                 writer_mcast_post_sender_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
+            const size_t gamma_final_idx = writer_mcast_sender_args.size() + gamma_post_idx;
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(),
                 writer_mcast_post_sender_args.begin(),
                 writer_mcast_post_sender_args.end());
-            tt::tt_metal::SetRuntimeArgs(program, writer_mcast_sender_kernels_id, core, writer_mcast_sender_args);
-            writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
+            desc.kernels[writer_mcast_sender_idx].runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+            // Register tensor buffers as BufferBindings so the framework patches their
+            // addresses on cache hit (contract-2 has no slow-path rebuild). stats is
+            // a required tensor; gamma is optional (skip binding if absent — 0 is fine).
+            desc.kernels[writer_mcast_sender_idx].buffer_bindings.push_back(
+                {core, static_cast<uint32_t>(stats_final_idx_s), stats.value().buffer()});
+            if (gamma.has_value()) {
+                desc.kernels[writer_mcast_sender_idx].buffer_bindings.push_back(
+                    {core, static_cast<uint32_t>(gamma_final_idx), gamma.value().buffer()});
+            }
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args = {0};
             CoreCoord mcast_start, mcast_end;
@@ -1168,128 +1161,57 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             writer_mcast_receiver_args.push_back(mcast_end.y);
             writer_mcast_receiver_args.push_back(cinv_pre_bits);
             writer_mcast_receiver_args.push_back(i);  // Core ID to limit number of cores to do all gather on
+            // stats address is at index 2 of all_gather_rts; track its final index.
+            const size_t stats_final_idx_r = writer_mcast_receiver_args.size() + 2;
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
             std::vector<uint32_t> writer_mcast_post_receiver_args;
             writer_mcast_post_receiver_args.push_back(cinv_bits);
             writer_mcast_post_receiver_args.push_back(e.u);
+            const size_t gamma_post_idx_r = writer_mcast_post_receiver_args.size();
             writer_mcast_post_receiver_args.push_back(gamma_dram_addr);
             writer_mcast_post_receiver_args.push_back(gamma_tile_start_id);
             // Add args for write back (reshard)
             writer_mcast_post_receiver_args.insert(
                 writer_mcast_post_receiver_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
+            const size_t gamma_final_idx_r = writer_mcast_receiver_args.size() + gamma_post_idx_r;
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(),
                 writer_mcast_post_receiver_args.begin(),
                 writer_mcast_post_receiver_args.end());
-            // std::cout << "writer rcv args are( ";
-            // for (int i=0; i<writer_mcast_receiver_args.size(); i++)
-            //{
-            //     std::cout << writer_mcast_receiver_args.at(i) <<" ";
-            // }
-            // std::cout << ")\n";
-            tt::tt_metal::SetRuntimeArgs(program, writer_mcast_receiver_kernels_id, core, writer_mcast_receiver_args);
-            writer_kernel_ids.push_back(writer_mcast_receiver_kernels_id);
-        }
-    }
-
-    return cached_program_t(
-        std::move(program),
-        RMSAllGatherSharedVariables{
-            .writer_kernel_ids = std::move(writer_kernel_ids),
-            .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
-            .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
-            .num_none_all_to_all_workers = num_none_all_to_all_workers,
-            .pre_cb_in0 = pre_cb_in0,
-            .cb_in1 = cb_in1,
-            .cb_add_out = cb_add_out,
-            .cb_in0 = cb_in0,
-            .cb_stats = cb_stats,
-            .cb_output = cb_output,
-            .cb_output_reshard = cb_output_reshard,
-            .cores = cores});
-}
-
-RMSAllGatherMeshWorkloadFactory::cached_mesh_workload_t RMSAllGatherMeshWorkloadFactory::create_mesh_workload(
-    const RMSAllGatherParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const RMSAllGatherInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    // Create programs for each coordinate in tensor_coords
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-            auto cached_program = create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value);
-            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
-            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
-        }
-    }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
-}
-
-void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const RMSAllGatherParams& operation_attributes,
-    const RMSAllGatherInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    // Update runtime arguments for each program in the workload using shared variables
-    for (auto& [range, shared_vars] : cached_workload.shared_variables) {
-        auto& program = cached_workload.workload.get_programs().at(range);
-
-        auto* const src_buffer_a = tensor_args.input.buffer();
-        const auto& b_tensor = tensor_args.residual_input_tensor;
-        const auto& gamma_tensor = tensor_args.weight;
-        const auto& stats_tensor = tensor_args.stats;
-        auto* const dst_buffer = tensor_return_value.buffer();
-        bool skip_write_back = tensor_return_value.shard_spec().value() == tensor_args.input.shard_spec().value();
-
-        auto& writer_sender_args_by_core = GetRuntimeArgs(program, shared_vars.writer_mcast_sender_kernels_id);
-        auto& writer_receiver_args_by_core = shared_vars.num_none_all_to_all_workers > 0
-                                                 ? GetRuntimeArgs(program, shared_vars.writer_mcast_receiver_kernels_id)
-                                                 : writer_sender_args_by_core;
-        const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
-
-        for (uint32_t i = 0; i < shared_vars.cores.size(); ++i) {
-            const CoreCoord& core = shared_vars.cores[i];
-            const auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
-
-            if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
-                auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                runtime_args[7] = operation_attributes.semaphore.address();
-                runtime_args[9] = stats_tensor.value().buffer()->address();
-                // runtime_args[0] holds the start of the post arguments, apply that offset
-                runtime_args[runtime_args[0] + 2] = gamma_address;
-            } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
-                auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                runtime_args[7] = operation_attributes.semaphore.address();
-                runtime_args[9] = stats_tensor.value().buffer()->address();
-                runtime_args[runtime_args[0] + 2] = gamma_address;
+            desc.kernels[writer_mcast_receiver_idx].runtime_args.emplace_back(
+                core, std::move(writer_mcast_receiver_args));
+            desc.kernels[writer_mcast_receiver_idx].buffer_bindings.push_back(
+                {core, static_cast<uint32_t>(stats_final_idx_r), stats.value().buffer()});
+            if (gamma.has_value()) {
+                desc.kernels[writer_mcast_receiver_idx].buffer_bindings.push_back(
+                    {core, static_cast<uint32_t>(gamma_final_idx_r), gamma.value().buffer()});
             }
         }
-
-        // Repoint to the input buffers
-        if (b_tensor.has_value()) {
-            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in1, *src_buffer_a);
-            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_add_out, *b_tensor.value().buffer());
-            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in0, *b_tensor.value().buffer());
-            UpdateDynamicCircularBufferAddress(program, shared_vars.pre_cb_in0, *b_tensor.value().buffer());
-        } else {
-            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in0, *src_buffer_a);
-            UpdateDynamicCircularBufferAddress(program, shared_vars.pre_cb_in0, *src_buffer_a);
-        }
-        if (!skip_write_back) {
-            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output_reshard, *dst_buffer);
-        } else {
-            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *dst_buffer);
-        }
-        auto* const stats_buffer = stats_tensor.value().buffer();
-        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_stats, *stats_buffer);
     }
+
+    return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor RMSAllGatherMeshWorkloadFactory::create_workload_descriptor(
+    const RMSAllGatherParams& operation_attributes,
+    const RMSAllGatherInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+
+    for (const auto& coord : coords) {
+        tt::tt_metal::ProgramDescriptor desc =
+            build_program_descriptor(operation_attributes, coord, tensor_args, tensor_return_value);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+
+    return wd;
 }
 
 }  // namespace ttnn::experimental::prim
