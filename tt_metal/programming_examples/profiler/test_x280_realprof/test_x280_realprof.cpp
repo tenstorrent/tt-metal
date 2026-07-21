@@ -214,6 +214,8 @@ int main(int argc, char** argv) {
                                // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
+    bool bringup = false;      // --bringup: STEP1 -- boot profzone as a PERSISTENT active FW and confirm it
+                               // stays resident (idle FW never re-entered); no workload, no P_STOP, exit resident.
     bool do_pin = false;       // --pin: bind each flusher to its own core (0,1,...). Pair with `taskset -c 2-N`
                                // on the process so cores 0/1 are otherwise empty -> flushers can't be descheduled
                                // by the live-Tracy consumer/send-worker/capture (the measured stall source).
@@ -292,6 +294,8 @@ int main(int argc, char** argv) {
             do_tracy = true;
         } else if (a == "--pin") {
             do_pin = true;
+        } else if (a == "--bringup") {
+            bringup = true;  // STEP1: boot profzone as a persistent active FW + confirm; no workload, no P_STOP
         } else if (a == "--csv") {
             do_csv = true;
             if (i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0) {
@@ -491,6 +495,46 @@ int main(int argc, char** argv) {
             "[boot] idle up, profzone RUNNING, %llu readers + %llu relay(s)\n",
             (unsigned long long)nread,
             (unsigned long long)nrelay);
+    }
+
+    if (bringup) {
+        // ---- STEP 1: confirm profzone is a PERSISTENT active FW ----
+        // The idle FW is only the launch pad (reset is released ONCE -> JUMP -> profzone). With NO P_STOP,
+        // profzone must stay in its drain loop indefinitely and must NEVER bounce back to idle. Verify via the
+        // boot-phase word: RUNNING_ACTIVE_FW while resident, RETURNED_TO_IDLE if it bounced.
+        constexpr uint64_t X280_BOOT_PHASE = 0x080160C0ull;  // X280_BOOT_HANDSHAKE_BASE(0x08016000)+0xC0
+        constexpr uint64_t PHASE_RUNNING = 0x7E570001ull;    // X280_BOOT_PHASE_RUNNING_ACTIVE_FW
+        constexpr uint64_t PHASE_RET_IDLE = 0x1D1E0002ull;   // X280_BOOT_PHASE_RETURNED_TO_IDLE
+        auto phname = [&](uint64_t p) {
+            return p == PHASE_RUNNING ? "RUNNING_ACTIVE_FW" : (p == PHASE_RET_IDLE ? "RETURNED_TO_IDLE" : "?");
+        };
+        auto harts_at_work = [&]() {
+            for (uint64_t h = 0; h < nharts; h++) {
+                if (drv.lim_rd_u64(harthb((int)h)) != 3) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        uint64_t ph0 = drv.lim_rd_u64(X280_BOOT_PHASE);
+        printf(
+            "[bringup] booted: %llu harts @ work loop, phase=0x%llx (%s)\n",
+            (unsigned long long)nharts,
+            (unsigned long long)ph0,
+            phname(ph0));
+        for (int s = 1; s <= 3; s++) {  // hold WITHOUT P_STOP -> must remain resident
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            printf(
+                "[bringup]  +%ds: phase=0x%llx harts@work=%s\n",
+                s,
+                (unsigned long long)drv.lim_rd_u64(X280_BOOT_PHASE),
+                harts_at_work() ? "all" : "MISSING");
+        }
+        bool ok = (drv.lim_rd_u64(X280_BOOT_PHASE) == PHASE_RUNNING) && harts_at_work();
+        printf(
+            "[bringup] RESULT: %s (profzone left RESIDENT -- no P_STOP, no idle bounce)\n",
+            ok ? "PASS -- persistent active FW" : "FAIL -- bounced to idle or a hart dropped");
+        std::_Exit(ok ? 0 : 1);
     }
 
     // ---- host consumer: drain the ONE host ring into a RAW capture buffer as fast as possible; the
