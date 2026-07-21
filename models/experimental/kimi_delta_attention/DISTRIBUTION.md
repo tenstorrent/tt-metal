@@ -7,6 +7,13 @@
 > (order-of-magnitude, to be firmed up by a profiler in the perf phase). Citations are `file:line` in
 > the tt-metal main tree.
 
+> **⚠ Correction (2026-07-21).** §3 below used **400 GB/s** effective fabric — a bits/bytes error.
+> The real roofline is **100 GB/s (LoudBox) / 50 GB/s (Galaxy)**. With the correct BW, prefill is
+> **CCL-bound** (Galaxy ~0.27:1), *not* the "8–18:1 compute-bound" §3 states, and the SP state-scan is
+> significant on Galaxy (not "negligible"). See **`ROOFLINE.md`** for the corrected, authoritative
+> numbers. Option B (SP=8×TP=4) is unchanged as the recommendation — CCL-bound only sharpens *why*
+> (it minimizes collective volume). The §3 table is left as-is with this note for provenance.
+
 ## TL;DR
 
 Map KDA exactly onto the production MLA mesh — **SP=8 (axis 0, sequence) × TP=4 (axis 1, heads)** — and
