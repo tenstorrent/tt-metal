@@ -76,6 +76,7 @@ static void pin_thread_to_core(std::thread& t, int core) {
 #include <impl/context/metal_context.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <tools/profiler/x280_driver.hpp>
+#include <tools/profiler/x280_profzone_boot.hpp>  // shared profzone bring-up (single source of truth)
 #include <umd/device/types/core_coordinates.hpp>
 
 #include "prof_packet.h"
@@ -96,10 +97,9 @@ using tt::tt_metal::MetalContext;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::profiler::X280Driver;
 
-// --- LIM map (MUST match tools/x280_bm/src/profstream.c) ---
+// --- LIM map (MUST match tools/x280_bm/src/profstream.c). MBOX_COORDS/SRCLUT_BASE now live in the shared
+//     bring-up header (x280_profzone_boot.hpp); only what the host hot-path still touches stays here. ---
 static constexpr uint64_t MBOX_PARAMS = 0x08011000ULL;
-static constexpr uint64_t MBOX_COORDS = 0x08011200ULL;
-static constexpr uint64_t SRCLUT_BASE = 0x08014000ULL;
 // SENT pointer now lives in HOST SYSMEM (ring trailer), not LIM -- see sent_off(). Only HACKED stays in LIM.
 static constexpr uint64_t HACKED_BASE = 0x08017200ULL;  // per-hart, host writes, X280 reads (stride 0x40)
 static uint64_t HACKED_ADDR_H(uint64_t h) { return HACKED_BASE + h * 0x40; }
@@ -417,77 +417,44 @@ int main(int argc, char** argv) {
         cluster.write_sysmem(z.data(), (uint32_t)z.size(), data_off, device_id, 0);
     }
 
-    // ---- boot ----
+    // ---- boot: profzone as a RESIDENT active FW via the shared bring-up (single source of truth;
+    //      see tools/profiler/x280_profzone_boot.hpp). Same params/SRCLUT/handoff/verify the manager uses. ----
     X280Driver drv(cluster, device_id, l2cpu);
+    namespace pz = tt::tt_metal::profiler;
+    pz::ProfzoneBootCfg bcfg;
+    bcfg.idle_fw = idle_fw;
+    bcfg.active_fw = active_fw;
+    bcfg.pll_mhz = pll;
+    bcfg.pcie_enc = pcie_enc;
+    bcfg.host_base = host_base;
+    bcfg.prof_l1 = prof_l1;
+    bcfg.num_cores = (uint64_t)num_cores;
+    bcfg.hring_words = hring_words;
+    bcfg.ndh = ndh;
+    bcfg.nread = nread;
+    bcfg.ndrain = ndrain;
+    bcfg.coords = coords.data();
+    bcfg.coords_bytes = (uint32_t)coords.size();
+    bcfg.read_noc = read_noc;
+    bcfg.direct = direct;
+    bcfg.split_noc = split_noc;
+    bcfg.wnoc1 = wnoc1;
+    bcfg.nodrain = nodrain;
+    bcfg.fullread = fullread;
+    bcfg.bulkcore = bulkcore;
+    bcfg.dualrelay = dualrelay;
+    bcfg.adaptive = adaptive;
+    uint64_t nharts = 0;
     bool half_broken = false;
-    if (!drv.ensure_idle(idle_fw, pll, std::chrono::milliseconds(3000), half_broken)) {
-        fprintf(stderr, "[boot] idle FW not up (half_broken=%d) -- needs `tt-smi -r %d`\n", half_broken, device_id);
+    if (!pz::boot_profzone(drv, bcfg, nharts, half_broken)) {
+        fprintf(
+            stderr,
+            "[boot] profzone bring-up failed (half_broken=%d) -- `tt-smi -r %d`\n",
+            (int)half_broken,
+            device_id);
         std::_Exit(1);
     }
-    {  // zero HACKED (LIM) + STAGECTL (PROD/CONS) BEFORE boot -- no init race. SENT now lives in host sysmem
-       // (zeroed with the rings above), so nothing to zero in LIM for it.
-        std::vector<uint8_t> z(512, 0);
-        for (uint64_t h = 0; h < ndh; h++) {
-            drv.write_block(z.data(), 8, HACKED_ADDR_H(h));
-        }
-        drv.write_block(z.data(), 512, 0x08018000ULL);  // STAGECTL
-    }
-    drv.write_block(coords.data(), (uint32_t)coords.size(), MBOX_COORDS);
-    {  // precompute the STICKY-SRC lookup table: lane L -> 8 B packet
-        std::vector<uint8_t> lut(NL * 8, 0);
-        for (uint32_t L = 0; L < NL; L++) {
-            pack<uint32_t>(lut, L * 8 + 0, pp_src_w0(L));
-            pack<uint32_t>(lut, L * 8 + 4, pp_src_w1(L));
-        }
-        drv.write_block(lut.data(), (uint32_t)lut.size(), SRCLUT_BASE);
-    }
-    std::vector<uint8_t> params(64, 0);
-    pack<uint64_t>(params, 0x00, pcie_enc);
-    pack<uint64_t>(params, 0x08, host_base);
-    pack<uint64_t>(params, 0x10, prof_l1);
-    pack<uint64_t>(params, 0x18, (uint64_t)num_cores);
-    pack<uint64_t>(params, 0x20, (uint64_t)hring_words);
-    pack<uint64_t>(params, 0x28, 0);  // P_STOP
-    pack<uint64_t>(
-        params,
-        0x30,
-        read_noc | (direct ? 0x100ull : 0ull) | (split_noc ? 0x200ull : 0ull) | (wnoc1 ? 0x800ull : 0ull) |
-            (nodrain ? 0x1000ull : 0ull) | (fullread ? 0x2000ull : 0ull) | (bulkcore ? 0x4000ull : 0ull) |
-            (dualrelay ? 0x8000ull : 0ull) | (adaptive ? 0x10000ull : 0ull));  // ...15=dualrelay 16=adaptive
-    pack<uint64_t>(params, 0x38, direct ? ndrain : nread);  // P_NREAD = drain-hart count in direct mode
-    drv.write_block(params.data(), (uint32_t)params.size(), MBOX_PARAMS);
     uint64_t nrelay = dualrelay ? nread : 1;
-    uint64_t nharts = direct ? ndrain : nread + nrelay;
-    for (uint64_t h = 0; h < nharts; h++) {
-        drv.lim_wr_u64(harthb((int)h), 0);
-    }
-    if (!drv.handoff_to_active_fw(active_fw, std::chrono::milliseconds(3000))) {
-        fprintf(stderr, "[boot] active FW (profstream) did not stamp RUNNING\n");
-        std::_Exit(1);
-    }
-    {
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        bool all = false;
-        while (std::chrono::steady_clock::now() < deadline) {
-            all = true;
-            for (uint64_t h = 0; h < nharts; h++) {
-                if (drv.lim_rd_u64(harthb((int)h)) != 3) {
-                    all = false;
-                }
-            }
-            if (all) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        if (!all) {
-            fprintf(
-                stderr,
-                "[boot] not all %llu harts reached work loop -- flaky boot, `tt-smi -r`\n",
-                (unsigned long long)nharts);
-            std::_Exit(1);
-        }
-    }
     if (direct) {
         printf("[boot] idle up, profzone RUNNING, %llu direct drain hart(s)\n", (unsigned long long)ndrain);
     } else {
