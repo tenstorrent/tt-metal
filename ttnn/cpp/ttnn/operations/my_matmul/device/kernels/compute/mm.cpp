@@ -62,7 +62,10 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 
-                pack_tile_block(0, cb_out, dst_size);
+                uint32_t out_tile_base = (block_iter_m * num_blocks_n + block_iter_n) * dst_size;
+                for (uint32_t i = 0; i < dst_size; i++) {
+                    pack_tile<true>(i, cb_out, out_tile_base + i);
+                }
 
                 tile_regs_release();
             }
