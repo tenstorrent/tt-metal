@@ -1,0 +1,16 @@
+started_at_utc=20260717T022642Z
+repo=/home/mvasiljevic/tt-metal
+codex_home=/home/mvasiljevic/codex-runs/03-multichip-decoder-tiiuae_falcon3_7b_base_-20260717T022642Z/codex_home
+codex_bin=/home/mvasiljevic/.local/bin/codex
+hf_model=tiiuae/Falcon3-7B-Base
+model_dir=models/autoports/tiiuae_falcon3_7b_base
+runner=app-server
+approval_policy=never
+sandbox=danger-full-access
+prompt_files:
+- .agents/prompts/model_bringup_multigoal/03-multichip-decoder.txt
+stage_1_objective_chars=3186
+stage_1_skills=autofix,multichip,stage-review,tt-device-usage
+stage_1_missing_skills=
+stage_1_thread_id=019f6de5-c85f-7eb1-a722-22efac520e63
+stage_1_terminal_status=blocked

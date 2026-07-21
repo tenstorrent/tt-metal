@@ -1,0 +1,3 @@
+{"ts": "20260717T022642Z", "direction": "send", "message": {"id": "f0de5eff-5e86-4d1f-883a-a28de34bc0bf", "method": "initialize", "params": {"clientInfo": {"name": "tt-metal-multigoal", "title": "TT Metal Multigoal Runner", "version": "1"}, "capabilities": {"experimentalApi": true}}}}
+{"ts": "20260717T022643Z", "direction": "recv", "message": {"id": "f0de5eff-5e86-4d1f-883a-a28de34bc0bf", "result": {"userAgent": "tt-metal-multigoal/0.144.4 (Ubuntu 24.4.0; x86_64) unknown (tt-metal-multigoal; 1)", "codexHome": "/home/mvasiljevic/codex-runs/03-multichip-decoder-tiiuae_falcon3_7b_base_-20260717T022642Z/codex_home", "platformFamily": "unix", "platformOs": "linux"}}}
+{"ts": "20260717T022643Z", "direction": "send", "message": {"method": "initialized"}}
