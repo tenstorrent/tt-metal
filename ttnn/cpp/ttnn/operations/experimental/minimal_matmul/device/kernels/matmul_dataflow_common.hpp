@@ -330,7 +330,6 @@ void write_block_sync_granular(
         noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -462,5 +461,4 @@ void write_block_sync_granular_split(
         noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
