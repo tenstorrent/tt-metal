@@ -13,15 +13,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-# Ensure sibling tool modules resolve regardless of cwd (this file may be run as
-# a script from anywhere).
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Repo root, resolved from this file's location (tools/bringup -> tools -> repo
+# root). Used as the base directory for confining user-supplied paths so a
+# malicious manifest/output path cannot escape the intended scope.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tracer_op_specs import resolve_within_repo
+
+def _resolve_within_repo(user_path: Any, *, label: str) -> str:
+    """Resolve ``user_path`` against the repo root and confine it there.
+
+    Uses an absolute-path + ``startswith`` check against ``_REPO_ROOT`` so that
+    dynamic (CLI/user) input cannot escape the repo tree via traversal or an
+    out-of-tree absolute path.
+    """
+    resolved = os.path.abspath(os.path.join(_REPO_ROOT, os.fspath(user_path)))
+    if not resolved.startswith(_REPO_ROOT):
+        raise ValueError(f"{label} escapes repo root {_REPO_ROOT!r}: {user_path!r} (resolved {resolved})")
+    return resolved
 
 
 def _parse_only(value: Optional[str]) -> Optional[List[str]]:
@@ -32,7 +43,12 @@ def _parse_only(value: Optional[str]) -> Optional[List[str]]:
 
 
 def _load_manifest_records(manifest_path: Path) -> List[Dict[str, Any]]:
-    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    # Confine the (possibly user-supplied) manifest path to the repo root before
+    # reading it, to prevent path traversal outside the intended scope.
+    resolved = os.path.abspath(os.path.join(_REPO_ROOT, os.fspath(manifest_path)))
+    if not resolved.startswith(_REPO_ROOT):
+        raise ValueError(f"manifest path escapes repo root {_REPO_ROOT!r}: {manifest_path!r} (resolved {resolved})")
+    data = json.loads(Path(resolved).read_text(encoding="utf-8"))
     return list(data.get("records", []))
 
 
@@ -134,8 +150,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    manifest_path = resolve_within_repo(args.manifest)
-    out_test = resolve_within_repo(args.out_test)
+    manifest_path = Path(_resolve_within_repo(args.manifest, label="--manifest"))
+    out_test = Path(_resolve_within_repo(args.out_test, label="--out-test"))
     out_test.parent.mkdir(parents=True, exist_ok=True)
 
     # Absolute path to the bringup tools directory (where tracer_test_harness.py

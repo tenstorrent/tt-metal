@@ -208,7 +208,13 @@ def record_from_mapping(raw: Mapping[str, Any], idx: int) -> Record:
 
 def load_manifest(manifest_path: Any) -> List[Record]:
     """Load a manifest JSON file into a list of ``Record`` objects."""
-    data = json.loads(resolve_within_repo(manifest_path).read_text(encoding="utf-8"))
+    # Confine the (possibly user-supplied) manifest path to the repo root before
+    # reading it, to prevent path traversal outside the intended scope.
+    base = str(_REPO_ROOT)
+    resolved = os.path.abspath(os.path.join(base, os.fspath(manifest_path)))
+    if not resolved.startswith(base):
+        raise ValueError(f"manifest path escapes repo root {base!r}: {manifest_path!r} (resolved {resolved})")
+    data = json.loads(Path(resolved).read_text(encoding="utf-8"))
     records = data.get("records", []) if isinstance(data, dict) else []
     return [record_from_mapping(r, i) for i, r in enumerate(records)]
 

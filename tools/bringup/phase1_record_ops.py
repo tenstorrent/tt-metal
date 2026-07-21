@@ -9,12 +9,16 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.nn as nn
 
+# Repo root, resolved from this file's location (tools/bringup -> tools -> repo
+# root). Used as the base directory for confining user-supplied paths so a
+# malicious output path cannot escape the intended scope.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Ensure sibling tool modules resolve regardless of cwd (this file may be run as
 # a script from anywhere).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from trace_manifest_validation import format_report, validate_manifest
-from tracer_op_specs import resolve_within_repo
 from unet_vgg19 import UNetVGG19
 
 
@@ -117,7 +121,12 @@ def main():
 
     torch.manual_seed(args.seed)
 
-    out_dir = resolve_within_repo(args.out)
+    # Confine the (possibly user-supplied) output dir to the repo root before
+    # creating files under it, to prevent path traversal outside the intended scope.
+    out_dir_resolved = os.path.abspath(os.path.join(_REPO_ROOT, os.fspath(args.out)))
+    if not out_dir_resolved.startswith(_REPO_ROOT):
+        raise ValueError(f"--out escapes repo root {_REPO_ROOT!r}: {args.out!r} (resolved {out_dir_resolved})")
+    out_dir = Path(out_dir_resolved)
     tensors_dir = out_dir / "tensors"
     tensors_dir.mkdir(parents=True, exist_ok=True)
 
