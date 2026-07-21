@@ -182,7 +182,9 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      # Package the wheel from the compiled tree instead of a second manylinux compile.
+      # Sanity tests run in the build's container family, so a non-portable wheel is fine.
+      build-inplace-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
