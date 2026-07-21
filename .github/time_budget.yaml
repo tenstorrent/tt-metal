@@ -132,7 +132,7 @@ ttnn:
     wh_galaxy_sweeps: 60   # lead galaxy (obs ~26/job)
     wh_n150_sweeps: 75     # lead(15) + model_traced(60); obs ~6 / ~25 per job
     wh_n300_sweeps: 60     # model_traced (obs ~30/job)
-    wh_t3k_sweeps: 90      # model_traced (obs ~48/job — slowest lane)
+    wh_t3k_sweeps: 60      # model_traced (obs ~48/job); capped at the impl's 60-min hard job timeout
     bh_p100a_sweeps: 30    # model_traced (obs ~13/job)
     bh_p150b_sweeps: 30    # model_traced (obs ~13/job)
     bh_p300a_sweeps: 20    # model_traced (obs ~6/job)
