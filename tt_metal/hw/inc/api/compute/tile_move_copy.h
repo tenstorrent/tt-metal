@@ -115,6 +115,51 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
         dst_tile_index, in_cb_id)));
 }
 
+// clang-format off
+/**
+ * Copies a contiguous block of ``ntiles`` tiles from the specified input CB into the
+ * DST register buffer starting at a chosen DST index. The source tiles are read from
+ * the input CB at positions ``[start_in_tile_index, start_in_tile_index + ntiles)``
+ * relative to the CB's current ``fifo_rd_ptr`` — i.e. ``start_in_tile_index`` is a
+ * read-only tile offset into the fronted region, NOT into the DST register buffer.
+ * The function does NOT advance ``fifo_rd_ptr``; the caller is responsible for
+ * ``cb_wait_front(n)`` covering at least ``start_in_tile_index + ntiles`` tiles
+ * before the call, and for ``cb_pop_front`` separately if/when the region is no
+ * longer needed.
+ *
+ * Two index parameters, two distinct meanings:
+ *   start_in_tile_index   tile offset into the SOURCE CB's fronted region (the read
+ *                         starts at fifo_rd_ptr + start_in_tile_index * page_size).
+ *   start_dst_tile_index  tile index in the DST register buffer where the first
+ *                         copied tile lands (DST is filled sequentially from there
+ *                         through start_dst_tile_index + ntiles - 1).
+ *
+ * The DST register buffer must be in acquired state via ``acquire_dst``. The
+ * unpacker / math pipeline executes the copy as a single block to amortize init
+ * overhead across the ntiles tiles. This call is blocking and is only available on
+ * the compute engine.
+ *
+ * Operates in tandem with ``cb_reserve_back`` / ``cb_push_back`` / ``cb_wait_front``
+ * / ``cb_pop_front`` for the producer-consumer FIFO protocol — the source-offset
+ * read here enables index-based access into a fronted region without a per-tile
+ * pop, useful for K-block partials reload patterns where the same fronted region
+ * holds multiple sub-block slots accessed by offset.
+ *
+ * NOTE: copy_block_matmul_partials doesn't need explicit initialization function prior
+ * to its call. Other op-specific initialization functions (such as ``tilize_init``,
+ * ``copy_tile_to_dst_init_short``, etc.) ensure proper initialization of the unpacker
+ * / math pipeline.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name                 | Description                                              | Type     | Valid Range                                          | Required |
+ * |------------|----------------------|----------------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Function   | in_cb_id             | The identifier of the source circular buffer (CB)        | uint32_t | 0 to 31                                              | True     |
+ * | Function   | start_in_tile_index  | Tile offset within in_cb_id's fronted region (read base) | uint32_t | start_in_tile_index + ntiles <= fronted-region size  | True     |
+ * | Function   | start_dst_tile_index | First DST register index to write                        | uint32_t | start_dst_tile_index + ntiles <= DST size            | True     |
+ * | Function   | ntiles               | Number of tiles to copy                                  | uint32_t | start_dst_tile_index + ntiles <= DST size            | True     |
+ */
+// clang-format on
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
