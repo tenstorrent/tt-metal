@@ -88,7 +88,7 @@ RUN source /tmp/python-version.env && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
     source ${PYTHON_ENV_DIR}/bin/activate && \
-    uv pip install --no-cache uv build numpy setuptools==80 && \
+    uv pip install --no-cache uv build numpy setuptools==80 auditwheel==6.7.0 patchelf==0.17.2.4 && \
     uv clean --force
 
 # Export as scratch image with only the venv

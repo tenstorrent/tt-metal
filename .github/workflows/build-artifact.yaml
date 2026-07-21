@@ -764,7 +764,6 @@ jobs:
 
           # auditwheel bundles transitively-linked libs (libtracy etc.) so the wheel is
           # self-contained; targets manylinux_2_35 (ubuntu 22.04 glibc) = in-family only.
-          uv pip install auditwheel patchelf
           LD_LIBRARY_PATH=/work/build/lib auditwheel repair -w /work/wheelhouse /work/wheelhouse-raw/*.whl
           echo "Repaired wheel(s):"; ls -1sh /work/wheelhouse/*.whl
           # Name it like the build-wheel job so consumers treat it identically.
