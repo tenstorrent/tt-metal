@@ -27,13 +27,17 @@ CHIP_ARCH=wormhole pytest accuracy/test_examples_accuracy.py -s
 ## Run modes
 
 The same op/format matrix can run in three modes, selected with `--mode`. All
-three run the one merged kernel (`sources/eltwise_unary_sfpu_perf.cpp`); they
-differ only in what they measure:
+three run the one merged kernel (`sources/eltwise_unary_sfpu_perf.cpp`), but they
+differ in workload as well as in what they measure: `accuracy` sweeps 2048 points
+with a single loop, while `perf` and `both` use 8192 points and loop 16× for
+stable timings. So the numbers are not directly comparable across modes:
 
 - `accuracy` (default) — run on hardware and compare against the torch golden,
   writing the per-op error files described below.
 - `perf` — profile every scenario for timings only (no golden compare, no file).
-- `both` — do both in one pass: profile *and* write the accuracy files.
+- `both` — profile *and* write the accuracy files in one pass. Restricted to the
+  `L1_TO_L1` scenario (the only one whose L1 output can be read back and compared
+  to the golden), so its timings are narrower than `perf` mode's.
 
 ```bash
 # accuracy only (default — --mode can be omitted)
