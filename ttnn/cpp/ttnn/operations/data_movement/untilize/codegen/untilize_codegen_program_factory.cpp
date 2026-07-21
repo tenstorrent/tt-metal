@@ -146,6 +146,9 @@ KernelDescriptor make_reader(const CoreRangeSet& cores, Buffer* in_buf, uint32_t
         {"seq_id", kSeqIdentity},
         {"cb_id", kCbIn},
         {"batch", read_batch},
+        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch");
+        // builder_utils injects it (0 = use the accessor's page size). Absent -> JIT compile fails.
+        {"src_page_pitch", 0},
     };
     reader.config = ReaderConfigDescriptor{};
     return reader;
