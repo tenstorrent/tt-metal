@@ -65,7 +65,7 @@ pytest models/experimental/vibevoice/tests/pcc/ -v
 
 ## TTNN demo (on device)
 
-`demo_ttnn.py` runs on-device TTNN inference (no HuggingFace reference model) and writes
+`demo/demo.py` runs on-device TTNN inference (no HuggingFace reference model) and writes
 `{output_dir}/{demo_id}/{demo_id}_tt.wav` next to the website golden clip. Multi-speaker demos
 auto-enable voice cloning from `resources/voices/`.
 
@@ -74,10 +74,10 @@ export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
 export ARCH_NAME=wormhole_b0 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml   # or blackhole
 
 # Default demo (shortest golden clip, eager — no trace)
-python models/experimental/vibevoice/demo_ttnn.py
+python models/experimental/vibevoice/demo/demo.py
 
 # Multi-speaker demo, cap the AR loop at 32 tokens, verbose stage/timing logs
-python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 32 --debug
+python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --debug
 ```
 
 ### Run with trace
@@ -89,7 +89,7 @@ replays it per frame. It gives **≈11–12 tok/s** steady-state decode vs ≈2.
 45-min climate demo, and opens the device with a ~1.4 GB trace region + 2 command queues.
 
 ```bash
-python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 32 --trace
+python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_new_tokens 32 --trace
 ```
 
 | Flag | Env var | Scope | Notes |
