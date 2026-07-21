@@ -139,12 +139,12 @@ class _WavLMLargeFtVerifier:
     """WavLM-large fine-tuned SV (UniSpeech wavlm_large_finetune.pth) — the VibeVoice-report SIM."""
 
     def __init__(self):
-        from models.experimental.vibevoice.common.wavlm_sv import init_model
+        from models.experimental.vibevoice.common.wavlm_sv.wavlm_standalone import init_model
 
         self.model = init_model()  # auto-downloads + caches the checkpoint
 
     def embed(self, wav_16k: torch.Tensor) -> torch.Tensor:
-        from models.experimental.vibevoice.common.wavlm_sv import embed as _embed
+        from models.experimental.vibevoice.common.wavlm_sv.wavlm_standalone import embed as _embed
 
         return _embed(self.model, wav_16k)
 
