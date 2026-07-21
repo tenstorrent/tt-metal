@@ -9,7 +9,6 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -2275,6 +2274,8 @@ class TtModelArgs:
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
         if self.dummy_weights:
+            from models.demos.llama3_70b_galaxy.reference.llama import Transformer
+
             reference_model = Transformer(self)
             state_dict = reference_model.state_dict()
             state_dict_prefix = self.get_state_dict_prefix("", None)
