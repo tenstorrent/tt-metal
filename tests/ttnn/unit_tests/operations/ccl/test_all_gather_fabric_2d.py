@@ -26,6 +26,73 @@ def _fabric_router_config():
     return config
 
 
+_MATCHED_RING_DEVICE_PARAMS = [
+    pytest.param(
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 2048,
+        },
+        id="fabric_1d_ring",
+    ),
+    pytest.param(
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 2048,
+        },
+        id="fabric_2d",
+    ),
+]
+
+
+def _fabric_name(fabric_config):
+    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+        return "fabric_1d_ring"
+    if fabric_config == ttnn.FabricConfig.FABRIC_2D:
+        return "fabric_2d"
+    raise AssertionError(f"matched ring benchmark received unsupported fabric config {fabric_config}")
+
+
+def _logical_ring_route_diagnostics(mesh_device, fabric_config):
+    """Describe the physical link directions used by every multicast path variant."""
+    direction_names = ("E", "W", "N", "S", "Z")
+    ring_size = mesh_device.shape[0]
+    assert mesh_device.shape[1] == 1
+    forward_hops = (ring_size - 1 + 1) // 2
+    backward_hops = ring_size - 1 - forward_hops
+    path_variants = set()
+
+    for source in range(ring_size):
+        for step in (1, -1):
+            for hop_count in (forward_hops, backward_hops):
+                rank = source
+                directions = []
+                escape_hop = 0
+                for hop in range(hop_count):
+                    next_rank = (rank + step) % ring_size
+                    src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(rank, 0))
+                    dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(next_rank, 0))
+                    direction = ttnn.get_eth_forwarding_direction(src_node, dst_node)
+                    assert direction is not None, f"no physical Fabric route from logical rank {rank} to {next_rank}"
+                    directions.append(direction_names[direction])
+                    crosses_dateline = {rank, next_rank} == {0, ring_size - 1}
+                    if crosses_dateline and hop + 1 < hop_count:
+                        escape_hop = hop + 1
+                    rank = next_rank
+                turns = sum(lhs != rhs for lhs, rhs in zip(directions, directions[1:]))
+                path_variants.add(("".join(directions), hop_count, turns, escape_hop))
+
+    explicit_path = fabric_config == ttnn.FabricConfig.FABRIC_2D
+    variants = ",".join(
+        f"{directions}:hops={hop_count}:turns={turns}:escape={escape_hop if explicit_path else 'native'}"
+        for directions, hop_count, turns, escape_hop in sorted(path_variants)
+    )
+    return f"explicit_path={str(explicit_path).lower()} route_variants=[{variants}]"
+
+
 def _all_worker_cores(mesh_device):
     grid = mesh_device.compute_with_storage_grid_size()
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -507,14 +574,7 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
 
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": _fabric_router_config(),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "l1_small_size": 2048,
-        }
-    ],
+    _MATCHED_RING_DEVICE_PARAMS,
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
@@ -525,8 +585,9 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
         pytest.param(ttnn.fp8_e4m3, 656, 0.99, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_fabric_2d_large_single_axis_correctness(mesh_device, dtype, width, pcc):
-    """Check an eight-rank 1D gather ring routed by the physical 2D fabric."""
+def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, width, pcc):
+    """Check the same large eight-rank gather under native 1D and physical 2D Fabric."""
+    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
     rows_per_device = 65536
     global_shape = (1, 1, rows_per_device * mesh_device.shape[0], width)
     torch.manual_seed(0)
@@ -817,14 +878,7 @@ def test_all_gather_async_fabric_2d_control_row_major_2k_page(mesh_device):
 
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": _fabric_router_config(),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "l1_small_size": 2048,
-        }
-    ],
+    _MATCHED_RING_DEVICE_PARAMS,
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
@@ -835,8 +889,8 @@ def test_all_gather_async_fabric_2d_control_row_major_2k_page(mesh_device):
         pytest.param(ttnn.fp8_e4m3, 656, 704, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, expected_page_size):
-    """Steady-state native AG bandwidth for the sparse-MLA SP row geometry.
+def test_all_gather_matched_sparse_mla_row_perf(mesh_device, dtype, width, expected_page_size):
+    """Matched native AG bandwidth for the sparse-MLA SP row geometry.
 
     The benchmark intentionally times only the compiled all-gather program: input/output creation,
     FP8 conversion, and correctness readback happen outside the realtime-profiler region.
@@ -847,14 +901,18 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     rows_per_device = 65536
     rows_per_page = 1
     valid_gather_extent = None
-    samples = 3
+    samples = 7
     perf_core_rect = None
-    perf_fabric_config = "fabric_2d"
+    active_fabric_config = ttnn.get_fabric_config()
+    perf_fabric_config = _fabric_name(active_fabric_config)
     perf_l1_small_size = 2048
     perf_sub_core_grid = None
     sp = mesh_device.shape[0]
     selected_pages_per_device = valid_gather_extent or rows_per_device // rows_per_page
     expected_receiver_l1 = True
+    packet_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+    assert packet_payload_size == 14 * 1024, f"matched benchmark requires 14336-B payload, got {packet_payload_size}"
+    route_diagnostics = _logical_ring_route_diagnostics(mesh_device, active_fabric_config)
     element_size = 1 if dtype == ttnn.fp8_e4m3 else 2
     transport_page_size = ((width * rows_per_page * element_size + 63) // 64) * 64
     if transport_page_size > 14 * 1024:
@@ -882,7 +940,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
     assert page_size == transport_page_size, f"expected {transport_page_size}-byte transport page, got {page_size}"
     if rows_per_page == 1:
         assert page_size == expected_page_size, f"expected {expected_page_size}-byte rows, got {page_size}"
-    receiver_batch_rows = max(1, (14 * 1024) // page_size)
+    receiver_batch_rows = max(1, packet_payload_size // page_size)
     receiver_drain_riscs = 2
 
     def run_ag():
@@ -923,6 +981,7 @@ def test_all_gather_fabric_2d_sparse_mla_row_perf(mesh_device, dtype, width, exp
         f"schedule=bank_owned_interleaved batch_rows={receiver_batch_rows} "
         f"credit=pipelined_group6 drain_riscs={receiver_drain_riscs} terminal_offload=enabled "
         f"core_rect={perf_core_rect or 'auto'} fabric={perf_fabric_config} l1_small={perf_l1_small_size}B "
+        f"packet_payload={packet_payload_size}B {route_diagnostics} "
         f"dtype={dtype} rows_per_device={rows_per_device} rows_per_page={rows_per_page} "
         f"valid_gather_extent={valid_gather_extent or 'full'} "
         f"page_size={page_size}B "
