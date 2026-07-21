@@ -794,7 +794,7 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
-- name: TT-DiT Wan2.2-T2V-A14B  unit tests
+- name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
@@ -812,7 +812,7 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
-- name: TT-DiT Wan2.2-I2V-A14B  unit tests
+- name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
@@ -825,6 +825,58 @@
     wh_galaxy:
       timeout: 40
       tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Pro T2V unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/ltx/
+  model: ltx-2.3-pro-t2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Fast T2V unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/ltx/
+  model: ltx-2.3-fast-t2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Pro I2V unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/ltx/
+  model: ltx-2.3-pro-i2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Fast I2V unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/ltx/
+  model: ltx-2.3-fast-i2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
