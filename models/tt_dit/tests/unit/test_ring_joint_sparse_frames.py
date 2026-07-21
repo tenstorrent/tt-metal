@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 
 # ---------------------------------------------------------------------------
 # Mesh setup — mirror the neighbouring tt_dit ring-joint tests' pattern.
