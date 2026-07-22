@@ -29,7 +29,6 @@ using tt::tt_metal::DistributedHostBuffer;
 using tt::tt_metal::enqueue_read_tensor;
 using tt::tt_metal::enqueue_write_tensor;
 using tt::tt_metal::GraphTracker;
-using tt::tt_metal::HostBuffer;
 using tt::tt_metal::HostTensor;
 using tt::tt_metal::is_uniform_write;
 using tt::tt_metal::Layout;
@@ -42,10 +41,8 @@ using tt::tt_metal::Shape;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
 using tt::tt_metal::TensorTopology;
-using tt::tt_metal::Tile;
 using ttnn::DeviceStorage;
 using ttnn::is_cpu_tensor;
-using ttnn::set_tensor_id;
 using ttnn::StorageType;
 using ttnn::Tensor;
 
@@ -118,7 +115,6 @@ namespace tt::tt_metal {
 
 using ttnn::DeviceStorage;
 using ttnn::is_cpu_tensor;
-using ttnn::set_tensor_id;
 using ttnn::StorageType;
 using ttnn::Tensor;
 
@@ -301,8 +297,6 @@ namespace tt::tt_metal {
 
 using ttnn::DeviceStorage;
 using ttnn::is_cpu_tensor;
-using ttnn::set_tensor_id;
-using ttnn::StorageType;
 using ttnn::Tensor;
 
 // ======================================================================================
@@ -507,10 +501,6 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
 
 namespace tt::tt_metal {
 
-using ttnn::DeviceStorage;
-using ttnn::is_cpu_tensor;
-using ttnn::set_tensor_id;
-using ttnn::StorageType;
 using ttnn::Tensor;
 
 // ======================================================================================
