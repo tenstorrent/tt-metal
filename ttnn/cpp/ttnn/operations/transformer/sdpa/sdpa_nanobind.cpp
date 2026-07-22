@@ -471,9 +471,9 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             paged_cache_geometry (PagedCacheGeometryOverride, optional): Geometry override for
                 an HMA-shared paged cache. When the K/V cache was allocated for a different
-                layer's view, pass this call's view (`block_size`, `num_kv_heads`); Q drives
-                head_dim and the per-block element count must be invariant. Defaults to the
-                cache's declared shape.
+                layer's view, pass this call's view with both `block_size` and `num_kv_heads`
+                set; Q drives head_dim and the per-block element count must be invariant.
+                Defaults to the cache's declared shape.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].

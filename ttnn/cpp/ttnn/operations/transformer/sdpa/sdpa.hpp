@@ -41,8 +41,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    // Geometry overrides for an HMA-shared paged cache. Q drives head_dim; supply this
-    // call's view when the cache was allocated for a different layer. Unset ⇒ cache shape.
+    // Geometry override for an HMA-shared paged cache. Q drives head_dim; supply this
+    // call's view (block_size + num_kv_heads) when the cache was allocated for a different
+    // layer. nullopt ⇒ cache shape.
     std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.

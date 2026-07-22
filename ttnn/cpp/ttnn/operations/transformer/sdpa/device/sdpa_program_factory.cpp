@@ -125,11 +125,7 @@ EffectiveKvGeometry resolve_effective_kv_geometry(
     if (use_mla || !geo.active()) {
         return {k_num_heads, v_num_heads, k_block_size};
     }
-    return {
-        geo.num_kv_heads.value_or(k_num_heads),
-        geo.num_kv_heads.value_or(v_num_heads),
-        geo.block_size.value_or(k_block_size),
-    };
+    return {geo.num_kv_heads, geo.num_kv_heads, geo.block_size};
 }
 
 // Chunked prefill parameters collected from page table layout.

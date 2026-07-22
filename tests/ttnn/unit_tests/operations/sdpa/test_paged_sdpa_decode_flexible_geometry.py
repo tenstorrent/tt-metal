@@ -205,7 +205,9 @@ def test_override_matches_alloc_is_noop(device):
             program_config=program_config,
         )
         if use_override:
-            kwargs["paged_cache_geometry"] = ttnn.PagedCacheGeometryOverride(block_size=block_size)
+            kwargs["paged_cache_geometry"] = ttnn.PagedCacheGeometryOverride(
+                block_size=block_size, num_kv_heads=num_kv_heads
+            )
         return ttnn.to_torch(ttnn.transformer.paged_scaled_dot_product_attention_decode(q_tt, k_tt, v_tt, **kwargs))[
             :, :, :num_q_heads, :
         ]
@@ -286,7 +288,7 @@ def _run_flexible_geometry_test(
         cur_pos_tensor=cur_pos_tt,
         scale=scale,
         program_config=program_config,
-        paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=view_block_size),
+        paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=view_block_size, num_kv_heads=num_kv_heads),
     )
     out = ttnn.to_torch(out_tt)[:, :, :num_q_heads, :]
 
@@ -350,7 +352,7 @@ def test_negative_byte_count_mismatch(device, expect_error):
             v_tt,
             page_table_tensor=page_table_tt,
             cur_pos_tensor=cur_pos_tt,
-            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=view_block_size),
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=view_block_size, num_kv_heads=num_kv_heads),
         )
 
 
@@ -380,7 +382,7 @@ def test_negative_zero_block_size_rejected(device, expect_error):
             v_tt,
             page_table_tensor=page_table_tt,
             cur_pos_tensor=cur_pos_tt,
-            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=0),
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=0, num_kv_heads=num_kv_heads),
             cache_position_modulo=alloc_block_size,  # would divide-by-zero without the guard
         )
 

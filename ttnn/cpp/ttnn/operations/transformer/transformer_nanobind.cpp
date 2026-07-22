@@ -54,11 +54,7 @@ void py_module(nb::module_& mod) {
 
     nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
         .def(nb::init<>())
-        .def(
-            nb::init<std::optional<uint32_t>, std::optional<uint32_t>>(),
-            nb::kw_only(),
-            nb::arg("block_size") = nb::none(),
-            nb::arg("num_kv_heads") = nb::none())
+        .def(nb::init<uint32_t, uint32_t>(), nb::kw_only(), nb::arg("block_size") = 0, nb::arg("num_kv_heads") = 0)
         .def_rw("block_size", &PagedCacheGeometryOverride::block_size)
         .def_rw("num_kv_heads", &PagedCacheGeometryOverride::num_kv_heads)
         .def("active", &PagedCacheGeometryOverride::active)

@@ -151,18 +151,13 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
     }
 
-    if (operation_attributes.paged_cache_geometry.block_size.has_value()) {
-        TT_FATAL(
-            operation_attributes.paged_cache_geometry.block_size.value() > 0,
-            "PagedCacheGeometryOverride.block_size must be > 0");
-    }
-    if (operation_attributes.paged_cache_geometry.num_kv_heads.has_value()) {
+    const auto& paged_geo = operation_attributes.paged_cache_geometry;
+    if (paged_geo.active()) {
         TT_FATAL(
             tensor_args.page_table_tensor.has_value(),
-            "PagedCacheGeometryOverride.num_kv_heads is only supported in paged mode (when page_table is provided)");
-        TT_FATAL(
-            operation_attributes.paged_cache_geometry.num_kv_heads.value() > 0,
-            "PagedCacheGeometryOverride.num_kv_heads must be > 0");
+            "PagedCacheGeometryOverride is only supported in paged mode (when page_table is provided)");
+        TT_FATAL(paged_geo.block_size > 0, "PagedCacheGeometryOverride.block_size must be > 0");
+        TT_FATAL(paged_geo.num_kv_heads > 0, "PagedCacheGeometryOverride.num_kv_heads must be > 0");
     }
 
     if (operation_attributes.cache_position_modulo.has_value()) {
@@ -174,8 +169,8 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         // Wrap must align with block boundaries (otherwise a wrapped position would split
         // across two physical blocks and the kernel can't address it). Pull
         // effective_block_size from the same fallback the program factory uses.
-        // block_size>0 is already enforced above when the override is set.
-        const uint32_t effective_block_size = operation_attributes.paged_cache_geometry.block_size.value_or(k_shape[2]);
+        // block_size>0 is already enforced above when the override is active.
+        const uint32_t effective_block_size = paged_geo.active() ? paged_geo.block_size : k_shape[2];
         TT_FATAL(
             modulo % effective_block_size == 0,
             "cache_position_modulo ({}) must be a multiple of effective block_size ({})",
@@ -293,15 +288,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             const uint32_t cache_block_size = k_shape[2];
             const uint32_t cache_head_dim = k_shape[3];
             const uint32_t q_head_dim = q_shape[3];
-            const uint32_t effective_block_size = geo.block_size.value_or(cache_block_size);
+            // Both fields are required plain values whenever the override is active.
+            const uint32_t effective_block_size = geo.block_size;
             // num_kv_heads on the call-view side may differ from the cache when the
             // caller is reading an HMA cross-group buffer (e.g. Gemma4-26B-A4B sliding
             // kv=8 cache read by a full layer with kv=2). Earlier versions of this
             // check used cache_num_kv_heads on both sides, so the kv factor cancelled
-            // and the per-kv-heads dimension was unchecked — masking real mismatches
-            // when num_kv_heads was set, and rejecting legitimate asymmetric
-            // calls when it wasn't. Use the override (or default to cache when unset).
-            const uint32_t view_num_kv_heads = geo.num_kv_heads.value_or(cache_num_kv_heads);
+            // and the per-kv-heads dimension was unchecked — masking real mismatches.
+            const uint32_t view_num_kv_heads = geo.num_kv_heads;
             const uint64_t cache_elems_per_block =
                 static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
             const uint64_t view_elems_per_block =
