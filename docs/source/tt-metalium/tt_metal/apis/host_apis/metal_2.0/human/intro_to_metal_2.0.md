@@ -510,7 +510,7 @@ The `TensorAccessorArgs<N>()` lines, the manual `next_compile_time_args_offset()
 
 The Metal 2.0 host API declares kernel arguments by name; the kernel-side API retrieves them by name. This replaces the legacy positional `get_arg_val<uint32_t>(N)` style.
 
-On the kernel side, Metal 2.0 adds a single new include, `experimental/kernel_args.h`, which pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`). The `args::` / `dfb::` / `sem::` / `tensor::` namespaces are generated per-kernel from the host-side declarations and auto-included by the build system before the kernel source.
+On the kernel side, Metal 2.0's named-argument API lives in a new include, `experimental/kernel_args.h`. This pulls in the accessor templates (`get_arg`, `args::`, `dfb::`, `sem::`, `tensor::`). The `args::` / `dfb::` / `sem::` / `tensor::` namespaces are generated per-kernel from the host-side declarations and auto-included by the build system before the kernel source.
 
 Suppose the host declared:
 
