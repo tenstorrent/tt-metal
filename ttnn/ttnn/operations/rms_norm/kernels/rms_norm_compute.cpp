@@ -63,6 +63,10 @@ void kernel_main() {
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
     constexpr bool HAS_PARTIAL_W = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t eps_bits = get_compile_time_arg_val(5);
+    // RM gamma -> compute tilizes cb_gamma_sticks -> cb_gamma. TILE gamma ->
+    // the reader already filled cb_gamma with tiles, so the tilize is skipped
+    // (op_design.md §5 tiled-gamma knob-turn, Refinement 2).
+    constexpr bool GAMMA_IS_RM = get_compile_time_arg_val(6) != 0;
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
 
@@ -123,7 +127,11 @@ void kernel_main() {
                 ckl::OperandKind::Col>(block_shape);
 
             if constexpr (HAS_GAMMA) {
-                ckl::tilize<BLOCK_SIZE, cb_gamma_sticks, cb_gamma>(1);
+                if constexpr (GAMMA_IS_RM) {
+                    // RM gamma: tilize the sticks the reader pushed to cb_gamma_sticks.
+                    ckl::tilize<BLOCK_SIZE, cb_gamma_sticks, cb_gamma>(1);
+                }
+                // else TILE gamma: reader already pushed BLOCK_SIZE tiles to cb_gamma.
                 // norm * gamma (gamma is [1,W] -> row-shaped -> BroadcastDim::Row).
                 // B = cb_gamma held-bulk (Wt tiles per block, popped at chain end).
                 ckl::mul<

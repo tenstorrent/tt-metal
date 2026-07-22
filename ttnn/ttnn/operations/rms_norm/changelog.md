@@ -92,3 +92,54 @@
   shapes — 160 passed, 32 `{f32,False}` cells skipped) + `precision_matrix_results.md`.
   Regression net green: `test_rms_norm.py`, `test_rms_norm_debug.py`,
   `test_rms_norm_precision_baseline.py` (95 passed together).
+
+## Refinement 2 — Tiled-gamma layout support
+- **Date**: 2026-07-22
+- **What was done**: added `ttnn.TILE_LAYOUT` to `SUPPORTED["gamma_layout"]` — a
+  pure knob-turn per op_design.md §5. gamma layout is an INDEPENDENT knob from the
+  input layout (new `gamma_is_rm` host predicate on `gamma.layout`, separate from
+  `is_rm`), so RM-input + TILE-gamma at INTERLEAVED (a valid TARGET cell) works.
+  Shared kernels, CT-arg dispatch (no forked files):
+  - Op file (`rms_norm.py`): `SUPPORTED["gamma_layout"] += TILE_LAYOUT`. No
+    axes.py change — `classify_call` already reads `gamma.layout` off the tensor
+    (lockstep automatic).
+  - Program descriptor: `gamma_is_rm` predicate; `cb_gamma_sticks` allocated
+    ONLY on the RM-gamma path (unused for TILE gamma); `gamma_is_rm` passed as a
+    new CT arg to reader (idx 15, accessor offset -> 16) and compute (idx 6).
+  - Reader (`rms_norm_reader.cpp`): `GAMMA_IS_RM` CT flag. TILE gamma reads whole
+    tiles straight into `cb_gamma` (tile_id = b*BLOCK_SIZE+wt; gamma is (1,1,1,W)
+    -> Wt tiles in one tile-row), coalesced behind ONE barrier per block — same
+    batched-read fast path as the TILE input (performance-conformance bar). RM
+    gamma keeps the existing `read_sticks_for_tilize<cb_gamma_sticks>` path.
+  - Compute (`rms_norm_compute.cpp`): `GAMMA_IS_RM` CT flag skips the pass-2
+    `ckl::tilize<…,cb_gamma_sticks,cb_gamma>` on the TILE-gamma path (reader
+    already filled `cb_gamma`); the `mul<Row>` consumer is unchanged. `cb_gamma`
+    has ONE producer per compiled program (reader for TILE, compute-tilize for
+    RM), exactly mirroring how `cb_x_in` dispatches on input layout.
+  - This also unlocks bf8b gamma (block-float has no RM form -> implies TILE gamma).
+- **Accuracy achieved**: perf-1 anchor (bf16 / fp32_dest_acc_en=False / TILE input
+  / TILE gamma / INTERLEAVED / HiFi2, shape (1,1,128,2304)) PCC=0.999970,
+  rel-Frobenius=0.0096 (soft gate 0.9995). Gamma-layout matrix (bf16/f32,
+  gamma_dtype bf16/f32/bf8b, aligned + W/H/both non-aligned): rtol/atol/PCC gates
+  met on all 86 cases.
+- **Golden test progress**: 1598 passed, 33900 skipped, 4928 xfailed, **12 failed**.
+  vs Refinement 1 (750 passed, 5689 xfailed): +848 supported_pass, -761 xfails —
+  the gamma_layout=TILE cells (incl. bf8b gamma) moved xfail -> pass.
+  - The 12 failures are **pre-existing Refinement-1 defects, NOT caused by R2**:
+    all are `test_translated.py::test_rms_norm_row_major` with W=4096 +
+    fp32_dest_acc_en=False + bf16, on the TILE-input + RM-gamma path (which R2
+    does not touch). They are relative-Frobenius near-misses (5.20e-2..5.59e-2 vs
+    0.052 threshold); PCC (>=0.9998) and ALLCLOSE pass. PROVEN pre-existing:
+    stashing all R2 changes and re-running the same subset on the R1 commit
+    reproduces the identical 12 failures with identical Frobenius values. They are
+    a bf16 DEST-accumulation precision-boundary issue over 128 W-tiles — R1's
+    fp32_dest_acc_en=False territory, out of scope for tiled-gamma. Not silenced
+    with an EXCLUSION (per protocol: precision near-misses stay failing as the
+    next precision refinement's baseline). Surfaced to the user for R1 follow-up.
+- **Issues encountered**: None for the tiled-gamma work. (The 12 pre-existing R1
+  Frobenius near-misses above are documented but out of this refinement's scope.)
+- **Tests added**: `test_rms_norm_gamma_layout.py` — gamma_layout {TILE, RM} ×
+  input_layout {TILE, RM} × dtype {bf16, f32} × 8 shapes (aligned + non-aligned)
+  = 64 cases; + mixed-precision (bf16 act + f32 TILE gamma, 16 cases) + bf8b TILE
+  gamma (6 cases). 86 passed (--dev + non-dev). Full rms_norm unit dir: 341 passed,
+  32 skipped ({f32,False} EXCLUSION), 0 failed — no regression.

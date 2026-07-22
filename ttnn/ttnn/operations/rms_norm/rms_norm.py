@@ -93,8 +93,10 @@ INPUT_TAGGERS = {
 #   * rank             — 2/3/4.
 #   * gamma_mode       — optional scale (present / absent).
 #   * gamma_dtype      — real dtype when present (bf16/f32/bf8b), "none" absent.
-#   * gamma_layout     — RM gamma is the phase-1 contract; "none" when absent.
-#                        (bf8b gamma implies TILE gamma — unlocked in Refinement 2.)
+#   * gamma_layout     — RM gamma (phase-1 contract) OR TILE gamma (native tiled
+#                        reader, Refinement 2); "none" when absent. bf8b gamma
+#                        implies TILE gamma (block-float has no RM form), so TILE
+#                        gamma also unlocks the bf8b-gamma cells.
 #   * memory_layout    — INTERLEAVED (the sharded schemes are §1 lamps).
 
 SUPPORTED = {
@@ -105,7 +107,7 @@ SUPPORTED = {
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
-    "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
+    "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
 

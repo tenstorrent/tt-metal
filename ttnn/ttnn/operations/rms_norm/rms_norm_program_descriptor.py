@@ -98,6 +98,11 @@ def create_program_descriptor(
 
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     has_gamma = gamma is not None
+    # gamma layout is an independent knob from the input layout (a valid TARGET
+    # cell is RM input + TILE gamma). RM gamma -> reader reads sticks + compute
+    # tilizes; TILE gamma -> reader reads tiles straight into cb_gamma and the
+    # compute-side gamma tilize is skipped (op_design.md §5 knob-turn).
+    gamma_is_rm = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
 
     inv_N_bits = _f32_bits(1.0 / float(origin_W))  # scaler = 1/origin_W (true element count)
     eps_bits = _f32_bits(epsilon)
@@ -188,8 +193,14 @@ def create_program_descriptor(
         add_cb(CB_OUT_STICKS, tile_out, DEPTH * BLOCK_SIZE, out_dtype)
 
     if has_gamma:
+        # cb_gamma holds tiles in both regimes: TILE gamma -> reader is the
+        # producer (direct tile read); RM gamma -> compute-tilize is the producer.
+        # Single producer per compiled program (CT-arg dispatch), same pattern as
+        # cb_x_in for the input layout.
         add_cb(CB_GAMMA, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
-        add_cb(CB_GAMMA_STICKS, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
+        # cb_gamma_sticks is the RM-gamma-only tilize input; not needed for TILE gamma.
+        if gamma_is_rm:
+            add_cb(CB_GAMMA_STICKS, tile_gamma, DEPTH * BLOCK_SIZE, gamma_dtype)
 
     # ---- Reader kernel ----
     reader_ct_args = [
@@ -208,6 +219,7 @@ def create_program_descriptor(
         gamma_elem,
         in_page,
         gamma_page,
+        1 if gamma_is_rm else 0,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -265,6 +277,7 @@ def create_program_descriptor(
         1 if has_gamma else 0,
         1 if has_partial_w else 0,
         eps_bits,
+        1 if gamma_is_rm else 0,
     ]
 
     compute_rt_args = ttnn.RuntimeArgs()

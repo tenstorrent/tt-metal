@@ -14,9 +14,11 @@
 //          W (row_bytes), non-tile-aligned H (partial last block), the per-core
 //          start-row offset, and W-block chunking (byte offset).
 //
-// gamma is ALWAYS row-major (1,1,1,W); it is read per-block in pass 1 into
-// cb_gamma_sticks (compute tilizes it) so cb_x / cb_gamma arrive block-aligned
-// in the order compute consumes them.
+// gamma (1,1,1,W) is read per-block in pass 1, in the order compute consumes it.
+// Two gamma regimes (selected by the compile-time GAMMA_IS_RM flag):
+//   RM gamma   : read row-major sticks into cb_gamma_sticks (compute tilizes).
+//   TILE gamma : read whole tiles straight into cb_gamma (compute skips tilize),
+//                same batched-read path as the TILE input (Refinement 2 knob-turn).
 //
 // Raw TensorAccessor + noc_async_read_tile is used for the TILE path (no
 // kernel-lib helper covers the custom two-pass, per-core tile_id order).
@@ -31,6 +33,7 @@ namespace {
 constexpr uint32_t cb_x_sticks = 0;
 constexpr uint32_t cb_x_in = 1;
 constexpr uint32_t cb_scaler = 2;
+constexpr uint32_t cb_gamma = 3;
 constexpr uint32_t cb_gamma_sticks = 4;
 constexpr uint32_t TILE_DIM = 32;
 }  // namespace
@@ -51,8 +54,9 @@ void kernel_main() {
     constexpr uint32_t gamma_elem = get_compile_time_arg_val(12);
     constexpr uint32_t in_page = get_compile_time_arg_val(13);
     constexpr uint32_t gamma_page = get_compile_time_arg_val(14);
+    constexpr bool GAMMA_IS_RM = get_compile_time_arg_val(15) != 0;
 
-    constexpr auto in_args = TensorAccessorArgs<15>();
+    constexpr auto in_args = TensorAccessorArgs<16>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -128,18 +132,34 @@ void kernel_main() {
                     cb_push_back(cb_x_in, BLOCK_SIZE);
                 }
 
-                // gamma: pass 1 only, per block (same order compute consumes it).
+                // gamma: pass 2 only (pass==1), per block, in compute's consume order.
                 if constexpr (HAS_GAMMA) {
                     if (pass == 1) {
-                        const uint32_t col0 = b * BLOCK_SIZE * TILE_DIM;
-                        uint32_t cols = origin_W - col0;
-                        if (cols > BLOCK_SIZE * TILE_DIM) {
-                            cols = BLOCK_SIZE * TILE_DIM;
+                        if constexpr (GAMMA_IS_RM) {
+                            const uint32_t col0 = b * BLOCK_SIZE * TILE_DIM;
+                            uint32_t cols = origin_W - col0;
+                            if (cols > BLOCK_SIZE * TILE_DIM) {
+                                cols = BLOCK_SIZE * TILE_DIM;
+                            }
+                            // gamma is (1,1,1,W): one stick; only row 0 is read by the
+                            // Row-broadcast multiply, so total_num_rows = 1.
+                            dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
+                                gamma_accessor, 1, cols * gamma_elem, 0, col0 * gamma_elem);
+                        } else {
+                            // TILE gamma: already tiled, (1,1,1,W) -> Wt tiles in one
+                            // tile-row, so tile_id = b*BLOCK_SIZE + wt. Coalesce the
+                            // whole block behind ONE barrier (writer/reader batched-read
+                            // twin -> DRAM bandwidth, not per-tile latency).
+                            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
+                            cb_reserve_back(cb_gamma, BLOCK_SIZE);
+                            uint32_t l1 = get_write_ptr(cb_gamma);
+                            for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
+                                noc_async_read_tile(b * BLOCK_SIZE + wt, gamma_accessor, l1);
+                                l1 += gamma_tile_bytes;
+                            }
+                            noc_async_read_barrier();
+                            cb_push_back(cb_gamma, BLOCK_SIZE);
                         }
-                        // gamma is (1,1,1,W): one stick; only row 0 is read by the
-                        // Row-broadcast multiply, so total_num_rows = 1.
-                        dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
-                            gamma_accessor, 1, cols * gamma_elem, 0, col0 * gamma_elem);
                     }
                 }
             }

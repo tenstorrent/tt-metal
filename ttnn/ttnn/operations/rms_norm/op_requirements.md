@@ -87,7 +87,7 @@ excluded/INVALID cells); acceptance + precision-baseline suites still pass.
 
 ---
 
-### [ ] Refinement 2 — Tiled-gamma layout support
+### [x] Refinement 2 — Tiled-gamma layout support
 
 **Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["gamma_layout"]`. Per `op_design.md`
 §5 tiled gamma is a knob-turn: gamma arrives already tiled, so the reader reads it
