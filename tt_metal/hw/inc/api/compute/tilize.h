@@ -362,57 +362,40 @@ ALWI void tilize_block(
 #endif
 
 #ifdef ARCH_QUASAR
-    // Quasar per-tile datacopy tilize (TT_METAL_QSR_TILIZE_UNPACK_TO_DEST OFF). A WIDE tile-row faults with
-    // ERROR_TRISC1 0x19 (RISC IB interrupt on MATH) once the per-tile MATH datacopy -> PACK advances the DEST
-    // section past its half-capacity: after `cap` tiles the section base wraps and the next tile's datacopy
-    // laps the packer in the reused DEST bank. It is a clean width cutoff — a block of <= cap tiles is one
-    // non-wrapping DEST section and is safe (e.g. avg_pool2d C512 -> 8 tiles PASS), a wider block faults
-    // (C2048 -> 64 tiles FAULT at the first wrap ~tile cap). Fix: split a wide row into cap-sized column
-    // chunks and, BETWEEN chunks, return the MATH+PACK dest sync to the clean kernel-start phase
-    // (llk_math_pack_sync_init drains outstanding packs, re-seeds the MATH_PACK semaphore, and resets the MATH
-    // dest-section base to bank 0; llk_pack_init/llk_pack_dest_init reset the packer side). Each chunk then
-    // runs exactly like the first (already-passing) chunk and never crosses the wrap, so 0x19 cannot recur.
-    // `cap` tracks the sync/accum mode: SyncHalf bf16 -> 8 (matches the observed cutoff), 32-bit dest -> 4.
-    // Clamp to the empirically known-safe 8 (avg_pool2d C512 = 8 tiles PASS) so we never exceed the confirmed
-    // safe width even if a mode reports a larger DEST capacity; the clamp still shrinks to 4 for 32-bit dest
-    // (matches the conv's t=4 fault boundary). WIDTH-DRIVEN: for block <= chunk_cap this is a single chunk with
-    // NO re-init -> byte-identical to the previous single-block path, so the already-passing narrow cases (and
-    // the pool/conv tilize_block callers whose block already fits) stay unchanged. WH/BH take #else, unchanged.
-    constexpr uint32_t qsr_tilize_dest_cap = qsr_tilize_dest_tile_cap();
-    constexpr uint32_t chunk_cap = (qsr_tilize_dest_cap < 8u) ? qsr_tilize_dest_cap : 8u;
-    for (uint32_t c0 = 0; c0 < block; c0 += chunk_cap) {
-        const uint32_t this_chunk = ((block - c0) < chunk_cap) ? (block - c0) : chunk_cap;
-        if (c0 > 0) {
-            // Re-sync DEST/pack to the clean phase before each subsequent chunk (mirrors
-            // tilizeA_B_reduce_init_short's per-iteration re-init; NO hw_configure, which would corrupt engine
-            // state per [[reference_quasar_compute_hw_startup_once]]). The pack-sync drain also serializes the
-            // chunk boundary (small perf cost, correctness-safe).
-            MATH((llk_math_pack_sync_init()));
-            PACK((llk_pack_init(ocb)));
-            PACK((llk_pack_dest_init()));
-        }
-        // Unpack this chunk's tiles into SrcA. The column offset c0 preserves the FULL-row stride programmed
-        // once by tilize_init (full_ct_dim = block) while addressing columns [c0, c0+this_chunk) — identical
-        // tiling to the single wide unpack, issued cap tiles at a time.
-        UNPACK((llk_unpack_tilize_block(icb, this_chunk, input_tile_index, c0 /*col_tile_offset*/)));
+    // Quasar per-tile datacopy tilize (TT_METAL_QSR_TILIZE_UNPACK_TO_DEST OFF). SINGLE continuous loop over the
+    // full block — structurally identical to the WH/BH #else. The earlier chunking + per-chunk re-init has been
+    // REMOVED; it was the CAUSE of the C2048 ERROR_TRISC1 0x19, not the cure (LLK root-cause, cited below).
+    //
+    // The "DEST section wraps after `cap` tiles" premise was FALSE for the semaphore-sync scheme. SyncHalf DEST
+    // is a strict 2-bank ping-pong fully bounded by the MATH_PACK semaphore (seeded max=2 in
+    // _llk_math_pack_sync_init_): MATH's wait_for_dest_available stalls STALL_ON_MAX (llk_math_common.h:302-305),
+    // PACK's packer_wait_for_math_done stalls STALL_ON_ZERO (llk_pack_common.h:279-282), and
+    // _llk_math_dest_section_done_<SyncHalf> merely TOGGLES the section base between bank0/bank1
+    // (ckernel_trisc_common.h:301-306) — it never grows or wraps. So MATH is at most 2 tiles ahead of PACK for
+    // ANY block width, and a 64-tile row cannot overflow DEST (WH runs this exact loop over block=64 and passes).
+    //
+    // The removed per-chunk llk_math_pack_sync_init re-SEEDED a LIVE MATH_PACK semaphore mid-kernel with no
+    // MATH<->PACK barrier (llk_math_common.h:281-295) while PACK was still retiring the prior chunk's
+    // section-done SEMGET -> the STALL_ON_MAX invariant broke and the next MATH post drove the count past max=2
+    // -> over-max SEMPOST -> ERROR_TRISC1 0x19 at the first tile after the re-init (g=8). Removing it lets the
+    // ping-pong run seamlessly across the whole block. Uses the Quasar-flavored llk calls (bare datacopy /
+    // single-bool llk_pack) that already compiled and passed for the narrow (single-chunk) case.
+    UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
-        for (uint32_t t = 0; t < this_chunk; t++) {
-            // Acquire dst
-            MATH((llk_math_wait_for_dest_available()));
-            PACK((llk_packer_wait_for_math_done()));
+    for (uint32_t t = 0; t < block; t++) {
+        // Acquire dst
+        MATH((llk_math_wait_for_dest_available()));
+        PACK((llk_packer_wait_for_math_done()));
 
-            MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-            PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, c0 + t + output_tile_index)));
-            // Release dest. Intentionally NO llk_math_set_dvalid here: set_dvalid belongs to the dest-dvalid
-            // sync scheme and is compile-blocked on tt-metal's semaphore-sync path (llk_math_common_api.h
-            // static_assert: "should not be mixed with semaphores"). It is also unnecessary — the datacopy MOP
-            // (_llk_math_eltwise_unary_datacopy_) + llk_math_dest_section_done handle the FPU dest-dvalid exactly
-            // as the WH/BH #else branch below does (which runs a full wide block with no set_dvalid and no 0x19).
-            // The C2048 ERROR_TRISC1 0x19 is a DEST-section WRAP, prevented by the per-chunk re-init above
-            // (chunk_cap keeps each chunk within one non-wrapping section), not by an explicit per-tile clear.
-            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
-        }
+        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        // DEBUG (leave in until debugged): per-tile MATH marker — the last TZT printed before any 0x19 is the
+        // faulting tile. With the chunking removed this should run t=0..block-1 clean (no fault at t=8).
+        MATH((DPRINT("TZT t={}\n", (uint32_t)t)));
+        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+        // Release dest. NO llk_math_set_dvalid: it belongs to the dest-dvalid scheme and is compile-blocked on
+        // the semaphore-sync path; the datacopy MOP + llk_math_dest_section_done handle FPU dvalid as WH does.
+        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 #else
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
