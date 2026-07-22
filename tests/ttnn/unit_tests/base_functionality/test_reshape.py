@@ -12,6 +12,22 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
+def test_view_preserves_root_buffer_unique_id(device):
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    input_buffer_id = input_tensor.buffer_unique_id()
+
+    reshaped_tensor = ttnn.experimental.view(input_tensor, (1, 32, 32))
+
+    assert input_buffer_id is not None
+    assert reshaped_tensor.buffer_unique_id() == input_buffer_id
+    assert ttnn.mark_corruptible(reshaped_tensor) == input_buffer_id
+
+
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [

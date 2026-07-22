@@ -16,7 +16,6 @@ from loguru import logger
 
 import ttnn._ttnn
 
-
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
@@ -151,13 +150,62 @@ from ttnn._ttnn.operations.trace import (
     MeshTraceId,
     begin_trace_capture,
     end_trace_capture,
-    execute_trace,
+    execute_trace as _ttnn_execute_trace,
     release_trace,
 )
 
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
+
+from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
+
+if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import (
+        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
+        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
+    )
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """Suppress accounting for intentionally corruptible allocations in this scope."""
+        _push_corruptible_allocation_scope(mesh_device)
+        try:
+            yield
+        finally:
+            _pop_corruptible_allocation_scope(mesh_device)
+
+else:
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """No-op when trace allocation tracking is disabled."""
+        yield
+
+
+if TRACE_ALLOC_TRACKING:
+
+    def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
+        """Execute a captured trace, with automatic allocation-safety verification."""
+        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+        UnsafeAllocationTracker(device).verify_before_replay(trace_id)
+        return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
+
+else:
+    # Preserve the original nanobind fast path when tracking is disabled.
+    execute_trace = _ttnn_execute_trace
+
+
+def mark_corruptible(tensor):
+    """
+    Mark a specific tensor buffer as intentionally corruptible for trace
+    allocation safety checks.
+    """
+    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+    return UnsafeAllocationTracker.mark_corruptible(tensor)
+
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,

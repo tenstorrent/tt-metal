@@ -47,6 +47,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
@@ -1449,6 +1450,24 @@ void pytensor_module(nb::module_& mod) {
 
             Returns:
                 int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+        )doc")
+        .def(
+            "buffer_unique_id",
+            [](const Tensor& self) -> std::optional<size_t> {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return std::nullopt;
+                }
+                auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
+                if (!backing) {
+                    return std::nullopt;
+                }
+                return backing->unique_id();
+            },
+            R"doc(
+            Get the unique ID of this tensor's root backing device buffer, or
+            None if the tensor is not on device / not allocated. Views return
+            the ID of the buffer that owns their device memory. This ID matches
+            the IDs reported by the unsafe-allocation tracker.
         )doc")
         .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(

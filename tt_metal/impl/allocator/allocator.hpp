@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 
@@ -77,8 +80,21 @@ public:
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
 
-    void mark_allocations_unsafe();
+    void mark_allocations_unsafe(std::uint32_t trace_id);
     void mark_allocations_safe();
+    bool allocations_unsafe() const;
+
+    // Unsafe allocation tracking is per trace. Allocation context remains per buffer because a
+    // buffer has the same allocation site regardless of how many older traces can corrupt it.
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id) const;
+    void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    void clear_unsafe_tracked_ids(std::uint32_t trace_id);
+    static std::vector<size_t> drain_pending_traceback_ids();
+    static std::vector<size_t> drain_retired_traceback_ids();
+    static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
+    static void pop_corruptible_allocation_scope();
+
+    // See <tt-metalium/allocation_context.hpp> for the thread-local context stack API.
 
     // High water mark tracking for DRAM allocations during trace capture
     // Delegates to BankManager to account for banking properly
@@ -121,13 +137,21 @@ protected:
     void validate_bank_assignments() const;
 
 private:
-    void verify_safe_allocation() const;
+    void verify_safe_allocation(const Buffer* buffer) const;
+    void track_buffer_if_unsafe(Buffer* buffer);
+    bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;
 
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
+    bool tracking_enabled_ = false;
+    bool traceback_capture_enabled_ = false;
+    bool skip_program_cache_ = false;
+    std::unordered_map<std::uint32_t, std::unordered_set<size_t>> unsafe_tracked_ids_by_trace_;
+    std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
+
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;
     std::unique_ptr<BankManager> l1_small_manager_;

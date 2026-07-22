@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/allocation_context.hpp>
 
 namespace ttnn::operations::core {
 
@@ -58,6 +59,7 @@ ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, std::optiona
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }
 
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    tt::tt_metal::AllocationContextGuard guard("ttnn.reallocate");
     return ttnn::move(input_tensor, memory_config);
 }
 
