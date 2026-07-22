@@ -6,21 +6,17 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
-#include <fmt/base.h>  // RINGCOST diagnostic line (physical ring-order experiment)
-
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (physical ring-order diag)
+#include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (M-split placement + ring order)
 
 #include "regime_a_matmul_config.hpp"
-#include "regime_a_matmul_diag.hpp"  // internal-only RegimeADiag enum (not reachable from the public header)
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -59,6 +55,202 @@ void mkcb(Program& program, const CoreRangeSet& crs, uint32_t idx, uint32_t ntil
     CircularBufferConfig c(ntiles * tsz, {{idx, df}});
     c.set_page_size(idx, tsz);
     CreateCircularBuffer(program, crs, c);
+}
+
+// M-split (Sm>1) worker PLACEMENT (IN1_NEAR). Overrides ONLY P.cores[i].coord; logical core indices,
+// ownership, and the factory's reader->i+s / slave->i-mm runtime-arg math are unchanged. MUST run BEFORE the
+// ring reorder so the ring order recomputes on the new coords. Pass 1 places every mm==0 DRAM reader around
+// its bank target (a logical-Manhattan spiral mirroring the planner's find_near) so slaves can't displace
+// later readers from bank-adjacent cores; pass 2 places each slave at the free worker minimizing the directed
+// reader->slave hop on the group's in1-reader NoC. No-op / never called at Sm==1.
+void place_m_split_workers(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo) {
+    namespace expd = tt::tt_metal::experimental::Device;
+    const uint32_t preaders = geo.num_cores / 8u;
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const auto opt0 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+    const auto opt1 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1);
+    std::set<std::pair<uint32_t, uint32_t>> used;
+    auto bank_tgt = [&](uint32_t b, uint32_t noc) { return noc ? opt1[b] : opt0[b]; };
+    // logical-Manhattan spiral over the compute grid (mirrors the planner's find_near).
+    auto find_near = [&](CoreCoord t) -> CoreCoord {
+        for (int d = 0; d < (int)(grid.x + grid.y); ++d) {
+            for (int dx = -d; dx <= d; ++dx) {
+                const int rem = d - (dx < 0 ? -dx : dx);
+                for (int sgn = 0; sgn <= 1; ++sgn) {
+                    const int dy = sgn ? -rem : rem;
+                    const int x = (int)t.x + dx, y = (int)t.y + dy;
+                    if (x < 0 || y < 0 || (uint32_t)x >= grid.x || (uint32_t)y >= grid.y) {
+                        continue;
+                    }
+                    const auto key = std::make_pair((uint32_t)x, (uint32_t)y);
+                    if (used.count(key)) {
+                        continue;
+                    }
+                    used.insert(key);
+                    return CoreCoord{(uint32_t)x, (uint32_t)y};
+                }
+            }
+        }
+        return CoreCoord{t.x, t.y};
+    };
+    auto set_coord = [&](uint32_t i, CoreCoord c) {
+        P.cores[i].coord.x = c.x;
+        P.cores[i].coord.y = c.y;
+    };
+    // pass 1: every mm==0 reader around its bank target (readers-first).
+    for (uint32_t b = 0; b < 8u; ++b) {
+        for (uint32_t p = 0; p < preaders; ++p) {
+            const uint32_t i = b * preaders + p;
+            if (P.cores[i].mm == 0u) {
+                set_coord(i, find_near(bank_tgt(b, P.cores[i].noc)));
+            }
+        }
+    }
+    // pass 2: slaves — IN1_NEAR minimizes the directed reader->slave hop on the reader NoC.
+    for (uint32_t b = 0; b < 8u; ++b) {
+        for (uint32_t p = 0; p < preaders; ++p) {
+            const uint32_t i = b * preaders + p;
+            if (P.cores[i].mm == 0u) {
+                continue;
+            }
+            const uint32_t ri = i - P.cores[i].mm;  // this group's reader (contiguous index)
+            const CoreCoord rc{P.cores[ri].coord.x, P.cores[ri].coord.y};
+            const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
+            CoreCoord best{};
+            uint32_t bestd = 0xffffffffu;
+            bool found = false;
+            for (uint32_t y = 0; y < grid.y; ++y) {
+                for (uint32_t x = 0; x < grid.x; ++x) {
+                    if (used.count(std::make_pair(x, y))) {
+                        continue;
+                    }
+                    const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, CoreCoord{x, y}, rnoc);
+                    if (!found || dd < bestd) {
+                        bestd = dd;
+                        best = CoreCoord{x, y};
+                        found = true;
+                    }
+                }
+            }
+            used.insert(std::make_pair(best.x, best.y));
+            set_coord(i, best);
+        }
+    }
+}
+
+// Physical-topology-aware in0 ring ordering (PARETO). Overrides ring_pos/ring_next_idx/ring_prev_idx per ring
+// group using the group's WRITER NoC authoritative hop distance (get_worker_noc_hop_distance; logical->physical
+// + directed torus routing w/ wraparound). Placement / work / reduction are unchanged; only the ring visiting
+// order (which core seeds which in0 shard, the forward route, the in1 rotated read) changes — correct for ANY
+// permutation.
+//
+// M-split (Sm>1): slices differing only in mm form a (kk,nn) group of Sm CONTIGUOUS slice indices [base,
+// base+Sm), all sharing the same writer NoC. Their in1 slaves receive in1 in the mm==0 READER's shard order
+// while their in0 rings are separate physical cores, so the WHOLE group MUST use the SAME permutation
+// (reader/slave ring_pos must agree per bank) or the in0/in1 pairing corrupts.
+//
+// PARETO objective (aggregated over the Sm physical mm-rings; aggmax = worst directed edge over all rings,
+// aggtot = summed hops over all rings): min aggmax subject to aggtot <= the MM0 order's aggtot, then aggtot.
+// MM0 (score only the mm==0 ring: min ring0.max then ring0.total) establishes the aggtot budget and seeds the
+// search, so PARETO route-dominates MM0 by construction (never a worse total) — it keeps the Sm=2 win and
+// stays within noise of MM0 on Sm=1.
+void optimize_in0_ring_order(plan::ExecutionPlan& P, IDevice* device, const plan::Geometry& geo, uint32_t Sm) {
+    namespace expdev = tt::tt_metal::experimental::Device;
+    const uint32_t preaders = geo.num_cores / 8u;
+    // directed route cost of one 8-core cycle over a single ring's hop matrix: (max edge, total hops).
+    auto ring_cost = [](const std::array<uint32_t, 8>& ord,
+                        const std::array<std::array<uint32_t, 8>, 8>& d) -> std::pair<uint32_t, uint32_t> {
+        uint32_t mx = 0, tot = 0;
+        for (uint32_t p = 0; p < 8u; ++p) {
+            const uint32_t e = d[ord[p]][ord[(p + 1u) % 8u]];
+            tot += e;
+            mx = std::max(mx, e);
+        }
+        return {mx, tot};
+    };
+    for (uint32_t base = 0; base < preaders; base += Sm) {
+        // shared writer NoC (opposite the reader's): noc==0 -> writer NOC1; noc==1 -> writer NOC0.
+        const NOC wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+        // one 8x8 hop matrix per mm-ring (same wnoc, different physical cores).
+        std::vector<std::array<std::array<uint32_t, 8>, 8>> dm(Sm);
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            auto lc = [&](uint32_t b) {
+                const auto& c = P.cores[b * preaders + base + mm].coord;
+                return CoreCoord{c.x, c.y};
+            };
+            for (uint32_t a = 0; a < 8u; ++a) {
+                for (uint32_t b = 0; b < 8u; ++b) {
+                    dm[mm][a][b] = (a == b) ? 0u : expdev::get_worker_noc_hop_distance(device, lc(a), lc(b), wnoc);
+                }
+            }
+        }
+        // per-candidate metrics across all Sm mm-rings: ring0 (mm==0) max/total; aggmax = worst edge over
+        // rings; aggtot = summed hops over all rings.
+        struct Metrics {
+            uint32_t r0max, r0tot, aggmax, aggtot;
+        };
+        auto metrics = [&](const std::array<uint32_t, 8>& ord) -> Metrics {
+            Metrics m{0, 0, 0, 0};
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                const auto [rm, rt] = ring_cost(ord, dm[mm]);
+                if (mm == 0) {
+                    m.r0max = rm;
+                    m.r0tot = rt;
+                }
+                m.aggmax = std::max(m.aggmax, rm);
+                m.aggtot += rt;
+            }
+            return m;
+        };
+        auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) { return a0 < b0 || (a0 == b0 && a1 < b1); };
+        auto cand_of = [](const std::array<uint32_t, 7>& t) {
+            std::array<uint32_t, 8> c{};
+            c[0] = 0;
+            for (uint32_t i = 0; i < 7u; ++i) {
+                c[i + 1u] = t[i];
+            }
+            return c;
+        };
+        const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
+        // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040 cycles; directed => both orientations).
+        // Pass 1 — MM0 objective (establishes the PARETO aggtot budget).
+        std::array<uint32_t, 8> opt_mm0 = bank;
+        Metrics b_mm0{~0u, ~0u, ~0u, ~0u};
+        std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+        do {
+            const std::array<uint32_t, 8> cand = cand_of(tail);
+            const Metrics m = metrics(cand);
+            if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
+                b_mm0 = m;
+                opt_mm0 = cand;
+            }
+        } while (std::next_permutation(tail.begin(), tail.end()));
+        // Pass 2 — PARETO: min aggmax (then aggtot) subject to aggtot <= MM0's aggtot. Seeded with MM0 itself
+        // (satisfies the constraint by construction).
+        std::array<uint32_t, 8> opt_pareto = opt_mm0;
+        Metrics b_pa = b_mm0;
+        const uint32_t budget = b_mm0.aggtot;
+        std::array<uint32_t, 7> tail2 = {1, 2, 3, 4, 5, 6, 7};
+        do {
+            const std::array<uint32_t, 8> cand = cand_of(tail2);
+            const Metrics m = metrics(cand);
+            if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
+                b_pa = m;
+                opt_pareto = cand;
+            }
+        } while (std::next_permutation(tail2.begin(), tail2.end()));
+        // apply the PARETO order to ALL Sm slices of this group (same permutation => reader/slave ring_pos
+        // agree per bank, preserving in0/in1 pairing under M-split).
+        for (uint32_t mm = 0; mm < Sm; ++mm) {
+            const uint32_t jj = base + mm;
+            for (uint32_t pos = 0; pos < 8u; ++pos) {
+                const uint32_t ci = opt_pareto[pos] * preaders + jj;
+                P.cores[ci].ring_pos = pos;
+                P.cores[ci].ring_next_idx = opt_pareto[(pos + 1u) % 8u] * preaders + jj;
+                P.cores[ci].ring_prev_idx = opt_pareto[(pos + 7u) % 8u] * preaders + jj;
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -107,530 +299,19 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t n_chunks = static_cast<uint32_t>(chunks);
     const uint32_t out_ntc = Nt_r / n_chunks;  // per-chunk N tiles (validated divisible + tile-aligned)
 
-    // Test-only diagnostic ablations. mask 0 adds NO *DIAG_* define; each DIAG_* define is scoped to the
-    // kernel(s) that #ifdef it. NOTE: mask 0 is no longer unconditionally byte-identical to a chain build —
-    // the internal production reduction strategy below sets the RSCATTER define (reduce-scatter) for the
-    // gate-selected shapes even at mask 0. Non-gated shapes at mask 0 remain the byte-identical chain compile.
-    const uint32_t diag = operation_attributes.diag_mask;
-    std::map<std::string, std::string> rdefs;  // in1 reader
-    std::map<std::string, std::string> wdefs;  // in0 ring/reduce writer
-    std::map<std::string, std::string> ddefs;  // compute (added to cdefs below)
+    // ---- Kernel compile defines. wdefs = writer (in0 ring/reduce + fused output); fdefs_compute (below) =
+    // compute fusion defines merged into cdefs. The in1 reader takes NO defines. Empty maps => the
+    // byte-identical no-fusion compile. ----
+    std::map<std::string, std::string> wdefs;
 
-    // ---- Internal production reduction strategy (non-public; NOT a diag mask). ----
-    // The split-K reduction TOPOLOGY (chain vs reduce-scatter) is an INTERNAL ALGORITHM CHOICE, not part of the
-    // config contract: this gate is evaluated on the RESOLVED (Mt,Kt,Nt,cfg) and therefore fires for ANY config
-    // satisfying the predicate below, whether auto-selected (config=None) OR manually supplied — the factory
-    // cannot (and need not) distinguish them. Select ring REDUCE-SCATTER (vs the linear chain) on the exposed-
-    // reduction WIN regime measured across the corpus: shallow-K (Kt<=64), Pk>=4, adequate per-core output width
-    // (Nt>=32 and N_sub>=2), and each output sub-block tile-partitionable into Pk chunks (T=M_block*N_sub,
-    // T%Pk==0, T>=Pk). There it is a measured 5-9% win with ZERO regressions; the chain is kept everywhere else
-    // (Pk<4 = chain already ~1 hop; deep-K = read-bound, reduction hidden, RS can regress; narrow-N / N_sub<2 =
-    // no exposed tail). Unfused + single output chunk only (reduce-scatter v1). DIAG_FORCE_CHAIN forces the
-    // chain (A/B + bit-identity baselines). Output is PCC-preserving (>=0.999) but NOT bit-identical (reassoc).
-    const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;
-    const bool rs_gate = (Pk >= 4u) && (Kt_r <= 64u) && (Nt_r >= 32u) && (geo.N_sub >= 2u) && (rs_T % Pk == 0u) &&
-                         (rs_T >= Pk) && !has_bias && !has_ternary && !has_activation && (n_chunks == 1u);
-    // The production gate yields to any explicit reduction diagnostic (force-chain / tree / no-reduce) so those
-    // A/B baselines are the pure chain and never set conflicting kernel defines. DIAG_RSCATTER always wins.
-    const bool reduction_diag =
-        (diag & (RegimeADiag::DIAG_FORCE_CHAIN | RegimeADiag::DIAG_REDTREE | RegimeADiag::DIAG_NO_REDUCE)) != 0u;
-    const bool rscatter = ((diag & RegimeADiag::DIAG_RSCATTER) != 0u) || (rs_gate && !reduction_diag);
-    if (diag & RegimeADiag::DIAG_FWD_FLUSH_FIRST) {
-        rdefs["DIAG_FWD_FLUSH_FIRST"] = "1";  // A/B baseline: OLD per-block flush-before-signal in1 forward
-    }
-    if (diag & RegimeADiag::DIAG_NO_COALESCE) {
-        rdefs["DIAG_NO_COALESCE"] = "1";  // A/B baseline: OLD K_block per-row in1 reads (no coalescing)
-    }
-    if (diag & RegimeADiag::DIAG_NO_REDUCE) {
-        wdefs["DIAG_NO_REDUCE"] = "1";
-        ddefs["DIAG_NO_REDUCE"] = "1";
-    }
-    if (diag & RegimeADiag::DIAG_ZONES) {  // test-only causal timing zones on all 3 kernels
-        rdefs["DIAG_ZONES"] = "1";
-        wdefs["DIAG_ZONES"] = "1";
-        ddefs["DIAG_ZONES"] = "1";
-    }
-    if (diag & RegimeADiag::DIAG_RINGDRAIN) {  // test-only: phase-1 deferred-drain (writer only)
-        wdefs["DIAG_RINGDRAIN"] = "1";
-    }
-    if (diag & RegimeADiag::DIAG_REDTREE) {  // test-only: fan-in-2 reduction tree (Pk==4); writer + compute
-        TT_FATAL(Pk == 4u, "DIAG_REDTREE requires k_slices (Pk) == 4 (fan-in-2 depth-2 tree); got Pk={}", Pk);
-        wdefs["REDTREE"] = "1";
-        ddefs["REDTREE"] = "1";
-    }
-    if (rscatter) {  // ring reduce-scatter (production gate OR explicit DIAG_RSCATTER); tile-partition over Pk
-        // Feasibility (guaranteed by rs_gate on the production path; asserted for an explicit DIAG_RSCATTER).
-        TT_FATAL(
-            Pk > 1u && rs_T % Pk == 0u && rs_T >= Pk,
-            "reduce-scatter requires Pk>1 and each output sub-block (M_block*N_sub={}) divisible by Pk={} and "
-            ">= Pk (tile-partitionable into Pk chunks); got M_block={} N_sub={} N_bpc={} (each of the N_bpc "
-            "sub-blocks runs its own reduce-scatter)",
-            rs_T,
-            Pk,
-            geo.M_block_capacity,
-            geo.N_sub,
-            geo.N_bpc);
-        wdefs["RSCATTER"] = "1";
-        ddefs["RSCATTER"] = "1";
-    }
-    if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
-        wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
+    // ---- M-split worker PLACEMENT (Sm>1): IN1_NEAR. Overrides only P.cores[i].coord; MUST run BEFORE the ring
+    // reorder so the ring order recomputes on the placed coords. No-op at Sm==1. ----
+    if (Sm > 1u) {
+        place_m_split_workers(P, device, geo);
     }
 
-    // ---- M-split worker PLACEMENT diagnostics (Sm>1; DEFAULT = the planner's CURRENT placement) ----
-    // Overrides only P.cores[i].coord (logical indices / ownership / the factory reader->i+s & slave->i-mm arg
-    // math are unchanged). Runs BEFORE the ring reorder below so PARETO recomputes on the new coords.
-    // READERS_FIRST: place every mm==0 DRAM reader (same bank targets / NoC / logical-Manhattan spiral) before
-    // any slave. IN1_NEAR (implies readers-first): place each slave at the free worker minimizing the directed
-    // reader->slave hop distance on the group's in1-reader NoC. Emits PLACECOST (gated by TT_MM_PLACECOST).
-    const bool place_current = (diag & RegimeADiag::DIAG_PLACE_CURRENT) != 0u;              // diag: planner's placement
-    const bool place_readers_first = (diag & RegimeADiag::DIAG_PLACE_READERS_FIRST) != 0u;  // diag: bank-spiral slaves
-    const bool place_in1_near = !place_readers_first;  // DEFAULT = in1-near slaves; readers-first bit -> bank spiral
-    if (!place_current && Sm > 1u) {  // DEFAULT (and readers-first diag) re-place; DIAG_PLACE_CURRENT keeps planner's
-        namespace expd = tt::tt_metal::experimental::Device;
-        const uint32_t preaders = geo.num_cores / 8u;
-        const CoreCoord grid = device->compute_with_storage_grid_size();
-        const auto opt0 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
-        const auto opt1 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1);
-        std::set<std::pair<uint32_t, uint32_t>> used;
-        auto bank_tgt = [&](uint32_t b, uint32_t noc) { return noc ? opt1[b] : opt0[b]; };
-        // logical-Manhattan spiral over the compute grid (mirrors the planner's find_near).
-        auto find_near = [&](CoreCoord t) -> CoreCoord {
-            for (int d = 0; d < (int)(grid.x + grid.y); ++d) {
-                for (int dx = -d; dx <= d; ++dx) {
-                    const int rem = d - (dx < 0 ? -dx : dx);
-                    for (int sgn = 0; sgn <= 1; ++sgn) {
-                        const int dy = sgn ? -rem : rem;
-                        const int x = (int)t.x + dx, y = (int)t.y + dy;
-                        if (x < 0 || y < 0 || (uint32_t)x >= grid.x || (uint32_t)y >= grid.y) {
-                            continue;
-                        }
-                        const auto key = std::make_pair((uint32_t)x, (uint32_t)y);
-                        if (used.count(key)) {
-                            continue;
-                        }
-                        used.insert(key);
-                        return CoreCoord{(uint32_t)x, (uint32_t)y};
-                    }
-                }
-            }
-            return CoreCoord{t.x, t.y};
-        };
-        auto set_coord = [&](uint32_t i, CoreCoord c) {
-            P.cores[i].coord.x = c.x;
-            P.cores[i].coord.y = c.y;
-        };
-        // pass 1: every mm==0 reader around its bank target (readers-first).
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t p = 0; p < preaders; ++p) {
-                const uint32_t i = b * preaders + p;
-                if (P.cores[i].mm == 0u) {
-                    set_coord(i, find_near(bank_tgt(b, P.cores[i].noc)));
-                }
-            }
-        }
-        // pass 2: slaves — IN1_NEAR minimizes directed reader->slave hop on the reader NoC; else bank spiral.
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t p = 0; p < preaders; ++p) {
-                const uint32_t i = b * preaders + p;
-                if (P.cores[i].mm == 0u) {
-                    continue;
-                }
-                if (place_in1_near) {
-                    const uint32_t ri = i - P.cores[i].mm;  // this group's reader (contiguous index)
-                    const CoreCoord rc{P.cores[ri].coord.x, P.cores[ri].coord.y};
-                    const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
-                    CoreCoord best{};
-                    uint32_t bestd = 0xffffffffu;
-                    bool found = false;
-                    for (uint32_t y = 0; y < grid.y; ++y) {
-                        for (uint32_t x = 0; x < grid.x; ++x) {
-                            if (used.count(std::make_pair(x, y))) {
-                                continue;
-                            }
-                            const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, CoreCoord{x, y}, rnoc);
-                            if (!found || dd < bestd) {
-                                bestd = dd;
-                                best = CoreCoord{x, y};
-                                found = true;
-                            }
-                        }
-                    }
-                    used.insert(std::make_pair(best.x, best.y));
-                    set_coord(i, best);
-                } else {
-                    set_coord(i, find_near(bank_tgt(b, P.cores[i].noc)));
-                }
-            }
-        }
-        // PLACECOST: per group, reader's dist from its bank target + directed reader->slave hops (in1 NoC).
-        if (std::getenv("TT_MM_PLACECOST") != nullptr) {
-            for (uint32_t b = 0; b < 8u; ++b) {
-                for (uint32_t p = 0; p < preaders; ++p) {
-                    const uint32_t i = b * preaders + p;
-                    if (P.cores[i].mm != 0u) {
-                        continue;
-                    }
-                    const CoreCoord rc{P.cores[i].coord.x, P.cores[i].coord.y};
-                    const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
-                    const CoreCoord tgt = bank_tgt(b, P.cores[i].noc);
-                    std::string fwd;
-                    uint32_t maxf = 0;
-                    for (uint32_t s = 1; s < Sm; ++s) {
-                        const CoreCoord sc{P.cores[i + s].coord.x, P.cores[i + s].coord.y};
-                        const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, sc, rnoc);
-                        fwd += std::to_string(dd) + (s + 1 < Sm ? "," : "");
-                        maxf = std::max(maxf, dd);
-                    }
-                    fmt::print(
-                        "PLACECOST b={} p={} noc={} reader=({},{}) tgt=({},{}) rdr2tgt={} fwd=[{}] maxfwd={}\n",
-                        b,
-                        p,
-                        P.cores[i].noc,
-                        rc.x,
-                        rc.y,
-                        tgt.x,
-                        tgt.y,
-                        expd::get_worker_noc_hop_distance(device, tgt, rc, rnoc),
-                        fwd,
-                        maxf);
-                }
-            }
-        }
-    }
-
-    // ---- Physical-topology-aware in0 ring ordering (test-only; DEFAULT = bank order [0..7]) ----
-    // Overrides ring_pos/ring_next_idx/ring_prev_idx per ring group using the group's WRITER NoC authoritative
-    // hop distance (get_worker_noc_hop_distance, logical->physical + directed torus routing w/ wraparound).
-    // Placement/work/reduction are unchanged; only the ring visiting order (which core seeds which in0 shard,
-    // the forward route, and the in1 rotated read) changes — correct for ANY permutation. Emits a RINGCOST
-    // line per group (bank/greedy/opt max+total edge cost) for the report. No effect on the public path.
-    const bool ring_bank = (diag & RegimeADiag::DIAG_RING_BANK) != 0u;        // diagnostic: bank order [0..7]
-    const bool ring_opt_mm0 = (diag & RegimeADiag::DIAG_RING_OPT_MM0) != 0u;  // diagnostic: mm==0-only objective
-    const bool ring_total = (diag & RegimeADiag::DIAG_RING_TOTAL) != 0u;      // diagnostic: total_maxedge
-    const bool ring_maxedge = (diag & RegimeADiag::DIAG_RING_MAXEDGE) != 0u;  // diagnostic: maxedge_total
-    if (!ring_bank) {  // DEFAULT = PARETO across all Sm mm-rings; other objectives if selected
-        namespace expdev = tt::tt_metal::experimental::Device;
-        const uint32_t preaders = geo.num_cores / 8u;
-        // directed route cost of one 8-core cycle over a single ring's hop matrix: (max edge, total hops).
-        auto ring_cost = [](const std::array<uint32_t, 8>& ord,
-                            const std::array<std::array<uint32_t, 8>, 8>& d) -> std::pair<uint32_t, uint32_t> {
-            uint32_t mx = 0, tot = 0;
-            for (uint32_t p = 0; p < 8u; ++p) {
-                const uint32_t e = d[ord[p]][ord[(p + 1u) % 8u]];
-                tot += e;
-                mx = std::max(mx, e);
-            }
-            return {mx, tot};
-        };
-        // M-split (Sm>1): slices differing only in mm form a (kk,nn) group of Sm CONTIGUOUS slice indices
-        // [base, base+Sm), all sharing the same writer NoC. Their in1 slaves receive in1 in the mm==0 READER's
-        // shard order while their in0 rings are separate physical cores, so the WHOLE group MUST use the SAME
-        // permutation (reader/slave ring_pos must agree per bank) or the in0/in1 pairing corrupts.
-        // OBJECTIVE (default): lexicographic over the Sm physical mm-rings — (1) minimize the worst directed
-        // edge across ALL rings, (2) then the summed hops across ALL edges AND rings. This accounts for the
-        // slaves' routes, not just the reader's. DIAG_RING_OPT_MM0 reverts to scoring only the mm==0 ring.
-        for (uint32_t base = 0; base < preaders; base += Sm) {
-            // shared writer NoC (opposite the reader's): noc==0 -> writer NOC1; noc==1 -> writer NOC0.
-            const NOC wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-            // one 8x8 hop matrix per mm-ring (same wnoc, different physical cores).
-            std::vector<std::array<std::array<uint32_t, 8>, 8>> dm(Sm);
-            for (uint32_t mm = 0; mm < Sm; ++mm) {
-                auto lc = [&](uint32_t b) {
-                    const auto& c = P.cores[b * preaders + base + mm].coord;
-                    return CoreCoord{c.x, c.y};
-                };
-                for (uint32_t a = 0; a < 8u; ++a) {
-                    for (uint32_t b = 0; b < 8u; ++b) {
-                        dm[mm][a][b] = (a == b) ? 0u : expdev::get_worker_noc_hop_distance(device, lc(a), lc(b), wnoc);
-                    }
-                }
-            }
-            // per-candidate metrics across all Sm mm-rings: ring0 (mm==0) max/total; aggmax = worst edge over
-            // rings; aggtot = summed hops over all rings; maxringtot = worst per-ring total.
-            struct Metrics {
-                uint32_t r0max, r0tot, aggmax, aggtot, maxringtot;
-            };
-            auto metrics = [&](const std::array<uint32_t, 8>& ord) -> Metrics {
-                Metrics m{0, 0, 0, 0, 0};
-                for (uint32_t mm = 0; mm < Sm; ++mm) {
-                    const auto [rm, rt] = ring_cost(ord, dm[mm]);
-                    if (mm == 0) {
-                        m.r0max = rm;
-                        m.r0tot = rt;
-                    }
-                    m.aggmax = std::max(m.aggmax, rm);
-                    m.aggtot += rt;
-                    m.maxringtot = std::max(m.maxringtot, rt);
-                }
-                return m;
-            };
-            const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
-            // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040 cycles; directed => both orientations).
-            // Pass 1 tracks the lexicographic objectives (each first-strict-min wins). We also record the
-            // aggtot of the MM0-selected order as the PARETO budget.
-            std::array<uint32_t, 8> opt_mm0 = bank, opt_maxedge = bank, opt_total = bank, opt_pareto = bank;
-            auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
-                return a0 < b0 || (a0 == b0 && a1 < b1);
-            };
-            {
-                std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
-                Metrics b_mm0{~0u, ~0u, ~0u, ~0u, ~0u}, b_me{~0u, ~0u, ~0u, ~0u, ~0u}, b_to{~0u, ~0u, ~0u, ~0u, ~0u};
-                auto cand_of = [](const std::array<uint32_t, 7>& t) {
-                    std::array<uint32_t, 8> c{};
-                    c[0] = 0;
-                    for (uint32_t i = 0; i < 7u; ++i) {
-                        c[i + 1u] = t[i];
-                    }
-                    return c;
-                };
-                do {
-                    const std::array<uint32_t, 8> cand = cand_of(tail);
-                    const Metrics m = metrics(cand);
-                    if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
-                        b_mm0 = m;
-                        opt_mm0 = cand;
-                    }
-                    if (lt2(m.aggmax, m.aggtot, b_me.aggmax, b_me.aggtot)) {
-                        b_me = m;
-                        opt_maxedge = cand;
-                    }
-                    if (lt2(m.aggtot, m.aggmax, b_to.aggtot, b_to.aggmax)) {
-                        b_to = m;
-                        opt_total = cand;
-                    }
-                } while (std::next_permutation(tail.begin(), tail.end()));
-
-                // Pass 2 — PARETO: min aggmax (then aggtot) subject to aggtot <= MM0's aggtot (never worse
-                // total than MM0). Seeded with MM0 itself (satisfies the constraint by construction).
-                opt_pareto = opt_mm0;
-                Metrics b_pa = b_mm0;
-                const uint32_t budget = b_mm0.aggtot;
-                std::array<uint32_t, 7> tail2 = {1, 2, 3, 4, 5, 6, 7};
-                do {
-                    const std::array<uint32_t, 8> cand = cand_of(tail2);
-                    const Metrics m = metrics(cand);
-                    if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
-                        b_pa = m;
-                        opt_pareto = cand;
-                    }
-                } while (std::next_permutation(tail2.begin(), tail2.end()));
-            }
-            // DEFAULT = PARETO (chosen after the two-run objective A/B); diagnostics select the others.
-            const std::array<uint32_t, 8>& sel = ring_opt_mm0   ? opt_mm0
-                                                 : ring_total   ? opt_total
-                                                 : ring_maxedge ? opt_maxedge
-                                                                : opt_pareto;
-            // apply the selected order to ALL Sm slices of this group (same permutation => reader/slave ring_pos
-            // agree per bank, preserving in0/in1 pairing under M-split).
-            for (uint32_t mm = 0; mm < Sm; ++mm) {
-                const uint32_t jj = base + mm;
-                for (uint32_t pos = 0; pos < 8u; ++pos) {
-                    const uint32_t ci = sel[pos] * preaders + jj;
-                    P.cores[ci].ring_pos = pos;
-                    P.cores[ci].ring_next_idx = sel[(pos + 1u) % 8u] * preaders + jj;
-                    P.cores[ci].ring_prev_idx = sel[(pos + 7u) % 8u] * preaders + jj;
-                }
-            }
-            // RINGCOST diagnostic (route costs, gated behind TT_MM_RINGCOST so the production path is silent on
-            // compile). Reports each candidate's GROUP-AGGREGATE cost (worst edge over the Sm rings; summed hops
-            // over all rings) PLUS the selected order's PER-RING (max,total) breakdown so the report can
-            // distinguish per-ring from aggregated-across-rings costs. The harness further aggregates across
-            // the (kk,nn) groups of the whole op.
-            if (std::getenv("TT_MM_RINGCOST") != nullptr) {
-                auto join = [](const std::array<uint32_t, 8>& o) {
-                    std::string s;
-                    for (uint32_t p = 0; p < 8u; ++p) {
-                        s += std::to_string(o[p]) + (p + 1u < 8u ? "," : "");
-                    }
-                    return s;
-                };
-                // group-aggregate (aggmax:aggtot) of each candidate; also the selected order's per-ring maxes.
-                auto ac = [&](const std::array<uint32_t, 8>& o) {
-                    const Metrics m = metrics(o);
-                    return std::to_string(m.aggmax) + ":" + std::to_string(m.aggtot) + ":" +
-                           std::to_string(m.maxringtot);
-                };
-                const char* selname = ring_opt_mm0 ? "mm0" : ring_total ? "total" : ring_maxedge ? "maxedge" : "pareto";
-                std::string perring;
-                for (uint32_t mm = 0; mm < Sm; ++mm) {
-                    const auto [m, t] = ring_cost(sel, dm[mm]);
-                    perring += "(" + std::to_string(m) + ":" + std::to_string(t) + ")";
-                }
-                // fields are aggmax:aggtot:maxringtot per candidate (group-aggregate). op-level aggregation is
-                // done by the harness across (kk,nn) groups.
-                fmt::print(
-                    "RINGCOST group={} Sm={} wnoc={} sel={} bank[{}]={} mm0[{}]={} maxedge[{}]={} total[{}]={} "
-                    "pareto[{}]={} sel_perring={}\n",
-                    base,
-                    Sm,
-                    (wnoc == NOC::NOC_0 ? 0 : 1),
-                    selname,
-                    join(bank),
-                    ac(bank),
-                    join(opt_mm0),
-                    ac(opt_mm0),
-                    join(opt_maxedge),
-                    ac(opt_maxedge),
-                    join(opt_total),
-                    ac(opt_total),
-                    join(opt_pareto),
-                    ac(opt_pareto),
-                    perring);
-            }
-        }
-    }
-    // ---- DIAG_REDTREE: rewrite the linear reduction chain into a fan-in-2 tree (Pk==4 only). ----
-    // Groups: fixing a bank b and a within-bank (nn,mm) sub-index `sub` in [0, mfac), the 4 k-slices are the
-    // cores i_kk = b*preaders + kk*mfac + sub for kk=0..3 (this is exactly the chain's reduction group). We
-    // re-link them as two level-0 pairs feeding one level-1 root:
-    //   kk0 --ch0--> kk1        (kk1 sums kk0's partial: num_recv=1)
-    //   kk2 --ch0--> kk3        (root channel 0)
-    //   kk1 --ch1--> kk3        (root channel 1; kk3 sums both: num_recv=2, is_top)
-    // Critical depth drops from 3 (chain) to 2. The root's two channels use disjoint semaphores (red_sem /
-    // red_sem2) and disjoint reduce-CB slots so partials never alias. Output is bit-identical to the chain
-    // (same fp32-acc adds, associativity). This mutates ONLY reduction fields (num_recv / red_channel /
-    // red_parent_nrecv / red_next_idx / red_src_idx / is_top / is_bottom); ring + ownership + placement are
-    // untouched, so mask-0 stays byte-identical and only this diagnostic program sees the tree.
-    if (diag & RegimeADiag::DIAG_REDTREE) {
-        const uint32_t mfac = geo.mfac;          // Ns*Sm
-        const uint32_t preaders = geo.preaders;  // Pk*Ns*Sm
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t sub = 0; sub < mfac; ++sub) {
-                const uint32_t i0 = b * preaders + 0u * mfac + sub;
-                const uint32_t i1 = b * preaders + 1u * mfac + sub;
-                const uint32_t i2 = b * preaders + 2u * mfac + sub;
-                const uint32_t i3 = b * preaders + 3u * mfac + sub;
-                auto& c0 = P.cores[i0];
-                auto& c1 = P.cores[i1];
-                auto& c2 = P.cores[i2];
-                auto& c3 = P.cores[i3];
-                // kk0: leaf -> kk1 (channel 0)
-                c0.num_recv = 0u;
-                c0.is_bottom = true;
-                c0.is_top = false;
-                c0.red_next_idx = i1;
-                c0.red_channel = 0u;
-                c0.red_parent_nrecv = 1u;
-                c0.red_src_idx[0] = i0;
-                c0.red_src_idx[1] = i0;
-                // kk1: recv kk0 (channel 0) -> kk3 (channel 1)
-                c1.num_recv = 1u;
-                c1.is_bottom = false;
-                c1.is_top = false;
-                c1.red_next_idx = i3;
-                c1.red_channel = 1u;
-                c1.red_parent_nrecv = 2u;
-                c1.red_src_idx[0] = i0;
-                c1.red_src_idx[1] = i1;
-                // kk2: leaf -> kk3 (channel 0)
-                c2.num_recv = 0u;
-                c2.is_bottom = true;
-                c2.is_top = false;
-                c2.red_next_idx = i3;
-                c2.red_channel = 0u;
-                c2.red_parent_nrecv = 2u;
-                c2.red_src_idx[0] = i2;
-                c2.red_src_idx[1] = i2;
-                // kk3: root, recv kk2 (channel 0) + kk1 (channel 1)
-                c3.num_recv = 2u;
-                c3.is_bottom = false;
-                c3.is_top = true;
-                c3.red_next_idx = i3;
-                c3.red_channel = 0u;
-                c3.red_parent_nrecv = 0u;
-                c3.red_src_idx[0] = i2;  // channel 0 source
-                c3.red_src_idx[1] = i1;  // channel 1 source
-            }
-        }
-    }
-
-    // ---- DIAG_RSCATTER: assign the ring reduce-scatter cyclic order over each group's Pk cores. ----
-    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE minimizing
-    // the worst DIRECTED NoC hop (a poor wraparound edge would serialize the whole ring). The edge cost a->b
-    // is the SENDER a's send on ITS writer NoC (noc==0 -> writer NOC1; noc==1 -> writer NOC0), measured with
-    // get_worker_noc_hop_distance (logical->physical + directed torus routing) — asymmetric, unlike a coord
-    // proxy, and correct because each core forwards on its own writer NoC. Pk==4 keeps the exact
-    // min-(maxedge,total) 3!-search; Pk>4 uses greedy nearest-neighbour (P! infeasible). rs_pos = cycle
-    // position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk = (rs_pos+1)%Pk. Mutates only rs_* fields.
-    if (rscatter) {
-        namespace expdev = tt::tt_metal::experimental::Device;
-        const uint32_t mfac = geo.mfac;
-        const uint32_t preaders = geo.preaders;
-        for (uint32_t b = 0; b < 8u; ++b) {
-            for (uint32_t sub = 0; sub < mfac; ++sub) {
-                std::vector<uint32_t> idx(Pk);
-                for (uint32_t kk = 0; kk < Pk; ++kk) {
-                    idx[kk] = b * preaders + kk * mfac + sub;
-                }
-                auto lc = [&](uint32_t li) {
-                    const auto& c = P.cores[idx[li]].coord;
-                    return CoreCoord{c.x, c.y};
-                };
-                // directed edge a->b cost = hops on the SENDER a's writer NoC (opposite the reader's).
-                auto dist = [&](uint32_t a, uint32_t c) -> uint32_t {
-                    if (a == c) {
-                        return 0u;
-                    }
-                    const NOC wnoc = (P.cores[idx[a]].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-                    return expdev::get_worker_noc_hop_distance(device, lc(a), lc(c), wnoc);
-                };
-                std::vector<uint32_t> ord(Pk);
-                if (Pk == 4u) {
-                    // exact min-(maxedge,total) cycle over the 3! orderings of {1,2,3} (position 0 fixed)
-                    const uint32_t perms[6][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}};
-                    int best_max = 1 << 30, best_tot = 1 << 30;
-                    for (const auto& pm : perms) {
-                        uint32_t o[4] = {0, pm[0], pm[1], pm[2]};
-                        int mx = 0, tot = 0;
-                        for (uint32_t p = 0; p < 4u; ++p) {
-                            int e = dist(o[p], o[(p + 1u) % 4u]);
-                            mx = std::max(mx, e);
-                            tot += e;
-                        }
-                        if (mx < best_max || (mx == best_max && tot < best_tot)) {
-                            best_max = mx;
-                            best_tot = tot;
-                            for (uint32_t p = 0; p < 4u; ++p) {
-                                ord[p] = o[p];
-                            }
-                        }
-                    }
-                } else {
-                    // greedy nearest-neighbour Hamiltonian cycle (start at local 0)
-                    std::vector<bool> vis(Pk, false);
-                    ord[0] = 0;
-                    vis[0] = true;
-                    for (uint32_t p = 1; p < Pk; ++p) {
-                        int best = -1, bestd = 1 << 30;
-                        for (uint32_t cand = 0; cand < Pk; ++cand) {
-                            if (vis[cand]) {
-                                continue;
-                            }
-                            int dd = dist(ord[p - 1], cand);
-                            if (dd < bestd) {
-                                bestd = dd;
-                                best = (int)cand;
-                            }
-                        }
-                        ord[p] = (uint32_t)best;
-                        vis[best] = true;
-                    }
-                }
-                for (uint32_t p = 0; p < Pk; ++p) {
-                    auto& cp = P.cores[idx[ord[p]]];
-                    cp.rs_pos = p;
-                    cp.rs_next_idx = idx[ord[(p + 1u) % Pk]];
-                    cp.rs_prev_idx = idx[ord[(p + Pk - 1u) % Pk]];
-                    cp.rs_own_chunk = (p + 1u) % Pk;
-                }
-            }
-        }
-    }
-
-    if (diag & RegimeADiag::DIAG_FULL_IN0_WAIT) {
-        ddefs["DIAG_FULL_IN0_WAIT"] = "1";  // A/B baseline: old full-slice startup barrier (compute-only)
-    }
+    // ---- Physical-topology-aware in0 ring ordering (PARETO) over each (kk,nn) group's Sm mm-rings. ----
+    optimize_in0_ring_order(P, device, geo, Sm);
 
     // ---- Fused-epilogue / output-split kernel defines (empty => byte-identical no-fusion compile). ----
     // Compute-only fusion defines are collected here and merged into cdefs at compute-kernel creation.
@@ -685,15 +366,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (cb.cb7_tiles > 0u) {
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
     }
-    // DIAG_RSCATTER only (unfused): c_4 = compute->writer send-chunk CB; c_5 = incoming-chunk recv CB. Both
-    // bf16, EXACTLY double-buffered (2 x chunk_tiles, chunk_tiles = M_block*N_sub / Pk) so the FIFO period is
-    // 2 and matches the writer's fixed recv-slot offset (t%2) for the remote chunk writes. Reuse c_4/c_5
-    // (bias/residual CBs in fused builds; unused on the unfused reduce-scatter compile). c_7 unused here.
-    if (rscatter) {
-        const uint32_t rs_chunk = (geo.M_block_capacity * geo.N_sub) / Pk;
-        mkcb(program, all_cores, 4, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 5, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
-    }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
     // [M,N] block, c_6 gate [1,N_sub] (broadcast) or [M,N] block. Sized to hold a full sub-block so the
     // writer can stream all M rows while compute consumes them (matches minimal_matmul's ternary CB sizing).
@@ -717,13 +389,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (Sm > 1u) {
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
         in1ready_sem = CreateSemaphore(program, all_cores, 0u);
-    }
-    // DIAG_REDTREE only: the fan-in-2 root's SECOND receive channel (channel 1). Disjoint from red_sem so the
-    // two incoming partials never share a counter. Allocated only for the tree diagnostic (mask 0 unaffected);
-    // passed to the writer as a RUNTIME arg (below) so the writer's compile-time-arg layout is unchanged.
-    uint32_t red_sem2 = 0u;
-    if (diag & RegimeADiag::DIAG_REDTREE) {
-        red_sem2 = CreateSemaphore(program, all_cores, 0u);
     }
 
     // ---- Kernels ----
@@ -782,6 +447,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // Split-NOC: reader on the core's in1 NoC, writer on the OTHER NoC.
     //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
     //   g1 (noc==1): reader RISCV_1/NOC1, writer RISCV_0/NOC0
+    const std::map<std::string, std::string> rdefs;  // in1 reader takes no compile defines
     KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct, rdefs);
     KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct, rdefs);
     KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct, wdefs);
@@ -800,7 +466,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         sbh,                   // 6 subblock_h
         sbw};                  // 7 subblock_w
     std::map<std::string, std::string> cdefs = {{"REDUCE_K", "1"}, {"IN0_KSLICE_RESIDENT", "1"}};
-    cdefs.insert(ddefs.begin(), ddefs.end());                  // test-only diagnostic defines (empty for mask 0)
     cdefs.insert(fdefs_compute.begin(), fdefs_compute.end());  // fusion defines (empty for the no-fusion path)
     KernelHandle compute = CreateKernel(
         program,
@@ -882,9 +547,8 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             cp.valid_k,              // 14 valid K tiles (rest of capacity zero)
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
-        // Fused-epilogue / output-split writer args (index 17+). Never combined with the diag ablations above
-        // (those only run via the internal diag entry, which passes no fusion). Order MUST match the writer
-        // kernel's fidx reads: bias, then residual/gate/broadcast, then chunk count/width/addresses.
+        // Fused-epilogue / output-split writer args (index 17+). Order MUST match the writer kernel's fidx
+        // reads: bias, then residual/gate/broadcast, then chunk count/width/addresses.
         if (has_bias) {
             wa.push_back(tensor_args.bias_tensor->buffer()->address());
         }
@@ -900,53 +564,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 wa.push_back(tensor_return_value[c].buffer()->address());
             }
         }
-        // DIAG_REDTREE tree args (index 17+; never combined with fusion/chunks, which the diag entry disables).
-        // The writer reads these only under #ifdef REDTREE. red_src[0/1] are the channel-0/1 source cores this
-        // core reverse-credits; for leaves (num_recv==0) they point at self and are unused.
-        if (diag & RegimeADiag::DIAG_REDTREE) {
-            auto rs0 = phys(cp.red_src_idx[0]);
-            auto rs1 = phys(cp.red_src_idx[1]);
-            wa.push_back(cp.num_recv);          // 17 incoming partials to receive (0/1/2)
-            wa.push_back(cp.red_parent_nrecv);  // 18 parent's num_recv (sender reduce-slot cadence)
-            wa.push_back(cp.red_channel);       // 19 channel this core writes at its parent (0/1)
-            wa.push_back(red_sem2);             // 20 channel-1 receive semaphore id
-            wa.push_back(rs0.x);                // 21 channel-0 source x
-            wa.push_back(rs0.y);                // 22 channel-0 source y
-            wa.push_back(rs1.x);                // 23 channel-1 source x
-            wa.push_back(rs1.y);                // 24 channel-1 source y
-        }
-        // DIAG_RSCATTER ring reduce-scatter args (index 17+; unfused only). next/prev = my cyclic neighbours
-        // in the optimized Pk ring; owned_row = the block M-row this core finally writes to DRAM.
-        if (rscatter) {
-            auto rn = phys(cp.rs_next_idx);
-            auto rp = phys(cp.rs_prev_idx);
-            wa.push_back(rn.x);                                     // 17 next core x
-            wa.push_back(rn.y);                                     // 18 next core y
-            wa.push_back(rp.x);                                     // 19 prev core x
-            wa.push_back(rp.y);                                     // 20 prev core y
-            wa.push_back(cp.rs_own_chunk);                          // 21 owned tile-chunk index (0..Pk-1)
-            wa.push_back(Pk);                                       // 22 P = ring size (Pk)
-            wa.push_back((geo.M_block_capacity * geo.N_sub) / Pk);  // 23 chunk_tiles
-        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
         // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero. When a fusion is active the
         // reduction-root flag (is_top) follows, then the addcmul scalar bits + gate-broadcast flag.
         std::vector<uint32_t> ca = {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u};
-        // DIAG_REDTREE (never combined with fusion): compute reads num_recv right after is_reduce_bottom and
-        // runs num_recv reduce-add rounds. Follows is_reduce_bottom (arg 4) so the fused is_reduce_top (arg 5,
-        // present only under fusion) never collides with it.
-        if (diag & RegimeADiag::DIAG_REDTREE) {
-            ca.push_back(cp.num_recv);
-        }
-        // DIAG_RSCATTER (never combined with fusion): compute reads ring position + P + chunk_tiles after
-        // is_reduce_bottom.
-        if (rscatter) {
-            ca.push_back(cp.rs_pos);
-            ca.push_back(Pk);
-            ca.push_back((geo.M_block_capacity * geo.N_sub) / Pk);
-        }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);
         }

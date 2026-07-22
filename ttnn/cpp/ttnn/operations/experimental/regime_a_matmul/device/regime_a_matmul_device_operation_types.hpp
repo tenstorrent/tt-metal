@@ -7,7 +7,6 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/regime_a_matmul/device/regime_a_matmul_config.hpp"
 
@@ -26,17 +25,12 @@ struct RegimeAMatmulParams {
     // tensors live in RegimeAMatmulInputs). Rejected together with fused_activation.
     std::optional<float> fused_ternary_scalar;
     int32_t chunks = 1;  // output column-split count (regime_a_matmul_split); 1 => single output tensor
-    int32_t dim = -1;    // split dim (only -1 supported)
 
-    std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
-    std::optional<tt::tt_metal::DataType> output_dtype;
-
-    DeviceComputeKernelConfig compute_kernel_config;
-
-    // Test-only ablation bitmask (RegimeADiag). 0 for the public path. Part of the reflection-based
-    // program-cache hash, so a diagnostic program never aliases a normal one. Set only via the internal
-    // ttnn::prim::regime_a_matmul_diag entry; never through Python/nanobind.
-    uint32_t diag_mask = 0;
+    // NOTE: numerics are FIXED production behavior, not options — BF16 in/out, HiFi2, FP32 dest-accumulation,
+    // DRAM-interleaved output. There is deliberately no output dtype / memory_config / compute_kernel_config
+    // here: they were previously accepted but ignored (an API-correctness hazard), so they are not part of the
+    // op's attributes or program-cache identity. The split `dim` is always -1 (validated in the wrapper) and is
+    // likewise not stored/hashed — only `chunks` reaches the device op.
 };
 
 struct RegimeAMatmulInputs {

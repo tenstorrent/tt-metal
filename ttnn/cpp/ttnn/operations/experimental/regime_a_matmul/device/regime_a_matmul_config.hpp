@@ -26,11 +26,6 @@ struct RegimeAMatmulConfig {
     uint32_t n_subblock_tiles{0};  // nsb: N-subblock width (tiles). 0 => full N_own.
 };
 
-// RegimeADiag (the test-only diagnostic ablation bitmask) is INTERNAL-ONLY and deliberately NOT declared here
-// — this header is reachable from the public op header (regime_a_matmul.hpp) and the nanobind TU, so the enum
-// lives in the internal-only device/regime_a_matmul_diag.hpp, included only by the program factory. The
-// diag_mask field in RegimeAMatmulParams is a plain uint32_t, so nothing here needs the enum.
-
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
 
 // Auto-select a (Pk, Ns, Sm, kb, nsb) config for a shape given in TILE counts. Ported from the

@@ -6,7 +6,6 @@
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
@@ -45,18 +44,8 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         act.memory_config().buffer_type() == BufferType::DRAM &&
             act.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "regime_a_matmul input (in0) must be DRAM INTERLEAVED");
-    if (operation_attributes.output_dtype.has_value()) {
-        TT_FATAL(
-            operation_attributes.output_dtype.value() == DataType::BFLOAT16,
-            "regime_a_matmul output dtype must be BFLOAT16 (only bf16 output is implemented), got {}",
-            operation_attributes.output_dtype.value());
-    }
-    if (operation_attributes.output_mem_config.has_value()) {
-        const auto& omc = operation_attributes.output_mem_config.value();
-        TT_FATAL(
-            omc.buffer_type() == BufferType::DRAM && omc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "regime_a_matmul output must be DRAM INTERLEAVED");
-    }
+    // Output numerics/layout are FIXED (BF16, DRAM-interleaved) — created that way in compute_output_specs;
+    // there is no caller-supplied output dtype / memory_config to validate.
 
     // Shapes: no batching — all leading dims (< -2) must be 1 for both operands.
     const auto& a_logical = act.logical_shape();
@@ -115,10 +104,9 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
     // reject chunks beyond that to avoid an out-of-bounds runtime-arg read / write.
     constexpr int32_t kMaxChunks = 16;
     const int32_t chunks = operation_attributes.chunks;
-    const int32_t dim = operation_attributes.dim;
     TT_FATAL(chunks >= 1, "regime_a_matmul requires chunks >= 1, got chunks={}", chunks);
     TT_FATAL(chunks <= kMaxChunks, "regime_a_matmul supports at most {} chunks, got chunks={}", kMaxChunks, chunks);
-    TT_FATAL(dim == -1, "regime_a_matmul only supports dim=-1, got dim={}", dim);
+    // (split `dim` is validated == -1 in the public wrapper; only `chunks` reaches the device op.)
     if (chunks > 1) {
         TT_FATAL(N % static_cast<uint32_t>(chunks) == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
         const uint32_t N_per_chunk = N / static_cast<uint32_t>(chunks);
@@ -217,9 +205,9 @@ RegimeAMatmulDeviceOperation::spec_return_value_t RegimeAMatmulDeviceOperation::
     const auto& weight = tensor_args.weight_tensor;
     const uint32_t N = weight.logical_shape()[-1];
 
-    // Output is bf16 by default (v1) and DRAM interleaved unless overridden.
-    const auto dtype = operation_attributes.output_dtype.value_or(DataType::BFLOAT16);
-    const auto memory_config = operation_attributes.output_mem_config.value_or(MemoryConfig{});
+    // Output numerics/layout are FIXED: BF16, DRAM-interleaved (MemoryConfig{} default). Not caller-tunable.
+    const auto dtype = DataType::BFLOAT16;
+    const auto memory_config = MemoryConfig{};
 
     // Output column-split (regime_a_matmul_split): `chunks` equal-width [.., M, N/chunks] tensors written
     // directly by the writer. chunks==1 (public regime_a_matmul) => a single full-width output.
@@ -252,37 +240,18 @@ RegimeAMatmulDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const RegimeAMatmulConfig>& config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& bias_tensor,
     std::optional<operations::unary::UnaryWithParam> fused_activation,
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
-    int32_t chunks,
-    int32_t dim,
-    uint32_t diag_mask) {
-    const auto arch = input_tensor.device()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(
-        arch,
-        compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi2,
-        false /*approx_mode*/,
-        true /*fp32_acc*/,
-        true /*packer_acc*/);
-
+    int32_t chunks) {
     return {
         operation_attributes_t{
             .config = config,
             .fused_activation = std::move(fused_activation),
             .fused_ternary_scalar = fused_ternary_scalar,
-            .chunks = chunks,
-            .dim = dim,
-            .output_mem_config = memory_config,
-            .output_dtype = dtype,
-            .compute_kernel_config = kernel_config_val,
-            .diag_mask = diag_mask},
+            .chunks = chunks},
         tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
@@ -299,66 +268,24 @@ std::vector<Tensor> regime_a_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const experimental::prim::RegimeAMatmulConfig>& config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& bias_tensor,
     std::optional<operations::unary::UnaryWithParam> fused_activation,
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
-    int32_t chunks,
-    int32_t dim) {
+    int32_t chunks) {
     using OperationType = experimental::prim::RegimeAMatmulDeviceOperation;
-    const auto arch = input_tensor.device()->arch();
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
-
     auto [attributes, tensor_args] = OperationType::invoke(
         input_tensor,
         weight_tensor,
         config,
-        memory_config,
-        dtype,
-        compute_kernel_config,
         bias_tensor,
         std::move(fused_activation),
         fused_ternary_scalar,
         fused_ternary_input_a,
         fused_ternary_input_b,
-        chunks,
-        dim);
+        chunks);
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
-}
-
-Tensor regime_a_matmul_diag(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const experimental::prim::RegimeAMatmulConfig>& config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    uint32_t diag_mask) {
-    using OperationType = experimental::prim::RegimeAMatmulDeviceOperation;
-    const auto arch = input_tensor.device()->arch();
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
-
-    auto [attributes, tensor_args] = OperationType::invoke(
-        input_tensor,
-        weight_tensor,
-        config,
-        memory_config,
-        dtype,
-        compute_kernel_config,
-        std::nullopt,  // bias
-        std::nullopt,  // activation
-        std::nullopt,  // ternary scalar
-        std::nullopt,  // ternary a
-        std::nullopt,  // ternary b
-        1,             // chunks
-        -1,            // dim
-        diag_mask);
-    auto outs = ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
-    return outs[0];
 }
 
 }  // namespace ttnn::prim

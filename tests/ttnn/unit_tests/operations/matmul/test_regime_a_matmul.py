@@ -505,12 +505,9 @@ def test_regime_a_fused_validation(device):
             fused_ternary_input_b=_mk(device, (1, 1, 1, N)),
         )
 
-    # ---- Output dtype: only bf16 implemented (writer/CBs hardcode bf16). Reject others on BOTH APIs. ----
-    for dt in (ttnn.float32, ttnn.bfloat8_b):
-        with pytest.raises(RuntimeError):
-            ttnn.experimental.regime_a_matmul(a, in1, dtype=dt)
-        with pytest.raises(RuntimeError):
-            ttnn.experimental.regime_a_matmul_split(a, in1, 2, -1, dtype=dt)
+    # (Output dtype / memory_config / compute_kernel_config are no longer op arguments — numerics are fixed
+    # BF16 / HiFi2 / FP32-acc / DRAM-interleaved — so there is nothing to reject at runtime; passing them is a
+    # Python TypeError at the binding, not an op-level RuntimeError.)
 
     # ---- addcmul all-or-nothing: {scalar, residual, gate} together or none (no silent-ignore). ----
     # residual + gate WITHOUT scalar -> reject (would otherwise be silently ignored)

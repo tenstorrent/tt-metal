@@ -20,13 +20,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-// Test-only causal timing zones (compile-gated; mask 0 => no-op => byte-identical). See DIAG_ZONES.
-#ifdef DIAG_ZONES
-#define RA_ZONE(n) DeviceZoneScopedN(n)
-#else
-#define RA_ZONE(n)
-#endif
-
 void kernel_main() {
     constexpr uint32_t K_block = get_compile_time_arg_val(0);             // kb
     constexpr uint32_t N_block = get_compile_time_arg_val(1);             // N_sub
@@ -99,22 +92,17 @@ void kernel_main() {
             uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
             noc_async_write(w1, get_noc_addr(sx, sy, w1), in1_blk_bytes);
         }
-#ifdef DIAG_FWD_FLUSH_FIRST
-        noc_async_writes_flushed();  // A/B baseline: OLD flush-before-signal
-#endif
+        // Signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without waiting on the
+        // reader's flush (same-NoC write-before-inc keeps the destination from observing validity before the
+        // payload lands); the per-block flush that follows is REQUIRED for SOURCE lifetime -- it guarantees
+        // the async write has departed this CB slot before the slot is pushed, wrapped, and overwritten by a
+        // later block (an exit-only barrier would be too late). The flush is merely off the slave-release
+        // critical path, NOT removed.
         for (uint32_t s = 0; s < mpeers; ++s) {
             uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
             noc_semaphore_inc(get_noc_addr(sx, sy, in1valid_addr), 1);
         }
-#ifndef DIAG_FWD_FLUSH_FIRST
-        // DEFAULT: signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without
-        // waiting on the reader's flush (same-NoC write-before-inc keeps the destination from observing
-        // validity before the payload lands); the per-block flush that follows is REQUIRED for SOURCE
-        // lifetime -- it guarantees the async write has departed this CB slot before the slot is pushed,
-        // wrapped, and overwritten by a later block (an exit-only barrier would be too late). The flush is
-        // merely moved off the slave-release critical path, NOT removed. DIAG_FWD_FLUSH_FIRST = old order.
         noc_async_writes_flushed();
-#endif
         ++mbc;
     };
 
@@ -123,7 +111,6 @@ void kernel_main() {
     // preserved by the writer, which zeros in0 for K/M tails -> 0*garbage == 0 kills the K-tail term; and
     // pad-N columns (>= valid_n) are never written to the output. This keeps the reader on its fast path
     // and confines the (cheap) tail zeroing to the small in0 buffer in the writer.
-    RA_ZONE("Z_IN1READ");  // function-scope: the whole strided in1 read+forward loop (BRISC critical path)
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         const uint32_t ncol_base = nb * N_block;  // owned-column offset of this subblock
         // valid N columns within this subblock (0 => whole subblock is beyond the owned N range)
@@ -137,13 +124,12 @@ void kernel_main() {
                 cb_reserve_back(in1_cb, in1_blk);
                 uint32_t w1 = get_write_ptr(in1_cb);
                 if (vcols > 0u) {
-#ifndef DIAG_NO_COALESCE
-                    // DEFAULT (adopted): coalesce the whole [K_block x vcols] block into ONE read when it is
-                    // physically contiguous in the bank shard: full owned width (vcols==N_block==shard
-                    // stride), zero column offset, and NO K-tail in this block (all K_block rows valid).
-                    // Consecutive K rows are then adjacent (gk*stride) with a contiguous L1 destination
-                    // (seg_bytes == vcols*tile_bytes), so one read replaces K_block per-row reads (-0.5..-3.1%,
-                    // PCC-exact). Falls back to per-row otherwise. DIAG_NO_COALESCE forces per-row for A/B.
+                    // Coalesce the whole [K_block x vcols] block into ONE read when it is physically
+                    // contiguous in the bank shard: full owned width (vcols==N_block==shard stride), zero
+                    // column offset, and NO K-tail in this block (all K_block rows valid). Consecutive K rows
+                    // are then adjacent (gk*stride) with a contiguous L1 destination (seg_bytes ==
+                    // vcols*tile_bytes), so one read replaces K_block per-row reads (-0.5..-3.1%, PCC-exact).
+                    // Falls back to per-row otherwise.
                     const bool contig = (vcols == N_block) && (N_block == in1_shard_stride_n) &&
                                         ((n_local + ncol_base) == 0u) && ((kblk * K_block + K_block) <= valid_k);
                     if (contig) {
@@ -151,9 +137,7 @@ void kernel_main() {
                         noc_async_read(
                             get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, K_block * vcols * tile_bytes);
                         noc_async_read_barrier();
-                    } else
-#endif
-                    {
+                    } else {
                         for (uint32_t kr = 0; kr < K_block; ++kr) {
                             const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
                             if (l < valid_k) {

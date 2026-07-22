@@ -8,7 +8,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "regime_a_matmul_device_operation_types.hpp"
 #include "regime_a_matmul_program_factory.hpp"
 
@@ -40,17 +39,12 @@ struct RegimeAMatmulDeviceOperation {
         const Tensor& input_tensor,
         const Tensor& weight_tensor,
         const std::optional<const RegimeAMatmulConfig>& config,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<const DataType> dtype,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config,
         const std::optional<Tensor>& bias_tensor = std::nullopt,
         std::optional<operations::unary::UnaryWithParam> fused_activation = std::nullopt,
         std::optional<float> fused_ternary_scalar = std::nullopt,
         const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
         const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
-        int32_t chunks = 1,
-        int32_t dim = -1,
-        uint32_t diag_mask = 0);  // test-only ablations (RegimeADiag); public path always 0
+        int32_t chunks = 1);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -58,31 +52,17 @@ struct RegimeAMatmulDeviceOperation {
 namespace ttnn::prim {
 
 // Returns a vector of output tensors (chunks). chunks==1 => single element (public regime_a_matmul).
+// Numerics are fixed (BF16 in/out, HiFi2, FP32 acc, DRAM-interleaved output) — no dtype/memory_config/
+// compute_kernel_config knobs.
 std::vector<Tensor> regime_a_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const experimental::prim::RegimeAMatmulConfig>& config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& bias_tensor = std::nullopt,
     std::optional<operations::unary::UnaryWithParam> fused_activation = std::nullopt,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
-    int32_t chunks = 1,
-    int32_t dim = -1);
-
-// Test-only / internal entry point that constructs the primitive with a nonzero diagnostic ablation mask
-// (RegimeADiag bits). NOT bound to Python/nanobind; used by the C++ ablation harness only. The public
-// regime_a_matmul() above always runs with mask 0. Returns the single (chunks==1) output tensor.
-Tensor regime_a_matmul_diag(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const experimental::prim::RegimeAMatmulConfig>& config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    uint32_t diag_mask);
+    int32_t chunks = 1);
 
 }  // namespace ttnn::prim

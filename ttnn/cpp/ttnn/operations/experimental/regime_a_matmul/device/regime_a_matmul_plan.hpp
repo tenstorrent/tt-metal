@@ -174,32 +174,11 @@ struct CorePlan {
     uint32_t ring_next_idx{};  // core index of (pos+1)%8 in this ring
     uint32_t ring_prev_idx{};  // core index of (pos+7)%8 in this ring
 
-    // split-K reduction (spec §4).
+    // split-K reduction chain (spec §4).
     bool is_bottom{};         // kk == 0
     bool is_top{};            // kk == Pk-1
     uint32_t red_next_idx{};  // core index of next k-slice (i+mfac); self if is_top
     uint32_t red_prev_idx{};  // core index of prev k-slice (i-mfac); self if is_bottom
-
-    // Generalized reduction topology (chain OR the DIAG_REDTREE fan-in-2 tree — the FACTORY post-process
-    // overrides these for the tree; build_plan below fills the CHAIN values). num_recv = incoming partials to
-    // sum before this core's own block is final: chain bottom=0, chain non-bottom=1; tree leaf=0, tree inner=1,
-    // tree root=2. red_channel = which receive channel (0/1) this core writes when it FORWARDS to its parent
-    // (chain always 0). red_parent_nrecv = the parent's num_recv (the sender's reduce-slot cadence: slot =
-    // (nb*red_parent_nrecv + red_channel) % 2). red_src_idx[c] = core index of this core's channel-c source
-    // (for reverse-credit addressing); unused entries point at self.
-    uint32_t num_recv{};          // chain: is_bottom ? 0 : 1
-    uint32_t red_channel{};       // chain: 0
-    uint32_t red_parent_nrecv{};  // chain: 1
-    uint32_t red_src_idx[2]{};    // chain: {red_prev_idx, self}
-
-    // DIAG_RSCATTER ring reduce-scatter over the Pk cores of a reduction group (factory post-process fills
-    // these; chain/tree leave them at self/0). rs_pos = position in the optimized Pk-cycle; rs_next/prev_idx =
-    // cyclic neighbours (core indices); rs_own_chunk = (rs_pos+1)%Pk = the block row-chunk this core finally
-    // owns and writes to DRAM.
-    uint32_t rs_pos{};
-    uint32_t rs_next_idx{};
-    uint32_t rs_prev_idx{};
-    uint32_t rs_own_chunk{};
 };
 
 struct ExecutionPlan {
@@ -417,19 +396,11 @@ inline PlanResult build_plan(const PlanInputs& in) {
                 return res;
             }
 
-            // reduction links (spec §4)
+            // reduction chain links (spec §4)
             cp.is_bottom = (kk == 0u);
             cp.is_top = (kk == Pk - 1u);
             cp.red_next_idx = cp.is_top ? i : (i + g.mfac);
             cp.red_prev_idx = cp.is_bottom ? i : (i - g.mfac);
-            // Generalized-topology CHAIN defaults (the DIAG_REDTREE factory post-process overrides these).
-            cp.num_recv = cp.is_bottom ? 0u : 1u;
-            cp.red_channel = 0u;
-            cp.red_parent_nrecv = 1u;
-            cp.red_src_idx[0] = cp.red_prev_idx;
-            cp.red_src_idx[1] = i;
-            cp.rs_next_idx = i;  // reduce-scatter ring links default to self (filled by the factory post-process)
-            cp.rs_prev_idx = i;
 
             plan.cores[i] = cp;
         }

@@ -18,24 +18,17 @@ ttnn::Tensor regime_a_matmul(
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     std::optional<float> fused_ternary_scalar,
     const std::optional<ttnn::Tensor>& fused_ternary_input_a,
-    const std::optional<ttnn::Tensor>& fused_ternary_input_b,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<ttnn::Tensor>& fused_ternary_input_b) {
     auto outs = ttnn::prim::regime_a_matmul(
         input_tensor,
         weight_tensor,
         config,
-        memory_config,
-        dtype,
-        compute_kernel_config,
         bias_tensor,
         std::move(fused_activation),
         fused_ternary_scalar,
         fused_ternary_input_a,
         fused_ternary_input_b,
-        1,    // chunks
-        -1);  // dim
+        1);  // chunks
     TT_FATAL(outs.size() == 1, "regime_a_matmul expected a single output, got {}", outs.size());
     return outs[0];
 }
@@ -50,26 +43,21 @@ std::vector<ttnn::Tensor> regime_a_matmul_split(
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     std::optional<float> fused_ternary_scalar,
     const std::optional<ttnn::Tensor>& fused_ternary_input_a,
-    const std::optional<ttnn::Tensor>& fused_ternary_input_b,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<ttnn::Tensor>& fused_ternary_input_b) {
     TT_FATAL(chunks >= 1, "regime_a_matmul_split requires chunks >= 1, got {}", chunks);
+    // `dim` is kept in the wrapper signature for minimal_matmul API compatibility, validated here, and NOT
+    // forwarded to the device op (only -1 is supported; the device op works on `chunks` alone).
     TT_FATAL(dim == -1, "regime_a_matmul_split only supports dim=-1, got {}", dim);
     return ttnn::prim::regime_a_matmul(
         input_tensor,
         weight_tensor,
         config,
-        memory_config,
-        dtype,
-        compute_kernel_config,
         bias_tensor,
         std::move(fused_activation),
         fused_ternary_scalar,
         fused_ternary_input_a,
         fused_ternary_input_b,
-        chunks,
-        dim);
+        chunks);
 }
 
 }  // namespace ttnn::experimental

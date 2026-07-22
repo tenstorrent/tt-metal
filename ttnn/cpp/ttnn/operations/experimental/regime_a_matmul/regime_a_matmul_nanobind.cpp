@@ -24,11 +24,12 @@ void bind_regime_a_matmul(nb::module_& mod) {
     ttnn::bind_function<"regime_a_matmul", "ttnn.experimental.">(
         mod,
         R"doc(
-        regime_a_matmul(input_tensor, weight_tensor, config=None, *, bias_tensor=None, fused_activation=None, fused_ternary_scalar=None, fused_ternary_input_a=None, fused_ternary_input_b=None, memory_config=None, dtype=None, compute_kernel_config=None)
+        regime_a_matmul(input_tensor, weight_tensor, config=None, *, bias_tensor=None, fused_activation=None, fused_ternary_scalar=None, fused_ternary_input_a=None, fused_ternary_input_b=None)
 
         Experimental DRAM-bandwidth-optimal matrix multiply (A @ B) for low-arithmetic-intensity
-        (M << N or N << M) "Regime-A" shapes, with optional fused epilogue. bf16 in/out, HiFi2 math,
-        fp32 dest accumulation.
+        (M << N or N << M) "Regime-A" shapes, with optional fused epilogue. Numerics are FIXED:
+        BFLOAT16 in/out, HiFi2 math, FP32 dest accumulation, DRAM-interleaved output (there are no
+        dtype / memory_config / compute_kernel_config arguments).
 
         Fusions (applied at the output/compute stage; for split-K they run exactly once after reduction):
           - bias:       Y = A@B + bias
@@ -58,17 +59,11 @@ void bind_regime_a_matmul(nb::module_& mod) {
             addcmul residual [M, N], BFLOAT16, TILE.
         fused_ternary_input_b : Optional[ttnn.Tensor], default: None
             addcmul gate [1, N] (broadcast) or [M, N] (full), TILE.
-        memory_config : Optional[ttnn.MemoryConfig], default: None
-            Output memory config. Defaults to DRAM interleaved.
-        dtype : Optional[ttnn.DataType], default: None
-            Output dtype. Defaults to BFLOAT16.
-        compute_kernel_config : Optional[DeviceComputeKernelConfig], default: None
-            Compute kernel config. Defaults to HiFi2 + fp32 accumulation.
 
         Returns
         -------
         ttnn.Tensor
-            Output tensor [.., M, N], TILE layout.
+            Output tensor [.., M, N], TILE layout, BFLOAT16, DRAM interleaved.
         )doc",
         &ttnn::experimental::regime_a_matmul,
         nb::arg("input_tensor"),
@@ -79,19 +74,17 @@ void bind_regime_a_matmul(nb::module_& mod) {
         nb::arg("fused_activation") = nb::none(),
         nb::arg("fused_ternary_scalar") = nb::none(),
         nb::arg("fused_ternary_input_a") = nb::none(),
-        nb::arg("fused_ternary_input_b") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("fused_ternary_input_b") = nb::none());
 
     ttnn::bind_function<"regime_a_matmul_split", "ttnn.experimental.">(
         mod,
         R"doc(
-        regime_a_matmul_split(input_tensor, weight_tensor, chunks, dim=-1, config=None, *, bias_tensor=None, fused_activation=None, fused_ternary_scalar=None, fused_ternary_input_a=None, fused_ternary_input_b=None, memory_config=None, dtype=None, compute_kernel_config=None)
+        regime_a_matmul_split(input_tensor, weight_tensor, chunks, dim=-1, config=None, *, bias_tensor=None, fused_activation=None, fused_ternary_scalar=None, fused_ternary_input_a=None, fused_ternary_input_b=None)
 
         Output column-split sibling of regime_a_matmul. Returns `chunks` equal-width [.., M, N/chunks]
         output tensors, written directly (no full-output materialize + slice). Requires dim==-1,
-        N % chunks == 0 and N/chunks tile-aligned. All fusions compose with chunking.
+        N % chunks == 0 and N/chunks tile-aligned. All fusions compose with chunking. Fixed numerics
+        (BFLOAT16, HiFi2, FP32 acc, DRAM interleaved).
 
         Returns
         -------
@@ -109,32 +102,32 @@ void bind_regime_a_matmul(nb::module_& mod) {
         nb::arg("fused_activation") = nb::none(),
         nb::arg("fused_ternary_scalar") = nb::none(),
         nb::arg("fused_ternary_input_a") = nb::none(),
-        nb::arg("fused_ternary_input_b") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("fused_ternary_input_b") = nb::none());
 
     auto py_config = nb::class_<RegimeAMatmulConfig>(
                          mod,
                          "RegimeAMatmulConfig",
                          R"doc(
                          Configuration for the Regime-A matmul operation (all values in tiles / slice counts).
+                         A manual config must set the scheduling fields explicitly; there is deliberately NO
+                         zero-argument constructor (the old all-ones default builds only 8 workers, which is
+                         invalid for most shapes). Use config=None for the auto-picker instead.
                          )doc")
-                         .def(nb::init<>())
                          .def(
                              nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
                              nb::kw_only(),
-                             nb::arg("k_slices") = 1,
-                             nb::arg("n_slices") = 1,
-                             nb::arg("m_slices") = 1,
-                             nb::arg("k_block_tiles") = 1,
-                             nb::arg("n_subblock_tiles") = 0);
+                             nb::arg("k_slices"),
+                             nb::arg("n_slices"),
+                             nb::arg("m_slices"),
+                             nb::arg("k_block_tiles"),
+                             nb::arg("n_subblock_tiles"));
 
-    py_config.def_rw("k_slices", &RegimeAMatmulConfig::k_slices, "");
-    py_config.def_rw("n_slices", &RegimeAMatmulConfig::n_slices, "");
-    py_config.def_rw("m_slices", &RegimeAMatmulConfig::m_slices, "");
-    py_config.def_rw("k_block_tiles", &RegimeAMatmulConfig::k_block_tiles, "");
-    py_config.def_rw("n_subblock_tiles", &RegimeAMatmulConfig::n_subblock_tiles, "");
+    // Read-only: a config is immutable after construction (set all fields via the constructor).
+    py_config.def_ro("k_slices", &RegimeAMatmulConfig::k_slices, "");
+    py_config.def_ro("n_slices", &RegimeAMatmulConfig::n_slices, "");
+    py_config.def_ro("m_slices", &RegimeAMatmulConfig::m_slices, "");
+    py_config.def_ro("k_block_tiles", &RegimeAMatmulConfig::k_block_tiles, "");
+    py_config.def_ro("n_subblock_tiles", &RegimeAMatmulConfig::n_subblock_tiles, "");
     // Build the repr manually (this file is compiled standalone / SKIP_UNITY, so the generic
     // reflection-based fmt formatter for aggregates is not in scope here).
     py_config.def("__repr__", [](const RegimeAMatmulConfig& c) {

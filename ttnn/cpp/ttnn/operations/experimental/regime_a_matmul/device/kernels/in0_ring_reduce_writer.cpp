@@ -14,21 +14,11 @@
 // (REDUCE_K) adds it; the top band writes the final [M,N] block to DRAM. When Pk==1 every core is bottom AND
 // top, so it writes its own block directly with no reduction traffic (and cb_reduce is never touched).
 //
-// Cleaned unified-only port of the prototype in0_ring_writer.cpp (ring all-gather + reduction chain). The
-// rejected in0-delivery variants (scatter / replicated-ring / direct-exchange) and the skip-read/forward
-// ablations have been removed; the only test-only diagnostics that remain here are DIAG_NO_REDUCE and the
-// DIAG_BARRIER_DRAIN write-sync A/B (both #ifdef, absent from the mask-0 public compile).
+// Production port of the prototype in0_ring_writer.cpp: ring all-gather + linear split-K reduction chain +
+// output write. Write sync is pipelined (per-block source-lifetime flush + one deferred completion barrier).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-
-// Test-only causal timing zones (compile-gated; profiler injects DeviceZoneScopedN). Mask 0 => no-op =>
-// byte-identical. See RegimeADiag::DIAG_ZONES.
-#ifdef DIAG_ZONES
-#define RA_ZONE(n) DeviceZoneScopedN(n)
-#else
-#define RA_ZONE(n)
-#endif
 
 void kernel_main() {
     constexpr uint32_t M_block = get_compile_time_arg_val(0);
@@ -77,27 +67,6 @@ void kernel_main() {
     const uint32_t valid_k = get_arg_val<uint32_t>(14);  // valid K tiles (rest of capacity zero-filled)
     const uint32_t valid_m = get_arg_val<uint32_t>(15);  // valid M tiles (rest zero / not written)
     const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
-#ifdef REDTREE
-    // Fan-in-2 reduction-tree runtime args (index 17+; never combined with fusion/chunks — see the factory).
-    const uint32_t tree_num_recv = get_arg_val<uint32_t>(17);      // incoming partials this core sums (0/1/2)
-    const uint32_t tree_parent_nrecv = get_arg_val<uint32_t>(18);  // parent's num_recv (sender slot cadence)
-    const uint32_t tree_channel = get_arg_val<uint32_t>(19);       // channel this core writes at its parent
-    const uint32_t red_sem2_id = get_arg_val<uint32_t>(20);        // channel-1 receive semaphore id
-    const uint32_t red_src0_x = get_arg_val<uint32_t>(21);         // channel-0 source (for reverse credit)
-    const uint32_t red_src0_y = get_arg_val<uint32_t>(22);
-    const uint32_t red_src1_x = get_arg_val<uint32_t>(23);  // channel-1 source
-    const uint32_t red_src1_y = get_arg_val<uint32_t>(24);
-#endif
-#ifdef RSCATTER
-    // Ring reduce-scatter runtime args (index 17+; unfused only — never combined with fusion/chunks/other diag).
-    const uint32_t rs_next_x = get_arg_val<uint32_t>(17);  // next core in the Pk ring (I send to it)
-    const uint32_t rs_next_y = get_arg_val<uint32_t>(18);
-    const uint32_t rs_prev_x = get_arg_val<uint32_t>(19);  // prev core (it sends to me)
-    const uint32_t rs_prev_y = get_arg_val<uint32_t>(20);
-    const uint32_t rs_owned_chunk = get_arg_val<uint32_t>(21);  // tile-chunk index this core owns + writes
-    const uint32_t rs_P = get_arg_val<uint32_t>(22);            // ring size = Pk
-    const uint32_t rs_chunk_tiles = get_arg_val<uint32_t>(23);  // tiles per chunk = M_block*N_block / Pk
-#endif
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
@@ -241,15 +210,12 @@ void kernel_main() {
 #endif
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
-    {
-        RA_ZONE("Z_RING");
-        cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
-        const uint32_t base0 = get_write_ptr(in0_cb);
+    cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
+    const uint32_t base0 = get_write_ptr(in0_cb);
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
         if (step == 0) {
-            // Z_R_INJECT: read our OWN shard (shard index = ring_pos) from DRAM into slot 0 (+ barrier).
-            RA_ZONE("Z_R_INJECT");
+            // read our OWN shard (shard index = ring_pos) from DRAM into slot 0 (+ barrier).
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
                 const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
@@ -267,28 +233,18 @@ void kernel_main() {
             }
             noc_async_read_barrier();
         } else {
-            RA_ZONE("Z_R_RECVWAIT");                // wait for prev to forward a shard into our slot `step`
-            noc_semaphore_wait_min(fwd_ptr, step);  // (ring-hop latency exposed to this core)
+            noc_semaphore_wait_min(fwd_ptr, step);  // wait for prev to forward a shard into our slot `step`
         }
-        if (step + 1 < G) {  // Z_R_FWD: forward this slot to the next core's slot (step+1) + signal
-            RA_ZONE("Z_R_FWD");
+        if (step + 1 < G) {  // forward this slot to the next core's slot (step+1) + signal
             uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (step + 1) * shard_bytes);
             noc_async_write(slot, dst, shard_bytes);
             noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
     }
-#ifdef DIAG_RINGDRAIN
-        // Test-only: source-lifetime flush only; remote completion deferred to the kernel-exit barrier
-        // (Pk>1 path drains write+atomics at 392-393). Remote landing is sem-synchronized (payload->sem).
-        noc_async_writes_flushed();
-#else
-        noc_async_write_barrier();  // all ring forwards landed
-#endif
-    }  // end Z_RING
+    noc_async_write_barrier();  // all ring forwards landed
 
     // ---- PHASE 2: output / split-K reduction over the N_bpc output blocks ----
-    RA_ZONE("Z_PHASE2");  // function-scope zone: destructor fires at return / kernel end (reduce + output)
     constexpr uint32_t out_blk_bytes = out_blk * tile_bytes;
 
     if constexpr (!use_reduce) {
@@ -311,190 +267,14 @@ void kernel_main() {
                     }
                 }
             }
-#ifdef DIAG_BARRIER_DRAIN
-            noc_async_write_barrier();  // A/B baseline: wait remote completion before reusing the slot
-#else
-            noc_async_writes_flushed();  // DEFAULT (pipelined): pages departed L1 -> out_cb slot safe to reuse
-#endif
+            noc_async_writes_flushed();  // pipelined: pages departed L1 -> out_cb slot safe to reuse
             cb_pop_front(out_cb, out_blk);
         }
-#ifndef DIAG_BARRIER_DRAIN
         noc_async_write_barrier();  // pipelined: single deferred completion barrier before return (no atomics)
-#endif
         return;
     }
 
     // Pk > 1: linear reduction chain.
-#ifdef DIAG_NO_REDUCE
-    // NO_REDUCE: every compute core took the bottom-band copy path (compute.cpp forces copy_block), so each
-    // produced its OWN matmul partial into out_cb. Bypass ALL reduction traffic (credits, receives, partial
-    // -sum forwards) and never touch cb_reduce. Non-top bands consume and DISCARD their partial; only the
-    // original top band writes its partial to DRAM (exactly one top-band output write, unchanged core count
-    // / CB alloc / output production). This removes reduction communication AND the reduction-add compute
-    // together — a COMBINED counterfactual, not a pure reduction-comm isolation.
-    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
-        cb_wait_front(out_cb, out_blk);
-        uint32_t r = get_read_ptr(out_cb);
-        if (is_top) {
-            const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
-            for (uint32_t m = 0; m < M_block; ++m) {
-                for (uint32_t n = 0; n < N_block; ++n) {
-                    if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
-                        noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
-                    }
-                }
-            }
-            noc_async_write_barrier();
-        }
-        cb_pop_front(out_cb, out_blk);
-    }
-#elif defined(REDTREE)
-    // ---- Fan-in-2 reduction TREE (test-only; Pk==4). Depth 2 vs the chain's depth 3. ----
-    // This core RECEIVES tree_num_recv partials (0 = leaf, 1 = inner, 2 = root) on disjoint channels, then
-    // (if not the root) FORWARDS its summed block up to its parent on channel `tree_channel`. The reduce-CB
-    // (cb_reduce, 2 slots) is addressed exactly like the chain: the receiver reserves one slot per round and
-    // the sender writes reduce_base + slot*out_blk_bytes where slot = (nb*parent_nrecv + channel) % 2 — this
-    // matches the receiver's per-round FIFO reservation for both parent kinds (inner parent nrecv=1 =>
-    // double-buffered nb%2 like the chain; root parent nrecv=2 => channel-fixed slots 0/1). Channel 0 uses
-    // red_sem, channel 1 uses red_sem2 (disjoint counters => no cross-channel fungibility).
-    const uint32_t reduce_base = get_write_ptr(cb_reduce);
-    const uint32_t red_addr = get_semaphore(red_sem_id);    // my channel-0 receive counter
-    const uint32_t red2_addr = get_semaphore(red_sem2_id);  // my channel-1 receive counter
-    volatile tt_l1_ptr uint32_t* red_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_addr);
-    volatile tt_l1_ptr uint32_t* red2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red2_addr);
-    const uint32_t redfree_addr = get_semaphore(redfree_sem_id);
-    volatile tt_l1_ptr uint32_t* redfree_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(redfree_addr);
-    // Reverse-credit targets: my channel-0/1 sources' redfree semaphores (I free their reduce slots).
-    const uint64_t src0_redfree = get_noc_addr(red_src0_x, red_src0_y, redfree_addr);
-    const uint64_t src1_redfree = get_noc_addr(red_src1_x, red_src1_y, redfree_addr);
-    // Forward target: my parent's channel-`tree_channel` receive counter (same L1 offset on every core).
-    const uint32_t parent_recv_addr = (tree_channel == 0u) ? red_addr : red2_addr;
-    const uint64_t next_recv = get_noc_addr(red_next_x, red_next_y, parent_recv_addr);
-
-    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
-        if (tree_num_recv >= 1u) {  // channel 0 (from red_src0), reduced first
-            cb_reserve_back(cb_reduce, out_blk);
-            noc_semaphore_inc(src0_redfree, 1);
-            {
-                RA_ZONE("Z_P2_RECVWAIT");
-                noc_semaphore_wait_min(red_ptr, nb + 1);
-            }
-            cb_push_back(cb_reduce, out_blk);  // compute reduce-adds it (round 0)
-        }
-        if (tree_num_recv >= 2u) {  // channel 1 (from red_src1), reduced second -> out_cb
-            cb_reserve_back(cb_reduce, out_blk);
-            noc_semaphore_inc(src1_redfree, 1);
-            {
-                RA_ZONE("Z_P2_RECVWAIT");
-                noc_semaphore_wait_min(red2_ptr, nb + 1);
-            }
-            cb_push_back(cb_reduce, out_blk);  // compute reduce-adds it (round 1)
-        }
-        {
-            RA_ZONE("Z_P2_OUTWAIT");
-            cb_wait_front(out_cb, out_blk);  // compute produced this core's (summed) block nb
-        }
-        uint32_t r = get_read_ptr(out_cb);
-        if (tree_num_recv < 2u) {                         // not the root: forward my block up to my parent
-            noc_semaphore_wait_min(redfree_ptr, nb + 1);  // parent freed my target slot
-            const uint32_t slot = (nb * tree_parent_nrecv + tree_channel) & 1u;
-            uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + slot * out_blk_bytes);
-            noc_async_write(r, dst, out_blk_bytes);
-            noc_semaphore_inc(next_recv, 1);  // ordered after payload (same peer + NoC, like the in0 ring)
-            noc_async_writes_flushed();       // payload departed L1 -> out_cb slot reusable
-        } else {                              // root (is_top): write the final block to DRAM
-            RA_ZONE("Z_P2_OUTWRITE");
-            const uint32_t n_off = n_start + nb * N_block;
-            for (uint32_t m = 0; m < M_block; ++m) {
-                for (uint32_t n = 0; n < N_block; ++n) {
-                    if (m < valid_m && (nb * N_block + n) < valid_n) {
-#if defined(OUT_CHUNKS)
-                        write_out_tile(m_start + m, n_off + n, r + (m * N_block + n) * tile_bytes);
-#else
-                        noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
-#endif
-                    }
-                }
-            }
-            noc_async_writes_flushed();
-        }
-        cb_pop_front(out_cb, out_blk);
-    }
-    // Single deferred completion (like the chain default): drain forwarded partial-sums / DRAM writes AND the
-    // non-posted reduction-readiness / reverse-credit atomics so no NoC transaction outlives the program.
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
-#elif defined(RSCATTER)
-    // ---- Ring REDUCE-SCATTER (test-only; ONE independent reduce-scatter per output SUB-block). ----
-    // P = Pk cores in an optimized cyclic order. Each of the N_bpc output sub-blocks (M_block x N_block tiles)
-    // is tile-partitioned into Pk chunks of chunk_tiles = M_block*N_block/Pk contiguous tiles (row-major; chunk
-    // c = tiles [c*chunk_tiles, (c+1)*chunk_tiles)). Per sub-block nb, every round each core sends one chunk to
-    // `next` and receives one from `prev` into cb_recv; compute adds its own resident partial tiles and forwards
-    // the running sum, so after P-1 rounds each core holds ONE fully-reduced chunk (rs_owned_chunk) and writes
-    // its tiles to DRAM. Semaphore EPOCHS are monotonically increasing across (nb, round): global g =
-    // nb*(P-1)+t, so waits target g+1 and never alias across sub-blocks. Reuses the in0-ring payload->credit
-    // protocol (red_sem/redfree_sem); cb_send/cb_recv are EXACTLY 2 chunk-slots so the FIFO period matches g%2.
-    const uint32_t P = rs_P;  // Pk
-    constexpr uint32_t cb_send = 4;
-    constexpr uint32_t cb_recv = 5;
-    const uint32_t chunk_tiles = rs_chunk_tiles;
-    const uint32_t chunk_bytes = chunk_tiles * tile_bytes;
-    const uint32_t recv_base = get_write_ptr(cb_recv);  // my cb_recv L1 base (== same offset on every core)
-    const uint32_t rs_recv_addr = get_semaphore(red_sem_id);
-    volatile tt_l1_ptr uint32_t* rs_recv_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_recv_addr);
-    const uint32_t rs_free_addr = get_semaphore(redfree_sem_id);
-    volatile tt_l1_ptr uint32_t* rs_free_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_free_addr);
-    const uint64_t prev_rs_free = get_noc_addr(rs_prev_x, rs_prev_y, rs_free_addr);  // I credit prev
-    const uint64_t next_rs_recv = get_noc_addr(rs_next_x, rs_next_y, rs_recv_addr);  // I signal next
-
-    uint32_t g = 0;  // monotonically increasing (nb, round) epoch, shared by rs_recv and rs_free
-    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
-        const uint32_t n_base = nb * N_block;  // this sub-block's N-column base within the core's ownership
-        for (uint32_t t = 0; t + 1u < P; ++t, ++g) {
-            // Post my recv-slot credit to prev FIRST (all cores credit before any blocks on its own send credit
-            // -> no ring deadlock). cb_reserve_back waits until compute consumed my previous incoming chunk.
-            cb_reserve_back(cb_recv, chunk_tiles);
-            noc_semaphore_inc(prev_rs_free, 1);   // tell prev: my cb_recv slot free for epoch g
-            cb_wait_front(cb_send, chunk_tiles);  // compute staged this epoch's send chunk
-            {
-                RA_ZONE("Z_RS_SENDWAIT");
-                noc_semaphore_wait_min(rs_free_ptr, g + 1);  // next freed my send slot for epoch g
-            }
-            const uint32_t slot = g & 1u;  // double-buffered (2 slots), period matches the global epoch
-            uint64_t dst = get_noc_addr(rs_next_x, rs_next_y, recv_base + slot * chunk_bytes);
-            noc_async_write(get_read_ptr(cb_send), dst, chunk_bytes);
-            noc_semaphore_inc(next_rs_recv, 1);  // ordered after payload (same peer+NoC, like the in0 ring)
-            noc_async_writes_flushed();          // payload departed L1 -> cb_send slot reusable
-            cb_pop_front(cb_send, chunk_tiles);
-            {
-                RA_ZONE("Z_RS_RECVWAIT");
-                noc_semaphore_wait_min(rs_recv_ptr, g + 1);  // prev delivered epoch g into my cb_recv slot g%2
-            }
-            cb_push_back(cb_recv, chunk_tiles);  // compute adds its own tiles + (forwards | writes owned)
-        }
-        // Final round of this sub-block produced my fully-reduced owned chunk into out_cb -> write its tiles.
-        // Chunk c owns sub-block tiles [c*chunk_tiles ..); tile i -> (m=i/N_block, n=i%N_block) at global
-        // (m_start+m, n_start + n_base + n); valid iff m<valid_m and (n_base+n)<valid_n.
-        {
-            RA_ZONE("Z_RS_OUTWRITE");
-            cb_wait_front(out_cb, chunk_tiles);
-            const uint32_t r = get_read_ptr(out_cb);
-            for (uint32_t j = 0; j < chunk_tiles; ++j) {
-                const uint32_t i = rs_owned_chunk * chunk_tiles + j;
-                const uint32_t m = i / N_block;
-                const uint32_t n = i - m * N_block;
-                if (m < valid_m && (n_base + n) < valid_n) {
-                    noc_async_write_page((m_start + m) * Nt + (n_start + n_base + n), out, r + j * tile_bytes);
-                }
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(out_cb, chunk_tiles);
-        }
-    }
-    // Single deferred completion: drain forwarded chunks / DRAM writes AND the non-posted deliver/credit atomics.
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
-#else
     // cb_reduce holds 2 blocks (double-buffered). reduce_base captured ONCE BEFORE any cb_reduce use (the
     // write ptr drifts after receives).
     const uint32_t reduce_base = get_write_ptr(cb_reduce);
@@ -509,10 +289,7 @@ void kernel_main() {
         if (!is_bottom) {
             cb_reserve_back(cb_reduce, out_blk);  // wait our compute freed slot (nb-2)
             noc_semaphore_inc(prev_redfree, 1);   // tell prev: our slot (nb%2) is free for block nb
-            {
-                RA_ZONE("Z_P2_RECVWAIT");                 // wait prev core's forwarded partial (chain latency)
-                noc_semaphore_wait_min(red_ptr, nb + 1);  // prev forwarded block nb into it
-            }
+            noc_semaphore_wait_min(red_ptr, nb + 1);  // prev forwarded block nb into it (chain latency)
             cb_push_back(cb_reduce, out_blk);  // compute reduce_add's it -> out_cb, pops cb_reduce
         }
 #if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
@@ -520,27 +297,19 @@ void kernel_main() {
             feed_fused(nb);  // ROOT only: supply bias/residual/gate for compute's single fused epilogue
         }
 #endif
-        {
-            RA_ZONE("Z_P2_OUTWAIT");         // wait compute to produce the reduced block into out_cb
-            cb_wait_front(out_cb, out_blk);  // compute produced reduced (+ fused at top) block nb
-        }
+        cb_wait_front(out_cb, out_blk);  // compute produced reduced (+ fused at top) block nb
         uint32_t r = get_read_ptr(out_cb);
         if (!is_top) {
             noc_semaphore_wait_min(redfree_ptr, nb + 1);  // next signalled its slot (nb%2) is free
             uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + (nb % 2) * out_blk_bytes);
             noc_async_write(r, dst, out_blk_bytes);
-#ifdef DIAG_BARRIER_DRAIN
-            noc_async_write_barrier();        // A/B baseline: wait remote completion, then signal
-            noc_semaphore_inc(next_recv, 1);  // block nb delivered
-#else
-            // DEFAULT (pipelined): payload THEN signal to the SAME peer on the SAME NoC (ordered, like the in0
-            // ring) so the receiver never observes readiness before its partial-sum has landed. Flush (not a
-            // full barrier) so the out_cb source slot is reusable; completion is deferred to the final barrier.
+            // Pipelined: payload THEN signal to the SAME peer on the SAME NoC (ordered, like the in0 ring) so
+            // the receiver never observes readiness before its partial-sum has landed. Flush (not a full
+            // barrier) so the out_cb source slot is reusable; completion is deferred to the final barrier.
             noc_semaphore_inc(next_recv, 1);  // block nb delivered (ordered after the payload write)
             noc_async_writes_flushed();       // payload departed L1 -> out_cb slot safe to reuse
-#endif
         } else {
-            RA_ZONE("Z_P2_OUTWRITE");  // ROOT: issue output DRAM pages + flush (the reduction tail on the wall)
+            // ROOT: issue output DRAM pages + flush (the reduction tail on the wall).
             const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
@@ -553,20 +322,13 @@ void kernel_main() {
                     }
                 }
             }
-#ifdef DIAG_BARRIER_DRAIN
-            noc_async_write_barrier();
-#else
             noc_async_writes_flushed();  // output pages departed L1 -> out_cb slot safe to reuse
-#endif
         }
         cb_pop_front(out_cb, out_blk);
     }
-#ifndef DIAG_BARRIER_DRAIN
-    // Pipelined (default): single deferred completion before return — drain this core's forwarded partial-sums
-    // / DRAM output writes AND the non-posted reduction-readiness semaphore atomics (noc_semaphore_inc), so no
+    // Pipelined: single deferred completion before return — drain this core's forwarded partial-sums / DRAM
+    // output writes AND the non-posted reduction-readiness semaphore atomics (noc_semaphore_inc), so no
     // in-flight NoC transaction outlives the program (writes_flushed above only guarantees source-L1 reuse).
     noc_async_write_barrier();
     noc_async_atomic_barrier();
-#endif
-#endif
 }

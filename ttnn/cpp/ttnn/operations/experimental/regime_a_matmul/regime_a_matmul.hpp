@@ -28,6 +28,8 @@ namespace ttnn::experimental {
 //   - addcmul:    Y = residual + scalar*(A@B + bias)*gate (residual [M,N], gate [1,N]/[M,N])
 // activation and addcmul are mutually exclusive. For Pk>1 (split-K) the fusion is applied EXACTLY ONCE
 // after the partials are reduced (at the reduction root band), never per-partial.
+// Numerics are FIXED (BF16 in/out, HiFi2, FP32 dest-accumulation, DRAM-interleaved output) — there are no
+// dtype / memory_config / compute_kernel_config arguments (they were previously accepted but ignored).
 ttnn::Tensor regime_a_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -36,14 +38,12 @@ ttnn::Tensor regime_a_matmul(
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<ttnn::Tensor>& fused_ternary_input_a = std::nullopt,
-    const std::optional<ttnn::Tensor>& fused_ternary_input_b = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::Tensor>& fused_ternary_input_b = std::nullopt);
 
 // Output column-split sibling (mirrors minimal_matmul_split): returns `chunks` equal-width [.., M, N/chunks]
-// output tensors written directly (no full-output materialize + slice). dim must be -1; N%chunks==0 and
-// N/chunks tile-aligned. Fusions compose with chunking.
+// output tensors written directly (no full-output materialize + slice). `dim` must be -1 (kept for API
+// compatibility, validated in the wrapper, not forwarded); N%chunks==0 and N/chunks tile-aligned. Fusions
+// compose with chunking. Fixed numerics as above.
 std::vector<ttnn::Tensor> regime_a_matmul_split(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -54,9 +54,6 @@ std::vector<ttnn::Tensor> regime_a_matmul_split(
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<ttnn::Tensor>& fused_ternary_input_a = std::nullopt,
-    const std::optional<ttnn::Tensor>& fused_ternary_input_b = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::Tensor>& fused_ternary_input_b = std::nullopt);
 
 }  // namespace ttnn::experimental
