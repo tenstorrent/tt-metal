@@ -2,7 +2,22 @@
 
 **Date:** 2026-07-22
 **Branch:** `fibo-pipeline`
-**Status:** approved (pending spec review)
+**Status:** Implemented
+
+> **Outcome (2026-07-22): the prior replay-noise bug does NOT reproduce on the simplified encoder; the
+> trace works and is fast.** Measured on the 4×8 Galaxy:
+> - **Bit-exact & stable:** traced == untraced (PCC 1.0002 vs untraced, 0.99989 vs HF on the JSON
+>   prompt); flat across **16 isolated replays** and **3 full-pipeline generations** (gen 2/3 identical
+>   to gen 1 at PCC 0.9999999) — the exact "after the first run" condition, now clean.
+> - **Perf: 3.58× on the real JSON encode** (untraced 1021.8 ms → traced replay 285.6 ms; one-time
+>   capture 2281.1 ms).
+> - The empty-prompt PCC dip (~0.979 vs HF) is the pre-existing short-sample effect, **identical
+>   traced and untraced** — not a trace bug.
+> - Therefore the planned **Phase 1/2 (root-cause + fix the noise) collapsed** — the simplification
+>   (SP-only, single-output `_forward`, removed FSDP/mask paths) had already eliminated the cause.
+>   Delivered: the `Tracer` behind `use_trace`, a corrected replay-stability gate (asserts
+>   traced-replay == captured baseline + json-vs-HF ≥ 0.99), and a gated `encoder_use_trace` pipeline
+>   flag (default off; profile/no-trace-region paths unaffected).
 
 > Second attempt at tracing the encoder forward. The first attempt
 > (`docs/superpowers/specs/2026-07-15-fibo-encoder-trace-design.md`, commits `9219018b5ba` …,

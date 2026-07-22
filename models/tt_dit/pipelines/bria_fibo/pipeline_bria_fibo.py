@@ -68,6 +68,10 @@ class BriaFiboPipelineConfig:
     width: int
     checkpoint_name: str
 
+    # Trace the SmolLM3 encoder device forward (per 1024 bucket, pos+neg share it). Requires a
+    # device trace_region_size. Default off so profile/no-trace-region tests are unaffected.
+    encoder_use_trace: bool = False
+
     @classmethod
     def default(
         cls,
@@ -78,6 +82,7 @@ class BriaFiboPipelineConfig:
         width: int = 1024,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
+        encoder_use_trace: bool = False,
     ) -> BriaFiboPipelineConfig:
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
@@ -132,6 +137,7 @@ class BriaFiboPipelineConfig:
             height=height,
             width=width,
             checkpoint_name=checkpoint_name,
+            encoder_use_trace=encoder_use_trace,
         )
 
 
@@ -188,6 +194,7 @@ class BriaFiboPipeline:
             ccl_manager=self._encoder_ccl_manager,
             parallel_config=config.encoder_parallel_config,
             pad_buckets=(1024,),
+            use_trace=config.encoder_use_trace,
         )
         ttnn.synchronize_device(self._submesh)
 

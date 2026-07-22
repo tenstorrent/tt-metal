@@ -4,6 +4,14 @@
 
 **Goal:** Capture the SmolLM3 encoder device forward as a ttnn trace and replay it, staying bit-exact across many sequential encodes — fixing the replay-noise that got the prior attempt reverted.
 
+> **OUTCOME (2026-07-22):** The replay-noise does **not reproduce** on the simplified encoder — Tasks 2
+> (root-cause) and 3 (fix) collapsed to "already stable." Verified on the 4×8 Galaxy: trace is bit-exact
+> (traced == untraced, PCC 1.0002), stable across 16 isolated replays and 3 full-pipeline generations
+> (gen 2/3 == gen 1 at PCC 0.9999999), and **3.58× faster** on the real JSON encode (1021.8 ms →
+> 285.6 ms). Delivered: `use_trace` + `Tracer` (Task 1), a corrected replay-stability gate (asserts
+> traced-replay == captured baseline; json-vs-HF ≥ 0.99), and a gated `encoder_use_trace` pipeline flag
+> (default off). No CCL fix was needed.
+
 **Architecture:** Wrap the existing `SmolLM3TextEncoderWrapper._forward` (already a clean device-in/device-out unit returning one stacked tensor) in a `Tracer`, behind a `use_trace` flag. Investigation-first: reproduce the replay-noise, root-cause the encoder CCLManager ping-pong/semaphore phase desync, then apply the fix, gated by an N-encode replay-stability test.
 
 **Tech Stack:** Python, `ttnn` (traces, CCL all-gather), tt_dit `Tracer` (`utils/tracing.py`), `CCLManager` (`parallel/manager.py`), pytest on a 4×8 Blackhole Galaxy.

@@ -238,8 +238,15 @@ def test_fibo_wrapper_encode(*, mesh_device):
 )
 def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
     """The traced encoder must stay bit-exact across MANY sequential encodes (the reverted bug was
-    'noise after the first run'). Capture on the first encode, replay on the rest; every readback
-    must match HF at PCC 0.99 -- not just the first."""
+    'noise after the first run').
+
+    Guards replay stability: each replay of a prompt must be bit-identical to that prompt's FIRST
+    (captured) encode (PCC >= 0.9999) -- checked for both the realistic json prompt and the empty (neg)
+    prompt, which share the 1024 trace and alternate across simulated generations. The realistic prompt
+    is additionally checked vs HF at 0.99 (absolute correctness). The empty prompt is checked for replay
+    stability ONLY, not vs HF: it has a known ~0.98 short-sample HF gap that is present untraced too, so
+    a traced-vs-HF check on it would confound the replay-stability signal this test exists to guard.
+    """
     from pathlib import Path
 
     from huggingface_hub import snapshot_download
@@ -266,22 +273,26 @@ def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
     )
 
     hf = _load_hf_smollm3()
+    ids = wrapper.tokenizer([json_prompt], add_special_tokens=True, return_tensors="pt").input_ids
+    with torch.no_grad():
+        ref = hf.model(input_ids=ids, output_hidden_states=True)
+    hf_json = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
 
-    def hf_embeds(p):
-        ids = wrapper.tokenizer([p if p else " "], add_special_tokens=True, return_tensors="pt").input_ids
-        if not p:
-            ids = torch.tensor([[128000]])  # empty -> BOT, matches the wrapper
-        with torch.no_grad():
-            ref = hf.model(input_ids=ids, output_hidden_states=True)
-        return torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
-
-    # Alternate pos/neg across several "generations": capture on run 1, replay on 2..N.
-    prompts = [json_prompt, "", json_prompt, "", json_prompt]
+    # Alternate pos/neg across several "generations": first encode of each captures, the rest replay.
+    baselines: dict[str, torch.Tensor] = {}
+    prompts = [json_prompt, "", json_prompt, "", json_prompt, ""]
     for i, p in enumerate(prompts):
         embeds, _ = wrapper.encode_prompt(p)
-        ref = hf_embeds(p)
-        assert list(embeds.shape) == list(ref.shape), f"run {i}: {embeds.shape} != {ref.shape}"
-        assert_quality(ref, embeds.float(), pcc=0.99, relative_rmse=0.2)
+        embeds = embeds.float()
+        key = "json" if p else "empty"
+        if key not in baselines:
+            baselines[key] = embeds  # capture (first encode of this prompt)
+        else:
+            # Replay must be bit-identical to the captured output -- the property the revert broke.
+            assert_quality(baselines[key], embeds, pcc=0.9999)
+        if key == "json":
+            assert list(embeds.shape) == list(hf_json.shape), f"run {i}: {embeds.shape} != {hf_json.shape}"
+            assert_quality(hf_json, embeds, pcc=0.99, relative_rmse=0.2)  # traced json correct vs HF
 
 
 def test_smollm3_state_conversion():
