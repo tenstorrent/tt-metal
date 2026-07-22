@@ -104,6 +104,29 @@ interleaved DRAM page, so the pipelined per-index reads hit one open DRAM row an
 don't issue one remote read per index. The win is collapsing the transaction count, not improving
 locality — so it applies whenever the index list touches most of a row, regardless of index order.
 
+## ⭐⭐ T2 — [`transfer_alignment`](transfer_alignment/README.md)
+**Concept:** the NoC read alignment-residue tax on sub-page spans. A `noc_async_read` can only move a
+range when the source and destination byte addresses are congruent modulo the alignment window; a span
+whose start residue doesn't match the destination residue **cannot be one transfer** — the kernel must
+round the source down, over-read `width + residue` into an aligned scratch, then do a local L1 `memmove`
+to realign the useful bytes.
+**Situation:** a reader extracts many `width`-byte row-spans from DRAM, each starting at an arbitrary
+byte offset, into a CB — and unknowingly trips the residue-mismatch path on every span (over-read + a
+per-span CPU realign), never noticing it's off the single-read fast path.
+**Measured win:** arranging the span start alignment-**congruent** so one direct read moves exactly
+`width` bytes is **~1.7× (64 B spans) up to ~19× (4 KB spans) faster** than the misaligned
+over-read+realign (WH B0, 1 core, DRAM window=32 B queried). Counter to the naive "the over-read
+amortizes with width" guess, the win **grows** with width: the over-read is only +residue (16 B,
+negligible even at 4 KB), so the tax is entirely the CPU `memmove`, which runs off the NoC on a scalar
+RISC and scales with `width`, while the direct read is a single NoC transfer nearly width-independent in
+the single-core latency regime. Ratio is flat across span count `N` (both scale linearly); the absolute
+ns saved grows with `N` (realign paid `N` times).
+**Gist:** for sub-page span reads at arbitrary byte offsets, arrange the span offset / CB write-pointer
+so `(src_off % align) == (dst_off % align)` (query `ttnn.get_dram_alignment()`); then the read stays one
+direct `noc_async_read` instead of over-read-into-aligned-scratch + local `memmove`. The tax is the
+forced CPU realign, not the wasted bytes — so it hurts most for wide spans; still a ~1.7× win even for
+tiny ones.
+
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
 **Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
