@@ -1,0 +1,55 @@
+{
+  "model": "Qwen/Qwen3-32B",
+  "layer": 32,
+  "batch": 32,
+  "prefill_sequence": 17,
+  "precision": "BF16 weights/activations/cache",
+  "results": {
+    "fused": {
+      "prefill_median_ms": 82.92067563161254,
+      "prefill_min_ms": 82.88160199299455,
+      "prefill_samples_ms": [
+        83.00774218514562,
+        82.97502994537354,
+        83.00670981407166,
+        82.94974081218243,
+        82.90505688637495,
+        82.92067563161254,
+        82.91303180158138,
+        82.8924817033112,
+        82.92345236986876,
+        82.88160199299455,
+        82.92022626847029
+      ],
+      "traced_decode_mean_ms": 81.76744610629976,
+      "traced_decode_iterations": 500,
+      "prefill_passed": true,
+      "prefill_pcc": 0.998839405843466,
+      "decode_passed": true,
+      "decode_pcc": 0.9986940405064663
+    },
+    "direct_concat_view": {
+      "prefill_median_ms": 82.94786605983973,
+      "prefill_min_ms": 82.89511734619737,
+      "prefill_samples_ms": [
+        83.03102385252714,
+        82.96692231670022,
+        82.94465998187661,
+        82.98989571630955,
+        82.9631662927568,
+        82.97540806233883,
+        82.92887080460787,
+        82.94786605983973,
+        82.91931310668588,
+        82.89511734619737,
+        82.93116465210915
+      ],
+      "traced_decode_mean_ms": 81.82055179774761,
+      "traced_decode_iterations": 500,
+      "prefill_passed": true,
+      "prefill_pcc": 0.998839405843466,
+      "decode_passed": true,
+      "decode_pcc": 0.9986940405064663
+    }
+  }
+}

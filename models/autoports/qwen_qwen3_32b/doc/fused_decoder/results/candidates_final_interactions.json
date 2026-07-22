@@ -1,0 +1,78 @@
+{
+  "model": "Qwen/Qwen3-32B",
+  "layer": 32,
+  "batch": 32,
+  "prefill_sequence": 17,
+  "precision": "BF16 weights/activations/cache",
+  "results": {
+    "legacy_concat_heads": {
+      "prefill_median_ms": 82.93972816318274,
+      "prefill_min_ms": 82.88277918472886,
+      "prefill_samples_ms": [
+        83.05924572050571,
+        82.93972816318274,
+        82.88885094225407,
+        82.93895702809095,
+        82.88277918472886,
+        82.89298927411437,
+        82.9168539494276,
+        83.09492375701666,
+        83.01321789622307,
+        82.95172080397606,
+        83.0234382301569
+      ],
+      "traced_decode_mean_ms": 81.77004037611187,
+      "traced_decode_iterations": 500,
+      "prefill_passed": true,
+      "prefill_pcc": 0.998839405843466,
+      "decode_passed": true,
+      "decode_pcc": 0.9986940405064663
+    },
+    "legacy_concat_separate_cache": {
+      "prefill_median_ms": 82.992407027632,
+      "prefill_min_ms": 82.95803004875779,
+      "prefill_samples_ms": [
+        83.08202773332596,
+        83.01888778805733,
+        83.00105296075344,
+        82.992407027632,
+        82.99109432846308,
+        82.97209814190865,
+        82.98312919214368,
+        82.95803004875779,
+        83.0513690598309,
+        82.99759589135647,
+        82.97728793695569
+      ],
+      "traced_decode_mean_ms": 81.79016075655818,
+      "traced_decode_iterations": 500,
+      "prefill_passed": true,
+      "prefill_pcc": 0.998839405843466,
+      "decode_passed": true,
+      "decode_pcc": 0.9986940405064663
+    },
+    "legacy_concat_uncached_metadata": {
+      "prefill_median_ms": 82.97906024381518,
+      "prefill_min_ms": 82.90501777082682,
+      "prefill_samples_ms": [
+        83.02179211750627,
+        83.00972823053598,
+        82.99212483689189,
+        82.98447076231241,
+        82.99620170146227,
+        82.97906024381518,
+        82.91887491941452,
+        82.93497608974576,
+        82.95714808627963,
+        82.90501777082682,
+        82.92273199185729
+      ],
+      "traced_decode_mean_ms": 81.7927722800523,
+      "traced_decode_iterations": 500,
+      "prefill_passed": true,
+      "prefill_pcc": 0.998839405843466,
+      "decode_passed": true,
+      "decode_pcc": 0.9986940405064663
+    }
+  }
+}

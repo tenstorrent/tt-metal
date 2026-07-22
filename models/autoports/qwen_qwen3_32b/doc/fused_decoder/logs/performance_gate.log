@@ -1,0 +1,65 @@
+Script started on 2026-07-22 19:32:10+00:00 [COMMAND="TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 QWEN3_32B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137 QWEN3_32B_RUN_FUSED_PERF=1 QWEN3_32B_FUSED_PREFILL_ITERATIONS=11 QWEN3_32B_FUSED_DECODE_ITERATIONS=500 pytest -q -s models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_fused_beats_functional_warmed_prefill_and_traced_decode" <not executed on terminal>]
+[32m2026-07-22 19:32:12.700[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collecting 1 item                                                              collected 1 item
+
+models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_fused_beats_functional_warmed_prefill_and_traced_decode[blackhole-1-device_params0] [32m2026-07-22 19:32:14.553[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-22 19:32:14.554[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[32m2026-07-22 19:32:15.207[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+functional warmed prefill: 0.998839405843466
+functional traced decode: 0.9986940405064663
+PERF_RESULT functional={'prefill_median_ms': 83.36133090779185, 'prefill_min_ms': 83.24893796816468, 'prefill_samples_ms': [83.40570516884327, 83.41556414961815, 83.391850348562, 83.36665108799934, 83.36133090779185, 83.32240814343095, 83.28184019774199, 83.26617116108537, 83.24893796816468, 83.31482298672199, 83.4030108526349], 'traced_decode_mean_ms': 82.09995819814503, 'traced_decode_iterations': 500, 'prefill_pcc': 0.998839405843466, 'decode_pcc': 0.9986940405064663}
+fused warmed prefill: 0.998839405843466
+fused traced decode: 0.9986940405064663
+PERF_RESULT fused={'prefill_median_ms': 83.01033591851592, 'prefill_min_ms': 82.9773130826652, 'prefill_samples_ms': [83.035031799227, 82.99799170345068, 83.18153070285916, 82.98006793484092, 82.9773130826652, 83.01033591851592, 83.06505996733904, 82.97810424119234, 83.01445422694087, 82.98709196969867, 83.02408177405596], 'traced_decode_mean_ms': 81.78823939245194, 'traced_decode_iterations': 500, 'prefill_pcc': 0.998839405843466, 'decode_pcc': 0.9986940405064663}
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+88.08s call     models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_fused_beats_functional_warmed_prefill_and_traced_decode[blackhole-1-device_params0]
+1.18s setup    models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_fused_beats_functional_warmed_prefill_and_traced_decode[blackhole-1-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_fused_beats_functional_warmed_prefill_and_traced_decode[blackhole-1-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_fused_beats_functional_warmed_prefill_and_traced_decode[blackhole-1-device_params0]
+========================= 1 passed in 90.04s (0:01:30) =========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7b9f95b98288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7b9f9614e118 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function "to_torch"
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_address"
+ - leaked function "__init__"
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
+Script done on 2026-07-22 19:33:45+00:00 [COMMAND_EXIT_CODE="0"]

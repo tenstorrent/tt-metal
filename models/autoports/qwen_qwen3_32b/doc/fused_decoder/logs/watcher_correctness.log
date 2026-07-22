@@ -1,0 +1,70 @@
+Script started on 2026-07-22 19:35:13+00:00 [COMMAND="TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 TT_METAL_WATCHER=1 TT_METAL_WATCHER_DISABLE_ETH=1 TTNN_CONFIG_OVERRIDES='{"throw_exception_on_fallback":true}' pytest -q -s models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_repeated_and_traced_decode_preserve_full_cache" <not executed on terminal>]
+[32m2026-07-22 19:35:15.531[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m76[0m - [34m[1mLoading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES[0m
+[32m2026-07-22 19:35:15.531[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collecting 1 item                                                              collected 1 item
+
+models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_repeated_and_traced_decode_preserve_full_cache[blackhole-1-device_params0] [32m2026-07-22 19:35:17.374[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-22 19:35:17.374[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[32m2026-07-22 19:35:18.045[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+repeated decode 17: 0.9995903150167746
+repeated key prefix 17: 0.9999029178825164
+repeated value prefix 17: 0.9998663151192088
+repeated decode 18: 0.9996261205689322
+repeated key prefix 18: 0.9999028078940356
+repeated value prefix 18: 0.9998650622684406
+repeated decode 19: 0.9995923726770154
+repeated key prefix 19: 0.9999027621131296
+repeated value prefix 19: 0.999865782670892
+traced fused decode: 0.9996178046279963
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+12.38s call     models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_repeated_and_traced_decode_preserve_full_cache[blackhole-1-device_params0]
+1.20s setup    models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_repeated_and_traced_decode_preserve_full_cache[blackhole-1-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_repeated_and_traced_decode_preserve_full_cache[blackhole-1-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_32b/tests/test_fused_decoder.py::test_repeated_and_traced_decode_preserve_full_cache[blackhole-1-device_params0]
+============================== 1 passed in 14.35s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x70e214cf0288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x70e215489f98 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "pad"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
+Script done on 2026-07-22 19:35:32+00:00 [COMMAND_EXIT_CODE="0"]

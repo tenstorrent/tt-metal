@@ -1,0 +1,24 @@
+{
+  "model": "Qwen/Qwen3-32B",
+  "layer": 32,
+  "batch": 32,
+  "prefill_sequence": 17,
+  "precision": "BF16 weights/activations/cache",
+  "results": {
+    "sharded_qk_norm": {
+      "prefill_median_ms": 82.98519300296903,
+      "prefill_min_ms": 82.96802965924144,
+      "prefill_samples_ms": [
+        83.0763871781528,
+        82.98519300296903,
+        82.96802965924144
+      ],
+      "traced_decode_mean_ms": 81.82397512719035,
+      "traced_decode_iterations": 5,
+      "prefill_passed": true,
+      "prefill_pcc": 0.998839405843466,
+      "decode_passed": false,
+      "decode_pcc": 0.6133192186777214
+    }
+  }
+}
