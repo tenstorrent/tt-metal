@@ -2,14 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Config for the Kimi-K2.6-DFlash *drafter* (block-diffusion speculative-decoding draft model).
-
-Pure-Python (no ttnn/torch import) so both the device module
-(``tt/speculative_decoding/dflash/tt_dflash_drafter.py``) and the torch-side HF PCC test
-(``tests/speculative_decoding/dflash/test_dflash.py``) can import it.
+"""Config for the Kimi-K2.6-DFlash *drafter*.
 
 Values are from the HF checkout ``Kimi-K2.6-DFlash/config.json`` (architecture
-``DFlashDraftModel``, a Qwen3-style GQA model). See issue #49586.
+``DFlashDraftModel``, a Qwen3-style GQA model). Every default here is Kimi-K2.6-DFlash-specific
+(dims, target-layer taps, rope) — do NOT reuse for another drafter without re-deriving from its
+own ``config.json``. See issue #49586.
 """
 
 from __future__ import annotations

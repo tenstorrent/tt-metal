@@ -6,8 +6,10 @@ import os
 
 import pytest
 import torch
+from transformers import AutoConfig
 
-from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.reference.dflash_prefill.dflash import DFlashDraftModel
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 
 HF_ENV = "DFLASH_HF_MODEL"
 
@@ -65,17 +67,13 @@ def _normalize_rope_config(config):
 
 def _load_hf_drafter(load_weights: bool = True):
     """Build the REAL z-lab DFlashDraftModel (fp32, eager) from the VENDORED reference modeling code
-    (``reference/speculative_decoding/dflash``) + the checkout's config (+ safetensors when pretrained). The
+    (``reference/dflash_prefill``) + the checkout's config (+ safetensors when pretrained). The
     model *code* is always the in-repo reference; only config/weights come from ``$DFLASH_HF_MODEL``. With
     load_weights=False (random mode) no safetensors is loaded — the caller supplies random weights."""
     path = os.environ.get(HF_ENV)
     if not path or not os.path.exists(path):
         pytest.skip(f"set {HF_ENV}=/path/to/Kimi-K2.x-DFlash (dir with config.json [+ model.safetensors])")
     try:
-        from transformers import AutoConfig
-
-        from models.demos.deepseek_v3_d_p.reference.speculative_decoding.dflash.dflash import DFlashDraftModel
-
         config = _normalize_rope_config(AutoConfig.from_pretrained(path, trust_remote_code=True))
         model = DFlashDraftModel(config).float().eval()
         if load_weights:
@@ -91,10 +89,8 @@ def _load_hf_drafter(load_weights: bool = True):
             absent = [k for k in required if k in missing]
             if absent:
                 pytest.skip(f"checkpoint missing required drafter tensors, e.g. {absent[:3]}")
-    except Exception as e:  # transformers missing / qwen3 or deepseek_yarn unsupported / build error
-        pytest.skip(
-            f"could not build DFlashDraftModel (reference/speculative_decoding/dflash): {type(e).__name__}: {e}"
-        )
+    except Exception as e:  # config/deepseek_yarn parse, model build, or checkpoint-load error
+        pytest.skip(f"could not build DFlashDraftModel (reference/dflash_prefill): {type(e).__name__}: {e}")
 
     if not _is_drafter(model):
         pytest.skip("built model is not a DFlashDraftModel (missing fc/hidden_norm/target_layer_ids)")

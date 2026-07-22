@@ -25,7 +25,7 @@ pretrained axis]); for the pretrained axis also ``KIMI_K2_6_HF_MODEL`` + ``TT_KI
 
     DFLASH_HF_MODEL=/path/to/Kimi-K2.6-DFlash \
     KIMI_K2_6_HF_MODEL=/path/to/Kimi-K2.6 TT_KIMI_PREFILL_TTNN_CACHE=/path/to/kimi_ttnn_cache MESH_DEVICE=8x4 \
-    pytest models/demos/deepseek_v3_d_p/tests/speculative_decoding/dflash/test_dflash_prefill_integration.py -svv -k pretrained
+    pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_prefill_integration.py -svv -k pretrained
 """
 
 import gc
@@ -38,11 +38,11 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache, init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     create_hf_model,
     extract_tt_state_dict,
@@ -60,7 +60,6 @@ MAX_RANDOM_LAYERS = 12
 @pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
 @pytest.mark.parametrize("temperature", [0.0], ids=["greedy"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
-@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize("isl_total, dispatch_buffer_capacity_factor", [(SEQ_LEN_5K, 8)], ids=["5k"])
 @pytest.mark.parametrize(
     "num_layers",
@@ -92,7 +91,6 @@ def test_dflash_prefill_integration(
     config_only,
     mesh_device,
     device_params,
-    is_balanced,
     isl_total,
     dispatch_buffer_capacity_factor,
     num_layers,
@@ -167,7 +165,6 @@ def test_dflash_prefill_integration(
     isl_per_chip = isl_total // sp_factor
     padding_side = tokenizer.padding_side
     torch.manual_seed(42)
-    assert not is_balanced, "this test assumes non-balanced (contiguous) SP token sharding"
 
     # Weights — SAME as run_model:
     #   pretrained → real Kimi via the memory-bounded layer-by-layer loader into a TTNN weight cache
@@ -219,7 +216,7 @@ def test_dflash_prefill_integration(
         state_dict=verifier_state_dict,
         num_layers=num_layers,
         seq_len=isl_total,
-        is_balanced=is_balanced,
+        is_balanced=False,  # this test assumes non-balanced (contiguous) SP token sharding
         padding_side=padding_side,
         dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
@@ -287,7 +284,9 @@ def test_dflash_prefill_integration(
     real = hf_context_kv(ctx)
 
     # Device drafter: finalize from the DRAM taps (concat → grouped-shard fc → per-layer k/v/norm/rope).
-    drafter.write_kv_cache()
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into write_kv_cache.
+    k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, dcfg, isl_total, sp_axis=sp_axis, tp_axis=tp_axis)
+    drafter.write_kv_cache(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1); the host[:num_layers]
@@ -300,7 +299,7 @@ def test_dflash_prefill_integration(
         )
         return host[: dcfg.num_hidden_layers][:, :, :isl_total, :].float()  # [n_layers, kv_heads, seq, head_dim]
 
-    dk, dv = _read(drafter.k_cache), _read(drafter.v_cache)
+    dk, dv = _read(k_cache), _read(v_cache)
 
     fails = []
     for i in range(dcfg.num_hidden_layers):

@@ -8,7 +8,7 @@ This is the validation of the *validator* — it compares the device's context-K
 ground truth produced by the actual HF drafter's forward.
 
     DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash MESH_DEVICE=8x4 \
-    pytest models/demos/deepseek_v3_d_p/tests/speculative_decoding/dflash/test_dflash.py -svv
+    pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py -svv
 """
 
 import pytest
@@ -17,8 +17,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
-from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.tt_dflash_drafter import TtDFlashDrafter
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.999
@@ -103,7 +104,9 @@ def test_dflash_pcc(
             mesh_mapper=mapper,
         )
         drafter.tap(h_tt, tid)
-    drafter.write_kv_cache()
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into write_kv_cache.
+    k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, cfg, ctx_len, sp_axis=sp_axis, tp_axis=tp_axis)
+    drafter.write_kv_cache(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1) → full
@@ -116,8 +119,8 @@ def test_dflash_pcc(
         )
         return host[: cfg.num_hidden_layers][:, :, :ctx_len, :].float()  # [num_layers, kv_heads, ctx_len, head_dim]
 
-    dk = _read(drafter.k_cache)
-    dv = _read(drafter.v_cache)
+    dk = _read(k_cache)
+    dv = _read(v_cache)
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
