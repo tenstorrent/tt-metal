@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "host_tensor_impl.hpp"
+
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
@@ -39,6 +41,11 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    TT_FATAL(
+        is_buffer_type_compatible_with_dtype<T>(spec.data_type()),
+        "Buffer element type {} is not compatible with tensor dtype {}; use float for block-float dtypes",
+        convert_to_data_type<T>(),
+        spec.data_type());
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
     }
@@ -86,6 +93,11 @@ HostTensor HostTensor::from_vector(std::vector<T>&& buffer, const TensorSpec& sp
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
 
+    TT_FATAL(
+        is_buffer_type_compatible_with_dtype<T>(spec.data_type()),
+        "Buffer element type {} is not compatible with tensor dtype {}; use float for block-float dtypes",
+        convert_to_data_type<T>(),
+        spec.data_type());
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types only supported in TILE layout");
     }
