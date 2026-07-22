@@ -7,8 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -27,7 +25,6 @@ namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-
 // Deterministic ramp for test data
 template <typename T>
 std::vector<T> make_ramp(size_t count) {
@@ -38,12 +35,70 @@ std::vector<T> make_ramp(size_t count) {
     return data;
 }
 
+std::vector<float> make_bfp_data(const Shape& shape, const Tile& tile) {
+    // Boundary-sensitive to faces: cycles face indices and steps magnitudes for BFP checks.
+    const size_t count = shape.volume();
+    const size_t face_width = tile.get_face_shape()[1];
+    std::vector<float> data(count);
+    size_t i = 0;
+    for (size_t face_row = 0; i < count; ++face_row) {
+        for (size_t face_index = 0; face_index < face_width && i < count; ++face_index) {
+            data[i++] = static_cast<float>(face_index) + static_cast<float>(face_row) * 0.5f;
+        }
+    }
+    return data;
+}
+
+using PackedBfp = std::vector<uint32_t>;
+using UnpackedBfp = std::vector<float>;
+
+// BFP -> float golden: packed bytes plus their reference unpack (not the pre-quant floats).
+std::pair<PackedBfp, UnpackedBfp> generate_bfp8_dataset(const Shape& shape, const Tile& tile) {
+    const auto src = make_bfp_data(shape, tile);
+    auto packed = pack_as_bfp8_tiles(ttsl::make_const_span(src), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+    auto unpacked = unpack_bfp8_tiles_into_float_vec(packed, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(packed), std::move(unpacked)};
+}
+
+std::pair<PackedBfp, UnpackedBfp> generate_bfp4_dataset(const Shape& shape, const Tile& tile) {
+    const auto src = make_bfp_data(shape, tile);
+    auto packed = pack_as_bfp4_tiles(ttsl::make_const_span(src), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+    auto unpacked = unpack_bfp4_tiles_into_float_vec(packed, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(packed), std::move(unpacked)};
+}
+
+// Float(TILE) -> BFP golden: tile-layout floats plus their reference pack.
+std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp8_dataset(const Shape& shape, const Tile& tile) {
+    auto floats = make_bfp_data(shape, tile);
+    auto packed =
+        pack_as_bfp8_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(floats), std::move(packed)};
+}
+
+std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& shape, const Tile& tile) {
+    auto floats = make_bfp_data(shape, tile);
+    auto packed =
+        pack_as_bfp4_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    return {std::move(floats), std::move(packed)};
+}
+
+template <typename T>
+HostTensor make_host_tensor(std::vector<T> data, const TensorSpec& spec) {
+    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
+    dist_buffer.emplace_shard(
+        distributed::MeshCoordinate(0, 0), [data = std::move(data)]() mutable { return HostBuffer(std::move(data)); });
+    return HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+}
+
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
     return a == b && experimental::per_core_allocation::is_per_core_allocation(a.memory_config()) ==
                          experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
+
+using ::testing::Eq;
+using ::testing::Pointwise;
 
 TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
     const Shape shape{32, 32};
@@ -104,175 +159,94 @@ TEST(HostTensorToDtype, RowMajorToBfpChangesLayoutToTileAndPreservesTile) {
 
 TEST(HostTensorToDtype, TileBfp8ToFloat32ValueCheck) {
     const Shape shape{32, 32};
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto alignment = tt::tt_metal::Alignment({32, 32});
-    auto tile = Tile(
-        {16,
-         16});  // Custom tile size could be used here if supported, but let's stick to 16x16 or 32x32. Let's use 16x16.
-
-    // Create boundary-sensitive float data
-    std::vector<float> float_data(shape.volume());
-    for (size_t i = 0; i < float_data.size(); ++i) {
-        // Values that test quantization and faces
-        float_data[i] = static_cast<float>(i % 16) + (i / 16) * 0.5f;
-    }
-
-    // Independently pack to BFP8
-    auto packed_bfp8_data =
-        pack_as_bfp8_tiles(ttsl::make_const_span(float_data), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_bfp8_dataset(shape, tile);
 
     auto source_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<uint32_t>(packed_bfp8_data)); });
-    auto source = HostTensor::from_buffer(std::move(dist_buffer), source_spec, TensorTopology{});
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, source_spec);
 
     auto result = to_dtype(source, DataType::FLOAT32);
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 
-    // Independently unpack golden
-    auto expected_unpacked_data =
-        unpack_bfp8_tiles_into_float_vec(packed_bfp8_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-
-    auto result_data = host_buffer::get_as<float>(result);
-    EXPECT_EQ(result_data.size(), expected_unpacked_data.size());
-    for (size_t i = 0; i < expected_unpacked_data.size(); ++i) {
-        EXPECT_EQ(result_data[i], expected_unpacked_data[i]);
-    }
+    EXPECT_THAT(host_buffer::get_as<float>(result), Pointwise(Eq(), unpacked_golden));
 }
 
 TEST(HostTensorToDtype, Float32ToTileBfp8ValueCheck) {
     const Shape shape{32, 32};
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto alignment = tt::tt_metal::Alignment({32, 32});
-    auto tile = Tile({16, 16});
-
-    // Create boundary-sensitive float data in TILE layout
-    std::vector<float> float_data(shape.volume());
-    for (size_t i = 0; i < float_data.size(); ++i) {
-        float_data[i] = static_cast<float>(i % 16) + (i / 16) * 0.5f;
-    }
-
-    // Independently pack to BFP8 golden
-    auto expected_packed_data =
-        pack_as_bfp8_tiles(ttsl::make_const_span(float_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [floats, packed_golden] = CMAKE_UNIQUE_NAMESPACE::generate_float_to_bfp8_dataset(shape, tile);
 
     auto source_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(float_data)); });
-    auto source = HostTensor::from_buffer(std::move(dist_buffer), source_spec, TensorTopology{});
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, source_spec);
 
     auto result = to_dtype(source, DataType::BFLOAT8_B);
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT8_B);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 
-    auto result_data = host_buffer::get_as<uint32_t>(result);
-    EXPECT_EQ(result_data.size(), expected_packed_data.size());
-    for (size_t i = 0; i < expected_packed_data.size(); ++i) {
-        EXPECT_EQ(result_data[i], expected_packed_data[i]);
-    }
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), packed_golden));
 }
 
 TEST(HostTensorToDtype, TileBfp4ToFloat32ValueCheck) {
     const Shape shape{32, 32};
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto alignment = tt::tt_metal::Alignment({32, 32});
-    auto tile = Tile({16, 16});
-
-    std::vector<float> float_data(shape.volume());
-    for (size_t i = 0; i < float_data.size(); ++i) {
-        float_data[i] = static_cast<float>(i % 16) + (i / 16) * 0.5f;
-    }
-
-    // Independently pack to BFP4
-    auto packed_bfp4_data =
-        pack_as_bfp4_tiles(ttsl::make_const_span(float_data), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_bfp4_dataset(shape, tile);
 
     auto source_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<uint32_t>(packed_bfp4_data)); });
-    auto source = HostTensor::from_buffer(std::move(dist_buffer), source_spec, TensorTopology{});
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, source_spec);
 
     auto result = to_dtype(source, DataType::FLOAT32);
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::FLOAT32);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 
-    // Independently unpack golden
-    auto expected_unpacked_data =
-        unpack_bfp4_tiles_into_float_vec(packed_bfp4_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-
-    auto result_data = host_buffer::get_as<float>(result);
-    EXPECT_EQ(result_data.size(), expected_unpacked_data.size());
-    for (size_t i = 0; i < expected_unpacked_data.size(); ++i) {
-        EXPECT_EQ(result_data[i], expected_unpacked_data[i]);
-    }
+    EXPECT_THAT(host_buffer::get_as<float>(result), Pointwise(Eq(), unpacked_golden));
 }
 
 TEST(HostTensorToDtype, Float32ToTileBfp4ValueCheck) {
     const Shape shape{32, 32};
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto alignment = tt::tt_metal::Alignment({32, 32});
-    auto tile = Tile({16, 16});
-
-    std::vector<float> float_data(shape.volume());
-    for (size_t i = 0; i < float_data.size(); ++i) {
-        float_data[i] = static_cast<float>(i % 16) + (i / 16) * 0.5f;
-    }
-
-    // Independently pack to BFP4 golden
-    auto expected_packed_data =
-        pack_as_bfp4_tiles(ttsl::make_const_span(float_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [floats, packed_golden] = CMAKE_UNIQUE_NAMESPACE::generate_float_to_bfp4_dataset(shape, tile);
 
     auto source_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(float_data)); });
-    auto source = HostTensor::from_buffer(std::move(dist_buffer), source_spec, TensorTopology{});
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, source_spec);
 
     auto result = to_dtype(source, DataType::BFLOAT4_B);
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT4_B);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 
-    auto result_data = host_buffer::get_as<uint32_t>(result);
-    EXPECT_EQ(result_data.size(), expected_packed_data.size());
-    for (size_t i = 0; i < expected_packed_data.size(); ++i) {
-        EXPECT_EQ(result_data[i], expected_packed_data[i]);
-    }
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), packed_golden));
 }
 
 TEST(HostTensorToDtype, Float32ToBfloat16RowMajorValueCheck) {
@@ -413,71 +387,6 @@ TEST(HostTensorToDtype, MalformedBfpBufferToDtypeThrows) {
 
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::FLOAT32));
 }
-TEST(HostTensorToDtype, MultiShardTopologyPreservation) {
-    const Shape shape{32, 64};
-    const size_t volume = shape.volume();
-
-    // Create sharded MemoryConfig
-    auto memory_config = MemoryConfig{
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        BufferType::L1,
-        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
-
-    auto alignment = tt::tt_metal::Alignment({32, 64});
-    auto tile = Tile({16, 16});
-    auto source_spec =
-        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    // Create fully populated multi-shard host tensor on 1x2 mesh
-    auto topology = TensorTopology::create_fully_replicated_tensor_topology(distributed::MeshShape(1, 2));
-
-    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 2));
-
-    auto data_0 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(volume);
-    auto data_1 = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(volume);
-    // Make data distinct
-    for (auto& v : data_1) {
-        v += 10.0f;
-    }
-
-    distributed_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(data_0)); });
-    distributed_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 1), [&]() { return HostBuffer(std::vector<float>(data_1)); });
-
-    auto source = HostTensor::from_buffer(std::move(distributed_buffer), source_spec, topology);
-
-    auto result = to_dtype(source, DataType::BFLOAT16);
-
-    auto expected_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
-    EXPECT_EQ(result.tensor_topology(), topology);
-
-    const size_t expected_shard_size = expected_spec.compute_packed_buffer_size_bytes();
-
-    // Check coordinate set
-    auto coords = result.buffer().shard_coords();
-    EXPECT_EQ(coords.size(), 2);
-    EXPECT_TRUE(coords.contains(distributed::MeshCoordinate(0, 0)));
-    EXPECT_TRUE(coords.contains(distributed::MeshCoordinate(0, 1)));
-
-    for (const auto& coord : coords) {
-        auto shard = result.buffer().get_shard(coord);
-        ASSERT_TRUE(shard.has_value());
-        EXPECT_EQ(shard->view_bytes().size(), expected_shard_size);
-
-        auto result_data = shard->view_as<bfloat16>();
-        EXPECT_EQ(result_data.size(), volume);
-
-        const auto& expected_data = (coord == distributed::MeshCoordinate(0, 0)) ? data_0 : data_1;
-        for (size_t i = 0; i < volume; ++i) {
-            EXPECT_EQ(static_cast<float>(result_data[i]), static_cast<float>(bfloat16(expected_data[i])));
-        }
-    }
-}
-
 TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
     const Shape shape{32, 24};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());

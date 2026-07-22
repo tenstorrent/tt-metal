@@ -20,6 +20,7 @@
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
