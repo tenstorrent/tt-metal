@@ -55,8 +55,9 @@ int main(int argc, char** argv) {
 
     // RISC1 (subordinate) = the free data mover; base FW owns NOC0 on RISC0, so RISC1 uses NOC1.
     Program program = CreateProgram();
+    // Default eth_mode (a dispatchable active-eth kernel) — NOT Eth::IDLE (an idle core isn't
+    // dispatched -> the kernel never runs). NOC1 because base FW owns NOC0 on RISC0.
     const EthernetConfig cfg{
-        .eth_mode = Eth::IDLE,  // resident compute kernel, not a tunneling/dispatch link
         .noc = NOC::NOC_1,
         .processor = DataMovementProcessor::RISCV_1,
     };
