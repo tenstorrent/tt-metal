@@ -759,11 +759,11 @@ int main(int argc, char** argv) {
                 batch.reserve(BATCH_RECS);
             }
         };
-        auto start = std::chrono::steady_clock::now();
-        for (;;) {
+        auto start = std::chrono::steady_clock::now();  // reset on every drain -> this is a NO-PROGRESS watchdog,
+        for (;;) {                                      // not a total-runtime cap (long runs at 50k+ markers are fine)
             auto now = std::chrono::steady_clock::now();
             if (now - start > std::chrono::seconds(120)) {
-                printf("  [flusher %llu] WALL TIMEOUT\n", (unsigned long long)h);
+                printf("  [flusher %llu] WALL TIMEOUT (120 s no progress)\n", (unsigned long long)h);
                 break;
             }
             if (socket_mode) {
@@ -785,6 +785,7 @@ int main(int argc, char** argv) {
                 if (np >= fifo_pages) {
                     np = fifo_pages - 1u;
                 }
+                start = now;             // made progress -> reset the no-progress watchdog
                 uint32_t dw = np * 16u;  // 64 B page = 16 words
                 buf.resize(resid.size() + dw);
                 if (!resid.empty()) {
@@ -804,6 +805,7 @@ int main(int argc, char** argv) {
                     continue;  // spin
                 }
                 uint32_t avail = hsent - acked;
+                start = now;  // made progress -> reset the no-progress watchdog
                 if (avail > hring_words) {
                     overflow.fetch_add(1);
                     acked = hsent;
