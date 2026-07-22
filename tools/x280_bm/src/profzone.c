@@ -402,9 +402,12 @@ static void relay_run(
      * the fence + PCIe posted-write ordering), so the host polls its OWN RAM (~ns) instead of reading the
      * pointer from device LIM (~18 us/poll -- the old 215 MB/s wall). HACKED stays in LIM (host->device write
      * is posted/fast). SENT slot @ hbase[h] + hring_words*4. */
+    /* Rings are STRIDED at 2 MiB (NOC_2M_WINDOW_STRIDE), one per TLB window, so every ring starts at in-window
+     * offset 0 and may use the full window -- see the host's ring_stride note. MUST match the host layout. */
+    uint64_t rstride = ((uint64_t)hring_words * 4 + 64 + (NOC_2M_WINDOW_STRIDE - 1)) & ~(NOC_2M_WINDOW_STRIDE - 1);
     uint64_t hbase[4];
     for (uint64_t h = rlo; h < rhi; h++) {
-        uint64_t mhb = host_base + h * ((uint64_t)hring_words * 4 + 64);
+        uint64_t mhb = host_base + h * rstride;
         uint32_t win_p = WRITE_WIN_BASE + (uint32_t)h;
         noc_tlb_2m_t wt;
         wt.data[0] = 0;
@@ -705,8 +708,9 @@ static void drain_direct(
     if (lo > num_cores) {
         lo = num_cores;
     }
-    uint64_t my_host_base =
-        host_base + (uint64_t)hartid * ((uint64_t)hring_words * 4 + 64); /* ring + 64 B SENT trailer */
+    /* 2 MiB-strided rings (one TLB window each) -- MUST match relay_run + the host layout. */
+    uint64_t rstride = ((uint64_t)hring_words * 4 + 64 + (NOC_2M_WINDOW_STRIDE - 1)) & ~(NOC_2M_WINDOW_STRIDE - 1);
+    uint64_t my_host_base = host_base + (uint64_t)hartid * rstride; /* ring + 64 B SENT trailer */
     uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
     uint64_t off_w = my_host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
     volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS;

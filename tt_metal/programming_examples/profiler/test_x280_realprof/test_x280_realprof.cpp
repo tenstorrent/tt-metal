@@ -109,6 +109,7 @@ static constexpr uint64_t P_STOP = MBOX_PARAMS + 0x28;
 static uint64_t harthb(int h) { return 0x08011040ULL + 0x100 + (uint64_t)h * 8; }
 
 static constexpr uint64_t DEFAULT_WIN_STRIDE = 0x200000ULL;  // 2 MB default host-ring budget; --winmb overrides
+static constexpr uint64_t NOC_2M_STRIDE = 0x200000ULL;       // X280 posted-write TLB window = HARD 2 MiB (noc.h)
 static constexpr int NRISC = 5;
 static constexpr uint32_t RING_CAP = 512;  // worker L1 ring depth (words) -- MUST match profstream.c/producer
 
@@ -388,21 +389,29 @@ int main(int argc, char** argv) {
     uint64_t pcie_enc = ((uint64_t)pc.x & 0x3f) | (((uint64_t)pc.y & 0x3f) << 6);
     uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(device_id);
     uint64_t chan_sz = cluster.get_host_channel_size(device_id, 0);
-    uint64_t data_off = (chan_sz / 2) & ~(win_stride - 1);
+    // Must be 2 MiB-aligned so ring 0 starts at in-window offset 0 (the whole 2 MiB-strided layout depends on it),
+    // independent of --winmb. win_stride only widens the alignment further, never below 2 MiB.
+    uint64_t data_off = (chan_sz / 2) & ~((win_stride > NOC_2M_STRIDE ? win_stride : NOC_2M_STRIDE) - 1);
     uint64_t host_base = pcie_base + data_off;
     uint64_t hring_bytes = (uint64_t)hring_words * 4;
-    uint64_t ring_stride = hring_bytes + 64;  // ring data + 64 B trailer (SENT pointer in host sysmem)
+    // Each host ring occupies its OWN 2 MiB posted-write TLB window on the X280 (NOC_2M_STRIDE, hardware-fixed),
+    // so rings are STRIDED at 2 MiB -- NOT packed contiguously. Packing made ring h>=1 start at a nonzero
+    // in-window offset, and any ring whose extent crossed the 2 MiB edge had its tail + SENT trailer spill into
+    // the next (unconfigured) TLB window -> dropped writes -> that ring's flusher WALL TIMEOUT (the 1 MB wedge).
+    // With 2 MiB striding every ring starts at in-window offset 0 and may use the full window (data + 64 B
+    // trailer <= 2 MiB). --winmb now only aligns data_off; it no longer gates (a raised budget can't enlarge the
+    // hardware window). ring_stride = round_up(data + trailer, 2 MiB).
+    uint64_t ring_stride = (hring_bytes + 64 + (NOC_2M_STRIDE - 1)) & ~(NOC_2M_STRIDE - 1);
     uint64_t ndh = direct ? ndrain : nread;   // # host rings: direct = 1/drain hart; split = 1/reader (relay
                                               // writes reader h -> ring h), each drained by its own host thread
     // SENT pointer for ring h lives in sysmem at data_off + h*ring_stride + hring_bytes (the trailer).
     auto sent_off = [&](uint64_t h) { return data_off + h * ring_stride + hring_bytes; };
-    if (!socket_mode && ring_stride * ndh > win_stride) {
+    if (!socket_mode && hring_bytes + 64 > NOC_2M_STRIDE) {
         fprintf(
             stderr,
-            "[d2h] %llu host rings (%llu B each) exceed %llu MB window -- lower --hring or raise --winmb\n",
-            (unsigned long long)ndh,
-            (unsigned long long)ring_stride,
-            (unsigned long long)(win_stride >> 20));
+            "[d2h] --hring %u (%llu B) + 64 B trailer exceeds one 2 MiB TLB window -- lower --hring\n",
+            hring_words,
+            (unsigned long long)hring_bytes);
         std::_Exit(2);
     }
     // data_off starts at chan_sz/2, so the rings have the whole second half of the PCIe channel to grow into;
