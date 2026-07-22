@@ -27,6 +27,9 @@ class ModelArgs:
         dtype=ttnn.bfloat16,
         data_parallel=False,
         use_experimental_encoder_sdpa=False,
+        mlp_wi_output_dtype=None,
+        encoder_sdpa_q256_vbf4=False,
+        use_qkv_scatter_matmul=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -63,6 +66,9 @@ class ModelArgs:
         # Only takes effect on the exact head-folded DP S8192 contract; any
         # deviation falls back to stock SDPA (see attention.py guard).
         self.use_experimental_encoder_sdpa = use_experimental_encoder_sdpa
+        self.mlp_wi_output_dtype = mlp_wi_output_dtype
+        self.encoder_sdpa_q256_vbf4 = encoder_sdpa_q256_vbf4
+        self.use_qkv_scatter_matmul = use_qkv_scatter_matmul
         self.attention_mask_dtype = (
             dtype if self.max_seq_len == 512 and max(1, int(self.max_batch_size)) in (1, 32) else ttnn.bfloat16
         )

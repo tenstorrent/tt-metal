@@ -365,6 +365,7 @@ def _bge_qkv_heads_headsplit_kbf4(
     heads_per_group: int,
     out_memcfg: ttnn.MemoryConfig,
     k_out_dtype: ttnn.DataType,
+    v_out_dtype: ttnn.DataType | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Head-split with K fused-typecast to ``k_out_dtype`` (e.g. bfloat4_b).
 
@@ -378,12 +379,16 @@ def _bge_qkv_heads_headsplit_kbf4(
     plan = _TrackAPlan.from_input(qkv_fused, num_heads)
     q_heads_per_kv = 1  # BGE-M3 MHA: Q heads == KV heads
     qv_dtype = qkv_fused.dtype
+    fuse_vbf4 = v_out_dtype is not None and v_out_dtype != qv_dtype
+    resolved_v_dtype = v_out_dtype if fuse_vbf4 else qv_dtype
 
-    # ---- Pre-allocate outputs: Q/V keep input dtype, K becomes k_out_dtype ----
+    # ---- Pre-allocate outputs: Q stays input dtype; K/V may be converted ----
     out_shape = (plan.batch, num_heads, plan.seq_len, plan.head_dim)
     q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), qv_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
     k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), k_out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
-    v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), qv_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+    v_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(out_shape), resolved_v_dtype, ttnn.TILE_LAYOUT, device, out_memcfg
+    )
 
     # ---- Work split: batch * seq_tiles * head_groups total units. ----
     grid = device.compute_with_storage_grid_size()
@@ -404,8 +409,11 @@ def _bge_qkv_heads_headsplit_kbf4(
     cb_qv = 1
     cb_k_in = 2
     cb_k_out = 3
+    cb_v_in = 4 if fuse_vbf4 else cb_qv
+    cb_v_out = 5 if fuse_vbf4 else cb_qv
     qv_tile_size = _tile_size_bytes(qv_dtype)
     k_out_tile_size = _tile_size_bytes(k_out_dtype)
+    v_out_tile_size = _tile_size_bytes(resolved_v_dtype)
     cb_qv_desc = ttnn.CBDescriptor(
         total_size=group_q_tiles * 2 * qv_tile_size,  # double-buffer, sized for Q chunk
         core_ranges=used_cores,
@@ -425,6 +433,26 @@ def _bge_qkv_heads_headsplit_kbf4(
             ttnn.CBFormatDescriptor(buffer_index=cb_k_out, data_format=k_out_dtype, page_size=k_out_tile_size)
         ],
     )
+    extra_v_cbs = []
+    if fuse_vbf4:
+        extra_v_cbs = [
+            ttnn.CBDescriptor(
+                total_size=group_kv_tiles * 2 * qv_tile_size,
+                core_ranges=used_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=cb_v_in, data_format=qv_dtype, page_size=qv_tile_size)
+                ],
+            ),
+            ttnn.CBDescriptor(
+                total_size=group_kv_tiles * 2 * v_out_tile_size,
+                core_ranges=used_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_v_out, data_format=resolved_v_dtype, page_size=v_out_tile_size
+                    )
+                ],
+            ),
+        ]
 
     # ---- Reader CT args ----
     reader_ct_args = [
@@ -437,6 +465,8 @@ def _bge_qkv_heads_headsplit_kbf4(
         heads_per_group,
         cb_qv,
         cb_k_in,
+        int(fuse_vbf4),
+        cb_v_in,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(qkv_fused).get_compile_time_args())
 
@@ -462,7 +492,7 @@ def _bge_qkv_heads_headsplit_kbf4(
         kernel_source=HEADSPLIT_KBF4_COMPUTE_KERNEL_REL_PATH,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=used_cores,
-        compile_time_args=[group_kv_tiles, cb_k_in, cb_k_out],
+        compile_time_args=[group_kv_tiles, cb_k_in, cb_k_out, int(fuse_vbf4), cb_v_in, cb_v_out],
         runtime_args=compute_rt_per_core,
         config=ttnn.ComputeConfigDescriptor(),
     )
@@ -480,6 +510,8 @@ def _bge_qkv_heads_headsplit_kbf4(
         plan.q_out_h_tiles,  # seq_tiles
         cb_qv,
         cb_k_out,
+        int(fuse_vbf4),
+        cb_v_out,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(q_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(k_tensor).get_compile_time_args())
@@ -513,7 +545,7 @@ def _bge_qkv_heads_headsplit_kbf4(
 
     program_descriptor = ttnn.ProgramDescriptor(
         kernels=[reader_kd, compute_kd, writer_kd],
-        cbs=[cb_qv_desc, cb_k_in_desc, cb_k_out_desc],
+        cbs=[cb_qv_desc, cb_k_in_desc, cb_k_out_desc, *extra_v_cbs],
     )
 
     io_tensors = [qkv_fused, q_tensor, k_tensor, v_tensor]
@@ -528,6 +560,7 @@ def bge_qkv_heads_headsplit(
     head_groups: int | None = None,
     out_memcfg: ttnn.MemoryConfig | None = None,
     k_out_dtype: ttnn.DataType | None = None,
+    v_out_dtype: ttnn.DataType | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Head-split QKV head creation.
 
@@ -565,6 +598,7 @@ def bge_qkv_heads_headsplit(
             heads_per_group=heads_per_group,
             out_memcfg=out_memcfg,
             k_out_dtype=k_out_dtype,
+            v_out_dtype=v_out_dtype,
         )
 
     device = qkv_fused.device()

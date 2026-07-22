@@ -30,6 +30,9 @@ void kernel_main() {
     constexpr uint32_t group_kv_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_k_out = get_compile_time_arg_val(2);
+    constexpr bool fuse_vbf4 = get_compile_time_arg_val(3) != 0;
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_v_out = get_compile_time_arg_val(5);
 
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
 
@@ -37,26 +40,42 @@ void kernel_main() {
     constexpr uint32_t IN_FMT = 6u;
     constexpr uint32_t OUT_FMT = 7u;
 
-    CircularBuffer cb_in(cb_k_in);
-    CircularBuffer cb_out(cb_k_out);
+    CircularBuffer cb_k_in_h(cb_k_in);
+    CircularBuffer cb_k_out_h(cb_k_out);
+    CircularBuffer cb_v_in_h(cb_v_in);
+    CircularBuffer cb_v_out_h(cb_v_out);
 
     init_sfpu(cb_k_in, cb_k_out);
-    const uint32_t total_k_tiles = num_work_units * group_kv_tiles;
-    for (uint32_t t = 0; t < total_k_tiles; ++t) {
-        cb_out.reserve_back(1);
-        cb_in.wait_front(1);
-
-        tile_regs_acquire();
-        copy_tile(cb_k_in, 0, 0);
-        typecast_tile_init<IN_FMT, OUT_FMT>();
-        typecast_tile<IN_FMT, OUT_FMT>(0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_k_out);
-        tile_regs_release();
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+    for (uint32_t w = 0; w < num_work_units; ++w) {
+        for (uint32_t t = 0; t < group_kv_tiles; ++t) {
+            cb_k_out_h.reserve_back(1);
+            cb_k_in_h.wait_front(1);
+            tile_regs_acquire();
+            copy_tile(cb_k_in, 0, 0);
+            typecast_tile_init<IN_FMT, OUT_FMT>();
+            typecast_tile<IN_FMT, OUT_FMT>(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_k_out);
+            tile_regs_release();
+            cb_k_in_h.pop_front(1);
+            cb_k_out_h.push_back(1);
+        }
+        if constexpr (fuse_vbf4) {
+            for (uint32_t t = 0; t < group_kv_tiles; ++t) {
+                cb_v_out_h.reserve_back(1);
+                cb_v_in_h.wait_front(1);
+                tile_regs_acquire();
+                copy_tile(cb_v_in, 0, 0);
+                typecast_tile_init<IN_FMT, OUT_FMT>();
+                typecast_tile<IN_FMT, OUT_FMT>(0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_v_out);
+                tile_regs_release();
+                cb_v_in_h.pop_front(1);
+                cb_v_out_h.push_back(1);
+            }
+        }
     }
 }

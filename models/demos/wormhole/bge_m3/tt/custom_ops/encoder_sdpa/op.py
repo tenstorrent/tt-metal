@@ -157,6 +157,8 @@ def _compile_defines(plan: EncoderSDPAPlan) -> list[tuple[str, str]]:
         ("DHT_GRANULARITY", str(plan.dht_granularity)),
         ("REDUCE_GRANULARITY", str(plan.reduce_granularity)),
         ("EXP_APPROX_MODE", "1"),
+        ("DIRECT_CONCAT_HEADS", "1" if plan.config.direct_concat_heads else "0"),
+        ("REUSE_PREV_MAX_FOR_EXP", "1" if plan.config.reuse_prev_max_for_exp else "0"),
     ]
     return defs
 
@@ -452,7 +454,7 @@ def build_encoder_sdpa_descriptor(
                 _cb_descriptor(
                     CB_V,
                     plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles,
-                    ttnn.bfloat8_b,
+                    v.dtype,
                     core_grid,
                 ),
             ]
@@ -475,7 +477,11 @@ def build_encoder_sdpa_descriptor(
         _cb_descriptor(CB_MAX_B, plan.statistics_tiles, ttnn.bfloat16, core_grid),
         _cb_descriptor(CB_SUM_A, plan.statistics_tiles, ttnn.bfloat16, core_grid),
         _cb_descriptor(CB_SUM_B, plan.statistics_tiles, ttnn.bfloat16, core_grid),
-        _cb_descriptor(CB_EXP_MAX_DIFF, plan.statistics_tiles, ttnn.bfloat16, core_grid),
+        *(
+            []
+            if plan.config.reuse_prev_max_for_exp
+            else [_cb_descriptor(CB_EXP_MAX_DIFF, plan.statistics_tiles, ttnn.bfloat16, core_grid)]
+        ),
         _cb_descriptor(
             CB_OUT,
             plan.streaming_cb_out_tiles if plan.config.use_streaming else plan.out_im_tiles,

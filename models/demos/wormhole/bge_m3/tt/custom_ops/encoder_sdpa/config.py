@@ -47,6 +47,12 @@ class EncoderSDPAConfig:
     # BF8 halves the score-CB L1 footprint (~492KB at q256), which is what lets
     # q256/k2048 fit. Experiment: validate PCC/perf before enabling.
     score_cb_bf8: bool = False
+    # Emit SDPA output directly in concat-heads layout [B,1,S,H*D]. This is
+    # exact for the BGE head-fold contract and removes a DRAM reorder pass.
+    direct_concat_heads: bool = False
+    # Reuse the dead previous-max CB for exp(previous_max-current_max), avoiding
+    # a separate statistics-sized scratch allocation. Standard compute only.
+    reuse_prev_max_for_exp: bool = False
     # CB double-buffer depths (chunks). Default 2 (production double-buffer).
     # Experiment F: set K/V (and optionally Q) to 1 to free L1 for a bigger Q
     # chunk while keeping BF16 score (precision-preserving). Trades reader<->
@@ -76,6 +82,9 @@ class EncoderSDPAConfig:
 
     @property
     def output_shape(self) -> tuple[int, int, int, int]:
+        if self.direct_concat_heads:
+            fold = self.num_q_heads // self.num_kv_heads
+            return (self.batch, 1, self.q_seq_len * fold, self.num_kv_heads * self.head_dim)
         return self.q_shape
 
 
@@ -264,12 +273,13 @@ class EncoderSDPAPlan:
 
     # ── Experiment F4 (aliased K/V) derived quantities ──────────────────────
     # Tile byte sizes on Wormhole (32x32 tiles): bf4_b=576, bf8_b=1088.
-    K_TILE_BYTES = 576   # bfloat4_b
+    K_TILE_BYTES = 576  # bfloat4_b
     V_TILE_BYTES = 1088  # bfloat8_b
 
     @property
     def kv_alias_page_lcm(self) -> int:
         import math
+
         return self.K_TILE_BYTES * self.V_TILE_BYTES // math.gcd(self.K_TILE_BYTES, self.V_TILE_BYTES)
 
     @property
@@ -336,11 +346,19 @@ class EncoderSDPAPlan:
             raise ValueError("head_dim must be tile aligned")
         if c.num_q_heads % c.num_kv_heads != 0:
             raise ValueError("num_q_heads must be divisible by num_kv_heads")
-        # B6*HQ32*32 chunks / 64 cores = 96 chunks = exactly three heads.
-        # Therefore no head spans cores and production KV forwarding chains are
-        # inactive for this exact work split.
-        if self.heads_per_core != 3:
-            raise ValueError(f"expected exactly three Q heads/core, got {self.heads_per_core}")
+        # Work-split requirement (batch-general): the flat B*NQH*q_num_chunks work
+        # range must divide evenly across the fixed core grid so every core does
+        # equal work. decompose_global_q_index() decodes each flat index
+        # independently into (batch, head, q_chunk), so a core MAY process a
+        # partial head; whole-head-per-core is NOT required. Production KV
+        # forwarding chains stay inactive because this exact model path never
+        # enables them (is_chain_participant flags are always 0 in runtime args).
+        # (At B6 this yields exactly 3 heads/core; B1/B3 give fractional heads,
+        #  which is fine for the flat scheduler.)
+        if self.total_q_work % self.num_cores != 0:
+            raise ValueError(
+                f"non-uniform Q work: total_q_work={self.total_q_work} not divisible " f"by num_cores={self.num_cores}"
+            )
 
 
 def _shape_tuple(tensor: ttnn.Tensor) -> tuple[int, ...]:
@@ -369,8 +387,8 @@ def validate_encoder_sdpa_inputs(
         raise ValueError(f"expected BF8 Q, got {q.dtype}")
     if k.dtype != ttnn.bfloat4_b:
         raise ValueError(f"expected BF4 K, got {k.dtype}")
-    if v.dtype != ttnn.bfloat8_b:
-        raise ValueError(f"expected BF8 V, got {v.dtype}")
+    if v.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        raise ValueError(f"expected BF8 or BF4 V, got {v.dtype}")
     if q.device() != k.device() or q.device() != v.device():
         raise ValueError("Q/K/V must be on the same device")
 

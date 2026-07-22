@@ -58,12 +58,15 @@ void kernel_main() {
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t cb_qv = get_compile_time_arg_val(9);
     constexpr uint32_t cb_k_out = get_compile_time_arg_val(10);
-    constexpr auto q_args = TensorAccessorArgs<11>();
+    constexpr bool fuse_vbf4 = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t cb_v_out = get_compile_time_arg_val(12);
+    constexpr auto q_args = TensorAccessorArgs<13>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     const uint32_t qv_tile_bytes = get_tile_size(cb_qv);
     const uint32_t k_tile_bytes = get_tile_size(cb_k_out);
+    const uint32_t v_tile_bytes = get_tile_size(cb_v_out);
 
     const auto sq = TensorAccessor(q_args, q_tensor_addr);
     const auto sk = TensorAccessor(k_args, k_tensor_addr);
@@ -72,6 +75,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_qv_h(cb_qv);
     CircularBuffer cb_k_h(cb_k_out);
+    CircularBuffer cb_v_h(cb_v_out);
 
     constexpr uint32_t q_heads_per_group = heads_per_group * q_heads_per_kv;
     constexpr uint32_t group_q_tiles = q_heads_per_group * q_out_w_tiles;
@@ -104,8 +108,10 @@ void kernel_main() {
                 row_base += q_out_HtWt;
             }
         }
-        noc.async_write_barrier();
-        cb_qv_h.pop_front(group_q_tiles);
+        if constexpr (!fuse_vbf4) {
+            noc.async_write_barrier();
+            cb_qv_h.pop_front(group_q_tiles);
+        }
 
         // ---- K chunk (BF4 CB from compute) ----
         cb_k_h.wait_front(group_kv_tiles);
@@ -122,14 +128,32 @@ void kernel_main() {
                 row_base += q_out_HtWt;
             }
         }
-        noc.async_write_barrier();
-        cb_k_h.pop_front(group_kv_tiles);
+        if constexpr (!fuse_vbf4) {
+            noc.async_write_barrier();
+            cb_k_h.pop_front(group_kv_tiles);
+        }
 
-        // ---- V chunk (shared CB, BF8) ----
-        cb_qv_h.wait_front(group_kv_tiles);
-        {
+        // ---- V chunk (shared BF8 CB, or fused BF4 CB from compute) ----
+        uint32_t row_base = batch * kv_batch_stride + kv_head_start * q_out_HtWt + s_tile * q_out_w_tiles;
+        if constexpr (fuse_vbf4) {
+            cb_v_h.wait_front(group_kv_tiles);
             uint32_t l1_read_offset = 0;
-            uint32_t row_base = batch * kv_batch_stride + kv_head_start * q_out_HtWt + s_tile * q_out_w_tiles;
+            for (uint32_t h = 0; h < heads_per_group; ++h) {
+                uint32_t dst = row_base;
+                for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; ++w_dim) {
+                    noc.async_write(cb_v_h, sv, v_tile_bytes, {.offset_bytes = l1_read_offset}, {.page_id = dst});
+                    l1_read_offset += v_tile_bytes;
+                    dst++;
+                }
+                row_base += q_out_HtWt;
+            }
+            noc.async_write_barrier();
+            cb_qv_h.pop_front(group_q_tiles);
+            cb_k_h.pop_front(group_kv_tiles);
+            cb_v_h.pop_front(group_kv_tiles);
+        } else {
+            cb_qv_h.wait_front(group_kv_tiles);
+            uint32_t l1_read_offset = 0;
             for (uint32_t h = 0; h < heads_per_group; ++h) {
                 uint32_t dst = row_base;
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; ++w_dim) {
@@ -139,8 +163,8 @@ void kernel_main() {
                 }
                 row_base += q_out_HtWt;
             }
+            noc.async_write_barrier();
+            cb_qv_h.pop_front(group_kv_tiles);
         }
-        noc.async_write_barrier();
-        cb_qv_h.pop_front(group_kv_tiles);
     }
 }

@@ -15,6 +15,9 @@ def create_tt_model(
     pooling=None,
     data_parallel=False,
     use_experimental_encoder_sdpa=False,
+    mlp_wi_output_dtype=None,
+    encoder_sdpa_q256_vbf4=False,
+    use_qkv_scatter_matmul=False,
 ):
     """
     BGE-M3 version of create_tt_model that matches tt_transformers interface.
@@ -33,6 +36,9 @@ def create_tt_model(
         dtype=dtype,
         data_parallel=data_parallel,
         use_experimental_encoder_sdpa=use_experimental_encoder_sdpa,
+        mlp_wi_output_dtype=mlp_wi_output_dtype,
+        encoder_sdpa_q256_vbf4=encoder_sdpa_q256_vbf4,
+        use_qkv_scatter_matmul=use_qkv_scatter_matmul,
     )
 
     if not state_dict:

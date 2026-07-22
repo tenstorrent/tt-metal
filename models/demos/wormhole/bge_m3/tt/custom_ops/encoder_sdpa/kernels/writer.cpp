@@ -195,33 +195,60 @@ void kernel_main() {
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-            uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-            if constexpr (use_streaming_compute) {
-                // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
-                // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
-                // are padding and get popped without being written.
-                write_block_row_grouped(
-                    noc,
-                    out_writer,
-                    cb_out,
-                    Sq_chunk_t,
-                    out_row_tile_count,
-                    vDHt,
-                    out_tile_id,
-                    tile_bytes,
-                    out_subblock_h,
-                    barrier_threshold);
+            if constexpr (DIRECT_CONCAT_HEADS == 1) {
+                static_assert(!use_streaming_compute, "direct concat requires non-streaming compute");
+                constexpr uint32_t fold = NQH / NKH;
+                constexpr uint32_t out_row_tiles = NKH * vDHt;
+                constexpr uint32_t out_seq_tiles = Sqt * fold;
+                constexpr uint32_t out_batch_tiles = out_seq_tiles * out_row_tiles;
+
+                // Head-fold ordering is nq = parent_head * fold + seq_group.
+                // Write each [D] row directly into [B,1,S*fold,NKH*D], deleting
+                // the separate reshape + concat-heads DRAM reorder.
+                const uint32_t parent_head = nq / fold;
+                const uint32_t seq_group = nq - parent_head * fold;
+                CircularBuffer out_cb(cb_out);
+                out_cb.wait_front(out_chunk_tiles);
+                for (uint32_t row = 0; row < out_row_tile_count; ++row) {
+                    const uint32_t out_seq = seq_group * Sqt + write_offset + out_row_start_tile + row;
+                    const uint32_t out_page = nb * out_batch_tiles + out_seq * out_row_tiles + parent_head * vDHt;
+                    for (uint32_t d = 0; d < vDHt; ++d) {
+                        const uint32_t src_offset = (row * vDHt + d) * tile_bytes;
+                        noc.async_write(
+                            out_cb, out_writer, tile_bytes, {.offset_bytes = src_offset}, {.page_id = out_page + d});
+                    }
+                }
+                noc.async_write_barrier();
+                out_cb.pop_front(out_chunk_tiles);
             } else {
-                write_block(
-                    noc,
-                    out_writer,
-                    cb_out,
-                    out_chunk_tiles,
-                    out_row_tile_count,
-                    vDHt,
-                    out_tile_id,
-                    tile_bytes,
-                    barrier_threshold);
+                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+                if constexpr (use_streaming_compute) {
+                    // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
+                    // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
+                    // are padding and get popped without being written.
+                    write_block_row_grouped(
+                        noc,
+                        out_writer,
+                        cb_out,
+                        Sq_chunk_t,
+                        out_row_tile_count,
+                        vDHt,
+                        out_tile_id,
+                        tile_bytes,
+                        out_subblock_h,
+                        barrier_threshold);
+                } else {
+                    write_block(
+                        noc,
+                        out_writer,
+                        cb_out,
+                        out_chunk_tiles,
+                        out_row_tile_count,
+                        vDHt,
+                        out_tile_id,
+                        tile_bytes,
+                        barrier_threshold);
+                }
             }
         }
     }  // close phase

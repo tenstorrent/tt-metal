@@ -30,6 +30,7 @@ class BgeM3MLPConfig:
 
     # Runtime config fields (resolved by _resolve_mlp_config or Optimizations)
     wi_dtype: ttnn.DataType | None = None
+    wi_output_dtype: ttnn.DataType | None = None
     wo_dtype: ttnn.DataType | None = None
     activation_dtype: ttnn.DataType | None = None
     wi_memcfg: ttnn.MemoryConfig | None = None
@@ -109,7 +110,7 @@ class BgeM3MLP(LightweightModule):
                 fused_activation=(ttnn.UnaryOpType.GELU, True),
                 config=self.config.wi_minimal_config,
                 memory_config=self.config.wi_memcfg,
-                dtype=self.config.wi_dtype,
+                dtype=self.config.wi_output_dtype,
                 compute_kernel_config=self.config.wi_compute_kernel_cfg,
             )
         else:
@@ -117,7 +118,7 @@ class BgeM3MLP(LightweightModule):
                 hidden_states,
                 self.wi_weight,
                 memory_config=self.config.wi_memcfg,
-                dtype=self.config.wi_dtype,
+                dtype=self.config.wi_output_dtype,
                 bias=self.wi_bias,
                 program_config=self.config.wi_prg_config,
                 compute_kernel_config=self.config.wi_compute_kernel_cfg,
@@ -160,6 +161,8 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
 
     if config.wi_dtype is None:
         to_set["wi_dtype"] = ttnn.bfloat16
+    if config.wi_output_dtype is None:
+        to_set["wi_output_dtype"] = config.wi_dtype if config.wi_dtype is not None else ttnn.bfloat16
     if config.wo_dtype is None:
         to_set["wo_dtype"] = ttnn.bfloat16
     if config.activation_dtype is None:

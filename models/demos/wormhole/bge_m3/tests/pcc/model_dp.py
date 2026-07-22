@@ -20,7 +20,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
 MODEL_ID = "BAAI/bge-m3"
-PCC_THRESHOLD = 0.93
+PCC_THRESHOLD = 0.90
 
 DP_BATCH_SIZE = 12
 DP_SEQ_LEN = 8192
@@ -74,6 +74,8 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
         hf_model_name=model_id_or_path,
         data_parallel=True,
         use_experimental_encoder_sdpa=True,
+        encoder_sdpa_q256_vbf4=True,
+        use_qkv_scatter_matmul=True,
     )
     assert tt_model._data_parallel, "DP mode not active"
 

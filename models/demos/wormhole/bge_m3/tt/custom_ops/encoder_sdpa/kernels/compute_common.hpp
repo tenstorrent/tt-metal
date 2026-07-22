@@ -672,6 +672,39 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     }
 }
 
+/**
+ * in0_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ *
+ * The previous running max is dead after this correction is formed, so recycle
+ * its CB pages in place and avoid a separate Sq_chunk_t scratch allocation.
+ */
+template <uint32_t scale_fp32>
+void sub_exp_block_inplace_in0(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+
+    sub_tiles_init(in0_cb, in1_cb);
+    exp_tile_init<EXP_APPROX_MODE>();
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        invalidate_l1_cache();
+        tile_regs_acquire();
+        sub_tiles(in0_cb, in1_cb, 0, i, 0);
+        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+        tile_regs_commit();
+        cb_in0.pop_front(1);
+        cb_in0.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, in0_cb);
+        tile_regs_release();
+        cb_in0.push_back(1);
+    }
+}
+
 #ifdef TRISC_MATH
 template <VectorMode vector_mode = VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
@@ -1876,25 +1909,31 @@ void sdpa_inner_loop(
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
+#if REUSE_PREV_MAX_FOR_EXP
+                sub_exp_block_inplace_in0<scale_fp32>(alias_prev_max, alias_cur_max, Sq_chunk_t);
+                const uint32_t correction_cb = alias_prev_max;
+#else
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                 CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+                const uint32_t correction_cb = cb_exp_max_diff;
+#endif
 
                 /**
-                 * cb_prev_sum *= cb_exp_max_diff
+                 * cb_prev_sum *= correction_cb
                  * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                  * reduction, containing the sum of tiles in dim=-1 of QK.
                  */
-                mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                mul_tiles_bcast_cols_inplace(alias_prev_sum, correction_cb, Sq_chunk_t);
 
                 /* cb_cur_sum += cb_prev_sum */
                 add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
                 /**
-                 * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
+                 * alias_mm2_cur_out += alias_mm2_prev_out * correction_cb
                  * This uses L1 accumulation to accumulate onto mm2_cur_out.
                  */
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                    alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                    alias_mm2_prev_out, correction_cb, alias_mm2_cur_out);
             }
 
             // Swap CB handles to prepare for next iteration
@@ -1933,11 +1972,17 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+#if REUSE_PREV_MAX_FOR_EXP
+            sub_exp_block_inplace_in0<scale_fp32>(alias_prev_max, alias_cur_max, Sq_chunk_t);
+            const uint32_t sink_correction_cb = alias_prev_max;
+#else
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+            const uint32_t sink_correction_cb = cb_exp_max_diff;
+#endif
 
             // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
-            mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+            mul_tiles_bcast_cols_inplace(alias_prev_sum, sink_correction_cb, Sq_chunk_t);
             // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
             //    This adds the attention sink's contribution to the softmax denominator
             sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, scale_fp32, false>(
@@ -1954,7 +1999,7 @@ void sdpa_inner_loop(
             //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
             //    But we need to rescale it due to the updated max
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(
-                alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                alias_mm2_prev_out, sink_correction_cb, alias_mm2_cur_out);
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
         }
 

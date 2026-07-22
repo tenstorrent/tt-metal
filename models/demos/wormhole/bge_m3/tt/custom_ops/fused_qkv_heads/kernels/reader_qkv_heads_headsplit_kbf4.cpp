@@ -45,7 +45,9 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);
     constexpr uint32_t cb_qv = get_compile_time_arg_val(7);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(8);
-    constexpr auto in0_args = TensorAccessorArgs<9>();
+    constexpr bool fuse_vbf4 = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(10);
+    constexpr auto in0_args = TensorAccessorArgs<11>();
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const uint32_t tile_size_bytes = get_tile_size(cb_qv);
@@ -53,62 +55,98 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_qv_h(cb_qv);
     CircularBuffer cb_k_h(cb_k_in);
+    CircularBuffer cb_v_h(cb_v_in);
 
     constexpr uint32_t group_q_tiles = heads_per_group * q_heads_per_kv * head_dim_tiles;
     constexpr uint32_t group_kv_tiles = heads_per_group * head_dim_tiles;
     constexpr uint32_t q_tiles_total = num_kv_heads * q_heads_per_kv * head_dim_tiles;
     constexpr uint32_t kv_tiles_total = num_kv_heads * head_dim_tiles;
 
-    for (uint32_t w = 0; w < num_work_units; ++w) {
-        const uint32_t work_unit = work_unit_start + w;
-        const uint32_t block = work_unit / head_groups;
-        const uint32_t group = work_unit - block * head_groups;
-        const uint32_t s_tile = block % seq_tiles;
-        const uint32_t batch = block / seq_tiles;
-        const uint32_t block_base = batch * (seq_tiles * in0_w_tiles) + s_tile * in0_w_tiles;
-
-        // ---- Q chunk -> shared CB ----
-        const uint32_t q_offset_in_row = group * group_q_tiles;
-        cb_qv_h.reserve_back(group_q_tiles);
-        {
-            uint32_t l1_write_offset = 0;
-            const uint32_t q_base_tile = block_base + q_offset_in_row;
+    if constexpr (fuse_vbf4) {
+        // All three streams use independent double-buffered CBs. Fill two work
+        // units per NoC barrier to amortize synchronization without changing
+        // tile order seen by compute/writer.
+        for (uint32_t w = 0; w < num_work_units; ++w) {
+            constexpr uint32_t units = 1;
+            cb_qv_h.reserve_back(units * group_q_tiles);
+            cb_k_h.reserve_back(units * group_kv_tiles);
+            cb_v_h.reserve_back(units * group_kv_tiles);
+            for (uint32_t lane = 0; lane < units; ++lane) {
+                const uint32_t work_unit = work_unit_start + w + lane;
+                const uint32_t block = work_unit / head_groups;
+                const uint32_t group = work_unit - block * head_groups;
+                const uint32_t s_tile = block % seq_tiles;
+                const uint32_t batch = block / seq_tiles;
+                const uint32_t block_base = batch * (seq_tiles * in0_w_tiles) + s_tile * in0_w_tiles;
+                const uint32_t q_offset_in_row = group * group_q_tiles;
+                const uint32_t kv_offset_in_row = group * group_kv_tiles;
+                const uint32_t q_base_tile = block_base + q_offset_in_row;
+                const uint32_t k_base_tile = block_base + q_tiles_total + kv_offset_in_row;
+                const uint32_t v_base_tile = block_base + q_tiles_total + kv_tiles_total + kv_offset_in_row;
+                for (uint32_t i = 0; i < group_q_tiles; ++i) {
+                    noc.async_read(
+                        s0,
+                        cb_qv_h,
+                        tile_size_bytes,
+                        {.page_id = q_base_tile + i},
+                        {.offset_bytes = (lane * group_q_tiles + i) * tile_size_bytes});
+                }
+                for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+                    noc.async_read(
+                        s0,
+                        cb_k_h,
+                        tile_size_bytes,
+                        {.page_id = k_base_tile + i},
+                        {.offset_bytes = (lane * group_kv_tiles + i) * tile_size_bytes});
+                    noc.async_read(
+                        s0,
+                        cb_v_h,
+                        tile_size_bytes,
+                        {.page_id = v_base_tile + i},
+                        {.offset_bytes = (lane * group_kv_tiles + i) * tile_size_bytes});
+                }
+            }
+            noc.async_read_barrier();
+            cb_qv_h.push_back(units * group_q_tiles);
+            cb_k_h.push_back(units * group_kv_tiles);
+            cb_v_h.push_back(units * group_kv_tiles);
+        }
+    } else {
+        for (uint32_t w = 0; w < num_work_units; ++w) {
+            const uint32_t work_unit = work_unit_start + w;
+            const uint32_t block = work_unit / head_groups;
+            const uint32_t group = work_unit - block * head_groups;
+            const uint32_t s_tile = block % seq_tiles;
+            const uint32_t batch = block / seq_tiles;
+            const uint32_t block_base = batch * (seq_tiles * in0_w_tiles) + s_tile * in0_w_tiles;
+            const uint32_t q_offset_in_row = group * group_q_tiles;
+            cb_qv_h.reserve_back(group_q_tiles);
+            uint32_t q_base_tile = block_base + q_offset_in_row;
             for (uint32_t i = 0; i < group_q_tiles; ++i) {
                 noc.async_read(
-                    s0, cb_qv_h, tile_size_bytes, {.page_id = q_base_tile + i}, {.offset_bytes = l1_write_offset});
-                l1_write_offset += tile_size_bytes;
+                    s0, cb_qv_h, tile_size_bytes, {.page_id = q_base_tile + i}, {.offset_bytes = i * tile_size_bytes});
             }
-        }
-        noc.async_read_barrier();
-        cb_qv_h.push_back(group_q_tiles);
+            noc.async_read_barrier();
+            cb_qv_h.push_back(group_q_tiles);
 
-        // ---- K chunk -> separate BF8 K-input CB (typecast happens in compute) ----
-        const uint32_t kv_offset_in_row = group * group_kv_tiles;
-        cb_k_h.reserve_back(group_kv_tiles);
-        {
-            uint32_t l1_write_offset = 0;
-            const uint32_t k_base_tile = block_base + q_tiles_total + kv_offset_in_row;
+            const uint32_t kv_offset_in_row = group * group_kv_tiles;
+            cb_k_h.reserve_back(group_kv_tiles);
+            uint32_t k_base_tile = block_base + q_tiles_total + kv_offset_in_row;
             for (uint32_t i = 0; i < group_kv_tiles; ++i) {
                 noc.async_read(
-                    s0, cb_k_h, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
-                l1_write_offset += tile_size_bytes;
+                    s0, cb_k_h, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = i * tile_size_bytes});
             }
-        }
-        noc.async_read_barrier();
-        cb_k_h.push_back(group_kv_tiles);
+            noc.async_read_barrier();
+            cb_k_h.push_back(group_kv_tiles);
 
-        // ---- V chunk -> shared CB ----
-        cb_qv_h.reserve_back(group_kv_tiles);
-        {
-            uint32_t l1_write_offset = 0;
             const uint32_t v_base_tile = block_base + q_tiles_total + kv_tiles_total + kv_offset_in_row;
+            cb_qv_h.reserve_back(group_kv_tiles);
             for (uint32_t i = 0; i < group_kv_tiles; ++i) {
                 noc.async_read(
-                    s0, cb_qv_h, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
-                l1_write_offset += tile_size_bytes;
+                    s0, cb_qv_h, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = i * tile_size_bytes});
             }
+            noc.async_read_barrier();
+            cb_qv_h.push_back(group_kv_tiles);
         }
-        noc.async_read_barrier();
-        cb_qv_h.push_back(group_kv_tiles);
     }
 }

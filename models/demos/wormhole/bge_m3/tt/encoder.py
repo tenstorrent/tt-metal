@@ -210,6 +210,8 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         qkv_scale_prefolded=(max_seq_len == 8192),
         # Opt-in JIT encoder SDPA (DP S8192 only), from the explicit model arg.
         use_experimental_encoder_sdpa=bool(getattr(args, "use_experimental_encoder_sdpa", False)),
+        encoder_sdpa_q256_vbf4=bool(getattr(args, "encoder_sdpa_q256_vbf4", False)),
+        use_qkv_scatter_matmul=bool(getattr(args, "use_qkv_scatter_matmul", False)),
     )
     if optimizations is not None and optimizations.attention is not None:
         attn_opts = optimizations.attention
@@ -242,6 +244,7 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
         intermediate_size=args.intermediate_size,
         mesh_device=mesh_device,
         wi_dtype=dtype,
+        wi_output_dtype=getattr(args, "mlp_wi_output_dtype", None) or dtype,
         wo_dtype=dtype,
         activation_dtype=ttnn.bfloat16,
         max_seq_len=max_seq_len,
