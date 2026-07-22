@@ -1578,7 +1578,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
 void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
     std::map<HostId, std::vector<std::string>> host_id_to_instance_path;
     if (root_instance_) {
-        collect_instance_paths(*root_instance_, {}, host_id_to_instance_path);
+        collect_instance_paths(*root_instance_, {root_instance_->template_name}, host_id_to_instance_path);
     }
     auto fsd = build_factory_system_descriptor(
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
@@ -1616,7 +1616,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
 tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::generate_factory_system_descriptor() const {
     std::map<HostId, std::vector<std::string>> host_id_to_instance_path;
     if (root_instance_) {
-        collect_instance_paths(*root_instance_, {}, host_id_to_instance_path);
+        collect_instance_paths(*root_instance_, {root_instance_->template_name}, host_id_to_instance_path);
     }
     return build_factory_system_descriptor(
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
@@ -2586,7 +2586,7 @@ void CablingGenerator::apply_instance_filter(
             prefix.pop_back();
         }
     };
-    std::vector<std::string> prefix;
+    std::vector<std::string> prefix{root_instance_->template_name};
     walk(walk, *root_instance_, prefix, false, false);
 
     // A filter path that matched no instance (typo / wrong level) is an error.

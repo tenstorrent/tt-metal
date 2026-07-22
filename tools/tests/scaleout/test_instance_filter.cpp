@@ -83,8 +83,8 @@ TEST(InstanceFilterTest, BaselineUnfiltered) {
     EXPECT_EQ(gen.get_deployment_hosts().size(), 16u);
     auto paths = instance_paths(gen);
     ASSERT_EQ(paths.size(), 16u);
-    EXPECT_THAT(paths.front(), ElementsAre("superpod1", "node1"));
-    EXPECT_THAT(paths.back(), ElementsAre("superpod4", "node4"));
+    EXPECT_THAT(paths.front(), ElementsAre("n300_lb_cluster", "superpod1", "node1"));
+    EXPECT_THAT(paths.back(), ElementsAre("n300_lb_cluster", "superpod4", "node4"));
     EXPECT_EQ(cross_host_pairs(gen).size(), 30u);
     EXPECT_EQ(max_referenced_host_id(gen), 15u);
 }
@@ -104,17 +104,17 @@ TEST(InstanceFilterTest, IncludeSubtreeSelectsAllDescendants) {
     EXPECT_THAT(
         instance_paths(gen),
         ElementsAre(
-            ElementsAre("superpod1", "node1"),
-            ElementsAre("superpod1", "node2"),
-            ElementsAre("superpod1", "node3"),
-            ElementsAre("superpod1", "node4")));
+            ElementsAre("n300_lb_cluster", "superpod1", "node1"),
+            ElementsAre("n300_lb_cluster", "superpod1", "node2"),
+            ElementsAre("n300_lb_cluster", "superpod1", "node3"),
+            ElementsAre("n300_lb_cluster", "superpod1", "node4")));
     EXPECT_EQ(cross_host_pairs(gen).size(), 6u);  // K4 intra-superpod; inter-superpod edges dropped
 }
 
 TEST(InstanceFilterTest, IncludeExactLeafPathSelectsOneNode) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod2", "node3"}}, {});
-    EXPECT_THAT(instance_paths(gen), ElementsAre(ElementsAre("superpod2", "node3")));
+    EXPECT_THAT(instance_paths(gen), ElementsAre(ElementsAre("n300_lb_cluster", "superpod2", "node3")));
     EXPECT_TRUE(cross_host_pairs(gen).empty());  // no surviving inter-node edges
 }
 
@@ -138,7 +138,7 @@ TEST(InstanceFilterTest, RelativeIncludeSelectsNameUnderEveryParent) {
     gen.apply_instance_filter({{"node1"}}, {});
     auto paths = instance_paths(gen);
     EXPECT_EQ(paths.size(), 4u);
-    EXPECT_THAT(paths, Each(ElementsAre(_, "node1")));
+    EXPECT_THAT(paths, Each(ElementsAre("n300_lb_cluster", _, "node1")));
     // Only the node1<->node1 inter-superpod edge has both endpoints in the selection.
     EXPECT_EQ(cross_host_pairs(gen).size(), 1u);
 }
@@ -148,7 +148,7 @@ TEST(InstanceFilterTest, RootLevelNameDoesNotMatchDeeperInstances) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod1"}}, {});
     EXPECT_EQ(gen.get_deployment_hosts().size(), 4u);
-    EXPECT_THAT(instance_paths(gen), Each(ElementsAre("superpod1", _)));
+    EXPECT_THAT(instance_paths(gen), Each(ElementsAre("n300_lb_cluster", "superpod1", _)));
 }
 
 // ---- Include / exclude precedence ----
@@ -157,7 +157,7 @@ TEST(InstanceFilterTest, ExcludeOverridesInclude) {
     auto gen = make_gen();
     gen.apply_instance_filter({{"superpod1"}, {"superpod2"}}, {{"superpod2"}});
     EXPECT_EQ(gen.get_deployment_hosts().size(), 4u);
-    EXPECT_THAT(instance_paths(gen), Each(ElementsAre("superpod1", _)));
+    EXPECT_THAT(instance_paths(gen), Each(ElementsAre("n300_lb_cluster", "superpod1", _)));
     EXPECT_EQ(cross_host_pairs(gen).size(), 6u);
 }
 
@@ -176,10 +176,10 @@ TEST(InstanceFilterTest, DenseHostIdRemapAndDeploymentSourcing) {
     EXPECT_THAT(
         instance_paths(gen),
         ElementsAre(
-            ElementsAre("superpod3", "node1"),
-            ElementsAre("superpod3", "node2"),
-            ElementsAre("superpod3", "node3"),
-            ElementsAre("superpod3", "node4")));
+            ElementsAre("n300_lb_cluster", "superpod3", "node1"),
+            ElementsAre("n300_lb_cluster", "superpod3", "node2"),
+            ElementsAre("n300_lb_cluster", "superpod3", "node3"),
+            ElementsAre("n300_lb_cluster", "superpod3", "node4")));
 }
 
 TEST(InstanceFilterTest, ConnectionsRemappedIntoDenseRange) {
