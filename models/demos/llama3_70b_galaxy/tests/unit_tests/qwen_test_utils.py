@@ -16,14 +16,8 @@ import ttnn
 def is_blackhole_galaxy():
     """Return True when running on a Blackhole Galaxy, False otherwise.
 
-    Detection order: explicit QWEN_TEST_FORCE_ARCH override -> cluster type -> ARCH_NAME / arch name.
+    Detection order: cluster type -> ARCH_NAME / arch name.
     """
-    # Optional explicit override (set to "blackhole"/"bh" or "wormhole"/"wh").
-    forced = os.environ.get("QWEN_TEST_FORCE_ARCH", "").lower()
-    if forced in ("blackhole", "bh"):
-        return True
-    if forced in ("wormhole", "wormhole_b0", "wh"):
-        return False
     try:
         cluster_type = ttnn.cluster.get_cluster_type()
         if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
