@@ -246,6 +246,7 @@ void kernel_main() {
                         // Operand 0
                         // Common for sharded and interleaved paths
                         cb_in0.reserve_back(in0_block_num_tiles);
+                        DPRINT("IN0R reserved\n");  // DEBUG #48552
 #ifndef IN0_SHARDED
 
                         uint32_t in0_write_offset = 0;
@@ -409,6 +410,7 @@ void kernel_main() {
                         // sets disable_dfb_implicit_sync_for_all, so the loopback read does not stall on
                         // the DFB producer credit. Runs once per in0 block (each bare pair needs it).
                         {
+                            DPRINT("IN0R g_enter\n");  // DEBUG #48552: guard active, before TEN-4746 TDMA
                             static uint32_t ten4746_tdma_scratch[8] __attribute__((aligned(16)));
                             // Convert the scratch's L1 symbol address to a uint32_t L1 offset via uintptr_t:
                             // a direct (uint32_t)ptr is a pointer->smaller-int cast (rejected under
@@ -424,11 +426,14 @@ void kernel_main() {
                                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = cb_in0.get_write_ptr()},
                                 {});
                             noc.async_read_barrier();
+                            DPRINT("IN0R g_done\n");  // DEBUG #48552: TEN-4746 TDMA read completed (barrier returned)
                         }
 #endif  // ARCH_QUASAR && IN0_SHARDED && SKIP_MCAST && !EXTRACT_SHARD_SUB_BLOCKS
 
                         // Common for sharded and interleaved paths
+                        DPRINT("IN0R pre-push\n");  // DEBUG #48552
                         cb_in0.push_back(in0_block_num_tiles);
+                        DPRINT("IN0R pushed\n");  // DEBUG #48552
                     }
                 }
 #ifdef IN0_SHARDED
