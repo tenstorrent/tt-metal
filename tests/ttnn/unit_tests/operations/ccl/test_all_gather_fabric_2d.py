@@ -781,19 +781,18 @@ def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width)
     if dtype == ttnn.fp8_e4m3:
         carried_input = ttnn.typecast(tt_input, ttnn.bfloat16)
         input_shards = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(carried_input)]
-        expected = torch.cat(input_shards[:2], dim=2)
-        for group_start in range(2, len(input_shards), 2):
-            assert torch.equal(torch.cat(input_shards[group_start : group_start + 2], dim=2), expected)
         check_output = ttnn.typecast(tt_output, ttnn.bfloat16)
+        output_shards = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(check_output)]
+        for group_start in range(0, len(input_shards), 2):
+            expected = torch.cat(input_shards[group_start : group_start + 2], dim=2)
+            for actual in output_shards[group_start : group_start + 2]:
+                assert_with_pcc(actual, expected, pcc=0.9999)
     else:
         expected = torch_input
         check_output = tt_output
 
-    for device_tensor in ttnn.get_device_tensors(check_output):
-        actual = ttnn.to_torch(device_tensor)
-        if dtype == ttnn.fp8_e4m3:
-            assert_with_pcc(actual, expected, pcc=0.9999)
-        else:
+        for device_tensor in ttnn.get_device_tensors(check_output):
+            actual = ttnn.to_torch(device_tensor)
             assert torch.equal(actual, expected)
 
 

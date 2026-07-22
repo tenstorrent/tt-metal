@@ -673,6 +673,26 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         vc2_sender_buffer_slots,
         vc2_receiver_buffer_slots);
 
+    log_info(
+        tt::LogFabric,
+        "FABRIC_CHANNEL_GEOMETRY topology={} senders=[{},{},{}] receivers=[{},{},{}] "
+        "slots_sender=[{},{},{}] slots_receiver=[{},{},{}] available_bytes={} slot_bytes={}",
+        topology,
+        num_used_sender_channels_per_vc[0],
+        num_used_sender_channels_per_vc[1],
+        num_used_sender_channels_per_vc[2],
+        num_used_receiver_channels_per_vc[0],
+        num_used_receiver_channels_per_vc[1],
+        num_used_receiver_channels_per_vc[2],
+        vc0_sender_buffer_slots,
+        vc1_sender_buffer_slots,
+        vc2_sender_buffer_slots,
+        vc0_receiver_buffer_slots,
+        vc1_receiver_buffer_slots,
+        vc2_receiver_buffer_slots,
+        this->available_channel_buffering_space,
+        this->channel_buffer_size_bytes);
+
     // Apply the buffer slot configuration to each VC
     num_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
     num_remote_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
@@ -688,6 +708,33 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     num_remote_sender_buffer_slots_per_vc[2].fill(vc2_sender_buffer_slots);
     num_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
     num_remote_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
+
+    // The table above deliberately chooses one slot count per VC so every
+    // channel class fits. Mesh configurations can leave several whole packet
+    // slots unused after that discrete choice. Give that otherwise stranded
+    // capacity to VC0's local-worker injection channel; forwarding and receive
+    // channels retain their selected depths.
+    if ((topology == Topology::Mesh || topology == Topology::Torus) &&
+        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED &&
+        num_used_sender_channels_per_vc[0] > 0) {
+        size_t allocated_slots = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            allocated_slots += std::accumulate(
+                num_sender_buffer_slots_per_vc[vc].begin(),
+                num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
+                size_t{0});
+            allocated_slots += std::accumulate(
+                num_receiver_buffer_slots_per_vc[vc].begin(),
+                num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc],
+                size_t{0});
+        }
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        TT_FATAL(allocated_slots <= slot_capacity, "Fabric channel allocation exceeds its slot capacity");
+        const size_t spare_slots = slot_capacity - allocated_slots;
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        num_sender_buffer_slots_per_vc[0][worker_channel] += spare_slots;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] += spare_slots;
+    }
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
