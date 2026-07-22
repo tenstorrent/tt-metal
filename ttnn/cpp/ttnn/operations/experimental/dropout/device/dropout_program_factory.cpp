@@ -350,7 +350,7 @@ namespace {
 // resolve_bindings, so the addresses are ours to re-apply too. Kernel push order: reader(0),
 // writer(1), compute_group_1(2), compute_group_2(3 if present).
 void apply_dropout_runtime_args(
-    tt::tt_metal::Program& program, const DropoutInputs& tensor_args, tt::tt_metal::Tensor& output, uint32_t seed) {
+    tt::tt_metal::Program& program, const DropoutInputs& tensor_args, Tensor& output, uint32_t seed) {
     using namespace tt::tt_metal;
 
     constexpr uint32_t kReaderIdx = 0;
