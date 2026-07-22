@@ -63,7 +63,8 @@ def test_xtts_gpt_block(device, xtts_state_dict, layer_idx, seq_len, pcc, reset_
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16
     )
-    tt_output = ttnn.to_torch(tt_block(tt_input)).float()[:, :seq_len, :]
+    # forward_prefill is the block's full causal pass (also returns the prompt K/V, which we drop).
+    tt_output = ttnn.to_torch(tt_block.forward_prefill(tt_input)[0]).float()[:, :seq_len, :]
 
     does_pass, pcc_message = comp_pcc(reference_output, tt_output, pcc)
     logger.info(comp_allclose(reference_output, tt_output))

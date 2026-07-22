@@ -106,7 +106,7 @@ class TtSampler:
         u = ttnn.clamp(ttnn.rand([1, self.v], device=self.device, dtype=ttnn.float32), 1e-4, 1.0 - 1e-3)
         g = ttnn.multiply(ttnn.log(ttnn.multiply(ttnn.log(u), -1.0)), -1.0)
         noisy = ttnn.add(ttnn.typecast(L, ttnn.float32), g)
-        tok = ttnn.argmax(ttnn.to_layout(noisy, ttnn.ROW_MAJOR_LAYOUT), dim=-1)
+        tok = ttnn.argmax(noisy, dim=-1)  # argmax over TILE directly (respects logical V; no untilize)
         token = int(ttnn.to_torch(tok).flatten()[0].item())
 
         if self.rep != 1.0:
@@ -150,7 +150,7 @@ class TtSampler:
         Lf = ttnn.typecast(L, ttnn.float32)
         if self.temperature > 0.0 and gumbel is not None:
             Lf = ttnn.add(Lf, gumbel)  # + pre-drawn Gumbel noise -> exact categorical sample
-        tok = ttnn.argmax(ttnn.to_layout(Lf, ttnn.ROW_MAJOR_LAYOUT), dim=-1)  # device
+        tok = ttnn.argmax(Lf, dim=-1)  # argmax over TILE directly (respects logical V; no untilize)
         tok = ttnn.reshape(ttnn.typecast(tok, ttnn.uint32), [1, 1])
         if self.rep != 1.0:
             # Mark the sampled id in the persistent seen mask IN PLACE (output_tensor=self.seen) so
