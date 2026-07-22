@@ -92,14 +92,22 @@ def _make_sharded_qk_norm_fn(rms: RMSNorm, model_args: Any) -> Callable:
 
 def ace_step_patch_attention_qk_norm_decode(attn: Any, model_args: Any) -> None:
     """Replace decode ``q_norm`` / ``k_norm`` lambdas that use ``norm_reshard``."""
-    for attr in ("q_norm", "k_norm"):
-        norm_fn = getattr(attn, attr, None)
+
+    def _patched_norm(norm_fn: Any) -> Callable | None:
         if not callable(norm_fn):
-            continue
+            return None
         rms = _unwrap_rmsnorm_from_norm_lambda(norm_fn)
         if rms is None:
-            continue
-        setattr(attn, attr, _make_sharded_qk_norm_fn(rms, model_args))
+            return None
+        return _make_sharded_qk_norm_fn(rms, model_args)
+
+    # Assign known attributes directly (avoid dynamic setattr; SAST false-positive).
+    patched_q = _patched_norm(getattr(attn, "q_norm", None))
+    if patched_q is not None:
+        attn.q_norm = patched_q
+    patched_k = _patched_norm(getattr(attn, "k_norm", None))
+    if patched_k is not None:
+        attn.k_norm = patched_k
 
 
 def ace_step_apply_qwen_decode_qk_norm(tt_model: Any, model_args: Any) -> None:

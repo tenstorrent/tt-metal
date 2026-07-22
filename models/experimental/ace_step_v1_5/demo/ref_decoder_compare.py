@@ -215,11 +215,18 @@ def hf_decoder_intermediates(
 
         # Compute HF self-attn q/k after q_norm/k_norm and after RoPE (for parity pinpointing).
         try:
-            from importlib import import_module
+            import sys
 
             attn = layer.self_attn
-            mod = import_module(type(attn).__module__)
-            apply_rope = getattr(mod, "apply_rotary_pos_emb", None)
+            # Resolve RoPE helper from the already-loaded attention module only.
+            # Avoid import_module(type(attn).__module__) — SAST flags dynamic imports.
+            mod_name = type(attn).__module__ or ""
+            _allowed_prefixes = ("transformers.", "acestep.")
+            apply_rope = None
+            if mod_name.startswith(_allowed_prefixes):
+                mod = sys.modules.get(mod_name)
+                if mod is not None:
+                    apply_rope = getattr(mod, "apply_rotary_pos_emb", None)
             pos = inputs[1]  # (cos, sin)
             if apply_rope is not None and pos is not None:
                 cos, sin = pos

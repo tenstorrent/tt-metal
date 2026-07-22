@@ -17,6 +17,7 @@ from loguru import logger
 # early and pausing is far less alarming than freezing at 52% with zero
 # movement.  The estimate self-corrects after the first successful generation.
 _FALLBACK_PER_STEP_SEC = 2.5
+_PROGRESS_ESTIMATES_FILENAME = "progress_estimates.json"
 
 
 class ProgressMixin:
@@ -32,14 +33,28 @@ class ProgressMixin:
         """
         env_root = os.environ.get("ACESTEP_PROJECT_ROOT")
         if env_root:
-            return os.path.abspath(env_root)
-        return os.getcwd()
+            return os.path.realpath(os.path.abspath(env_root))
+        return os.path.realpath(os.getcwd())
+
+    def _resolve_progress_estimates_path(self) -> str:
+        """Return progress-estimates path constrained to the project root."""
+        base_dir = self._get_project_root()
+        configured = getattr(self, "_progress_estimates_path", None)
+        if configured:
+            candidate = configured if os.path.isabs(configured) else os.path.join(base_dir, configured)
+        else:
+            candidate = os.path.join(base_dir, _PROGRESS_ESTIMATES_FILENAME)
+        resolved = os.path.realpath(candidate)
+        if os.path.commonpath([base_dir, resolved]) != base_dir:
+            raise ValueError(f"Progress estimates path escapes project root: {resolved}")
+        return resolved
 
     def _load_progress_estimates(self) -> None:
         """Load persisted diffusion progress estimates if available."""
         try:
-            if os.path.exists(self._progress_estimates_path):
-                with open(self._progress_estimates_path, "r", encoding="utf-8") as f:
+            progress_path = self._resolve_progress_estimates_path()
+            if os.path.exists(progress_path):
+                with open(progress_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, dict) and isinstance(data.get("records"), list):
                         self._progress_estimates = data
@@ -50,12 +65,13 @@ class ProgressMixin:
     def _save_progress_estimates(self) -> None:
         """Persist diffusion progress estimates."""
         try:
-            os.makedirs(os.path.dirname(self._progress_estimates_path), exist_ok=True)
-            with open(self._progress_estimates_path, "w", encoding="utf-8") as f:
+            progress_path = self._resolve_progress_estimates_path()
+            os.makedirs(os.path.dirname(progress_path) or ".", exist_ok=True)
+            with open(progress_path, "w", encoding="utf-8") as f:
                 json.dump(self._progress_estimates, f)
         except Exception as e:
             # Best-effort cache persistence: failures must not interrupt generation.
-            logger.debug(f"Failed to save progress estimates to {self._progress_estimates_path}: {e}")
+            logger.debug(f"Failed to save progress estimates: {e}")
 
     def _duration_bucket(self, duration_sec: Optional[float]) -> str:
         if duration_sec is None or duration_sec <= 0:

@@ -204,7 +204,11 @@ class InitServiceLoaderMixin(InitServiceLoaderComponentsMixin):
             self.model = torch.compile(self.model)
         self._apply_dit_quantization(quantization)
 
-        silence_latent_path = os.path.join(model_checkpoint_path, "silence_latent.pt")
+        # Load silence latent only from inside the resolved checkpoint directory.
+        checkpoint_dir = os.path.realpath(model_checkpoint_path)
+        silence_latent_path = os.path.realpath(os.path.join(checkpoint_dir, "silence_latent.pt"))
+        if os.path.commonpath([checkpoint_dir, silence_latent_path]) != checkpoint_dir:
+            raise ValueError(f"Silence latent path escapes checkpoint directory: {silence_latent_path}")
         if not os.path.exists(silence_latent_path):
             raise FileNotFoundError(f"Silence latent not found at {silence_latent_path}")
         self.silence_latent = torch.load(silence_latent_path, weights_only=True).transpose(1, 2)

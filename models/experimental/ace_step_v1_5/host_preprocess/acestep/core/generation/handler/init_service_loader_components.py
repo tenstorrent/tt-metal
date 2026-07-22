@@ -90,7 +90,11 @@ class InitServiceLoaderComponentsMixin:
         """
         from transformers import AutoModel, AutoTokenizer
 
-        text_encoder_path = os.path.join(checkpoint_dir, "Qwen3-Embedding-0.6B")
+        # Safelisted child under the checkpoint root (Cycode path-traversal guard).
+        base_directory = os.path.abspath(checkpoint_dir)
+        text_encoder_path = os.path.abspath(os.path.join(base_directory, "Qwen3-Embedding-0.6B"))
+        if not (text_encoder_path == base_directory or text_encoder_path.startswith(base_directory + os.sep)):
+            raise ValueError(f"Text encoder path escapes checkpoint directory: {text_encoder_path}")
         if not os.path.exists(text_encoder_path):
             raise FileNotFoundError(f"Text encoder not found at {text_encoder_path}")
 

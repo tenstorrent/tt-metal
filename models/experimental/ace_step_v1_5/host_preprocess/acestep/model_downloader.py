@@ -50,10 +50,18 @@ def _get_models_source_dir() -> Path:
     return Path(__file__).resolve().parent / "models"
 
 
-def _file_hash(filepath: Path) -> str:
-    """Compute SHA-256 hash of a file's contents."""
+def _file_hash(filepath: Path, *, base_directory: Path) -> str:
+    """Compute SHA-256 hash of a file's contents under ``base_directory``.
+
+    Raises:
+        ValueError: If ``filepath`` resolves outside ``base_directory``.
+    """
+    base = os.path.abspath(str(base_directory))
+    resolved = os.path.abspath(str(filepath))
+    if not (resolved == base or resolved.startswith(base + os.sep)):
+        raise ValueError(f"File path escapes allowed directory: {resolved}")
     h = hashlib.sha256()
-    with open(filepath, "rb") as f:
+    with open(resolved, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -89,7 +97,7 @@ def _check_code_mismatch(model_name: str, checkpoints_dir) -> List[str]:
         dst_file = target_dir / src_file.name
         if not dst_file.exists():
             mismatched.append(src_file.name)
-        elif _file_hash(src_file) != _file_hash(dst_file):
+        elif _file_hash(src_file, base_directory=source_dir) != _file_hash(dst_file, base_directory=target_dir):
             mismatched.append(src_file.name)
 
     return mismatched
