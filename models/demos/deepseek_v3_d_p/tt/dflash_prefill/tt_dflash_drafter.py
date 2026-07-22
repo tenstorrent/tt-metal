@@ -45,7 +45,7 @@ class TtDFlashDrafter:
         self,
         mesh_device: ttnn.MeshDevice,
         config: DFlashDrafterConfig,
-        state_dict: dict | None = None,
+        state_dict: dict,
         *,
         sp_axis: int = 0,
         tp_axis: int = 1,
@@ -119,16 +119,15 @@ class TtDFlashDrafter:
         mapper_col = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=col)
         return mapper_row, mapper_col
 
-    def _load_weights(self, state_dict: dict | None):
+    def _load_weights(self, state_dict: dict):
         cfg = self.config
         H, kv_dim, D = cfg.hidden_size, cfg.kv_dim, cfg.head_dim
         mapper_row, mapper_col = self._mesh_mappers()
         replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
-        have = state_dict is not None and "fc.weight" in state_dict
 
         def _linear_w(torch_w, mapper):
             # torch_w is the HF Linear weight [out, in]; ttnn.linear wants [in, out].
-            t = torch_w.transpose(-2, -1).contiguous() if torch_w is not None else None
+            t = torch_w.transpose(-2, -1).contiguous()
             return ttnn.as_tensor(
                 t,
                 device=self.mesh_device,
@@ -140,7 +139,7 @@ class TtDFlashDrafter:
 
         def _norm_w(torch_w):
             # RMSNorm weight [dim] -> [1, 1, dim/32, 32] ROW_MAJOR bf16, replicated (matches ttMLA).
-            t = torch_w.reshape(1, 1, -1, ttnn.TILE_SIZE) if torch_w is not None else None
+            t = torch_w.reshape(1, 1, -1, ttnn.TILE_SIZE)
             return ttnn.as_tensor(
                 t,
                 device=self.mesh_device,
@@ -164,24 +163,22 @@ class TtDFlashDrafter:
         self.fc_perm = None
         if self.fc_mode == "sliced":
             self.fc_slices = []
-            fc_full = state_dict["fc.weight"] if have else None  # [H, n*H]
+            fc_full = state_dict["fc.weight"]  # [H, n*H]
             for idx in range(n):
-                sl = fc_full[:, idx * H : (idx + 1) * H] if have else None  # [H(out), H(in)]
+                sl = fc_full[:, idx * H : (idx + 1) * H]  # [H(out), H(in)]
                 self.fc_slices.append(_linear_w(sl, mapper_row))
         else:  # "concat"
             assert H % self.tp_factor == 0, f"hidden {H} must be divisible by tp {self.tp_factor} for concat fc"
-            fc_perm_w = None
-            if have:
-                W = state_dict["fc.weight"]  # [H(out), n*H(in)]; in = concat over target layers of H
-                hs = H // self.tp_factor
-                # Column order so a contiguous TP block d == {layer*H + [d*hs:(d+1)*hs] for all layers}.
-                perm = [
-                    layer * H + col
-                    for d in range(self.tp_factor)
-                    for layer in range(n)
-                    for col in range(d * hs, (d + 1) * hs)
-                ]
-                fc_perm_w = W[:, perm].contiguous()  # [H(out), n*H(in)] permuted
+            W = state_dict["fc.weight"]  # [H(out), n*H(in)]; in = concat over target layers of H
+            hs = H // self.tp_factor
+            # Column order so a contiguous TP block d == {layer*H + [d*hs:(d+1)*hs] for all layers}.
+            perm = [
+                layer * H + col
+                for d in range(self.tp_factor)
+                for layer in range(n)
+                for col in range(d * hs, (d + 1) * hs)
+            ]
+            fc_perm_w = W[:, perm].contiguous()  # [H(out), n*H(in)] permuted
             self.fc_perm = _linear_w(fc_perm_w, mapper_row)
 
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
@@ -192,7 +189,7 @@ class TtDFlashDrafter:
             mesh_device=self.mesh_device,
             emb_dim=cfg.hidden_size,
             epsilon=cfg.rms_norm_eps,
-            torch_weight=state_dict["hidden_norm.weight"] if have else None,
+            torch_weight=state_dict["hidden_norm.weight"],
             cluster_axis=self.tp_axis,
             num_links=self.num_links,
             topology=self.topology,
@@ -201,9 +198,9 @@ class TtDFlashDrafter:
         # Per draft layer: k/v proj column-parallel (KV heads split across TP), per-head k_norm replicated.
         self.k_proj, self.v_proj, self.k_norm = [], [], []
         for i in range(cfg.num_hidden_layers):
-            kw = state_dict[self._K_PROJ.format(i=i)] if have else None  # [kv_dim, H]
-            vw = state_dict[self._V_PROJ.format(i=i)] if have else None
-            kn = state_dict[self._K_NORM.format(i=i)] if have else None  # [head_dim]
+            kw = state_dict[self._K_PROJ.format(i=i)]  # [kv_dim, H]
+            vw = state_dict[self._V_PROJ.format(i=i)]
+            kn = state_dict[self._K_NORM.format(i=i)]  # [head_dim]
             self.k_proj.append(_linear_w(kw, mapper_col))
             self.v_proj.append(_linear_w(vw, mapper_col))
             self.k_norm.append(_norm_w(kn))
