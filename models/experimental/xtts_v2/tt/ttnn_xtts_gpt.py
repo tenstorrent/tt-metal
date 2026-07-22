@@ -257,12 +257,16 @@ class TracedGPTDecoder:
         self._zeros = mk()  # preallocated (before any trace) so reset() never allocates during a trace
         self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)  # the position mailbox
         self._in = ttnn.from_torch(torch.zeros(1, 1, N_EMBD), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        # paged_update_cache wants the new K/V height-sharded (1 core suffices for batch=1)
-        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-        self._shard = ttnn.MemoryConfig(
+        # paged_fused_update_cache does K+V in one kernel but needs them on non-overlapping cores;
+        # nlp_create_qkv_heads_decode puts both K and V on core (0,0), so move V to core (1,0) first.
+        self._v_cfg1 = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, (32, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                (32, HEAD_DIM),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
         # Width-sharded LayerNorm for decode: over a single-token [1,1,1024], the 1024-dim (= 32-tile)
         # reduction runs effectively single-core in the interleaved op. Spreading it width-wise across a
@@ -307,8 +311,11 @@ class TracedGPTDecoder:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
                 ttnn.reshape(qkv, [1, 1, 1, 3 * N_EMBD]), num_heads=N_HEAD, num_kv_heads=N_HEAD
             )
-            ttnn.experimental.paged_update_cache(self.k_cache[li], k, update_idxs_tensor=self._pos, page_table=None)
-            ttnn.experimental.paged_update_cache(self.v_cache[li], v, update_idxs_tensor=self._pos, page_table=None)
+            # Fused K+V cache update in one kernel (V moved to a separate core so the two don't overlap).
+            ttnn.experimental.paged_fused_update_cache(
+                self.k_cache[li], k, self.v_cache[li], ttnn.to_memory_config(v, self._v_cfg1),
+                update_idxs_tensor=self._pos, page_table=None,
+            )
             attn = ttnn.transformer.scaled_dot_product_attention_decode(
                 q, self.k_cache[li], self.v_cache[li], cur_pos_tensor=self._pos, scale=SCALE, compute_kernel_config=COMPUTE_KERNEL_CONFIG
             )
