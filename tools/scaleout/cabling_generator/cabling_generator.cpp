@@ -83,6 +83,19 @@ deployment::proto::DeploymentDescriptor load_deployment_descriptor(const std::st
     return load_descriptor_from_textproto<deployment::proto::DeploymentDescriptor>(file_path);
 }
 
+// Load a factory system descriptor and return hostname -> instance_path segments. Used by
+// build_nested_aggregate to recover a child's intra-cluster hierarchy (which a flattened cabling
+// descriptor no longer carries) when composing aggregated instance paths.
+std::unordered_map<std::string, std::vector<std::string>> load_fsd_instance_paths(const std::string& file_path) {
+    auto fsd = load_descriptor_from_textproto<tt::scaleout_tools::fsd::proto::FactorySystemDescriptor>(file_path);
+    std::unordered_map<std::string, std::vector<std::string>> out;
+    for (const auto& host : fsd.hosts()) {
+        out.emplace(
+            host.hostname(), std::vector<std::string>(host.instance_path().begin(), host.instance_path().end()));
+    }
+    return out;
+}
+
 // Build endpoint map for node template inter-board connections (validates conflicts per port type)
 std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for_port_type(
     const std::vector<Node::BoardConnection>& connections,
@@ -1488,6 +1501,291 @@ void CablingGenerator::merge(
     merge_other(other, new_file_path, existing_sources);
 }
 
+// Shift every host_id in a resolved graph (nodes + connections) by `base` so that independently
+// resolved child graphs occupy disjoint host_id ranges before a global DFS reassignment.
+static void offset_host_ids(ResolvedGraphInstance& graph, uint32_t base) {
+    for (auto& [name, node] : graph.nodes) {
+        node.host_id = HostId(*node.host_id + base);
+    }
+    for (auto& [port_type, connections] : graph.internal_connections) {
+        for (auto& conn : connections) {
+            std::get<0>(conn.first) = HostId(*std::get<0>(conn.first) + base);
+            std::get<0>(conn.second) = HostId(*std::get<0>(conn.second) + base);
+        }
+    }
+    // Rebuild derived lookups against the shifted ids.
+    graph.endpoint_to_dest.clear();
+    graph.connection_pairs.clear();
+    for (const auto& [port_type, connections] : graph.internal_connections) {
+        for (const auto& conn : connections) {
+            graph.endpoint_to_dest[conn.first] = conn.second;
+            graph.endpoint_to_dest[conn.second] = conn.first;
+            graph.connection_pairs.insert(normalize_graph_connection(conn));
+        }
+    }
+    for (auto& [name, subgraph] : graph.subgraphs) {
+        offset_host_ids(*subgraph, base);
+    }
+}
+
+CablingGenerator CablingGenerator::build_nested_aggregate(
+    const std::string& composite_name,
+    const std::vector<AggregateChild>& children,
+    const std::vector<std::string>& glue_descriptor_paths,
+    const std::string& deployment_descriptor_path) {
+    if (children.empty()) {
+        throw std::runtime_error("build_nested_aggregate requires at least one child");
+    }
+    auto full_deployment = load_deployment_descriptor(deployment_descriptor_path);
+
+    CablingGenerator agg;
+    agg.root_instance_ = std::make_unique<ResolvedGraphInstance>();
+    agg.root_instance_->template_name = composite_name;
+    agg.root_instance_->instance_name = "";
+
+    std::unordered_map<std::string, Host> all_hosts;
+    // Leaf Node* -> hostname. Node objects live in the (re)nested subgraphs owned by agg, so their
+    // addresses stay valid until deployment_hosts_ is rebuilt below.
+    std::unordered_map<const Node*, std::string> node_to_hostname;
+    uint32_t base = 0;
+
+    // Get-or-create a subgraph child by instance name, maintaining children_order.
+    auto get_or_create_subgraph =
+        [](ResolvedGraphInstance& parent, const std::string& key, const std::string& tmpl) -> ResolvedGraphInstance& {
+        if (auto it = parent.subgraphs.find(key); it != parent.subgraphs.end()) {
+            return *it->second;
+        }
+        auto sub = std::make_unique<ResolvedGraphInstance>();
+        sub->template_name = tmpl;
+        sub->instance_name = key;
+        ResolvedGraphInstance& ref = *sub;
+        parent.subgraphs.emplace(key, std::move(sub));
+        parent.children_order.emplace_back(key, false);
+        return ref;
+    };
+
+    std::set<std::string> aggregate_instance_names;
+    for (const auto& [inst_name, cabling_path, fsd_path, deployment_path] : children) {
+        validate_instance_name(inst_name, composite_name);
+        if (!aggregate_instance_names.insert(inst_name).second) {
+            throw std::runtime_error("Duplicate aggregate child instance name: " + inst_name);
+        }
+        // Load each child against its own deployment when provided (host_id-positional). This is what
+        // lets a hierarchical child (whose leaf nodes are instance-named, e.g. "node_0", rather than
+        // hostname-named) load at all, since the composite deployment can only be sliced by hostname.
+        // Fall back to slicing the composite deployment by hostname for flat, hostname-named children.
+        auto load_child = [&]() -> CablingGenerator {
+            if (!deployment_path.empty()) {
+                return CablingGenerator(cabling_path, deployment_path);
+            }
+            auto cluster = load_cluster_descriptor(cabling_path);
+            auto child_deployment = filter_deployment_for_cabling(cluster, full_deployment, cabling_path);
+            return CablingGenerator(cabling_path, child_deployment);
+        };
+        CablingGenerator child = load_child();
+        if (!child.root_instance_) {
+            throw std::runtime_error("Child cabling descriptor produced no root_instance: " + cabling_path);
+        }
+
+        for (const auto& [key, node_template] : child.node_templates_) {
+            agg.node_templates_.emplace(key, node_template);
+        }
+        for (const auto& name : child.explicit_node_descriptors_) {
+            agg.explicit_node_descriptors_.insert(name);
+        }
+        for (const auto& host : child.deployment_hosts_) {
+            all_hosts[host.hostname] = host;
+        }
+
+        uint32_t child_leaf_count = static_cast<uint32_t>(child.host_id_to_node_.size());
+
+        // The child's own intra-cluster hierarchy (e.g. sp4/sp2_0/bh_galaxy_sp_0/...) lives in its
+        // FSD's per-host instance_path; a flattened cabling descriptor no longer carries it. When the
+        // FSD is available we rebuild that hierarchy under the composite, uniquifying the top segment
+        // with the child's directory name. Otherwise we fall back to nesting the child's resolved tree
+        // directly under its directory name (directory hierarchy only).
+        std::unordered_map<std::string, std::vector<std::string>> fsd_paths;
+        if (!fsd_path.empty()) {
+            fsd_paths = load_fsd_instance_paths(fsd_path);
+        }
+
+        if (fsd_paths.empty()) {
+            auto record_hostnames = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+                for (const auto& [name, node] : graph.nodes) {
+                    if (*node.host_id < child.deployment_hosts_.size()) {
+                        node_to_hostname[&node] = child.deployment_hosts_[*node.host_id].hostname;
+                    }
+                }
+                for (const auto& [name, subgraph] : graph.subgraphs) {
+                    self(self, *subgraph);
+                }
+            };
+            record_hostnames(record_hostnames, *child.root_instance_);
+            offset_host_ids(*child.root_instance_, base);
+            base += child_leaf_count;
+            child.root_instance_->instance_name = inst_name;
+            agg.root_instance_->children_order.emplace_back(inst_name, false);
+            agg.root_instance_->subgraphs.emplace(inst_name, std::move(child.root_instance_));
+            continue;
+        }
+
+        // Collect every leaf node (capturing its hostname before shifting host_ids) and flatten all
+        // connections, offsetting host_ids so each child occupies a disjoint range before the global
+        // DFS reassignment below.
+        std::vector<std::pair<std::string, Node>> leaves;  // (hostname, node with offset host_id)
+        leaves.reserve(child_leaf_count);
+        std::vector<std::pair<PortType, PortConnection>> conns;
+        auto collect = [&](auto& self, ResolvedGraphInstance& graph) -> void {
+            for (auto& [name, node] : graph.nodes) {
+                std::string hostname = (*node.host_id < child.deployment_hosts_.size())
+                                           ? child.deployment_hosts_[*node.host_id].hostname
+                                           : std::string{};
+                node.host_id = HostId(*node.host_id + base);
+                leaves.emplace_back(std::move(hostname), std::move(node));
+            }
+            for (const auto& [port_type, connections] : graph.internal_connections) {
+                for (const auto& conn : connections) {
+                    PortConnection shifted = conn;
+                    std::get<0>(shifted.first) = HostId(*std::get<0>(shifted.first) + base);
+                    std::get<0>(shifted.second) = HostId(*std::get<0>(shifted.second) + base);
+                    conns.emplace_back(port_type, shifted);
+                }
+            }
+            for (const auto& [name, subgraph] : graph.subgraphs) {
+                self(self, *subgraph);
+            }
+        };
+        collect(collect, *child.root_instance_);
+        base += child_leaf_count;
+
+        // Rebuild the nested structure from the FSD instance paths. The top segment is uniquified with
+        // the child's directory name (e.g. "sp4" -> "sp4-120-a29") so identical intra-cluster roots
+        // from different clusters do not collide; a segment already equal to the directory name (a
+        // re-aggregated composite whose root == its own name) is left as-is.
+        std::set<std::string> child_top_keys;
+        for (auto& [hostname, node] : leaves) {
+            auto pit = fsd_paths.find(hostname);
+            // A missing instance_path used to be a hard error, but that breaks backward compatibility with
+            // older FSDs that do not emit one. Downgrade to a warning and fall back to a flat instance path
+            // ("<inst_name>/<hostname>") so aggregation still succeeds.
+            std::vector<std::string> fallback_path;
+            if (pit == fsd_paths.end() || pit->second.empty()) {
+                log_warning(
+                    tt::LogDistributed,
+                    "Child '{}' FSD ({}) is missing an instance_path for host '{}'; falling back to a flat "
+                    "instance path. Please regenerate the FSD with an up-to-date tool.",
+                    inst_name,
+                    fsd_path,
+                    hostname);
+                fallback_path = {inst_name, hostname};
+            }
+            const std::vector<std::string>& path = fallback_path.empty() ? pit->second : fallback_path;
+            std::string key0 = (path.front() == inst_name) ? path.front() : (path.front() + "-" + inst_name);
+            child_top_keys.insert(key0);
+            ResolvedGraphInstance* cur = &get_or_create_subgraph(*agg.root_instance_, key0, path.front());
+            for (size_t i = 1; i + 1 < path.size(); ++i) {
+                cur = &get_or_create_subgraph(*cur, path[i], path[i]);
+            }
+            const std::string& leaf_name = path.back();
+            cur->nodes.emplace(leaf_name, std::move(node));
+            cur->children_order.emplace_back(leaf_name, true);
+            node_to_hostname[&cur->nodes.at(leaf_name)] = hostname;
+        }
+
+        // Attach the child's connections at its single top instance so relative connection paths in the
+        // hierarchical descriptor resolve within the child; fall back to the composite root if a child
+        // unexpectedly spans multiple top segments.
+        ResolvedGraphInstance* conn_target = (child_top_keys.size() == 1)
+                                                 ? agg.root_instance_->subgraphs.at(*child_top_keys.begin()).get()
+                                                 : agg.root_instance_.get();
+        for (const auto& [port_type, conn] : conns) {
+            conn_target->add_connection(port_type, conn);
+        }
+    }
+
+    // Pack host_ids densely in DFS order, remap child connections, and repopulate host_id_to_node_.
+    agg.reassign_host_ids_dfs();
+
+    // Rebuild deployment_hosts_ indexed by the final (DFS) host_id.
+    agg.deployment_hosts_.assign(base, Host{});
+    auto fill_hosts = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+        for (const auto& [name, is_node] : graph.children_order) {
+            if (is_node) {
+                auto it = graph.nodes.find(name);
+                if (it == graph.nodes.end()) {
+                    continue;
+                }
+                auto hn = node_to_hostname.find(&it->second);
+                if (hn == node_to_hostname.end()) {
+                    throw std::runtime_error("Aggregate leaf missing a hostname mapping: " + name);
+                }
+                auto host_it = all_hosts.find(hn->second);
+                if (host_it == all_hosts.end()) {
+                    throw std::runtime_error("Aggregate host not found in deployment: " + hn->second);
+                }
+                agg.deployment_hosts_[*it->second.host_id] = host_it->second;
+            } else if (auto sit = graph.subgraphs.find(name); sit != graph.subgraphs.end()) {
+                self(self, *sit->second);
+            }
+        }
+    };
+    fill_hosts(fill_hosts, *agg.root_instance_);
+
+    // Wire glue (inter-child) connections at the composite root, mapping hostname -> final host_id.
+    std::unordered_map<std::string, HostId> hostname_to_hid;
+    for (size_t i = 0; i < agg.deployment_hosts_.size(); ++i) {
+        hostname_to_hid[agg.deployment_hosts_[i].hostname] = HostId(static_cast<uint32_t>(i));
+    }
+    for (const auto& glue_path : glue_descriptor_paths) {
+        auto glue_cluster = load_cluster_descriptor(glue_path);
+        auto glue_deployment = filter_deployment_for_cabling(glue_cluster, full_deployment, glue_path);
+        CablingGenerator glue(glue_path, glue_deployment);
+        for (const auto& [key, node_template] : glue.node_templates_) {
+            agg.node_templates_.emplace(key, node_template);
+        }
+        for (const auto& name : glue.explicit_node_descriptors_) {
+            agg.explicit_node_descriptors_.insert(name);
+        }
+        if (!glue.root_instance_) {
+            continue;
+        }
+        auto remap_endpoint = [&](const PortEndpoint& ep) -> PortEndpoint {
+            HostId ghid = std::get<0>(ep);
+            if (*ghid >= glue.deployment_hosts_.size()) {
+                throw std::runtime_error("Glue connection references an unknown host_id in: " + glue_path);
+            }
+            const std::string& hostname = glue.deployment_hosts_[*ghid].hostname;
+            auto it = hostname_to_hid.find(hostname);
+            if (it == hostname_to_hid.end()) {
+                throw std::runtime_error(
+                    "Glue file '" + glue_path + "' references host '" + hostname +
+                    "' that is not part of the aggregated children");
+            }
+            return std::make_tuple(it->second, std::get<1>(ep), std::get<2>(ep));
+        };
+        auto add_glue = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+            for (const auto& [port_type, connections] : graph.internal_connections) {
+                for (const auto& conn : connections) {
+                    agg.root_instance_->add_connection(
+                        port_type, PortConnection(remap_endpoint(conn.first), remap_endpoint(conn.second)));
+                }
+            }
+            for (const auto& [name, subgraph] : graph.subgraphs) {
+                self(self, *subgraph);
+            }
+        };
+        add_glue(add_glue, *glue.root_instance_);
+    }
+
+    // Reset port availability, then regenerate channel-level connections across the whole tree.
+    agg.recreate_nodes_from_templates(*agg.root_instance_);
+    agg.populate_host_id_to_node();
+    agg.generate_logical_chip_connections();
+    agg.validate_host_id_uniqueness();
+
+    return agg;
+}
+
 // Getters for all data
 const std::vector<Host>& CablingGenerator::get_deployment_hosts() const { return deployment_hosts_; }
 
@@ -1789,6 +2087,113 @@ static void flatten_resolved_graph_to_protobuf(
     }
 }
 
+// Find the relative instance path (child instance names) from `graph` down to the leaf node with
+// `target` host_id. Returns true and fills `out` (root..leaf, e.g. {"sp2_0","bh_galaxy_node_0","node_0"})
+// on success. Used to render multi-segment connection paths when emitting a nested descriptor.
+static bool relative_path_to_host(const ResolvedGraphInstance& graph, HostId target, std::vector<std::string>& out) {
+    for (const auto& [name, node] : graph.nodes) {
+        if (node.host_id == target) {
+            out.push_back(name);
+            return true;
+        }
+    }
+    for (const auto& [name, subgraph] : graph.subgraphs) {
+        out.push_back(name);
+        if (relative_path_to_host(*subgraph, target, out)) {
+            return true;
+        }
+        out.pop_back();
+    }
+    return false;
+}
+
+// Recursively serialize a resolved graph instance into a nested ClusterDescriptor, preserving the
+// hierarchy. Each graph instance gets its own graph_template (keyed by its instance path so keys are
+// unique; templates are expanded rather than shared). `inst` is the GraphInstance proto (root_instance
+// or a sub_instance) to populate. Returns the template key assigned to this graph.
+static std::string emit_graph_template_recursive(
+    const ResolvedGraphInstance& graph,
+    const std::vector<std::string>& path,
+    const std::string& root_template_name,
+    cabling_generator::proto::ClusterDescriptor& cluster_desc,
+    cabling_generator::proto::GraphInstance* inst,
+    const std::unordered_map<std::string, Node>& node_templates) {
+    // Root uses the composite/root template name (drives instance_path[0]); deeper graphs use their
+    // unique instance path as the key. '/' is safe here: only child *instance* names are validated.
+    std::string template_key;
+    if (path.empty()) {
+        template_key = root_template_name;
+    } else {
+        for (const auto& seg : path) {
+            template_key += template_key.empty() ? seg : "/" + seg;
+        }
+    }
+    inst->set_template_name(template_key);
+    auto& template_proto = (*cluster_desc.mutable_graph_templates())[template_key];
+
+    for (const auto& [name, is_node] : graph.children_order) {
+        auto* child = template_proto.add_children();
+        child->set_name(name);
+        if (is_node) {
+            auto it = graph.nodes.find(name);
+            if (it == graph.nodes.end()) {
+                continue;
+            }
+            child->mutable_node_ref()->set_node_descriptor(node_descriptor_key_for(name, it->second, node_templates));
+            (*inst->mutable_child_mappings())[name].set_host_id(*it->second.host_id);
+        } else {
+            auto it = graph.subgraphs.find(name);
+            if (it == graph.subgraphs.end()) {
+                continue;
+            }
+            std::vector<std::string> child_path = path;
+            child_path.push_back(name);
+            auto* sub_inst = (*inst->mutable_child_mappings())[name].mutable_sub_instance();
+            std::string sub_key = emit_graph_template_recursive(
+                *it->second, child_path, root_template_name, cluster_desc, sub_inst, node_templates);
+            child->mutable_graph_ref()->set_graph_template(sub_key);
+        }
+    }
+
+    // Emit this level's internal connections with paths relative to this graph.
+    for (const auto& [port_type, connections] : graph.internal_connections) {
+        std::string port_type_str;
+        switch (port_type) {
+            case PortType::QSFP_DD: port_type_str = "QSFP_DD"; break;
+            case PortType::WARP100: port_type_str = "WARP100"; break;
+            case PortType::WARP400: port_type_str = "WARP400"; break;
+            default: continue;
+        }
+
+        auto* port_conns = (*template_proto.mutable_internal_connections())[port_type_str].mutable_connections();
+        for (const auto& conn : connections) {
+            auto* conn_proto = port_conns->Add();
+
+            const auto& [host_a, tray_a, port_a_id] = conn.first;
+            auto* port_a = conn_proto->mutable_port_a();
+            std::vector<std::string> path_a;
+            relative_path_to_host(graph, host_a, path_a);
+            for (const auto& seg : path_a) {
+                port_a->add_path(seg);
+            }
+            port_a->set_tray_id(*tray_a);
+            port_a->set_port_id(*port_a_id);
+
+            const auto& [host_b, tray_b, port_b_id] = conn.second;
+            auto* port_b = conn_proto->mutable_port_b();
+            std::vector<std::string> path_b;
+            relative_path_to_host(graph, host_b, path_b);
+            for (const auto& seg : path_b) {
+                port_b->add_path(seg);
+            }
+            port_b->set_tray_id(*tray_b);
+            port_b->set_port_id(*port_b_id);
+        }
+    }
+
+    return template_key;
+}
+
 // Method to emit deployment descriptor (one host per node in host_id order)
 void CablingGenerator::emit_deployment_descriptor(const std::string& output_path) const {
     deployment::proto::DeploymentDescriptor deployment_desc;
@@ -1832,7 +2237,7 @@ void CablingGenerator::emit_deployment_descriptor(const std::string& output_path
 }
 
 // Method to emit merged cabling descriptor
-void CablingGenerator::emit_cabling_descriptor(const std::string& output_path) const {
+void CablingGenerator::emit_cabling_descriptor(const std::string& output_path, bool hierarchical) const {
     cabling_generator::proto::ClusterDescriptor cluster_desc;
 
     // Only emit node descriptors that were explicitly present in source files
@@ -1855,7 +2260,12 @@ void CablingGenerator::emit_cabling_descriptor(const std::string& output_path) c
     if (root_instance_) {
         auto* root_inst = cluster_desc.mutable_root_instance();
 
-        if (root_instance_->subgraphs.empty()) {
+        if (hierarchical) {
+            // Preserve the nested structure faithfully (one graph_template per graph instance).
+            // Single-level trees naturally produce the same output as the legacy path below.
+            emit_graph_template_recursive(
+                *root_instance_, {}, root_instance_->template_name, cluster_desc, root_inst, node_templates_);
+        } else if (root_instance_->subgraphs.empty()) {
             // Single-level topology: emit node instance names directly (unchanged legacy behavior).
             auto& template_proto = (*cluster_desc.mutable_graph_templates())[root_instance_->template_name];
             root_inst->set_template_name(root_instance_->template_name);
