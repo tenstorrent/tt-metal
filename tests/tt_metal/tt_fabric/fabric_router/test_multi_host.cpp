@@ -370,6 +370,24 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
     check_asic_mapping_against_golden("TestSplit2x2ControlPlaneInit");
 }
 
+// Regression test for an uneven WH loudbox split (M0=1x2, M1=1x6). Unlike TestSplit2x2 above, the boundary
+// between the two meshes isn't a clean 1:1 chip pairing: one M0 chip has real cables to two distinct M1
+// chips (T3K's inner-ring chips each link to two other inner-ring chips plus their own board-mate). This
+// used to hit TT_FATAL("Inter-mesh: one src to multiple dst chips...") in
+// propose_port_descriptors_for_exit_nodes even though the MGD's RELAXED channel-count policy only needs
+// one of those links, not both.
+TEST(MultiHost, TestSplit2_6ControlPlaneInit) {
+    const std::filesystem::path split_2_6_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2_6_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        split_2_6_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+}
+
 TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
