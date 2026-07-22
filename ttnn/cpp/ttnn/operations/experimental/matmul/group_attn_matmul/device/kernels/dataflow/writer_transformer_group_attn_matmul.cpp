@@ -5,70 +5,58 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-
-    uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
+    uint32_t has_work_for_q_heads = get_arg(args::has_work_for_q_heads);
     if (has_work_for_q_heads == 0) {
         return;
     }
 
-    uint32_t src0_addr = get_arg_val<uint32_t>(i++);
-    uint32_t dst_addr = get_arg_val<uint32_t>(i++);
-    uint32_t Mt = get_arg_val<uint32_t>(i++);
-    uint32_t Kt = get_arg_val<uint32_t>(i++);
-    uint32_t Nt = get_arg_val<uint32_t>(i++);
-    uint32_t MtKt = get_arg_val<uint32_t>(i++);
-    uint32_t blocks = get_arg_val<uint32_t>(i++);
-    uint32_t in0_start_id = get_arg_val<uint32_t>(i++);
-    uint32_t out_start_id = get_arg_val<uint32_t>(i++);
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t MtKt = get_arg(args::MtKt);
+    uint32_t blocks = get_arg(args::blocks);
+    uint32_t in0_start_id = get_arg(args::in0_start_id);
+    uint32_t out_start_id = get_arg(args::out_start_id);
 
     // matmul params
-    uint32_t in0_block_w = get_arg_val<uint32_t>(i++);
-    uint32_t in1_num_subblocks = get_arg_val<uint32_t>(i++);
-    uint32_t in1_num_blocks = get_arg_val<uint32_t>(i++);
-    uint32_t out_num_tiles = get_arg_val<uint32_t>(i++);
+    uint32_t in0_block_w = get_arg(args::in0_block_w);
+    uint32_t in1_num_subblocks = get_arg(args::in1_num_subblocks);
+    uint32_t in1_num_blocks = get_arg(args::in1_num_blocks);
+    uint32_t out_num_tiles = get_arg(args::out_num_tiles);
 
     // constants
-    uint32_t bfloat16_row_bytes = get_arg_val<uint32_t>(i++);
-    uint32_t bfloat16_Nt_bytes = get_arg_val<uint32_t>(i++);
-    uint32_t bfloat16_last_row_bytes_read = get_arg_val<uint32_t>(i++);
+    uint32_t bfloat16_row_bytes = get_arg(args::bfloat16_row_bytes);
+    uint32_t bfloat16_Nt_bytes = get_arg(args::bfloat16_Nt_bytes);
+    uint32_t bfloat16_last_row_bytes_read = get_arg(args::bfloat16_last_row_bytes_read);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(1);
-    constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(2);
-
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 =
-        tt::CBIndex::c_1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
-    constexpr uint32_t cb_id_intermed0 = tt::CBIndex::c_3;
-    constexpr uint32_t cb_id_intermed1 = tt::CBIndex::c_4;
+    constexpr uint32_t out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr uint32_t intermediate_num_tiles = get_arg(args::intermediate_num_tiles);
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_id_in0);
-    CircularBuffer cb_intermed0_obj(cb_id_intermed0);
-    CircularBuffer cb_intermed1_obj(cb_id_intermed1);
-    CircularBuffer cb_out_obj(cb_id_out);
+    DataflowBuffer cb_in0_obj(dfb::in0);
+    DataflowBuffer cb_intermed0_obj(dfb::intermed0);
+    DataflowBuffer cb_intermed1_obj(dfb::intermed1);
+    DataflowBuffer cb_out_obj(dfb::out);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    constexpr auto in0_args = TensorAccessorArgs<3>();
+    const uint32_t in0_tile_bytes = cb_in0_obj.get_tile_size();
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(in0_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::src0);
 #endif
 
-    const uint32_t out_tile_bytes = get_tile_size(cb_id_out);
-    constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    const uint32_t out_tile_bytes = cb_out_obj.get_tile_size();
 #ifndef OUT_SHARDED
-    const auto s = TensorAccessor(out_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 #endif
 
 #ifndef IN0_SHARDED
