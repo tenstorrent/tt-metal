@@ -275,3 +275,19 @@
       timeout: 60
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+
+- id: bh-qb2-deepseek-d2d-socket-sync
+  name: bh_qb2_DeepSeek_D2D_SOCKET_SYNC
+  model-name: deepseek_prefill
+  # Program-cache validation for outbound_socket_service_sync (D2D sender op) on a 4-chip
+  # QuietBox (linear-2x2 variant): 2 sender + 2 receiver chips over tt-fabric. Confirms the
+  # op is built once and cache-hits on the 2nd dispatch (input addr is a BufferBinding).
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/test_d2d_socket_sync.py -k "linear-2x2" -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
