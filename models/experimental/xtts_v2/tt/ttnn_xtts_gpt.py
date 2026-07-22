@@ -38,8 +38,15 @@ from models.experimental.xtts_v2.reference.xtts_gpt_ref import (
 HEAD_DIM = N_EMBD // N_HEAD  # 64
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
 
-# Activation/weight dtype. bf16 with fp32-accumulate compute config; bump to fp32 tensors if PCC is low.
-DTYPE = ttnn.bfloat16
+# fp32 to match the reference precision: fp32 tensors + HiFi4 math with fp32 accumulation
+# (on Wormhole, matmuls otherwise drop to reduced precision even with fp32 tensors).
+DTYPE = ttnn.float32
+COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi3,  # HiFi3+fp32-acc beats HiFi4 on Wormhole (documented HW bug)
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
 
 
 def _to_dev(t, device, dtype=DTYPE):
@@ -84,7 +91,7 @@ def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT):
 
 def _attention(x, w, seq_len, causal_mask):
     """Causal multi-head self-attention. x: [1, S, 1024] -> [1, S, 1024]."""
-    qkv = ttnn.linear(x, w["attn_w"], bias=w["attn_b"])  # [1, S, 3072]
+    qkv = ttnn.linear(x, w["attn_w"], bias=w["attn_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)  # [1, S, 3072]
 
     # split fused QKV on the last dim, then split heads -> [1, n_head, S, head_dim]
     q = ttnn.slice(qkv, [0, 0, 0], [1, seq_len, N_EMBD])
@@ -97,21 +104,21 @@ def _attention(x, w, seq_len, causal_mask):
 
     q, k, v = heads(q), heads(k), heads(v)
 
-    scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))  # [1, n_head, S, S]
+    scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1), compute_kernel_config=COMPUTE_KERNEL_CONFIG)  # [1, nh, S, S]
     scores = ttnn.multiply(scores, 1.0 / (HEAD_DIM**0.5))
     scores = ttnn.add(scores, causal_mask)  # additive -inf above the diagonal
     attn = ttnn.softmax(scores, dim=-1)
-    out = ttnn.matmul(attn, v)  # [1, n_head, S, head_dim]
+    out = ttnn.matmul(attn, v, compute_kernel_config=COMPUTE_KERNEL_CONFIG)  # [1, n_head, S, head_dim]
 
     out = ttnn.permute(out, [0, 2, 1, 3])  # [1, S, n_head, head_dim]
     out = ttnn.reshape(out, [1, seq_len, N_EMBD])
-    return ttnn.linear(out, w["proj_w"], bias=w["proj_b"])
+    return ttnn.linear(out, w["proj_w"], bias=w["proj_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)
 
 
 def _mlp(x, w):
-    x = ttnn.linear(x, w["fc_w"], bias=w["fc_b"])  # [1, S, 4096]
+    x = ttnn.linear(x, w["fc_w"], bias=w["fc_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)  # [1, S, 4096]
     x = ttnn.gelu(x)  # HF gelu_new (tanh approx) — verify approximate mode on device
-    return ttnn.linear(x, w["mproj_w"], bias=w["mproj_b"])  # [1, S, 1024]
+    return ttnn.linear(x, w["mproj_w"], bias=w["mproj_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)  # [1,S,1024]
 
 
 def run_prefill(device, inputs_embeds, weights=None, ckpt_path=DEFAULT_CKPT):
@@ -128,13 +135,13 @@ def run_prefill(device, inputs_embeds, weights=None, ckpt_path=DEFAULT_CKPT):
 
     x = _to_dev(inputs_embeds, device)
     for w in layers:
-        h = ttnn.layer_norm(x, weight=w["ln_1_w"], bias=w["ln_1_b"], epsilon=LN_EPS)
+        h = ttnn.layer_norm(x, weight=w["ln_1_w"], bias=w["ln_1_b"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
         x = ttnn.add(x, _attention(h, w, seq_len, causal_mask))
-        h = ttnn.layer_norm(x, weight=w["ln_2_w"], bias=w["ln_2_b"], epsilon=LN_EPS)
+        h = ttnn.layer_norm(x, weight=w["ln_2_w"], bias=w["ln_2_b"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
         x = ttnn.add(x, _mlp(h, w))
 
-    x = ttnn.layer_norm(x, weight=tail["ln_f_w"], bias=tail["ln_f_b"], epsilon=LN_EPS)
-    x = ttnn.layer_norm(x, weight=tail["fn_w"], bias=tail["fn_b"], epsilon=LN_EPS)
+    x = ttnn.layer_norm(x, weight=tail["ln_f_w"], bias=tail["ln_f_b"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
+    x = ttnn.layer_norm(x, weight=tail["fn_w"], bias=tail["fn_b"], epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
     return ttnn.to_torch(x).float()
 
 

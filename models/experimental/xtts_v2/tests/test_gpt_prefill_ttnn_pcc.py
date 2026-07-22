@@ -5,9 +5,9 @@
 """Block 3 (GPT core) PREFILL — TTNN-vs-reference PCC on device.
 
 Runs the TTNN port (tt/ttnn_xtts_gpt.py) on the Tenstorrent device and compares its latents to
-the CPU reference (reference/xtts_gpt_ref.py) on the same synthetic inputs_embeds. Unlike the
-reference tests (which are bit-exact vs coqui), this compares bf16 on-device output to the fp32
-reference, so the bar is 0.999 (full 30-layer stack).
+the CPU reference (reference/xtts_gpt_ref.py) on the same synthetic inputs_embeds. The port runs
+fp32 (HiFi3 + fp32 accumulation) to match the reference precision, but Tensix matmuls are not
+bit-exact IEEE fp32, so the bar is 0.999 (measured ~0.9997 over the full 30-layer stack).
 
 Skips cleanly when: ttnn isn't importable, no device is available, or the checkpoint is absent.
 Run: TT_METAL_HOME=<repo> PYTHONPATH=<repo> python -m pytest \
