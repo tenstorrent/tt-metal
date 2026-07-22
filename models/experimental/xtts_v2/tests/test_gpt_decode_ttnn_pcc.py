@@ -27,7 +27,7 @@ os.environ.setdefault("TT_METAL_HOME", _REPO)
 ttnn = pytest.importorskip("ttnn", reason="ttnn not importable (build tt-metal from source)")
 
 from models.experimental.xtts_v2.reference import xtts_gpt_ref as ref  # noqa: E402
-from models.experimental.xtts_v2.tt import ttnn_xtts_gpt_decode as decode  # noqa: E402
+from models.experimental.xtts_v2.tt import ttnn_xtts_gpt as port  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not gt.have_checkpoint(),
@@ -53,7 +53,7 @@ def test_gpt_decode_ttnn_matches_reference():
     except Exception as e:
         pytest.skip(f"could not open a Tenstorrent device: {e}")
     try:
-        our = decode.run_generate(device, prefix, heads, max_new=MAX_NEW, ckpt_path=ckpt)
+        our = port.run_generate(device, prefix, heads, max_new=MAX_NEW, ckpt_path=ckpt)
     finally:
         ttnn.close_device(device)
 
