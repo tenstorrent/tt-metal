@@ -1578,7 +1578,14 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
 void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
     std::map<HostId, std::vector<std::string>> host_id_to_instance_path;
     if (root_instance_) {
-        collect_instance_paths(*root_instance_, {}, host_id_to_instance_path);
+        // The root instance has no instance name of its own (it is the top-level `root_instance`
+        // rather than a named child), so seed the path with its template name so the top-level
+        // graph (e.g. "sp4") appears as the first instance_path segment.
+        std::vector<std::string> root_prefix;
+        if (!root_instance_->template_name.empty()) {
+            root_prefix.push_back(root_instance_->template_name);
+        }
+        collect_instance_paths(*root_instance_, root_prefix, host_id_to_instance_path);
     }
     auto fsd = build_factory_system_descriptor(
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
@@ -1616,7 +1623,14 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
 tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::generate_factory_system_descriptor() const {
     std::map<HostId, std::vector<std::string>> host_id_to_instance_path;
     if (root_instance_) {
-        collect_instance_paths(*root_instance_, {}, host_id_to_instance_path);
+        // The root instance has no instance name of its own (it is the top-level `root_instance`
+        // rather than a named child), so seed the path with its template name so the top-level
+        // graph (e.g. "sp4") appears as the first instance_path segment.
+        std::vector<std::string> root_prefix;
+        if (!root_instance_->template_name.empty()) {
+            root_prefix.push_back(root_instance_->template_name);
+        }
+        collect_instance_paths(*root_instance_, root_prefix, host_id_to_instance_path);
     }
     return build_factory_system_descriptor(
         deployment_hosts_, host_id_to_node_, chip_connections_, host_id_to_instance_path);
