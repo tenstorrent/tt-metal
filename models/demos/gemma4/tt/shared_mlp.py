@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -65,6 +65,21 @@ class SharedMLP:
             col_mapper = None
             row_mapper = None
 
+        # Pad intermediate to a tile-aligned per-device size (same pattern as
+        # experts/weights.py). At TP=8, 2112/8=264 is not tile-aligned; TILE
+        # slice rounds the GeGLU half to 288 while an unpadded down_proj stays
+        # K=264 → matmul width/height mismatch on WH/BH e2e.
+        if tp > 1:
+            per_device = self.intermediate_size // tp
+            padded_per_device = ((per_device + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+            pad_amount = padded_per_device * tp - self.intermediate_size
+        else:
+            padded_per_device = self.intermediate_size
+            pad_amount = 0
+        self._inter_per_device = padded_per_device
+        # Invalidate pre-pad cache bins when padding is applied.
+        pad_suffix = f"_ipad{padded_per_device}" if pad_amount > 0 else ""
+
         # Fuse gate+up into one column-parallel matmul. Per TP device we interleave
         # the shards as [up_i | gate_i] so that after column sharding splits the
         # concatenated output dim into ``tp`` contiguous chunks, each device holds
@@ -75,22 +90,26 @@ class SharedMLP:
         if state_dict:
             gate_t = state_dict["gate_proj.weight"].transpose(-2, -1)  # [hidden, inter]
             up_t = state_dict["up_proj.weight"].transpose(-2, -1)  # [hidden, inter]
+            down_t = state_dict["down_proj.weight"].transpose(-2, -1)  # [inter, hidden]
+            if pad_amount > 0:
+                gate_t = torch.nn.functional.pad(gate_t, (0, pad_amount))
+                up_t = torch.nn.functional.pad(up_t, (0, pad_amount))
+                # down: [I, H] → pad K (dim 0)
+                down_t = torch.nn.functional.pad(down_t, (0, 0, 0, pad_amount))
             if tp > 1:
                 gate_shards = torch.chunk(gate_t, tp, dim=-1)
                 up_shards = torch.chunk(up_t, tp, dim=-1)
                 gate_up_t = torch.cat([torch.cat([up_shards[i], gate_shards[i]], dim=-1) for i in range(tp)], dim=-1)
             else:
                 gate_up_t = torch.cat([up_t, gate_t], dim=-1)
-            gate_up_weight = gate_up_t.unsqueeze(0).unsqueeze(0)  # [1,1,hidden,2*inter]
-            down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            gate_up_weight = gate_up_t.unsqueeze(0).unsqueeze(0)  # [1,1,hidden,2*inter_pad]
+            down_proj_weight = down_t.unsqueeze(0).unsqueeze(0)
         else:
             gate_up_weight = None
             down_proj_weight = None
 
-        gu_n = 2 * self.intermediate_size // tp
-        down_k = self.intermediate_size // tp
-        # Gate each projection independently — e.g. intermediate=2112 at TP=4/8
-        # makes down_k non-tile-aligned, so only gate_up can use the DRAM path.
+        gu_n = 2 * padded_per_device
+        down_k = padded_per_device
         dram_shard = _DRAM_SHARD_MLP and tp > 1
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
@@ -102,7 +121,7 @@ class SharedMLP:
                 n=gu_n,
                 dtype=dtype,
                 cache_file_name=get_cache_file_name(
-                    tensor_cache_path, f"gate_up_proj.weight.ws{tp_suffix}{dtype_suffix}"
+                    tensor_cache_path, f"gate_up_proj.weight.ws{tp_suffix}{pad_suffix}{dtype_suffix}"
                 ),
             )
         else:
@@ -112,7 +131,9 @@ class SharedMLP:
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=col_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{pad_suffix}{dtype_suffix}"
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
@@ -125,7 +146,9 @@ class SharedMLP:
                 k=down_k,
                 n=self.hidden_size,
                 dtype=dtype,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight.ws{tp_suffix}{dtype_suffix}"),
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"down_proj.weight.ws{tp_suffix}{pad_suffix}{dtype_suffix}"
+                ),
             )
         else:
             down_proj = ttnn.as_tensor(
@@ -134,7 +157,9 @@ class SharedMLP:
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=row_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"down_proj.weight{tp_suffix}{pad_suffix}{dtype_suffix}"
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.down_proj = lambda x: ttnn.linear(x, down_proj)
@@ -145,15 +170,11 @@ class SharedMLP:
 
         gate/up are column-parallel, down is row-parallel + allreduce.
         """
-        # Fused gate/up projection: one matmul produces [.., 2*inter/tp] per
-        # device laid out as [up_i | gate_i]. A single wide matmul beats two
-        # narrow ones (fewer op launches, better core packing). When the shard
-        # shape allows, the weight is DRAM-width-sharded so decode (M<=32) is
-        # weight-read-optimal; prefill uses a 2D program config on the same
-        # weight (see DramShardedLinear). We split the result back out and reuse
-        # the original (fast-approx GELU) math — numerics identical to baseline.
+        # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
+        # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
+        # slice bounds stay aligned (264 would round to 288 and break down_proj).
         gate_up = self.gate_up_proj(hidden_states)
-        shard = gate_up.shape[-1] // 2
+        shard = self._inter_per_device
         s = gate_up.shape[-2]
         up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
         gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
