@@ -483,6 +483,20 @@ scripts/run_safe_pytest.sh \
 | G7 | Sparse-MLA correctness passes 39/39; perf passes 27/27; every DSA/GLM warm/cold/long result improves | proven on this box |
 | G8 | No implementation selector or model/shape gate; automatic 8x1 and 8x4 test selection exists; QuietBox and four-ring Galaxy tests are hardware-safe | implementation/coverage ready; actual QuietBox and Galaxy runs still missing |
 
+The physical cases are registered in the standard hardware matrices rather
+than relying on manual command knowledge:
+
+- `Fabric2D native all-gather QuietBox qualification` in
+  `blackhole_multi_card_sanity_tests.yaml` runs only on `bh_quietbox_2`;
+- `bh-galaxy-sparse-mla-all-gather` in `galaxy_e2e_tests.yaml` is an
+  individually selectable `bh_galaxy` job and runs the production 500K
+  persistent-output benchmark across all four SP rings.
+
+Both jobs use `scripts/run_safe_pytest.sh`, release artifacts, no `--dev`, and
+fit their repository-enforced team/SKU time budgets. The perf file's blanket
+CI skip was removed because the new matrix now selects its hardware case
+explicitly.
+
 The project cannot yet be called product-ready under the plan's literal G8
 exit condition: this host has eight devices, so it cannot supply real
 four-device QuietBox or 32-device four-ring Galaxy pass evidence. No software

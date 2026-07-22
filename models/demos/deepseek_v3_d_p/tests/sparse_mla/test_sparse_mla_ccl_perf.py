@@ -596,11 +596,11 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
 # --------------------------------------------------------------------------------------------------
 # Tests
 # --------------------------------------------------------------------------------------------------
-# Shared marks for every benchmark: perf-only, no timeout, skipped in CI (run locally on hardware).
+# Shared marks for every benchmark: perf-only and no pytest timeout. Hardware
+# pipeline matrices select the production topology cases explicitly.
 pytestmark = [
     pytest.mark.perf,
     pytest.mark.timeout(0),
-    pytest.mark.skipif(os.environ.get("CI") == "true", reason="performance test - run locally"),
 ]
 
 # Single-chunk scenarios only; the looping (cold prefill) scenario is not a single CCL measurement.

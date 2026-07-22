@@ -113,6 +113,7 @@ on:
           - galaxy-fabric-multi-mesh-4x4-2x4s
           - galaxy-fabric-multi-mesh-2x8-2x4s
           - bh-galaxy-ccl
+          - bh-galaxy-sparse-mla-all-gather
           - bh-galaxy-fabric-torus-stability
           - bh-galaxy-socket-pipeline
         default: "disabled"
