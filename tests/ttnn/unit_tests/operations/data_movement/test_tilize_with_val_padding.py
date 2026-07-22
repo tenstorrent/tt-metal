@@ -699,3 +699,14 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel,
     result_flat = y_torch_after_tile.reshape(-1)[: ref_flat.numel()]
 
     assert_with_pcc(ref_flat, result_flat, pcc=0.999)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)])
+def test_tilize_with_val_padding_rejects_custom_tile(device, expect_error, tile_shape):
+    tt_input = ttnn.from_torch(
+        torch.rand((32, 32), dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Custom tile is not supported"):
+        ttnn.tilize_with_val_padding(tt_input, [64, 64], 0.0, tile=ttnn.Tile(tile_shape))

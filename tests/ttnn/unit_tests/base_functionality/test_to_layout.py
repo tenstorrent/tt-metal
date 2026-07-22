@@ -1001,6 +1001,86 @@ def test_to_layout_pad_value_default_is_zero(device, shape):
     assert torch.equal(output_default, torch_output_tensor)
 
 
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)])
+def test_to_layout_custom_tile_host_roundtrip(tile_shape):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((30, 50), dtype=torch.bfloat16)
+    tile = ttnn.Tile(tile_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
+
+    assert tiled.layout == ttnn.TILE_LAYOUT
+    assert tiled.tile == tile
+    assert list(tiled.padded_shape)[-2:] == [
+        ((torch_input_tensor.shape[-2] + tile_shape[0] - 1) // tile_shape[0]) * tile_shape[0],
+        ((torch_input_tensor.shape[-1] + tile_shape[1] - 1) // tile_shape[1]) * tile_shape[1],
+    ]
+
+    round_tripped = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+    assert round_tripped.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(torch_input_tensor, ttnn.to_torch(round_tripped))
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32), (2, 32)])
+def test_to_layout_custom_tile_on_device_supported(device, tile_shape):
+    """Device to_layout(tile=...) succeeds for #50129-supported tiny tiles (width == 32)."""
+    torch.manual_seed(0)
+    torch_input = torch.rand((32, 64), dtype=torch.bfloat16)
+    tile = ttnn.Tile(list(tile_shape))
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
+    assert tiled.layout == ttnn.TILE_LAYOUT
+    assert tiled.tile == tile
+    assert_equal(torch_input, ttnn.to_torch(tiled))
+
+
+@pytest.mark.parametrize("tile_shape", [(32, 16), (16, 16)])
+def test_to_layout_rejects_unsupported_tile_width_on_device(device, expect_error, tile_shape):
+    """tilize requires tile width 32; non-32 widths are rejected on device."""
+    input_tensor = ttnn.from_torch(
+        torch.rand((32, 32), dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    with expect_error(RuntimeError, "tile width"):
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile(list(tile_shape)))
+
+
+def test_to_layout_rejects_custom_tile_via_padding_path(device, expect_error):
+    """Unaligned shapes go through tilize_with_val_padding, which still rejects custom tiles (#50508)."""
+    input_tensor = ttnn.from_torch(
+        torch.rand((30, 50), dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Custom tile is not supported"):
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32)))
+
+
+def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
+    input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # Passing tile information to a row major transformation
+    with expect_error(RuntimeError, "tile argument is only supported"):
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, tile=ttnn.Tile((16, 16)))
+
+
+def test_to_layout_rejects_transpose_only_tile_mismatch(expect_error):
+    input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
+
+    # Same geometry with different tile metadata (transpose) is not a supported retilize.
+    with expect_error(RuntimeError, "cannot convert to tile"):
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32), transpose_tile=True))
+
+
 # ---------------------------------------------------------------------------
 # to_layout on ND-sharded tensors
 #

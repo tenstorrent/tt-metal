@@ -36,6 +36,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                tile (tt.tt_metal.Tile, optional): Geometry of the tile to be tilized to. Defaults to the default tile.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -52,7 +53,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
             const std::optional<MemoryConfig>&,
             std::optional<DataType>,
             bool,
-            const std::optional<CoreRangeSet>&>(&ttnn::tilize_with_val_padding),
+            const std::optional<CoreRangeSet>&,
+            tt::tt_metal::Tile>(&ttnn::tilize_with_val_padding),
         nb::arg("input_tensor"),
         nb::arg("output_tensor_shape"),
         nb::arg("pad_value"),
@@ -60,7 +62,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("tile") = tt::tt_metal::Tile{});
 }
 
 void bind_tilize_with_zero_padding(nb::module_& mod) {
@@ -79,6 +82,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor.
                 * :attr:`dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
+                * :attr:`tile`: Geometry of the tile to be tilized to. Defaults to the default tile.
         )doc";
 
     ttnn::bind_function<"tilize_with_zero_padding">(
@@ -90,7 +94,8 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_dtype") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("tile") = tt::tt_metal::Tile{});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

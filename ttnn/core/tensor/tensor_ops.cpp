@@ -142,10 +142,19 @@ Tensor to_device(
     return device_tensor;
 }
 
-Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
-    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
+Tensor to_layout(const Tensor& input_tensor, Layout target_layout, std::optional<Tile> tile) {
+    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, tile);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
-    HostTensor host_output = ::tt::tt_metal::to_layout(input_tensor.host_tensor(), target_layout);
+    TT_FATAL(
+        target_layout != Layout::ROW_MAJOR || !tile.has_value(),
+        "Tensor::to_layout: tile argument is only supported when converting to TILE layout");
+    HostTensor host_output = [&] {
+        switch (target_layout) {
+            case Layout::ROW_MAJOR: return ::tt::tt_metal::to_row_major_layout(input_tensor.host_tensor());
+            case Layout::TILE: return ::tt::tt_metal::to_tile_layout(input_tensor.host_tensor(), tile.value_or(Tile{}));
+            default: TT_THROW("Target layout {} is not supported", target_layout);
+        }
+    }();
     Tensor output = Tensor(std::move(host_output));
     output = ttnn::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);

@@ -74,9 +74,7 @@ bool can_construct_on_device(
                !preserve_nan_values;
 
     if (optional_tile.has_value()) {
-        // on-device tiling operation expects tiles to be divisible by 32x32.
-        res &= ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
-               ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0);
+        res &= (*optional_tile == Tile{});
     }
 
     return res;
@@ -448,8 +446,8 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
-            output =
-                ttnn::to_layout(output, target, std::nullopt, memory_config, std::nullopt, pad_value.value_or(0.0f));
+            output = ttnn::to_layout(
+                output, target, std::nullopt, memory_config, std::nullopt, pad_value.value_or(0.0f), optional_tile);
         }
     };
 

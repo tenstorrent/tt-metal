@@ -608,6 +608,11 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
 template <typename T>
 HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
     if (tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            tensor.tensor_spec().tile() == tile,
+            "Cannot reinterpret TILE tensor with tile {} as requested tile {}",
+            tensor.tensor_spec().tile(),
+            tile);
         return tensor;
     }
 
@@ -689,14 +694,6 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
             return CMAKE_UNIQUE_NAMESPACE::to_tile_layout_impl<T>(tensor, tile);
         }
     });
-}
-
-HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
-    switch (target_layout) {
-        case Layout::ROW_MAJOR: return to_row_major_layout(tensor);
-        case Layout::TILE: return to_tile_layout(tensor, tensor.tensor_spec().tile());
-        default: TT_THROW("Target layout {} is not supported", target_layout);
-    }
 }
 
 // ======================================================================================

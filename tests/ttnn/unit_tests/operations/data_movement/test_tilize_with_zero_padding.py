@@ -42,3 +42,14 @@ def test_tilize_with_zero_padding_test(input_shapes, tilize_with_zero_padding_ar
 
     torch_golden = tilize_with_zero_padding(torch_input)
     assert_equal(torch_golden, torch_output)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)])
+def test_tilize_with_zero_padding_rejects_custom_tile(device, expect_error, tile_shape):
+    tt_input = ttnn.from_torch(
+        torch.rand((32, 32), dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Custom tile is not supported"):
+        ttnn.tilize_with_zero_padding(tt_input, tile=ttnn.Tile(tile_shape))

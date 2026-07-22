@@ -7,6 +7,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
+#include <tt-metalium/tile.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -95,7 +96,8 @@ ttnn::Tensor to_device(
     ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
     std::optional<QueueId> cq_id = std::nullopt);
 
-ttnn::Tensor to_layout(const ttnn::Tensor& input_tensor, Layout target_layout);
+ttnn::Tensor to_layout(
+    const ttnn::Tensor& input_tensor, Layout target_layout, std::optional<Tile> tile = std::nullopt);
 
 ttnn::Tensor view(const ttnn::Tensor& input_tensor, const Shape& new_shape);
 ttnn::Tensor view(const ttnn::Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape);

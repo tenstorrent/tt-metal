@@ -7,7 +7,6 @@
 #include "device/tilize_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
-#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"  // wide-sharded OOM reroute (#45331)
 
 using namespace tt::tt_metal;
 
@@ -52,15 +51,21 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     bool use_low_perf,
+    tt::tt_metal::Tile tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(
+        tile == tt::tt_metal::Tile{},
+        "Custom tile is not supported for tilize (See: #50508). Please transfer the tensor to host and use "
+        "`tt::tt_metal::to_tile_layout(HostTensor, Tile)` instead.");
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
 
-    uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t input_tile_width = tile.get_width();
+    uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
     uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;
@@ -71,24 +76,6 @@ ttnn::Tensor tilize(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
-        // Port of tt-metal 1e95aec97d5 (#45331): ttnn::prim::qsr::tilize routes wide width-sharded input
-        // to the default tilize factory, whose CBs are sized to a full tile-row (ntiles_per_block) and
-        // exceed L1. Reroute via interleaved DRAM so the prim selects the block factory (CBs bounded by
-        // max_l1 / (in_tile + out_tile)). Uses the quasar to_memory_config (same namespace).
-        if (input_tensor.memory_config().is_sharded() && !enough_space_height) {
-            const auto target_memory_config = memory_config.value_or(input_tensor.memory_config());
-            auto interleaved_input = to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
-            auto interleaved_tile = ttnn::prim::qsr::tilize(
-                interleaved_input,
-                ttnn::DRAM_MEMORY_CONFIG,
-                output_dtype,
-                use_multicore,
-                enough_space_width,
-                /*enough_space_height=*/false,
-                use_low_perf,
-                sub_core_grids);
-            return to_memory_config(interleaved_tile, target_memory_config);
-        }
         return ttnn::prim::qsr::tilize(
             input_tensor,
             memory_config,
