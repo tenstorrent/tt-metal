@@ -115,7 +115,8 @@
 
 # --- Debug Tools (DPrint, Watcher, Inspector, Clean Init, NOC Debugging) ---
 - name: runtime_debug_tools
-  # 12 tests disabled. #44767 Group A (50 ETH-heartbeat tests) re-enabled: root cause fixed by #45778.
+  # 12 tests disabled. #44767 Group A (50 ETH-heartbeat tests) re-enabled: device init fixed by #45778;
+  # TestWatcherRingBufferTrisc0/1/2 fixed here (renamed colliding TRISC{n} kernel define).
   # Remaining #44767: TensixTestWatcherSanitizeMulticastSemaphoreInc plus
   # WatcherArgAsserts/WatcherStackUsage/WatcherAssert-IErisc.
   # TestWatcherWaypointsEth + EthernetTestWatcherPause disabled by #50483.
