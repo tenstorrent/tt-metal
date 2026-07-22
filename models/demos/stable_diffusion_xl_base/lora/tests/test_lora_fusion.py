@@ -11,6 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name, is_galaxy
+from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import load_lora_weights_te_compat
 from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
@@ -203,7 +204,7 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
-    ref_pipeline.load_lora_weights(te_lora_path)
+    load_lora_weights_te_compat(ref_pipeline, te_lora_path)
     ref_pipeline.fuse_lora(components=components, lora_scale=1.0)
 
     for component in components:
