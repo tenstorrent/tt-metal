@@ -466,11 +466,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // override needed.
     const CoreRangeSet all_reader_cores_set(all_reader_cores);
     emit_cb_descriptors(cb_info, desc, all_reader_cores_set, a.buffer(), output.buffer(), conv_reader_indices_buffer);
-    // partials_cb_uses_output is still consumed by compute_kernel_args below; the
-    // CB-on-output wiring is handled inline by emit_cb_descriptors (MATMUL_PARTIALS
-    // is mapped to output_buffer when is_globally_allocated is true), so we no
-    // longer need to call UpdateDynamicCircularBufferAddress on cache hit.
-    const bool partials_cb_uses_output = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    // MATMUL_PARTIALS CB-on-output wiring is handled inline by emit_cb_descriptors (mapped to
+    // output_buffer when is_globally_allocated is true), so we no longer call
+    // UpdateDynamicCircularBufferAddress on cache hit. The compute kernel's former slot-25 arg
+    // (partials_cb_uses_output) is dead and now carries the UNTILIZE_STAGING CB index instead.
 
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,                         // in0_block_w
@@ -503,7 +502,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-        partials_cb_uses_output,
+        // Slot 25 (was the now-dead partials_cb_uses_output) now carries the UNTILIZE_STAGING CB index:
+        // the distinct one-block buffer the fuse_bias + untilize_out bias-add writes to (and the untilize
+        // phase reads). Valid only when untilize_out && has_bias; kInvalidCBIndex otherwise (unused).
+        get_cb_info_by_name(cb_info, Conv2dCb::UNTILIZE_STAGING).index,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
         false,            // check_skip_compute; not used in width sharded
         pack_relu,
@@ -515,8 +517,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         0,
         0,
         0,
-        0,                              // activation reuse related arguments
-        static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
+        0,                             // activation reuse related arguments
+        static_cast<uint32_t>(false),  // 38: split_reader_cb_shared (not used in width sharded)
+        // 39: tile_pack_row_major. Width-sharded convs never use the TileRowMajor pack layout:
+        // auto_select_tile_pack_row_major and the caller-owns/pin INTERM-target class (the only two
+        // TRM triggers in the sharded factory) are HEIGHT_SHARDED-only, so width-sharded always packs
+        // SubblockMajor, exactly as on main. The migrated conv_bmm_tilize.cpp reads this arg
+        // unconditionally (kernel line 403), so it must be emitted here even though it is always false
+        // on this path. Omitting it made get_compile_time_arg_val(39) overflow the 39-element arg list
+        // and fail to JIT-compile every width-sharded conv (e.g. Segformer depthwise).
+        static_cast<uint32_t>(false)};  // 39: tile_pack_row_major (always SubblockMajor for width sharded)
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,

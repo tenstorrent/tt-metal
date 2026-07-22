@@ -32,11 +32,14 @@ class TtnnUFLDV2Conv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         self.groups = conv.groups
+        # packer_l1_acc=True adds an L1 region for K-block accumulation; on WH the conv
+        # kernel measured neutral while the larger L1 footprint risks N300 CB clashes
+        # (mobilenetv2 OOM'd in N300 CI before this was arch-gated). Keep the BH win.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=(device.arch() == ttnn.device.Arch.BLACKHOLE),
             math_approx_mode=True,
         )
         self.conv_output_dtype = self.activation_dtype
