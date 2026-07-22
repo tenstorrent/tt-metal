@@ -38,6 +38,10 @@ tt::tt_fabric::Topology get_usable_topology(
 tt::tt_fabric::Topology get_axis_topology(
     const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
+// True when every consecutive pair on an axis, including the last-to-first pair,
+// is connected by one physical Fabric hop for every group on the other axis.
+bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis);
+
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
 uint32_t get_linearized_index_from_physical_coord(

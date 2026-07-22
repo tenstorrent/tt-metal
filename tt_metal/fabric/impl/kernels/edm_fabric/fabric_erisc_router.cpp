@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/ring_terminal_offload.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
@@ -47,6 +48,159 @@ using namespace tt::tt_fabric;
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
+
+FORCE_INLINE bool packet_writes_to_local_chip(ROUTING_FIELDS_TYPE cached_routing_fields) {
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
+        return (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
+               tt::tt_fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+    } else {
+        const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
+        return routing == LowLatencyFields::WRITE_ONLY || routing == LowLatencyFields::WRITE_AND_FORWARD;
+    }
+}
+
+template <bool Enabled, size_t NumReceiverSlots>
+struct RingTerminalOffloadProducerState {
+    FORCE_INLINE void init() {}
+    FORCE_INLINE bool should_offload(tt_l1_ptr PACKET_HEADER_TYPE*, ROUTING_FIELDS_TYPE) const { return false; }
+    FORCE_INLINE bool should_offload_explicit(tt_l1_ptr PACKET_HEADER_TYPE*, bool) const { return false; }
+    FORCE_INLINE bool can_publish() const { return true; }
+    FORCE_INLINE void publish(tt_l1_ptr PACKET_HEADER_TYPE*, BufferIndex) {}
+    FORCE_INLINE bool has_pending(BufferIndex) const { return false; }
+    FORCE_INLINE bool completed(BufferIndex) const { return true; }
+    FORCE_INLINE void clear(BufferIndex) {}
+};
+
+template <size_t NumReceiverSlots>
+struct RingTerminalOffloadProducerState<true, NumReceiverSlots> {
+    volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadQueue* queue = nullptr;
+    std::array<uint32_t, NumReceiverSlots> slot_sequences{};
+    uint32_t next_sequence = 1;
+
+    FORCE_INLINE void init() {
+        queue = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadQueue*>(
+            RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS);
+        for (auto& sequence : slot_sequences) {
+            sequence = 0;
+        }
+    }
+
+    FORCE_INLINE bool should_offload(
+        tt_l1_ptr PACKET_HEADER_TYPE* packet_header, ROUTING_FIELDS_TYPE cached_routing_fields) const {
+        if constexpr (!std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
+            return false;
+        }
+        const auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
+        const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
+        return packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC &&
+               routing == LowLatencyFields::WRITE_AND_FORWARD;
+    }
+
+    FORCE_INLINE bool should_offload_explicit(
+        tt_l1_ptr PACKET_HEADER_TYPE* packet_header, bool writes_locally_and_forwards) const {
+#if defined(FABRIC_2D)
+        const auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
+        return packet_header->is_mcast_active == MeshRoutingFields::EXPLICIT_PATH_MCAST &&
+               packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC &&
+               packet_header->command_fields.unicast_seminc_fused.defer_notification && writes_locally_and_forwards;
+#else
+        (void)packet_header;
+        (void)writes_locally_and_forwards;
+        return false;
+#endif
+    }
+
+    FORCE_INLINE bool can_publish() const {
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        const uint32_t completed_sequence = __atomic_load_n(&queue->completed_sequence, __ATOMIC_ACQUIRE);
+        return next_sequence - completed_sequence <= ring_terminal_offload_depth;
+    }
+
+    FORCE_INLINE void publish(tt_l1_ptr PACKET_HEADER_TYPE* packet_header, BufferIndex receiver_buffer_index) {
+        const uint32_t sequence = next_sequence++;
+        const uint32_t descriptor_index = (sequence - 1) & (ring_terminal_offload_depth - 1);
+        auto* descriptors = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadDescriptor*>(
+            RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS + 16);
+        volatile auto& descriptor = descriptors[descriptor_index];
+        const uint64_t destination = packet_header->command_fields.unicast_seminc_fused.noc_address;
+        descriptor.payload_l1_address = reinterpret_cast<uint32_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
+        descriptor.payload_size_bytes = packet_header->payload_size_bytes;
+        descriptor.destination_noc_address_low = static_cast<uint32_t>(destination);
+        descriptor.destination_noc_address_high = static_cast<uint32_t>(destination >> 32);
+        slot_sequences[receiver_buffer_index] = sequence;
+        __atomic_store_n(&queue->published_sequence, sequence, __ATOMIC_RELEASE);
+    }
+
+    FORCE_INLINE bool has_pending(BufferIndex receiver_buffer_index) const {
+        return slot_sequences[receiver_buffer_index] != 0;
+    }
+
+    FORCE_INLINE bool completed(BufferIndex receiver_buffer_index) const {
+        const uint32_t sequence = slot_sequences[receiver_buffer_index];
+        if (sequence == 0) {
+            return true;
+        }
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return __atomic_load_n(&queue->completed_sequence, __ATOMIC_ACQUIRE) >= sequence;
+    }
+
+    FORCE_INLINE void clear(BufferIndex receiver_buffer_index) { slot_sequences[receiver_buffer_index] = 0; }
+};
+
+template <bool Enabled>
+struct RingTerminalOffloadConsumerState {
+    FORCE_INLINE void init() {}
+    FORCE_INLINE bool step() { return false; }
+};
+
+template <>
+struct RingTerminalOffloadConsumerState<true> {
+    volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadQueue* queue = nullptr;
+    uint32_t next_issue_sequence = 1;
+    uint32_t next_complete_sequence = 1;
+
+    FORCE_INLINE void init() {
+        queue = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadQueue*>(
+            RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS);
+    }
+
+    FORCE_INLINE bool step() {
+        bool progress = false;
+        if (next_complete_sequence < next_issue_sequence) {
+            const uint8_t trid = static_cast<uint8_t>((next_complete_sequence - 1) & (ring_terminal_offload_depth - 1));
+            if (ncrisc_noc_nonposted_write_with_transaction_id_flushed(0, trid)) {
+                __atomic_store_n(&queue->completed_sequence, next_complete_sequence, __ATOMIC_RELEASE);
+                ++next_complete_sequence;
+                progress = true;
+            }
+        }
+
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        const uint32_t published_sequence = __atomic_load_n(&queue->published_sequence, __ATOMIC_ACQUIRE);
+        if (next_issue_sequence <= published_sequence &&
+            next_issue_sequence - next_complete_sequence < ring_terminal_offload_depth) {
+            const uint32_t descriptor_index = (next_issue_sequence - 1) & (ring_terminal_offload_depth - 1);
+            const auto* descriptors =
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadDescriptor*>(
+                    RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS + 16);
+            const volatile auto& descriptor = descriptors[descriptor_index];
+            const uint64_t destination = static_cast<uint64_t>(descriptor.destination_noc_address_high) << 32 |
+                                         descriptor.destination_noc_address_low;
+            const uint8_t trid = static_cast<uint8_t>(descriptor_index);
+            noc_async_write_one_packet_with_trid<false, false>(
+                descriptor.payload_l1_address,
+                destination,
+                descriptor.payload_size_bytes,
+                trid,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                0,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+            ++next_issue_sequence;
+            progress = true;
+        }
+        return progress;
+    }
+};
 
 /*
 
@@ -540,15 +694,26 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
         ROUTING_FIELDS_TYPE cached_routing_fields;
         cached_routing_fields.value = packet_header->routing_fields.value;
 
-        if constexpr (IS_TURN) {
-            if constexpr (my_direction == eth_chan_directions::EAST) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            } else {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
+#if defined(FABRIC_2D)
+        if (packet_header->is_mcast_active == MeshRoutingFields::EXPLICIT_PATH_MCAST) {
+            // Explicit paths are a linear sequence of per-hop commands, even
+            // when that sequence turns on the physical mesh.  Rectangle
+            // multicast branch offsets do not describe this encoding.
+            ++cached_routing_fields.hop_index;
         } else {
-            cached_routing_fields.value = cached_routing_fields.value + 1;
+#endif
+            if constexpr (IS_TURN) {
+                if constexpr (my_direction == eth_chan_directions::EAST) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+                } else {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+                }
+            } else {
+                cached_routing_fields.value = cached_routing_fields.value + 1;
+            }
+#if defined(FABRIC_2D)
         }
+#endif
         packet_header->routing_fields.value = cached_routing_fields.value;
     }
 #endif
@@ -916,6 +1081,53 @@ FORCE_INLINE void forward_to_local_destination(
     }
 }
 
+#if defined(FABRIC_2D)
+template <uint8_t rx_channel_id, typename DownstreamSenderT, typename LocalRelayInterfaceT>
+FORCE_INLINE bool can_forward_explicit_packet(
+    uint32_t hop_cmd, DownstreamSenderT* downstream_edm_interfaces, LocalRelayInterfaceT& local_relay_interface) {
+    const uint32_t local_direction = 1u << my_direction;
+    const uint32_t forward_direction = hop_cmd & ~local_direction;
+    bool has_space = true;
+    if constexpr (udm_mode) {
+        if (hop_cmd & local_direction) {
+            has_space = local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+        }
+    }
+    if (forward_direction != MeshRoutingFields::NOOP) {
+        const auto direction = static_cast<eth_chan_directions>(__builtin_ctz(forward_direction));
+        has_space &= downstream_edm_interfaces[get_downstream_edm_interface_index(direction)]
+                         .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+    }
+    return has_space;
+}
+
+template <uint8_t rx_channel_id, typename DownstreamSenderT, typename LocalRelayInterfaceT>
+FORCE_INLINE void forward_explicit_packet(
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    DownstreamSenderT* downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface,
+    uint8_t transaction_id,
+    uint32_t hop_cmd) {
+    const uint32_t local_direction = 1u << my_direction;
+    const uint32_t forward_direction = hop_cmd & ~local_direction;
+    ASSERT((forward_direction & (forward_direction - 1)) == 0);
+    if (forward_direction != MeshRoutingFields::NOOP) {
+        const auto direction = static_cast<eth_chan_directions>(__builtin_ctz(forward_direction));
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            packet_start,
+            packet_start->payload_size_bytes,
+            cached_routing_fields,
+            downstream_edm_interfaces[get_downstream_edm_interface_index(direction)],
+            transaction_id);
+    }
+    if (hop_cmd & local_direction) {
+        forward_to_local_destination<rx_channel_id>(
+            local_relay_interface, packet_start, packet_start->payload_size_bytes, transaction_id);
+    }
+}
+#endif
+
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, size_t DOWNSTREAM_EDM_SIZE, typename DownstreamSenderT, typename LocalRelayInterfaceT>
 #if !defined(FABRIC_2D_VC1_ACTIVE)
@@ -937,14 +1149,41 @@ FORCE_INLINE
     using eth_chan_directions::WEST;
     using eth_chan_directions::Z;
 
-    switch (hop_cmd) {
-        case MeshRoutingFields::NOOP:
-            if constexpr (z_router_enabled) {
-                if constexpr (my_direction == Z) {
+#if defined(FABRIC_2D)
+    if (packet_start->is_mcast_active == MeshRoutingFields::EXPLICIT_PATH_MCAST) {
+        forward_explicit_packet<rx_channel_id>(
+            packet_start,
+            cached_routing_fields,
+            downstream_edm_interfaces.data(),
+            local_relay_interface,
+            transaction_id,
+            hop_cmd);
+    } else
+#endif
+    {
+        switch (hop_cmd) {
+            case MeshRoutingFields::NOOP:
+                if constexpr (z_router_enabled) {
+                    if constexpr (my_direction == Z) {
+                        forward_to_local_destination<rx_channel_id>(
+                            local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    } else {
+                        constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
+                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                            packet_start,
+                            payload_size_bytes,
+                            cached_routing_fields,
+                            downstream_edm_interfaces[edm_index],
+                            transaction_id);
+                    }
+                }
+                break;
+            case MeshRoutingFields::FORWARD_EAST:
+                if constexpr (my_direction == EAST) {
                     forward_to_local_destination<rx_channel_id>(
                         local_relay_interface, packet_start, payload_size_bytes, transaction_id);
                 } else {
-                    constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
                     forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                         packet_start,
                         payload_size_bytes,
@@ -952,425 +1191,411 @@ FORCE_INLINE
                         downstream_edm_interfaces[edm_index],
                         transaction_id);
                 }
-            }
-            break;
-        case MeshRoutingFields::FORWARD_EAST:
-            if constexpr (my_direction == EAST) {
+                break;
+            case MeshRoutingFields::FORWARD_WEST:
+                if constexpr (my_direction == WEST) {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_EW:
+                if constexpr (my_direction == WEST) {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::FORWARD_WEST:
-            if constexpr (my_direction == WEST) {
+                break;
+            case MeshRoutingFields::FORWARD_NORTH:
+                if constexpr (my_direction == NORTH) {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::FORWARD_SOUTH:
+                if constexpr (my_direction == SOUTH) {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NS:
+                if constexpr (my_direction == SOUTH) {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_EW:
-            if constexpr (my_direction == WEST) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::FORWARD_NORTH:
-            if constexpr (my_direction == NORTH) {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::FORWARD_SOUTH:
-            if constexpr (my_direction == SOUTH) {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NS:
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
-            if constexpr (my_direction == SOUTH) {
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
                 }
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
+                if constexpr (my_direction == SOUTH) {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
-            if constexpr (my_direction == NORTH) {
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
                 }
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
+                if constexpr (my_direction == SOUTH) {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NE:
-            if constexpr (my_direction == SOUTH) {
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
                 }
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NW:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
+                if constexpr (my_direction == SOUTH) {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
                 }
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SE:
-            if constexpr (my_direction == NORTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
                 }
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SW:
-            if constexpr (my_direction == NORTH) {
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
+                if constexpr (my_direction == SOUTH) {
+                    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                        cached_routing_fields.value++;
+                    }
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                }
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
                 }
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        default: __builtin_unreachable();
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
+                if constexpr (my_direction == NORTH) {
+                    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                        cached_routing_fields.value++;
+                    }
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NE:
+                if constexpr (my_direction == SOUTH) {
+                    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                        cached_routing_fields.value++;
+                    }
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_NW:
+                if constexpr (my_direction == SOUTH) {
+                    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                        cached_routing_fields.value++;
+                    }
+                    constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_SE:
+                if constexpr (my_direction == NORTH) {
+                    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                        cached_routing_fields.value++;
+                    }
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            case MeshRoutingFields::WRITE_AND_FORWARD_SW:
+                if constexpr (my_direction == NORTH) {
+                    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                        cached_routing_fields.value++;
+                    }
+                    constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                } else {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                }
+                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+                    cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+                }
+                {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+                break;
+            default: __builtin_unreachable();
+        }
     }
 
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
@@ -1678,7 +1903,6 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
-        // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
@@ -1778,21 +2002,26 @@ template <
     uint8_t to_receiver_pkts_sent_id,
     bool enable_first_level_ack,
     size_t DOWNSTREAM_EDM_SIZE,
+    size_t ESCAPE_DOWNSTREAM_EDM_SIZE,
     typename WriteTridTracker,
     typename ReceiverChannelBufferT,
     typename ReceiverChannelPointersT,
     typename DownstreamSenderT,
+    typename EscapeDownstreamSenderT,
     typename LocalRelayInterfaceT,
+    typename RingTerminalOffloadProducerT,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<EscapeDownstreamSenderT, ESCAPE_DOWNSTREAM_EDM_SIZE>& escape_downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
+    RingTerminalOffloadProducerT& ring_terminal_offload_producer,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
@@ -1853,6 +2082,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
+        bool use_escape_downstream = false;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
             // read in the hop command from route buffer.
@@ -1872,9 +2102,18 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
-            can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
-                    hop_cmd, downstream_edm_interfaces, local_relay_interface);
+            use_escape_downstream =
+                packet_header->is_mcast_active == MeshRoutingFields::EXPLICIT_PATH_MCAST &&
+                packet_header->mcast_params_64 == static_cast<uint64_t>(cached_routing_fields.hop_index + 1);
+            hop_cmd &= MeshRoutingFields::FIELD_MASK;
+            if (use_escape_downstream) {
+                can_send_to_all_local_chip_receivers = can_forward_explicit_packet<receiver_channel>(
+                    hop_cmd, escape_downstream_edm_interfaces.data(), local_relay_interface);
+            } else {
+                can_send_to_all_local_chip_receivers =
+                    can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
+                        hop_cmd, downstream_edm_interfaces, local_relay_interface);
+            }
 #endif
         } else {
 #ifndef FABRIC_2D
@@ -1886,6 +2125,35 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
+        bool terminal_offload_packet;
+        if constexpr (is_2d_fabric) {
+            const bool packet_writes_locally = (hop_cmd & (1u << my_direction)) != 0;
+            const bool packet_forwards = (hop_cmd & ~(1u << my_direction)) != 0;
+            terminal_offload_packet = ring_terminal_offload_producer.should_offload_explicit(
+                packet_header, packet_writes_locally && packet_forwards);
+        } else {
+            terminal_offload_packet =
+                ring_terminal_offload_producer.should_offload(packet_header, cached_routing_fields);
+        }
+        if constexpr (enable_ring_terminal_offload) {
+            const auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
+            bool deferred_fused_notification;
+            if constexpr (is_2d_fabric) {
+                const bool packet_writes_locally = (hop_cmd & (1u << my_direction)) != 0;
+                deferred_fused_notification =
+                    packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC &&
+                    packet_header->command_fields.unicast_seminc_fused.defer_notification && packet_writes_locally;
+            } else {
+                deferred_fused_notification =
+                    packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC &&
+                    packet_header->command_fields.unicast_seminc_fused.defer_notification &&
+                    packet_writes_to_local_chip(cached_routing_fields);
+            }
+            receiver_channel_pointers.set_deferred_fused_notification(
+                receiver_buffer_index, deferred_fused_notification);
+        }
+        const bool terminal_offload_blocked = terminal_offload_packet && !ring_terminal_offload_producer.can_publish();
+        can_send_to_all_local_chip_receivers &= !terminal_offload_blocked;
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             progress = true;
@@ -1897,15 +2165,63 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             if constexpr (!is_receiver_channel_forwarding_disabled[receiver_channel]) {
                 uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                     receiver_buffer_index);
-                if constexpr (is_2d_fabric) {
+                if (terminal_offload_packet) {
 #if defined(FABRIC_2D)
-                    receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
+                    if constexpr (is_2d_fabric) {
+                        if (use_escape_downstream) {
+                            forward_explicit_packet<receiver_channel>(
+                                packet_header,
+                                cached_routing_fields,
+                                escape_downstream_edm_interfaces.data(),
+                                local_relay_interface,
+                                trid,
+                                hop_cmd & ~(1u << my_direction));
+                        } else {
+                            forward_explicit_packet<receiver_channel>(
+                                packet_header,
+                                cached_routing_fields,
+                                downstream_edm_interfaces.data(),
+                                local_relay_interface,
+                                trid,
+                                hop_cmd & ~(1u << my_direction));
+                        }
+                    } else
+#endif
+                    {
+                        constexpr bool ENABLE_STATEFUL_NOC_APIS =
+#if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
+                            !FORCE_ALL_PATHS_TO_USE_SAME_NOC && true;
+#else
+                            false;
+#endif
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                         packet_header,
+                        packet_header->payload_size_bytes,
                         cached_routing_fields,
-                        downstream_edm_interfaces,
-                        local_relay_interface,
-                        trid,
-                        hop_cmd);
+                        downstream_edm_interfaces[0],
+                        trid);
+                    channel_trimming_usage_recorder.set_sender_channel_forwarded_to(receiver_channel, 1);
+                    }
+                    ring_terminal_offload_producer.publish(packet_header, receiver_buffer_index);
+                } else if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+                    if (use_escape_downstream) {
+                        forward_explicit_packet<receiver_channel>(
+                            packet_header,
+                            cached_routing_fields,
+                            escape_downstream_edm_interfaces.data(),
+                            local_relay_interface,
+                            trid,
+                            hop_cmd);
+                    } else {
+                        receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
+                            packet_header,
+                            cached_routing_fields,
+                            downstream_edm_interfaces,
+                            local_relay_interface,
+                            trid,
+                            hop_cmd);
+                    }
 #endif
                 } else {
 #ifndef FABRIC_2D
@@ -1925,13 +2241,42 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // Close the code profiling timer
     receiver_forward_timer.close();
 
+    auto deferred_fused_notification_ready = [&](BufferIndex buffer_index) __attribute__((always_inline)) -> bool {
+        if constexpr (enable_ring_terminal_offload) {
+            if (ring_terminal_offload_producer.has_pending(buffer_index)) {
+                return ring_terminal_offload_producer.completed(buffer_index);
+            }
+            return !receiver_channel_pointers.has_deferred_fused_notification(buffer_index) ||
+                   receiver_channel_trid_tracker.local_transaction_flushed(buffer_index);
+        }
+        return true;
+    };
+    auto complete_deferred_fused_notification = [&](BufferIndex buffer_index) __attribute__((always_inline)) {
+        if constexpr (enable_ring_terminal_offload) {
+            if (receiver_channel_pointers.has_deferred_fused_notification(buffer_index)) {
+                router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(buffer_index));
+                noc_semaphore_inc<true>(
+                    packet_header->command_fields.unicast_seminc_fused.semaphore_noc_address,
+                    packet_header->command_fields.unicast_seminc_fused.val,
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
+                receiver_channel_pointers.set_deferred_fused_notification(buffer_index, false);
+            }
+        }
+    };
+
     if constexpr (!fuse_receiver_flush_and_completion_ptr) {
         auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;
         bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
         if (unflushed_writes) {
             auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index) &&
+                                     deferred_fused_notification_ready(receiver_buffer_index);
             if (next_trid_flushed) {
+                complete_deferred_fused_notification(receiver_buffer_index);
+                ring_terminal_offload_producer.clear(receiver_buffer_index);
                 wr_flush_counter.increment();
                 receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             }
@@ -1957,12 +2302,15 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         // Currently unclear if it's better to loop here or not...
         bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
         auto receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index) &&
+                                 deferred_fused_notification_ready(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
+            complete_deferred_fused_notification(receiver_buffer_index);
+            ring_terminal_offload_producer.clear(receiver_buffer_index);
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
@@ -1987,6 +2335,7 @@ template <
     typename EthReceiverChannels,
     typename WriteTridTracker,
     typename ReceiverChannelPointersT,
+    typename RingTerminalOffloadProducerT,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
@@ -1997,6 +2346,7 @@ FORCE_INLINE bool run_receiver_channel_step(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
+    RingTerminalOffloadProducerT& ring_terminal_offload_producer,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -2005,12 +2355,16 @@ FORCE_INLINE bool run_receiver_channel_step(
             to_receiver_packets_sent_streams[receiver_channel],
             enable_first_level_ack,
             DOWNSTREAM_EDM_SIZE,  // Pass size explicitly
+            DOWNSTREAM_EDM_SIZE,
             WriteTridTracker,
             decltype(local_receiver_channels.template get<receiver_channel>()),
             ReceiverChannelPointersT,
             DownstreamSenderT,
-            LocalRelayInterfaceT>(
+            DownstreamSenderT,
+            LocalRelayInterfaceT,
+            RingTerminalOffloadProducerT>(
             local_receiver_channels.template get<receiver_channel>(),
+            downstream_edm_interfaces,
             downstream_edm_interfaces,
             local_relay_interface,
             receiver_channel_pointers,
@@ -2018,6 +2372,62 @@ FORCE_INLINE bool run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders[receiver_channel],
             routing_table,
+            ring_terminal_offload_producer,
+            local_fabric_telemetry);
+    }
+    return false;
+}
+
+template <
+    uint8_t receiver_channel,
+    bool enable_first_level_ack,
+    size_t DOWNSTREAM_EDM_SIZE,
+    size_t ESCAPE_DOWNSTREAM_EDM_SIZE,
+    typename DownstreamSenderT,
+    typename EscapeDownstreamSenderT,
+    typename LocalRelayInterfaceT,
+    typename EthReceiverChannels,
+    typename WriteTridTracker,
+    typename ReceiverChannelPointersT,
+    typename RingTerminalOffloadProducerT,
+    typename LocalTelemetryT>
+FORCE_INLINE bool run_receiver_channel_step_with_escape(
+    EthReceiverChannels& local_receiver_channels,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<EscapeDownstreamSenderT, ESCAPE_DOWNSTREAM_EDM_SIZE>& escape_downstream_edm_interfaces,
+    LocalRelayInterfaceT& local_relay_interface,
+    ReceiverChannelPointersT& receiver_channel_pointers,
+    WriteTridTracker& receiver_channel_trid_tracker,
+    std::array<uint8_t, num_eth_ports>& port_direction_table,
+    std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
+    const tt::tt_fabric::routing_l1_info_t& routing_table,
+    RingTerminalOffloadProducerT& ring_terminal_offload_producer,
+    LocalTelemetryT& local_fabric_telemetry) {
+    if constexpr (is_receiver_channel_serviced[receiver_channel]) {
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return run_receiver_channel_step_impl<
+            receiver_channel,
+            to_receiver_packets_sent_streams[receiver_channel],
+            enable_first_level_ack,
+            DOWNSTREAM_EDM_SIZE,
+            ESCAPE_DOWNSTREAM_EDM_SIZE,
+            WriteTridTracker,
+            decltype(local_receiver_channels.template get<receiver_channel>()),
+            ReceiverChannelPointersT,
+            DownstreamSenderT,
+            EscapeDownstreamSenderT,
+            LocalRelayInterfaceT,
+            RingTerminalOffloadProducerT>(
+            local_receiver_channels.template get<receiver_channel>(),
+            downstream_edm_interfaces,
+            escape_downstream_edm_interfaces,
+            local_relay_interface,
+            receiver_channel_pointers,
+            receiver_channel_trid_tracker,
+            port_direction_table,
+            receiver_channel_response_credit_senders[receiver_channel],
+            routing_table,
+            ring_terminal_offload_producer,
             local_fabric_telemetry);
     }
     return false;
@@ -2196,6 +2606,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();
 
+    RingTerminalOffloadProducerState<enable_ring_terminal_offload, RECEIVER_NUM_BUFFERS_ARRAY[0]>
+        ring_terminal_offload_producer;
+    RingTerminalOffloadConsumerState<enable_ring_terminal_offload> ring_terminal_offload_consumer;
+    ring_terminal_offload_producer.init();
+    ring_terminal_offload_consumer.init();
+
 #if defined(FABRIC_2D_VC1_SERVICED)
     // VC1 receiver channel pointer for inter-mesh routing. Gated on _SERVICED (not _ACTIVE) because
     // these locals are only consumed inside the FABRIC_2D_VC1_SERVICED block further down; on routers
@@ -2226,7 +2642,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     PerfTelemetryRecorder inner_loop_perf_telemetry_collector = build_perf_telemetry_recorder<perf_telemetry_mode>();
     auto local_perf_telemetry_buffer =
         build_perf_telemetry_buffer(reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr));
-
     auto receiver_channel_response_credit_senders =
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
     auto sender_channel_from_receiver_credits =
@@ -2388,6 +2803,27 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
+                        ring_terminal_offload_producer,
+                        local_fabric_telemetry);
+#elif defined(FABRIC_2D_VC1_SERVICED)
+                    rx_progress |= run_receiver_channel_step_with_escape<
+                        0,
+                        ENABLE_FIRST_LEVEL_ACK_VC0,
+                        VC0_DOWNSTREAM_EDM_SIZE,
+                        VC1_DOWNSTREAM_EDM_SIZE,
+                        DownstreamSenderVC0T,
+                        DownstreamSenderVC1T,
+                        decltype(local_relay_interface)>(
+                        local_receiver_channels,
+                        downstream_edm_noc_interfaces_vc0,
+                        downstream_edm_noc_interfaces_vc1,
+                        local_relay_interface,
+                        receiver_channel_pointers_ch0,
+                        receiver_channel_0_trid_tracker,
+                        port_direction_table,
+                        receiver_channel_response_credit_senders,
+                        routing_table,
+                        ring_terminal_offload_producer,
                         local_fabric_telemetry);
 #else
                     rx_progress |= run_receiver_channel_step<
@@ -2404,6 +2840,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
+                        ring_terminal_offload_producer,
                         local_fabric_telemetry);
 #endif
                     tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
@@ -2416,6 +2853,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
+                    if constexpr (enable_ring_terminal_offload && MY_ERISC_ID == 0) {
+                        tx_progress |= ring_terminal_offload_consumer.step();
+                    }
                     if constexpr (is_2d_fabric) {
                         tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
                             local_sender_channels,
@@ -2521,6 +2961,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
+                        ring_terminal_offload_producer,
                         local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
 
@@ -3718,6 +4159,14 @@ void kernel_main() {
     wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids, termination_signal_ptr);
     WAYPOINT("FSCD");
+
+    if constexpr (enable_ring_terminal_offload && MY_ERISC_ID == 0) {
+        auto* queue = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::RingTerminalOffloadQueue*>(
+            RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS);
+        queue->published_sequence = 0;
+        queue->completed_sequence = 0;
+        queue->depth = ring_terminal_offload_depth;
+    }
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();

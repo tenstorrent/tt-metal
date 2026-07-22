@@ -134,3 +134,55 @@ def test_all_gather_async_fabric_2d_control_row_major_2k_page(mesh_device):
 
     for device_tensor in ttnn.get_device_tensors(tt_output):
         assert_with_pcc(ttnn.to_torch(device_tensor), torch_input, pcc=1.0)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": _fabric_router_config(),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": 2048,
+            },
+            id="fabric_2d",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+@pytest.mark.parametrize("dtype,width", [pytest.param(ttnn.bfloat16, 576, id="bf16_1152b_rows")])
+def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, width):
+    """Exercise the native receiver-L1 path on a logical 8-rank Fabric2D ring."""
+    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
+    rows_per_device = 65536
+    global_shape = (1, 1, rows_per_device * mesh_device.shape[0], width)
+    torch.manual_seed(0)
+    torch_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=tuple(mesh_device.shape)),
+        device=mesh_device,
+    )
+    persistent_output = ttnn.from_torch(
+        torch.zeros(global_shape, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    tt_output = ttnn.all_gather(
+        tt_input,
+        dim=2,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=0,
+        output_tensor=persistent_output,
+    )
+    ttnn.synchronize_device(mesh_device)
+    for device_tensor in ttnn.get_device_tensors(tt_output):
+        assert torch.equal(ttnn.to_torch(device_tensor), torch_input)

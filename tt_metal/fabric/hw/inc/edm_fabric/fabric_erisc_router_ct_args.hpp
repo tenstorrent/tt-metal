@@ -125,6 +125,8 @@ constexpr uint32_t SWITCH_INTERVAL =
 constexpr bool fuse_receiver_flush_and_completion_ptr = NAMED_CT_ARG("FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR");
 constexpr bool enable_deadlock_avoidance = NAMED_CT_ARG("ENABLE_DEADLOCK_AVOIDANCE");
 constexpr bool enable_speedy_vc0 = NAMED_CT_ARG("ENABLE_SPEEDY_VC0") != 0;
+constexpr uint32_t ring_terminal_offload_depth = NAMED_CT_ARG("RING_TERMINAL_OFFLOAD_DEPTH");
+constexpr bool enable_ring_terminal_offload = ring_terminal_offload_depth != 0;
 constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
@@ -161,6 +163,7 @@ constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SEND
 // UDM mode (always available; 0 when inactive)
 constexpr bool udm_mode = NAMED_CT_ARG("UDM_MODE") != 0;
 constexpr uint32_t LOCAL_RELAY_NUM_BUFFERS = NAMED_CT_ARG("LOCAL_RELAY_NUM_BUFFERS");
+constexpr uint32_t RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS = NAMED_CT_ARG("RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS");
 
 // ============================================================================
 // Channel allocations (positional args, starting at index 0)
@@ -299,6 +302,16 @@ constexpr size_t MY_ETH_CHANNEL = NAMED_CT_ARG("MY_ETH_CHANNEL");
 constexpr size_t MY_ERISC_ID = NAMED_CT_ARG("MY_ERISC_ID");
 constexpr size_t NUM_ACTIVE_ERISCS = NAMED_CT_ARG("NUM_ACTIVE_ERISCS");
 static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
+static_assert(
+    !enable_ring_terminal_offload || NUM_ACTIVE_ERISCS == 2,
+    "ring terminal offload requires exactly two active ERISCs");
+static_assert(
+    ring_terminal_offload_depth == 0 || ring_terminal_offload_depth == 1 || ring_terminal_offload_depth == 4 ||
+        ring_terminal_offload_depth == 8,
+    "ring terminal offload depth must be 0, 1, 4, or 8");
+static_assert(
+    !enable_ring_terminal_offload || RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS != 0,
+    "ring terminal offload queue address must be valid");
 
 // Defines if packet header updates (as the packet header traverses its route) are done on the receiver side or the
 // sender side. If true, then the receiver channel updates the packet header before forwarding it. If false, the sender

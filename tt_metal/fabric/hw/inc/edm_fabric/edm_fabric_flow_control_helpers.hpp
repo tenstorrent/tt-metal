@@ -240,6 +240,10 @@ struct ReceiverChannelPointers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    // Ring experiments can issue a fused packet's payload write immediately
+    // and defer its semaphore increment until local TRID completion. The
+    // receiver slot remains live and owns the packet header until then.
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> deferred_fused_notification;
 
     FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
         src_chan_ids[buffer_index.get()] = src_chan_id;
@@ -249,6 +253,14 @@ struct ReceiverChannelPointers {
 
     FORCE_INLINE uint8_t get_src_chan_id() const { return src_chan_ids[0]; }
 
+    FORCE_INLINE bool has_deferred_fused_notification(BufferIndex buffer_index) const {
+        return deferred_fused_notification[buffer_index.get()] != 0;
+    }
+
+    FORCE_INLINE void set_deferred_fused_notification(BufferIndex buffer_index, bool value) {
+        deferred_fused_notification[buffer_index.get()] = value;
+    }
+
     FORCE_INLINE void init() { reset(); }
 
     FORCE_INLINE void reset() {
@@ -256,6 +268,9 @@ struct ReceiverChannelPointers {
         wr_flush_counter.reset();
         ack_counter.reset();
         completion_counter.reset();
+        for (size_t i = 0; i < RECEIVER_NUM_BUFFERS; ++i) {
+            deferred_fused_notification[i] = 0;
+        }
     }
 };
 

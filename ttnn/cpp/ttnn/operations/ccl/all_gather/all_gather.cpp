@@ -44,7 +44,13 @@ std::pair<bool, std::string> use_composite_all_gather(
             concat = input_tensor.memory_config().is_sharded() || is_last_dim;
         }
 
-        if ((concat || split) && input_padded) {
+        // Height gathers into interleaved output preserve the physical row stride. This includes
+        // sparse MLA's packed scaled-FP8 rows (656 logical bytes, 704-byte aligned DRAM pages): moving
+        // the complete aligned page is valid, and neither the reader nor writer needs to concatenate or
+        // split a row. Keep the conservative composite fallback for last-dim gathers and re-sharded
+        // outputs, where the padded tail would otherwise be interleaved with payload bytes.
+        const bool preserves_row_pages = gather_dim == rank - 2 && !output_mem_config.is_sharded();
+        if ((concat || split) && input_padded && !preserves_row_pages) {
             return {
                 true,
                 fmt::format(
@@ -102,7 +108,9 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     // Throw deprecation notice
     if (num_links.has_value() || topology.has_value() || chunks_per_sync.has_value() ||
         num_workers_per_link.has_value() || num_buffers_per_channel.has_value() || use_l1_small_for_semaphores) {
@@ -114,6 +122,10 @@ ttnn::Tensor all_gather(
 
     auto [use_composite, composite_reason] = use_composite_all_gather(input_tensor, dim, memory_config);
     if (use_composite) {
+        TT_FATAL(
+            !batch_slice_idx.has_value() && !valid_gather_extent.has_value(),
+            "batch_slice_idx / valid_gather_extent require the native all_gather path; composite fallback: {}",
+            composite_reason);
         log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
 
         // Query the Fabric setup
@@ -128,7 +140,15 @@ ttnn::Tensor all_gather(
     }
 
     return ttnn::prim::all_gather(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
+        input_tensor,
+        persistent_output_tensor,
+        dim,
+        memory_config,
+        cluster_axis,
+        subdevice_id,
+        sub_core_grid,
+        batch_slice_idx,
+        valid_gather_extent);
 }
 
 }  // namespace ttnn

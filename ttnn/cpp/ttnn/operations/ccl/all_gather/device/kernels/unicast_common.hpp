@@ -108,7 +108,8 @@ public:
         scatter_packet_header{PacketHeaderPool::allocate_header(1)},
         unicast_packet_header{PacketHeaderPool::allocate_header(1)},
         scatter_header({}, {}),
-        chunk_count{0} {
+        chunk_count{0},
+        chunks_are_contiguous{true} {
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
@@ -134,15 +135,13 @@ public:
             // Note: currently, scatter_write necessitates chunk_count >= 2.
             if (chunk_count == 0) {
                 start_l1_addr = l1_addr;
+                chunks_are_contiguous = true;
+            } else {
+                chunks_are_contiguous &= remote_noc_addr == scatter_header.noc_address[chunk_count - 1] + page_size;
             }
             scatter_header.noc_address[chunk_count++] = remote_noc_addr;
             if (chunk_count == pages_per_packet) {
-                noc.async_writes_flushed();
-                scatter_header.chunk_count = chunk_count;
-                fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                    sender, scatter_packet_header, start_l1_addr, scatter_header, payload_size);
-                chunk_count = 0;
+                send_queued_chunks();
             }
         } else {
             // Page larger than a packet: split across packets.
@@ -166,26 +165,7 @@ public:
         if constexpr (use_scatter_write) {
             static_assert(min_pages_per_packet == 2, "hardcoded to assume scatter_write min_pages_per_packet == 2");
             if (chunk_count > 0) {
-                noc.async_writes_flushed();
-                if (chunk_count == 1) {
-                    // Note: currently, scatter_write necessitates chunk_count >= 2, so we use unicast_write
-                    // for chunk_count == 1.
-                    // Note: this is hardcoded assuming NOC_SCATTER_WRITE_MIN_CHUNKS == 2. Else need to put
-                    // the below unicast_write in a loop.
-                    fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                        UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        sender,
-                        unicast_packet_header,
-                        start_l1_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
-                        page_size);
-                } else {
-                    scatter_header.chunk_count = chunk_count;
-                    fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                        sender, scatter_packet_header, start_l1_addr, scatter_header, chunk_count * page_size);
-                }
-                chunk_count = 0;
+                send_queued_chunks();
             }
         }
         // Wait for Fabric writes to be sent out before popping CB entry
@@ -193,6 +173,25 @@ public:
     }
 
 private:
+    void send_queued_chunks() {
+        noc.async_writes_flushed();
+        if (chunk_count == 1 || chunks_are_contiguous) {
+            fabric_api::fabric_unicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                sender,
+                unicast_packet_header,
+                start_l1_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
+                chunk_count * page_size);
+        } else {
+            scatter_header.chunk_count = chunk_count;
+            fabric_api::fabric_unicast_noc_scatter_write_with_state<
+                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
+                sender, scatter_packet_header, start_l1_addr, scatter_header, chunk_count * page_size);
+        }
+        chunk_count = 0;
+    }
+
     // Fabric limits
     static constexpr uint32_t max_pages_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
     static constexpr uint32_t min_pages_per_packet = NOC_SCATTER_WRITE_MIN_CHUNKS;
@@ -214,4 +213,5 @@ private:
     NocUnicastScatterCommandHeader scatter_header;
     uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
     uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks
+    bool chunks_are_contiguous;
 };

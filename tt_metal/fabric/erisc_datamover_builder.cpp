@@ -11,6 +11,7 @@
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/ring_terminal_offload.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
 #include <tt-metalium/hal.hpp>
@@ -237,6 +238,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
     // memory for the telemetry buffer in Blackhole
@@ -248,7 +250,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
 
     // Allocate code profiling buffer (conditionally enabled)
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Buffer size: max timer types * 16 bytes per result
         constexpr size_t code_profiling_buffer_size =
@@ -356,6 +357,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // Dedicated connection buffer index for the local tensix relay interface
     this->tensix_relay_connection_buffer_index_id = buffer_address;
     buffer_address += field_size;
+
+    // The terminal-copy protocol is inert for ordinary Fabric packets.  Both
+    // a native 1D ring and an explicit ring routed over a 2D fabric can form a
+    // cyclic dependency when a receiver must complete its local write before
+    // releasing the slot used to forward the same packet.
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    if ((fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
+         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) &&
+        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 2) {
+        buffer_address = tt::align(buffer_address, alignof(tt::tt_fabric::RingTerminalOffloadQueue));
+        this->ring_terminal_offload_queue_base_address = buffer_address;
+        buffer_address += sizeof(tt::tt_fabric::RingTerminalOffloadQueue);
+    }
 
     // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
     // the hang is root caused for multiprocess test.
@@ -850,7 +864,6 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
     named_args["PERF_TELEMETRY_MODE"] = bw_telemetry_mode;
-
     // Add telemetry buffer address (16B aligned)
     named_args["PERF_TELEMETRY_BUFFER_ADDR"] = static_cast<uint32_t>(config.perf_telemetry_buffer_address);
 
@@ -1209,6 +1222,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- UDM mode (always emitted; 0 when inactive) ---
     named_args["UDM_MODE"] = this->udm_mode ? 1 : 0;
     named_args["LOCAL_RELAY_NUM_BUFFERS"] = this->udm_mode ? this->local_tensix_relay_num_buffers : 0;
+    constexpr uint32_t ring_terminal_offload_depth = 4;
+    const bool ring_terminal_offload_supported = config.ring_terminal_offload_queue_base_address != 0;
+    named_args["RING_TERMINAL_OFFLOAD_QUEUE_BASE_ADDRESS"] =
+        static_cast<uint32_t>(config.ring_terminal_offload_queue_base_address);
+    named_args["RING_TERMINAL_OFFLOAD_DEPTH"] = ring_terminal_offload_supported ? ring_terminal_offload_depth : 0;
 
     // --- Sender channel connection info addresses (always emit MAX entries) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {

@@ -123,6 +123,11 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
     }
 }
 
+FORCE_INLINE void flush_current_local_write(uint8_t transaction_id) {
+    while (
+        !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, transaction_id));
+}
+
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
 
@@ -198,16 +203,27 @@ FORCE_INLINE
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
 
-            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
-            const auto increment = header.command_fields.unicast_seminc_fused.val;
-            if (header.command_fields.unicast_seminc_fused.flush) {
-                flush_write_to_noc_pipeline(rx_channel_id);
+            bool defer_notification = false;
+            if constexpr (enable_ring_terminal_offload) {
+                defer_notification = header.command_fields.unicast_seminc_fused.defer_notification;
             }
-            noc_semaphore_inc<true>(
-                semaphore_dest_address,
-                increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+            if (!defer_notification) {
+                const uint64_t semaphore_dest_address =
+                    header.command_fields.unicast_seminc_fused.semaphore_noc_address;
+                const auto increment = header.command_fields.unicast_seminc_fused.val;
+                if (header.command_fields.unicast_seminc_fused.flush) {
+                    if constexpr (enable_ring_terminal_offload) {
+                        flush_current_local_write(transaction_id);
+                    } else {
+                        flush_write_to_noc_pipeline(rx_channel_id);
+                    }
+                }
+                noc_semaphore_inc<true>(
+                    semaphore_dest_address,
+                    increment,
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
+            }
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {

@@ -22,6 +22,79 @@
 
 namespace ttnn::operations::ccl {
 
+namespace {
+
+AllGatherReceiverPolicy resolve_receiver_policy(
+    const Tensor& input,
+    const std::optional<Tensor>& persistent_output,
+    int32_t gather_dim,
+    const std::array<uint32_t, 2>& axis_num_devices,
+    const std::array<uint32_t, 2>& axis_num_links,
+    size_t packet_size,
+    const std::optional<tt::tt_metal::SubDeviceId>& requested_subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<uint32_t>& batch_slice_idx,
+    const std::optional<uint32_t>& valid_gather_extent) {
+    AllGatherReceiverPolicy policy;
+    if (!persistent_output.has_value()) {
+        return policy;
+    }
+
+    const auto& output = persistent_output.value();
+    const auto input_shape = input.padded_shape();
+    const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
+    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
+    const uint32_t links0 = axis_num_links[0];
+    const uint32_t links1 = axis_num_links[1];
+    const uint32_t num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
+    const uint32_t num_dram_banks = input.device()->num_dram_channels();
+    const uint32_t input_page_size = input.buffer()->aligned_page_size();
+
+    auto subdevice_id = requested_subdevice_id.value_or(input.device()->get_sub_device_ids().at(0));
+    auto available_cores = input.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(sub_core_grid.value());
+    }
+    const bool enough_interleaved_receiver_cores = available_cores.num_cores() >= num_links * 5;
+
+    const auto& allocator = input.device()->allocator();
+    const uint32_t semaphore_alignment = allocator->get_alignment(tt::tt_metal::BufferType::L1_SMALL);
+    const uint64_t required_control_bytes =
+        static_cast<uint64_t>(1 + 2 * num_devices + 2 * 4 + 1) * semaphore_alignment;
+    const bool enough_control_l1 =
+        semaphore_alignment != 0 &&
+        required_control_bytes <= allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+
+    // Select the bank-owned receiver from tensor, topology, and resource facts
+    // only. No model identity, exact page size, or production-shape allowlist is
+    // part of the policy.
+    const bool bank_owned_eligible =
+        one_active_axis && num_devices >= 2 && num_devices <= 8 && num_links == 2 &&
+        input.device()->arch() == tt::ARCH::BLACKHOLE && input.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+        output.layout() == ttnn::ROW_MAJOR_LAYOUT && input_shape.rank() == 4 && gather_dim == 2 &&
+        input_shape[0] == 1 && input_shape[1] == 1 && !batch_slice_idx.has_value() &&
+        !valid_gather_extent.has_value() && input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+        output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+        input.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        output.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED && input_page_size != 0 &&
+        input_page_size == output.buffer()->aligned_page_size() &&
+        input.buffer()->page_size() == output.buffer()->page_size() && input_page_size * 2 <= packet_size &&
+        num_dram_banks > 0 && num_dram_banks % num_links == 0 && input.buffer()->num_pages() % num_dram_banks == 0 &&
+        enough_interleaved_receiver_cores && enough_control_l1;
+
+    if (bank_owned_eligible) {
+        policy.credit_mode = ReceiverL1CreditMode::Pipelined;
+        policy.credit_group_batches = 6;
+        policy.bank_owned_links = true;
+        policy.interleaved_bank_receivers = true;
+        policy.drain_risc_count = 2;
+        policy.slot_count = 12;
+    }
+    return policy;
+}
+
+}  // namespace
+
 void AllGatherDeviceOperation::validate_on_program_cache_miss(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -38,10 +111,39 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // If mesh_device shape is 2D but !FABRIC_2D, then must specify cluster_axis
     const auto mesh_shape = input_tensor.device()->shape();
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(::tt::tt_fabric::GetFabricConfig());
     TT_FATAL(
         fabric_is_2d || args.cluster_axis.has_value() || mesh_shape[0] == 1 || mesh_shape[1] == 1,
         "1D fabric on a 2D mesh_device requires cluster_axis to be set");
+
+    const auto& input_shape = input_tensor.logical_shape();
+    const uint32_t input_rank = input_shape.rank();
+    if (args.batch_slice_idx.has_value()) {
+        TT_FATAL(input_rank >= 3, "batch_slice_idx requires rank >= 3, got {}", input_rank);
+        TT_FATAL(args.dim != 0, "batch_slice_idx is not supported when gathering dim 0");
+        TT_FATAL(
+            args.batch_slice_idx.value() < input_shape[0],
+            "batch_slice_idx {} is out of range for dim-0 extent {}",
+            args.batch_slice_idx.value(),
+            input_shape[0]);
+    }
+    if (args.valid_gather_extent.has_value()) {
+        TT_FATAL(input_rank >= 2, "valid_gather_extent requires rank >= 2, got {}", input_rank);
+        TT_FATAL(
+            args.dim == static_cast<int32_t>(input_rank) - 2,
+            "valid_gather_extent is supported only on the height gather dim (rank-2), got dim {} of rank {}",
+            args.dim,
+            input_rank);
+        TT_FATAL(args.valid_gather_extent.value() > 0, "valid_gather_extent must be greater than zero");
+        TT_FATAL(
+            args.valid_gather_extent.value() <= input_shape[args.dim],
+            "valid_gather_extent {} exceeds input extent {}",
+            args.valid_gather_extent.value(),
+            input_shape[args.dim]);
+        TT_FATAL(
+            input_shape[0] == 1 || args.batch_slice_idx.has_value(),
+            "valid_gather_extent with multiple batches requires batch_slice_idx");
+    }
 
     // Constraints on persistent output tensor
     if (tensor_args.persistent_output_tensor.has_value()) {
@@ -66,11 +168,14 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
         // Check the output tensor size
         auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
-        auto expected_output_shape = input_shape;
-        expected_output_shape[args.dim] *= args.num_devices;
+        auto input_padded_shape = input_tensor.padded_shape();
+        auto expected_output_shape = input_padded_shape;
+        expected_output_shape[args.dim] = input_padded_shape[args.dim] * args.num_devices;
+        if (args.batch_slice_idx.has_value()) {
+            expected_output_shape[0] = 1;
+        }
         TT_FATAL(
-            output_shape.size() == input_shape.size(),
+            output_shape.size() == input_padded_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
             output_shape.size());
         TT_FATAL(
@@ -86,11 +191,76 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // to composite path if needed.
 }
 
+void AllGatherDeviceOperation::validate_on_program_cache_hit(
+    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    // These knobs are deliberately excluded from the program-cache key. Decode changes
+    // the cache slot and valid prefix on every step, while the program's geometry stays
+    // fixed; the multicast factory patches their runtime arguments on every dispatch.
+    // Validate them here as well so a cache hit cannot bypass the API contract.
+    const auto& input_shape = tensor_args.input_tensor.logical_shape();
+    const uint32_t input_rank = input_shape.rank();
+    if (args.batch_slice_idx.has_value()) {
+        TT_FATAL(input_rank >= 3, "batch_slice_idx requires rank >= 3, got {}", input_rank);
+        TT_FATAL(args.dim != 0, "batch_slice_idx is not supported when gathering dim 0");
+        TT_FATAL(
+            args.batch_slice_idx.value() < input_shape[0],
+            "batch_slice_idx {} is out of range for dim-0 extent {}",
+            args.batch_slice_idx.value(),
+            input_shape[0]);
+    }
+    if (args.valid_gather_extent.has_value()) {
+        TT_FATAL(input_rank >= 2, "valid_gather_extent requires rank >= 2, got {}", input_rank);
+        TT_FATAL(
+            args.dim == static_cast<int32_t>(input_rank) - 2,
+            "valid_gather_extent is supported only on the height gather dim (rank-2), got dim {} of rank {}",
+            args.dim,
+            input_rank);
+        TT_FATAL(args.valid_gather_extent.value() > 0, "valid_gather_extent must be greater than zero");
+        TT_FATAL(
+            args.valid_gather_extent.value() <= input_shape[args.dim],
+            "valid_gather_extent {} exceeds input extent {}",
+            args.valid_gather_extent.value(),
+            input_shape[args.dim]);
+        TT_FATAL(
+            input_shape[0] == 1 || args.batch_slice_idx.has_value(),
+            "valid_gather_extent with multiple batches requires batch_slice_idx");
+    }
+}
+
+ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Prefix extent and selected batch are runtime-only: retaining them in the key
+    // creates a new cached workload (and L1_SMALL semaphore) at every decode position.
+    // Whether batch selection is enabled is structural because it changes the output
+    // batch dimension; its value is patched into reader runtime arguments instead.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<AllGatherDeviceOperation>,
+        attrs.dim,
+        attrs.output_mem_config,
+        attrs.cluster_axis,
+        attrs.axis_topology,
+        attrs.axis_num_devices,
+        attrs.axis_num_links,
+        attrs.num_devices,
+        attrs.packet_size,
+        attrs.subdevice_id,
+        attrs.sub_core_grid,
+        attrs.receiver_policy,
+        attrs.batch_slice_idx.has_value(),
+        tensor_args);
+}
+
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
+    // Keep the normal, full-size output allocation for a partial gather. Only the
+    // populated prefix of each device slab is transferred. This lets all decode
+    // positions reuse one program and one L1_SMALL semaphore.
     shape[args.dim] *= args.num_devices;
+    if (args.batch_slice_idx.has_value()) {
+        shape[0] = 1;
+    }
     return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
@@ -178,7 +348,7 @@ AllGatherDeviceOperation::create_op_performance_model(
     // (N-1)*S bytes must be received over K links, farthest byte travels `diameter_hops` hops.
     const uint64_t fabric_bytes = static_cast<uint64_t>(num_devices - 1) * input_size_bytes;
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
-        arch, args.fabric_config, clock_rate_mhz, fabric_bytes, bottleneck_links, diameter_hops);
+        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, fabric_bytes, bottleneck_links, diameter_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
@@ -220,50 +390,41 @@ AllGatherDeviceOperation::create_op_performance_model(
 }
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    const AllGatherParams& operation_attributes, const AllGatherInputs& tensor_args) {
     // Heuristics to pick the kernel algorithm.
     // Multicast supports all Fabric topologies, unicast only supports Fabric 1D topologies.
     // Unicast is empirically found to be faster for large tensors.
     bool use_unicast = false;
-    if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
+    if (operation_attributes.batch_slice_idx.has_value() || operation_attributes.valid_gather_extent.has_value()) {
+        return program_factory_t{AllGatherMulticastFactory{}};
+    }
+    if (operation_attributes.receiver_policy.test_mode == ReceiverL1TestMode::ForceReceiver) {
+        // The multicast factory owns the full safety proof and emits the
+        // concrete rejection reason for an invalid forced configuration.
+        return program_factory_t{AllGatherMulticastFactory{}};
+    }
+    if (operation_attributes.receiver_policy.test_mode == ReceiverL1TestMode::Auto &&
+        tensor_args.persistent_output_tensor.has_value() &&
+        should_auto_select_receiver_l1_path(
+            operation_attributes, tensor_args, tensor_args.persistent_output_tensor.value())) {
+        return program_factory_t{AllGatherMulticastFactory{}};
+    }
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
         // NeighborExchange only permits 1-hop unicast
         use_unicast = true;
-    } else if (!::tt::tt_fabric::is_2d_fabric_config(args.fabric_config)) {
-        // Unicast is only supported for Fabric 1D configs
+    } else if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
+        // Ring: multicast for small tensors and unicast for large tensors
         const auto& input_tensor = tensor_args.input_tensor;
+        const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
+        const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
         switch (input_tensor.device()->arch()) {
-            case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
-                if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
-                    use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
-                }
+            case tt::ARCH::WORMHOLE_B0:
+                use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
                 break;
-            }
-            case tt::ARCH::BLACKHOLE: {
-                // Multicast only wins the small-volume + large-page corner; unicast is
-                // bandwidth-optimal and wins outright once ~4MB cross a link (at any page size).
-                // Between, the multicast-favorable per-link-byte ceiling scales with the actual page
-                // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
-                // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
-                const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-                const uint64_t out_page = compute_output_specs(args, tensor_args).compute_page_size_bytes();
-                const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-
-                // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
-                const uint32_t axis = args.cluster_axis.value_or(args.axis_num_devices[1] > 1 ? 1 : 0);  // max 2 axes
-                const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-                const uint64_t per_link_bytes =
-                    input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
-
-                // Page^2 ceiling, anchored so a 2KB page permits multicast up to 1MB/link, capped at
-                // unicast's 4MB bandwidth floor. (2KB/1MB are the anchor; txn is the real page size.)
-                constexpr uint64_t anchor_page = 2048, anchor_ceiling = 1'000'000, unicast_bw_floor = 4'000'000;
-                const uint64_t mcast_ceiling =
-                    std::min(unicast_bw_floor, (txn * txn * anchor_ceiling) / (anchor_page * anchor_page));
-                use_unicast = per_link_bytes >= mcast_ceiling;
+            case tt::ARCH::BLACKHOLE:
+                use_unicast = !large_page && num_pages >= 128u;  // large pages never lose -> multicast
                 break;
-            }
             default: break;  // uncalibrated arch
         }
     }
@@ -278,7 +439,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in AllGatherParams.
@@ -298,6 +461,10 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        if (::tt::tt_fabric::is_2d_fabric_config(fabric_config) &&
+            ::ttnn::ccl::logical_axis_is_direct_fabric_ring(input_tensor, axis)) {
+            axis_topology[axis] = tt::tt_fabric::Topology::Ring;
+        }
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
@@ -317,6 +484,18 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     uint32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
+    const auto receiver_policy = resolve_receiver_policy(
+        input_tensor,
+        persistent_output_tensor,
+        gather_dim,
+        axis_num_devices,
+        axis_num_links,
+        packet_size,
+        subdevice_id,
+        sub_core_grid,
+        batch_slice_idx,
+        valid_gather_extent);
+
     return {
         AllGatherParams{
             gather_dim,
@@ -329,7 +508,10 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             num_devices,
             packet_size,
             subdevice_id,
-            sub_core_grid},
+            sub_core_grid,
+            receiver_policy,
+            batch_slice_idx,
+            valid_gather_extent},
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 
@@ -344,9 +526,19 @@ Tensor all_gather(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     auto [params, inputs] = ttnn::operations::ccl::all_gather_build_operation_args(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
+        input_tensor,
+        persistent_output_tensor,
+        dim,
+        memory_config,
+        cluster_axis,
+        subdevice_id,
+        sub_core_grid,
+        batch_slice_idx,
+        valid_gather_extent);
     return ttnn::device_operation::launch<ttnn::operations::ccl::AllGatherDeviceOperation>(params, inputs);
 }
 
