@@ -27,7 +27,7 @@ Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env
     transport: {sp, tp, h2d_service_id, connect_timeout_s}
     workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
                 mid_end_prob, seed, check_pcc, trace_dir}
-    migration: {issue, layer_by_layer, dest_endpoint_id, dst_slot_offset, timeout_ms, done_file,
+    migration: {issue, dest_endpoint_id, dst_slot_offset, timeout_ms, done_file,
                 client_dir, cmd_queue, table_queue, resp_queue, table_path, device_map_path}
     env:       {ANY_PREFILL_KEY: value}   # escape hatch for anything unmodeled
 
@@ -152,7 +152,6 @@ def _apply_manifest_env(manifest_path: str) -> None:
 
     migration = manifest.get("migration") or {}
     sd_bool("PREFILL_PRODUCER_ISSUE_MIGRATION", migration.get("issue"))
-    sd_bool("PREFILL_MIGRATION_LAYER_BY_LAYER", migration.get("layer_by_layer"))
     sd("PREFILL_MIGRATION_DEST_ENDPOINT_ID", migration.get("dest_endpoint_id"))
     sd("PREFILL_MIGRATION_DST_SLOT_OFFSET", migration.get("dst_slot_offset"))
     sd("PREFILL_MIGRATION_TIMEOUT_MS", migration.get("timeout_ms"))
