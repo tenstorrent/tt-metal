@@ -34,12 +34,6 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
             "reshape requires tile width {}, got {}",
             tt::constants::TILE_WIDTH,
             tile.get_width());
-        // Blocked formats are not accepted by this device op (typecast happens upstream), but keep the
-        // guard so a future dtype expansion cannot silently run tiny-tile + blocked paths.
-        TT_FATAL(
-            !(tile.get_height() < tt::constants::TILE_HEIGHT &&
-              (input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B)),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
     }
 }
 

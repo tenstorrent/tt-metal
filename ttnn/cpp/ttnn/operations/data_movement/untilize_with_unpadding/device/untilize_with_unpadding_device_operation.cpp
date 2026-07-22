@@ -80,10 +80,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
         "untilize_with_unpadding requires tile width {}, got {}",
         tt::constants::TILE_WIDTH,
         tile.get_width());
-    TT_FATAL(
-        tile.get_height() >= tt::constants::TILE_HEIGHT ||
-            (input_tensor_a.dtype() != DataType::BFLOAT8_B && input_tensor_a.dtype() != DataType::BFLOAT4_B),
-        "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+
     TT_FATAL(
         input_tensor_a.physical_volume() % tile.get_tile_hw() == 0,
         "Input tensor physical volume ({}) must be divisible by tile HW ({})",

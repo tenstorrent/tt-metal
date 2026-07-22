@@ -139,14 +139,6 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor_a.layout() == Layout::TILE) {
         const auto& tile = input_tensor_a.tensor_spec().tile();
         TT_FATAL(tile.get_width() == TILE_WIDTH, "copy requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
-        // Reject tiny heights for blocked formats on either side of a dtype conversion.
-        const bool tiny_height = tile.get_height() < TILE_HEIGHT;
-        const bool blocked_dtype = output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B ||
-                                   input_tensor_a.dtype() == DataType::BFLOAT8_B ||
-                                   input_tensor_a.dtype() == DataType::BFLOAT4_B;
-        TT_FATAL(
-            !(tiny_height && blocked_dtype),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
         if (tensor_args.preallocated_output.has_value()) {
             const auto& out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
             TT_FATAL(

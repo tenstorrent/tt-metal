@@ -94,14 +94,6 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor.layout() == Layout::TILE) {
         const auto& tile = input_tensor.tensor_spec().tile();
         TT_FATAL(tile.get_width() == TILE_WIDTH, "Unary requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
-        const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
-        const bool tiny_height = tile.get_height() < TILE_HEIGHT;
-        const bool blocked_dtype = effective_out == DataType::BFLOAT8_B || effective_out == DataType::BFLOAT4_B ||
-                                   input_tensor.dtype() == DataType::BFLOAT8_B ||
-                                   input_tensor.dtype() == DataType::BFLOAT4_B;
-        TT_FATAL(
-            !(tiny_height && blocked_dtype),
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
         if (output_tensor.has_value()) {
             const auto& out_tile = output_tensor->tensor_spec().tile();
             TT_FATAL(

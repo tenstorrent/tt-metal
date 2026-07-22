@@ -371,7 +371,7 @@ template <bool reconfiguring>
 inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_faces = 4, const bool partial_face = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = num_faces << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
@@ -441,7 +441,8 @@ inline void set_packer_config(
     config.f.exp_section_size =
         ((pack_dst_format == to_underlying(DataFormat::Lf8)) || (masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8)))
             ? 0
-            : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
+            : num_faces; // exp section holds one exponent chunk per face; use num_faces even for partial (e.g. 16x32) tiles so the
+                         // device layout matches the host pack/unpack, which always emit num_faces exp chunks.
 
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_dst_format;
