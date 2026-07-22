@@ -188,23 +188,34 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
+
+    // Atomic-increment packet state for pkt_hdr_seminc (value 1, single 1-hop unicast). Configured once
+    // and shared by both the per-link barrier below and the per-slice out_ready_sem increments in the
+    // data loop; the route was already set on pkt_hdr_seminc above.
+    fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_seminc,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                           // ignore
+            static_cast<uint32_t>(1)});  // increment 1
+
     if (use_barrier_sem) {
-        // multicast to entire ring of workers for both this dir and opposite dir
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
-
-        uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, barrier_sem, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        // Per-link 1-hop barrier that does NOT assume the logical ring is a contiguous physical ring.
+        // The old path multicast a fixed hop-range in one physical direction, which breaks on a
+        // reshaped/bent ring (e.g. a 2x2 block flattened to 1x4). Instead each worker sends a single
+        // 1-hop atomic-inc -- routed like the data path (unicast_route_info, distance 1) -- to the
+        // opposite-direction worker on its immediate ring neighbour. The two workers sharing a ring
+        // link handshake with each other: each sends one and waits for one. Only 1-hop sends are used,
+        // so this works on any valid ring, including one formed by a reshaped submesh. The atomic-inc
+        // packet state (value 1, single 1-hop unicast) is configured once above and reused here.
+        uint64_t opposite_barrier_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_direction_connection,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_barrier_sem_noc_addr, 0});
 
-        barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_direction_connection,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2 * (ring_size - 1));
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -221,13 +232,7 @@ void kernel_main() {
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
         pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
 
-    fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        pkt_hdr_seminc,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                           // ignore
-            static_cast<uint32_t>(1)});  // increment 1
+    // (pkt_hdr_seminc atomic-inc state is set once above, before the barrier — see note there.)
 
     // Fused-packet state: payload size, increment value (1) and flush are constant across the run;
     // only the write and semaphore destination addresses are patched per packet via with_state.
