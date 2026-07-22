@@ -516,3 +516,35 @@ def test_fibo_wrapper_encode(*, mesh_device):
     assert len(hidden) == len(ref.hidden_states)
     assert list(embeds.shape) == list(ref_embeds.shape)
     assert_quality(ref_embeds, embeds.float(), pcc=0.99, relative_rmse=0.2)
+
+
+def test_smollm3_state_conversion():
+    import torch as _torch
+
+    from models.tt_dit.encoders.smollm3.model_smollm3 import STATE_CONVERSION
+
+    # Full SmolLM3ForCausalLM-style dict: model.* prefix + lm_head + a rotary_emb buffer.
+    full = {
+        "model.embed_tokens.weight": _torch.zeros(2, 2),
+        "model.layers.0.self_attn.q_proj.weight": _torch.zeros(2, 2),
+        "model.layers.0.mlp.gate_proj.weight": _torch.zeros(2, 2),
+        "model.norm.weight": _torch.zeros(2),
+        "model.rotary_emb.inv_freq": _torch.zeros(2),
+        "lm_head.weight": _torch.zeros(2, 2),
+    }
+    out = STATE_CONVERSION.convert(full)
+    assert set(out) == {
+        "embed_tokens.weight",
+        "layers.0.self_attn.q_proj.weight",
+        "layers.0.mlp.gate_proj.weight",
+        "norm.weight",
+    }
+
+    # Inner SmolLM3Model-style dict (no model. prefix, no lm_head): keys pass through unchanged.
+    inner = {
+        "embed_tokens.weight": _torch.zeros(2, 2),
+        "layers.0.self_attn.q_proj.weight": _torch.zeros(2, 2),
+        "norm.weight": _torch.zeros(2),
+    }
+    out2 = STATE_CONVERSION.convert(inner)
+    assert set(out2) == set(inner)

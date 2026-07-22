@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import math
+import re
+import warnings
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import torch
@@ -18,9 +21,49 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
-from ...utils.substate import pop_substate
 
 MAX_CHUNK_SIZE = 128
+
+
+@dataclass
+class StateConversion:
+    """Declarative torch-state-dict key remapping: ordered regex renames, then removes."""
+
+    rename: Sequence[tuple[str, str]] = ()
+    remove: Sequence[str] = ()
+
+    def convert(self, state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        in_ = dict(state_dict)
+        out: dict[str, torch.Tensor] = {}
+        compiled = [(re.compile(p), t) for (p, t) in self.rename]
+        removes = [re.compile(p) for p in self.remove]
+        for k in list(in_):
+            transformed = False
+            for pattern, t in compiled:
+                new_k, count = pattern.subn(t, k, count=1)
+                if count == 1:
+                    out[new_k] = in_.pop(k)
+                    transformed = True
+                    break
+            if transformed:
+                continue
+            for pattern in removes:
+                if pattern.search(k):
+                    in_.pop(k)
+                    transformed = True
+                    break
+            if not transformed:
+                warnings.warn(f"unprocessed key: {k}", stacklevel=2)
+        return {**in_, **out}
+
+
+# Strip a leading `model.` from encoder submodules; drop the LM head and rotary buffers.
+# Works on both the full SmolLM3ForCausalLM dict (model.* + lm_head) and the inner
+# SmolLM3Model dict (already-stripped keys pass through the rename as no-ops).
+STATE_CONVERSION = StateConversion(
+    rename=[(r"^(?:model\.)?(embed_tokens|layers|norm)", r"\1")],
+    remove=[r"(?:^|\.)lm_head(?:\.|$)", r"(?:^|\.)rotary_emb(?:\.|$)"],
+)
 
 
 def create_rope_tensors(
@@ -488,14 +531,9 @@ class SmolLM3TextEncoder(Module):
         self._sp_bias_cache: dict[int, ttnn.Tensor] = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # HF SmolLM3ForCausalLM prefix is "model."; SmolLM3Model state has no prefix.
-        # Accept either by stripping "model." if present, then drop lm_head.
-        prefix = "model."
-        for k in list(state):
-            if k.startswith(prefix):
-                state[k[len(prefix) :]] = state.pop(k)
-        pop_substate(state, "lm_head")
-        pop_substate(state, "rotary_emb")
+        converted = STATE_CONVERSION.convert(state)
+        state.clear()
+        state.update(converted)
 
     def create_rope_tensors(self, batch_size: int, sequence_length: int) -> tuple[torch.Tensor, torch.Tensor]:
         return create_rope_tensors(batch_size, sequence_length, self._head_dim, self._rope_theta)
