@@ -13,13 +13,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_out);
     using namespace compute_kernel_lib;
-    using L1Pack = PackTile<
+    using L1Pack = PackTile<output(
         cb_out,
-        OutputLifecycle::L1AccumulationCallerManaged,
-        PackTileReconfig::Output,
-        Dst::D0,
-        TileOffset::Unset,
-        PackTileL1Accumulation::Enabled>;
-    using OrdinaryPack = PackTile<cb_out, OutputLifecycle::CallerManaged, PackTileReconfig::Output, Dst::D1>;
-    eltwise_chain(EltwiseShape::tiles(n), CopyTile<cb_in>{}, L1Pack{}, OrdinaryPack{});
+        OutputLifecycle::CallerManaged,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Enabled)>;
+    using OrdinaryPack = PackTile<output(cb_out, OutputLifecycle::CallerManaged), Dst::D1>;
+    eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(cb_in)>{}, L1Pack{}, OrdinaryPack{});
 }
