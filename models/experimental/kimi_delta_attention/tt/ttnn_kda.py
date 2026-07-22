@@ -176,22 +176,24 @@ class TtKimiDeltaAttention:
         g = self._lin(self._lin(x, self.w_f0), self.w_f1)
         beta = ttnn.sigmoid(self._lin(x, self.w_b))
 
-        q = ttnn.reshape(q, [B, T, self.Hloc, self.K])
-        k = ttnn.reshape(k, [B, T, self.Hloc, self.K])
-        v = ttnn.reshape(v, [B, T, self.Hloc, self.V])
         g = ttnn.reshape(g, [B, T, self.Hloc, self.K])
-
-        q, k = l2norm_ttnn(q), l2norm_ttnn(k)
+        g = kda_gate_ttnn(g, self.A_log, self.dt_bias, self.lower_bound)
         if self.allow_neg_eigval:
             beta = ttnn.multiply(beta, 2.0)
-        g = kda_gate_ttnn(g, self.A_log, self.dt_bias, self.lower_bound)
 
         if T % _CHUNK == 0:
+            # flat OPT-A: pass q/k/v flat [B,T,Hloc*K] straight from the conv. chunk_kda L2-norms q/k
+            # in-kernel and skips the head-split relayout, so NO host reshape or l2norm here (perf #2:
+            # kills the q/k/v head reshapes + the RMSNorm×2). g stays rank-4 (diagonal gate).
             o = ttnn.transformer.chunk_kda(q, k, v, g, beta, scale=self.K ** -0.5, chunk_size=_CHUNK, use_qk_l2norm=False)
             if isinstance(o, (tuple, list)):
                 o = o[0]  # fused C++ kernel, per-chip local heads
             o = ttnn.to_layout(o, ttnn.TILE_LAYOUT)  # C++ op returns ROW_MAJOR
         else:
+            # decode / ragged: recurrent path needs head-major + host-normalized q/k
+            q = l2norm_ttnn(ttnn.reshape(q, [B, T, self.Hloc, self.K]))
+            k = l2norm_ttnn(ttnn.reshape(k, [B, T, self.Hloc, self.K]))
+            v = ttnn.reshape(v, [B, T, self.Hloc, self.V])
             o, _ = recurrent_kda_ttnn(q, k, v, g, beta, device=self.md)
 
         gate = ttnn.reshape(ttnn.add(self._lin(self._lin(x, self.w_g0), self.w_g1), self.b_g1), [B, T, self.Hloc, self.V])

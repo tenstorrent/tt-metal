@@ -416,6 +416,24 @@ Conv op alone 4.1–4.4× fewer programs / faster. PCC held: native conv 0.99999
 0.99993 (T=64, TP=4). Op-level regression: `test_kda_conv_native.py` (D=1024/4096, native vs FIR vs
 torch). Next backlog items: #2 head-layout reshapes (23.7%), #3 batch q/k/v matmuls.
 
+### Phase 10 — elementwise-fusion loop, #2: flat OPT-A input path (kill head reshapes)
+
+Post-#1 the head-layout reshapes were the #1 cost (32%). Survey found our chunk_kda fork already has a
+**flat rank-3 input path (OPT-A)**: pass q/k/v as `[B,T,H·K]` and the op L2-norms q/k in-kernel and skips
+the head-split relayout (works because KDA is K==V, C=32, T%32==0, phased default-on; the fork already
+handles the diagonal gate on this path). Verified op-level PCC (flat vs head-major vs torch, 0.99999)
+before wiring. Layer change is a **call-change, no kernel work**: prefill passes q/k/v flat straight from
+the conv, dropping the 3 host reshapes AND the 2 host l2norm calls; g stays rank-4; decode keeps
+head-major + host l2norm. **Result (T=640, per chip):**
+| | before (#1) | after (#2 flat) |
+|---|---|---|
+| TP=4 layer | 4.73 ms | **3.57 ms** (−1.16 ms, 1.32×) |
+| TP=1 layer | 11.21 ms | 7.74 ms (−3.5 ms) |
+Bigger than the ~0.7ms estimate (also skipped the op's internal head_split_tile). PCC 0.99993 (single +
+TP-sharded). Regression: `test_kda_flat_optA.py`. **`use_qk_l2norm` param is stubbed off** — flat
+auto-norms via `qk_norm = flat_qk && C==32`. Output-side (`output_head_major` to kill the s6 output
+reshapes) deferred as a separate step.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
