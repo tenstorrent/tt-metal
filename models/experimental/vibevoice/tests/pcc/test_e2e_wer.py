@@ -2,26 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end Word Error Rate (WER): TTNN VibeVoice vs the fp32 PyTorch reference, by Whisper.
+Teacher-forced end-to-end Word Error Rate (WER): TTNN VibeVoice vs the fp32 PyTorch reference.
 
-Runs the 4-speaker ``resources/text/<DEMO_ID>.txt`` script with voice cloning (Speaker 1-4 →
-en-Alice_woman / en-Carter_man / en-Frank_man / en-Maya_woman). Both the TTNN model and the
-vendored fp32 PyTorch reference free-run the SAME input (same script, voices, seed, AR cap), so
-the comparison is apples-to-apples. Because the CPU reference is slow, ``MAX_NEW_TOKENS``
-(env ``VV_WER_MAX_NEW_TOKENS``) caps AR steps and the default demo is the 45-min script.
+Isolates TT's per-step audio-rendering fidelity, with no free-running feedback drift. The fp32
+reference free-runs the 4-speaker ``resources/text/<TF_DEMO_ID>.txt`` script with voice cloning
+(Speaker 1-4 → en-Alice_woman / en-Carter_man / en-Frank_man / en-Maya_woman) and we capture its
+per-frame re-encoded embedding (``acoustic_connector + semantic_connector`` = ``diffusion_embeds``).
+TT then replays the reference token stream (``forced_token_ids``) with ``_post_diffusion_embeds``
+hooked so TT's LM is fed the REFERENCE embedding each step (no drift), while TT still renders its
+own audio.
 
-Whisper (``WHISPER_MODEL``) transcribes both waveforms, and WER is reported **by sequence
-length** — at cumulative transcript-word prefixes (32, 64, 128, 256, …): for each length N we
-compare the first N words of a hypothesis against the first N words of the target. Comparing
-aligned prefixes keeps every point a fair local measure (a token cap only shortens the curve, it
-does not inflate WER with trailing deletions), so the curve shows how WER drifts as generation
-proceeds. Target text = the input script (Speaker-N prefixes stripped). Three series per length:
-  * ``ref_vs_gt``  — the fp32 reference's own Whisper error vs the script (a floor / sanity baseline).
-  * ``tt_vs_gt``   — TT synthesis intelligibility vs the script words.
-  * ``tt_vs_ref``  — TT transcript vs the reference transcript (direct TT-vs-reference divergence).
-
-Report-only: asserts both waveforms are finite / non-silent and both transcripts non-empty.
-Decode uses the whole-segment fused-frame trace (``VV_TRACE_SEGMENT=1``, ~4.4x faster).
+Whisper (``WHISPER_MODEL``) transcribes both waveforms and WER (TT vs reference) is reported by
+cumulative transcript-word prefix (32, 64, 128, …). Report-only: asserts audio is finite and
+transcripts non-empty. ``TF_MAX_NEW_TOKENS`` (env ``VV_WER_MAX_NEW_TOKENS``) caps AR steps; the
+fp32 CPU reference is slow, so keep it modest (e.g. 32 for a quick smoke test).
 """
 
 import json
@@ -51,16 +45,15 @@ NUM_DIFFUSION_STEPS = 10
 SR = 24000  # VibeVoice sample rate
 WHISPER_SR = 16000  # Whisper feature-extractor sample rate
 WHISPER_MODEL = "openai/whisper-medium"
-# 4-speaker climate script + voice cloning. Both TT and the fp32 reference free-run this input.
-DEMO_ID = os.environ.get("VV_WER_DEMO_ID", "4p_climate_45min")
-_TEXT_PATH = TEXT_EXAMPLES_DIR / f"{DEMO_ID}.txt"
-# AR-step cap. The fp32 CPU reference free-runs the same input, so keep this modest by default
-# (override with VV_WER_MAX_NEW_TOKENS; e.g. 32 for a quick smoke test).
-MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
 # Cumulative transcript-word prefixes at which WER is reported.
 WER_PREFIX_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 _OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_wer"
-_OUT_TAG = os.environ.get("VV_WER_OUT_TAG", "")  # suffix to avoid clobbering baseline artifacts
+
+# 4-speaker climate script + voice cloning (override the script with VV_WER_DEMO_ID).
+TF_DEMO_ID = os.environ.get("VV_WER_DEMO_ID", "4p_climate_45min")
+# AR-step cap. The fp32 CPU reference free-runs the same input, so keep this modest by default
+# (override with VV_WER_MAX_NEW_TOKENS; e.g. 32 for a quick smoke test).
+TF_MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
 
 
 def _normalize(text: str) -> list[str]:
@@ -68,13 +61,6 @@ def _normalize(text: str) -> list[str]:
     text = text.lower().replace("’", "'")
     text = re.sub(r"[^a-z0-9' ]+", " ", text)
     return text.split()
-
-
-def _target_words() -> list[str]:
-    """Ground-truth spoken words: the input script (Speaker-N prefixes stripped)."""
-    script = load_script(_TEXT_PATH)
-    text = " ".join(re.sub(r"(?i)^\s*speaker\s+\d+\s*:\s*", "", ln.strip()) for ln in script.split("\n"))
-    return _normalize(text)
 
 
 def _wer(ref_words: list[str], hyp_words: list[str]) -> float:
@@ -93,86 +79,11 @@ def _wer(ref_words: list[str], hyp_words: list[str]) -> float:
     return dp[m] / n
 
 
-def _cumulative_wer(target: list[str], ref: list[str], tt: list[str]) -> list[dict]:
-    """WER over the first N words for N in WER_PREFIX_LENGTHS (+ a final full-length row).
-
-    Each series compares aligned prefixes: ref↔target, tt↔target, tt↔ref.
-    """
-    rows = []
-    lengths = [n for n in WER_PREFIX_LENGTHS if n < max(len(ref), len(tt))]
-    lengths.append(max(len(ref), len(tt)))  # final full-length point
-    for n in lengths:
-        rows.append(
-            {
-                "n": n,
-                "ref_vs_gt": round(_wer(target[:n], ref[:n]), 4),
-                "tt_vs_gt": round(_wer(target[:n], tt[:n]), 4),
-                "tt_vs_ref": round(_wer(ref[:n], tt[:n]), 4),
-            }
-        )
-    return rows
-
-
-def _build_inputs():
-    from processor.vibevoice_processor import VibeVoiceProcessor
-
-    assert _TEXT_PATH.is_file(), f"Missing script: {_TEXT_PATH}"
-    script = load_script(_TEXT_PATH)
-    # Same 4 speaker voices demo_ttnn uses for this demo (Alice/Carter/Frank/Maya).
-    voice_samples, _ = build_voice_samples(script, DEMO_ID)
-    processor = VibeVoiceProcessor.from_pretrained(MODEL_PATH)
-    inputs = processor(
-        text=[script],
-        voice_samples=[voice_samples],
-        padding=True,
-        return_tensors="pt",
-        return_attention_mask=True,
-    )
-    return processor, inputs
-
-
-def _generate_reference(processor, inputs) -> torch.Tensor:
-    """Free-run the fp32 PyTorch reference on the same input; return its speech waveform.
-
-    fp32 on CPU (bf16 matmul has no CPU acceleration); greedy decode, seed 0, same AR cap as TT.
-    """
-    from modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-
-    ref = VibeVoiceForConditionalGenerationInference.from_pretrained(
-        MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
-    )
-    ref.eval()
-    ref.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
-    ref.model.acoustic_tokenizer.std_dist_type = "none"
-    torch.manual_seed(0)
-    ref_out = ref.generate(
-        **inputs,
-        max_new_tokens=MAX_NEW_TOKENS,
-        cfg_scale=CFG_SCALE,
-        tokenizer=processor.tokenizer,
-        generation_config={"do_sample": False},
-        verbose=False,
-        is_prefill=True,
-    )
-    assert ref_out.speech_outputs and ref_out.speech_outputs[0] is not None, "reference produced no audio"
-    return ref_out.speech_outputs[0].to(torch.float32).reshape(-1)
-
-
 def _load_whisper():
     from transformers import pipeline
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     return pipeline("automatic-speech-recognition", model=WHISPER_MODEL, device=device)
-
-
-def _load_wav(path: Path) -> torch.Tensor:
-    import soundfile as sf
-
-    data, file_sr = sf.read(str(path), dtype="float32")
-    if data.ndim > 1:
-        data = data.mean(axis=1)
-    assert file_sr == SR, f"{path.name} sample rate {file_sr} != {SR}"
-    return torch.from_numpy(data)
 
 
 def _transcribe(asr, audio_24k: torch.Tensor) -> str:
@@ -189,141 +100,18 @@ def _transcribe(asr, audio_24k: torch.Tensor) -> str:
     return result["text"].strip()
 
 
-def _sanity_check(name: str, speech: torch.Tensor) -> None:
-    assert speech.numel() > SR // 2, f"{name} audio too short: {speech.numel()} samples"
-    assert torch.isfinite(speech).all(), f"{name} audio contains NaN/Inf"
-    # Only flag a real blow-up/divergence, not mild >1.0 overshoot (clamped before transcription).
-    peak = speech.abs().max().item()
-    assert peak < 50.0, f"{name} audio blew up (peak {peak:.1f}), not mild clipping"
-    assert (speech.abs() > 1e-3).float().mean().item() > 0.3, f"{name} audio is mostly silent"
-
-
-@pytest.mark.timeout(0)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 32768, "trace_region_size": 1_400_000_000, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_e2e_wer_tt_vs_ref(mesh_device):
-    """Free-run the same input on TT and the fp32 reference; transcribe both, report WER by length."""
-    # Load Whisper up front so an unavailable ASR skips fast (before slow generation).
-    try:
-        asr = _load_whisper()
-    except Exception as exc:
-        pytest.skip(f"Whisper ASR unavailable ({WHISPER_MODEL}): {exc}")
-
-    processor, inputs = _build_inputs()
-
-    # TT free-run — full on-device TTNN pipeline (the demo_ttnn path). Save the wav immediately
-    # so a later failure never costs the (~30 min) regeneration; VV_WER_REUSE_TT=1 reuses it.
-    _OUT_DIR.mkdir(parents=True, exist_ok=True)
-    import soundfile as sf
-
-    tt_wav_path = _OUT_DIR / f"{DEMO_ID}{_OUT_TAG}_tt.wav"
-    if os.environ.get("VV_WER_REUSE_TT") == "1" and tt_wav_path.is_file():
-        tt_speech = _load_wav(tt_wav_path)
-    else:
-        # Whole-segment fused-frame trace (~4.4x faster decode; PCC-1.0 vs eager). Read by the
-        # generator at construction; the mesh is opened above with a trace region + 2nd queue.
-        os.environ.setdefault("VV_TRACE_SEGMENT", "1")
-        tt_model = TTVibeVoiceModel.from_checkpoint(
-            mesh_device,
-            MODEL_PATH,
-            cfg_scale=CFG_SCALE,
-            num_diffusion_steps=NUM_DIFFUSION_STEPS,
-        )
-        torch.manual_seed(0)
-        tt_out = tt_model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            speech_tensors=inputs["speech_tensors"],
-            speech_masks=inputs["speech_masks"],
-            speech_input_mask=inputs["speech_input_mask"],
-            tokenizer=processor.tokenizer,
-            cfg_scale=CFG_SCALE,
-            num_diffusion_steps=NUM_DIFFUSION_STEPS,
-            max_new_tokens=MAX_NEW_TOKENS,
-        )
-        assert tt_out.speech_outputs and tt_out.speech_outputs[0] is not None
-        tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
-        sf.write(str(tt_wav_path), tt_speech.clamp(-1.0, 1.0).numpy(), SR)
-        print(
-            f"[e2e_wer] TT audio SAVED -> {tt_wav_path} ({tt_speech.numel() / SR:.1f}s) "
-            f"before any reference/Whisper work (rerun with VV_WER_REUSE_TT=1 to skip regen)",
-            flush=True,
-        )
-    _sanity_check("tt", tt_speech)
-
-    # Reference free-run on the same input (fp32 CPU, same seed + AR cap).
-    ref_speech = _generate_reference(processor, inputs)
-    _sanity_check("ref", ref_speech)
-    sf.write(str(_OUT_DIR / f"{DEMO_ID}{_OUT_TAG}_ref.wav"), ref_speech.clamp(-1.0, 1.0).numpy(), SR)
-
-    # Transcribe both.
-    ref_text = _transcribe(asr, ref_speech)
-    tt_text = _transcribe(asr, tt_speech)
-    assert ref_text, "Whisper produced an empty reference transcript"
-    assert tt_text, "Whisper produced an empty TT transcript"
-
-    target = _target_words()
-    ref_words = _normalize(ref_text)
-    tt_words = _normalize(tt_text)
-
-    table = _cumulative_wer(target, ref_words, tt_words)
-    overall = {
-        "ref_vs_gt": round(_wer(target, ref_words), 4),
-        "tt_vs_gt": round(_wer(target, tt_words), 4),
-        "tt_vs_ref": round(_wer(ref_words, tt_words), 4),
-    }
-
-    # Persist transcripts + metrics (TT + reference wavs already saved above).
-    metrics = {
-        "whisper_model": WHISPER_MODEL,
-        "demo": DEMO_ID,
-        "max_new_tokens": MAX_NEW_TOKENS,
-        "ref_audio_sec": round(ref_speech.numel() / SR, 2),
-        "tt_audio_sec": round(tt_speech.numel() / SR, 2),
-        "target_word_count": len(target),
-        "ref_word_count": len(ref_words),
-        "tt_word_count": len(tt_words),
-        "overall_wer": overall,
-        "wer_by_length": table,
-        "ref_transcript": ref_text,
-        "tt_transcript": tt_text,
-    }
-    (_OUT_DIR / f"{DEMO_ID}{_OUT_TAG}_wer.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-
-    header = f"{'N':>7} | {'ref_vs_gt':>9} | {'tt_vs_gt':>9} | {'tt_vs_ref':>9}"
-    lines = [header, "-" * len(header)]
-    for r in table:
-        lines.append(f"{r['n']:>7} | {r['ref_vs_gt']:>9.4f} | {r['tt_vs_gt']:>9.4f} | {r['tt_vs_ref']:>9.4f}")
-    print(
-        f"\n[e2e_wer] whisper={WHISPER_MODEL} demo={DEMO_ID} max_new_tokens={MAX_NEW_TOKENS}\n"
-        f"[e2e_wer] ref {ref_speech.numel() / SR:.1f}s ({len(ref_words)}w) | "
-        f"tt {tt_speech.numel() / SR:.1f}s ({len(tt_words)}w) | target {len(target)}w\n"
-        f"[e2e_wer] WER by cumulative transcript length:\n" + "\n".join(lines) + "\n"
-        f"[e2e_wer] overall: ref_vs_gt={overall['ref_vs_gt']:.4f} "
-        f"tt_vs_gt={overall['tt_vs_gt']:.4f} tt_vs_ref={overall['tt_vs_ref']:.4f}\n"
-        f"[e2e_wer] artifacts -> {_OUT_DIR}"
-    )
-
-
-TF_DEMO_ID = "4p_climate_45min"
-TF_MAX_NEW_TOKENS = 512
-
-
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_e2e_wer_teacher_forced(mesh_device):
     """Teacher-forced parity: bf16 reference re-encoded embedding fed into TT's LM each frame.
 
-    Both backends bf16, 45-min script, cap 512 frames. The reference free-runs and we capture its
-    per-frame re-encoded embedding (``acoustic_connector + semantic_connector`` = ``diffusion_embeds``).
-    TT then replays the reference token stream (``forced_token_ids``) with its ``_post_diffusion_embeds``
-    hooked so TT's LM is fed the REFERENCE embedding each step (no feedback drift), while TT still renders
-    its own audio. WER is TT audio vs reference audio (Whisper) — isolates TT's per-step rendering fidelity.
+    Both backends bf16, 45-min script, cap TF_MAX_NEW_TOKENS frames (default 512). The reference
+    free-runs and we capture its per-frame re-encoded embedding (``acoustic_connector +
+    semantic_connector`` = ``diffusion_embeds``). TT then replays the reference token stream
+    (``forced_token_ids``) with its ``_post_diffusion_embeds`` hooked so TT's LM is fed the
+    REFERENCE embedding each step (no feedback drift), while TT still renders its own audio. WER is
+    TT audio vs reference audio (Whisper) — isolates TT's per-step rendering fidelity.
     """
     try:
         asr = _load_whisper()
