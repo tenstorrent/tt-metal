@@ -1,0 +1,46 @@
+{
+  "note": "Compact verifier summary. Full per-cell report (~24MB) lives in the eval results dir (/tmp/rms_norm_results2/verifier_report.json), not committed (>500KB repo limit).",
+  "op": "ttnn.operations.rms_norm",
+  "source_results_dir": "/tmp/rms_norm_results2",
+  "summary": {
+    "total": 40438,
+    "supported_pass": 472,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 6051,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 33900,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 15
+  },
+  "by_category_counts": {
+    "xfail_expected": 6051,
+    "supported_pass": 472,
+    "invalid_skipped": 33900,
+    "no_axes_found": 15
+  },
+  "xfail_expected_gap_by_axis_value": {
+    "dtype": {
+      "BFLOAT8_B": 960
+    },
+    "fp32_dest_acc_en": {
+      "False": 3255
+    },
+    "gamma_dtype": {
+      "BFLOAT8_B": 860
+    },
+    "gamma_layout": {
+      "TILE": 2599
+    },
+    "memory_layout": {
+      "HEIGHT_SHARDED": 1501,
+      "WIDTH_SHARDED": 1505,
+      "BLOCK_SHARDED": 1502
+    }
+  }
+}
