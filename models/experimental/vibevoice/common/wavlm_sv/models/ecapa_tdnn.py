@@ -1,17 +1,14 @@
 # part of the code is borrowed from https://github.com/lawlict/ECAPA-TDNN
+#
+# TRIMMED for the VibeVoice standalone speaker-verification path. Upstream ECAPA-TDNN supports many
+# self-supervised front-ends (fbank/mfcc via torchaudio, s3prl via torch.hub, fairseq via
+# UpstreamExpert); this integration only ever builds the torch-only WavLM-large front-end
+# (feat_type="wavlm_large", config_path="__standalone__", update_extract=False). Those other
+# front-ends, the trainable-extractor path, and the __main__ demo were removed. See README.md.
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-try:
-    import torchaudio.transforms as trans
-except ImportError:  # only fbank/mfcc feat_types need torchaudio; wavlm path does not
-    trans = None
-try:
-    from .utils import UpstreamExpert  # needs fairseq+s3prl; unused on the standalone wavlm path
-except Exception:
-    UpstreamExpert = None
 
 
 """ Res2Conv1d + BatchNorm1d + ReLU
@@ -94,15 +91,6 @@ class SE_Connect(nn.Module):
 """
 
 
-# def SE_Res2Block(channels, kernel_size, stride, padding, dilation, scale):
-#     return nn.Sequential(
-#         Conv1dReluBn(channels, 512, kernel_size=1, stride=1, padding=0),
-#         Res2Conv1dReluBn(512, kernel_size, stride, padding, dilation, scale=scale),
-#         Conv1dReluBn(512, channels, kernel_size=1, stride=1, padding=0),
-#         SE_Connect(channels)
-#     )
-
-
 class SE_Res2Block(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, scale, se_bottleneck_dim):
         super().__init__()
@@ -137,24 +125,14 @@ class SE_Res2Block(nn.Module):
 
 
 class AttentiveStatsPool(nn.Module):
-    def __init__(self, in_dim, attention_channels=128, global_context_att=False):
+    def __init__(self, in_dim, attention_channels=128):
         super().__init__()
-        self.global_context_att = global_context_att
-
         # Use Conv1d with stride == 1 rather than Linear, then we don't need to transpose inputs.
-        if global_context_att:
-            self.linear1 = nn.Conv1d(in_dim * 3, attention_channels, kernel_size=1)  # equals W and b in the paper
-        else:
-            self.linear1 = nn.Conv1d(in_dim, attention_channels, kernel_size=1)  # equals W and b in the paper
+        self.linear1 = nn.Conv1d(in_dim, attention_channels, kernel_size=1)  # equals W and b in the paper
         self.linear2 = nn.Conv1d(attention_channels, in_dim, kernel_size=1)  # equals V and k in the paper
 
     def forward(self, x):
-        if self.global_context_att:
-            context_mean = torch.mean(x, dim=-1, keepdim=True).expand_as(x)
-            context_std = torch.sqrt(torch.var(x, dim=-1, keepdim=True) + 1e-10).expand_as(x)
-            x_in = torch.cat((x, context_mean, context_std), dim=1)
-        else:
-            x_in = x
+        x_in = x
 
         # DON'T use ReLU here! In experiments, I find ReLU hard to converge.
         alpha = torch.tanh(self.linear1(x_in))
@@ -172,8 +150,6 @@ class ECAPA_TDNN(nn.Module):
         feat_dim=80,
         channels=512,
         emb_dim=192,
-        global_context_att=False,
-        feat_type="fbank",
         sr=16000,
         feature_selection="hidden_states",
         update_extract=False,
@@ -181,66 +157,17 @@ class ECAPA_TDNN(nn.Module):
     ):
         super().__init__()
 
-        self.feat_type = feat_type
         self.feature_selection = feature_selection
         self.update_extract = update_extract
         self.sr = sr
 
-        if feat_type == "fbank" or feat_type == "mfcc":
-            self.update_extract = False
+        assert config_path == "__standalone__", "trimmed ECAPA-TDNN only supports the standalone WavLM front-end"
+        from ..wavlm_standalone import StandaloneWavLM  # torch-only, no fairseq/s3prl
 
-        win_len = int(sr * 0.025)
-        hop_len = int(sr * 0.01)
+        self.feature_extract = StandaloneWavLM()
 
-        if feat_type == "fbank":
-            self.feature_extract = trans.MelSpectrogram(
-                sample_rate=sr,
-                n_fft=512,
-                win_length=win_len,
-                hop_length=hop_len,
-                f_min=0.0,
-                f_max=sr // 2,
-                pad=0,
-                n_mels=feat_dim,
-            )
-        elif feat_type == "mfcc":
-            melkwargs = {
-                "n_fft": 512,
-                "win_length": win_len,
-                "hop_length": hop_len,
-                "f_min": 0.0,
-                "f_max": sr // 2,
-                "pad": 0,
-            }
-            self.feature_extract = trans.MFCC(sample_rate=sr, n_mfcc=feat_dim, log_mels=False, melkwargs=melkwargs)
-        else:
-            if config_path == "__standalone__":
-                from ..wavlm_standalone import StandaloneWavLM  # torch-only, no fairseq/s3prl
-
-                self.feature_extract = StandaloneWavLM()
-            elif config_path is None:
-                self.feature_extract = torch.hub.load("s3prl/s3prl", feat_type)
-            else:
-                self.feature_extract = UpstreamExpert(config_path)
-            if len(self.feature_extract.model.encoder.layers) == 24 and hasattr(
-                self.feature_extract.model.encoder.layers[23].self_attn, "fp32_attention"
-            ):
-                self.feature_extract.model.encoder.layers[23].self_attn.fp32_attention = False
-            if len(self.feature_extract.model.encoder.layers) == 24 and hasattr(
-                self.feature_extract.model.encoder.layers[11].self_attn, "fp32_attention"
-            ):
-                self.feature_extract.model.encoder.layers[11].self_attn.fp32_attention = False
-
-            self.feat_num = self.get_feat_num()
-            self.feature_weight = nn.Parameter(torch.zeros(self.feat_num))
-
-        if feat_type != "fbank" and feat_type != "mfcc":
-            freeze_list = ["final_proj", "label_embs_concat", "mask_emb", "project_q", "quantizer"]
-            for name, param in self.feature_extract.named_parameters():
-                for freeze_val in freeze_list:
-                    if freeze_val in name:
-                        param.requires_grad = False
-                        break
+        self.feat_num = self.get_feat_num()
+        self.feature_weight = nn.Parameter(torch.zeros(self.feat_num))
 
         if not self.update_extract:
             for param in self.feature_extract.parameters():
@@ -285,9 +212,7 @@ class ECAPA_TDNN(nn.Module):
         # self.conv = nn.Conv1d(self.channels[-1], self.channels[-1], kernel_size=1)
         cat_channels = channels * 3
         self.conv = nn.Conv1d(cat_channels, self.channels[-1], kernel_size=1)
-        self.pooling = AttentiveStatsPool(
-            self.channels[-1], attention_channels=128, global_context_att=global_context_att
-        )
+        self.pooling = AttentiveStatsPool(self.channels[-1], attention_channels=128)
         self.bn = nn.BatchNorm1d(self.channels[-1] * 2)
         self.linear = nn.Linear(self.channels[-1] * 2, emb_dim)
 
@@ -303,27 +228,17 @@ class ECAPA_TDNN(nn.Module):
             return 1
 
     def get_feat(self, x):
-        if self.update_extract:
+        with torch.no_grad():
             x = self.feature_extract([sample for sample in x])
+
+        x = x[self.feature_selection]
+        if isinstance(x, (list, tuple)):
+            x = torch.stack(x, dim=0)
         else:
-            with torch.no_grad():
-                if self.feat_type == "fbank" or self.feat_type == "mfcc":
-                    x = self.feature_extract(x) + 1e-6  # B x feat_dim x time_len
-                else:
-                    x = self.feature_extract([sample for sample in x])
-
-        if self.feat_type == "fbank":
-            x = x.log()
-
-        if self.feat_type != "fbank" and self.feat_type != "mfcc":
-            x = x[self.feature_selection]
-            if isinstance(x, (list, tuple)):
-                x = torch.stack(x, dim=0)
-            else:
-                x = x.unsqueeze(0)
-            norm_weights = F.softmax(self.feature_weight, dim=-1).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-            x = (norm_weights * x).sum(dim=0)
-            x = torch.transpose(x, 1, 2) + 1e-6
+            x = x.unsqueeze(0)
+        norm_weights = F.softmax(self.feature_weight, dim=-1).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        x = (norm_weights * x).sum(dim=0)
+        x = torch.transpose(x, 1, 2) + 1e-6
 
         x = self.instance_norm(x)
         return x
@@ -347,7 +262,6 @@ class ECAPA_TDNN(nn.Module):
 def ECAPA_TDNN_SMALL(
     feat_dim,
     emb_dim=256,
-    feat_type="fbank",
     sr=16000,
     feature_selection="hidden_states",
     update_extract=False,
@@ -357,20 +271,8 @@ def ECAPA_TDNN_SMALL(
         feat_dim=feat_dim,
         channels=512,
         emb_dim=emb_dim,
-        feat_type=feat_type,
         sr=sr,
         feature_selection=feature_selection,
         update_extract=update_extract,
         config_path=config_path,
     )
-
-
-if __name__ == "__main__":
-    x = torch.zeros(2, 32000)
-    model = ECAPA_TDNN_SMALL(
-        feat_dim=768, emb_dim=256, feat_type="hubert_base", feature_selection="hidden_states", update_extract=False
-    )
-
-    out = model(x)
-    # print(model)
-    print(out.shape)
