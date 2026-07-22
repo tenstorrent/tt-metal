@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "experimental/kernel_args.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -11,22 +12,18 @@
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_block = get_arg_val<uint32_t>(3);
-    const uint32_t block_width_size = get_arg_val<uint32_t>(4);
-    const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
+    const auto num_sticks = get_arg(args::num_sticks);
+    const auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    const auto block_width_size = get_arg(args::block_width_size);
+    const auto num_full_blocks_in_row = get_arg(args::num_full_blocks_in_row);
+    const auto start_stick_id = get_arg(args::start_stick_id);
 
-    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
-
-    const auto s = TensorAccessor(src_tensor_args, src_addr);
+    const auto s = TensorAccessor(tensor::input);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
 
     uint32_t stick_ids[tile_height];
     uint32_t stick_offset = 0;
