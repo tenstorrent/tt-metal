@@ -12,6 +12,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
+#endif
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -24,12 +27,20 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
+// Drive the device forward one step from a host socket credit-wait loop. Simulator co-steps the umd
+// clock; emule pumps the parked fiber scheduler so a kernel blocked on this host-fed socket resumes.
 void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
     if (mesh_device == nullptr) {
         return;
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
+#ifdef TT_METAL_USE_EMULE
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        tt::tt_metal::emule::pump_device();
+        return;
+    }
+#endif
     if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
         return;
     }
