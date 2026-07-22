@@ -337,7 +337,20 @@ def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn
 
 
 def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
-    """Reshape via ROW_MAJOR intermediary to avoid tile layout conflicts."""
+    """Reshape landing in TILE layout.
+
+    For a TILE input (every attention head-split / head-merge), ttnn.reshape reshapes it
+    directly — byte-identical to the ROW_MAJOR round-trip (reshape is value-preserving;
+    verified maxabsdiff==0 across the decode + prefill shapes in
+    tests/perf/reshape_byteident_probe.py) and ~3x cheaper on the decode path (drops the
+    per-reshape untilize + tilize, ~1.6 ms / B=2 LM forward).  A non-TILE input (the
+    ROW_MAJOR embedding output) keeps the round-trip that also lands the result in TILE.
+    """
+    if x.layout == ttnn.TILE_LAYOUT:
+        r = ttnn.reshape(x, shape)
+        if r.layout != ttnn.TILE_LAYOUT:
+            r = ttnn.to_layout(r, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return r
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x = ttnn.reshape(x, shape)
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
