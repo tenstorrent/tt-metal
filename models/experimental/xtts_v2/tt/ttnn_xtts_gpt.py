@@ -302,11 +302,13 @@ class TracedGPTDecoder:
         for li in range(N_LAYER):
             w = self.layers[li]
             qkv = ttnn.linear(self._ln(x, w["ln_1_w"], w["ln_1_b"]), w["attn_w"], bias=w["attn_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)
-            q = ttnn.reshape(ttnn.slice(qkv, [0, 0, 0], [1, 1, N_EMBD]), [1, 1, N_HEAD, HEAD_DIM])
-            k = ttnn.reshape(ttnn.slice(qkv, [0, 0, N_EMBD], [1, 1, 2 * N_EMBD]), [1, 1, N_HEAD, HEAD_DIM])
-            v = ttnn.reshape(ttnn.slice(qkv, [0, 0, 2 * N_EMBD], [1, 1, 3 * N_EMBD]), [1, 1, N_HEAD, HEAD_DIM])
-            ttnn.experimental.paged_update_cache(self.k_cache[li], ttnn.interleaved_to_sharded(k, self._shard), update_idxs_tensor=self._pos, page_table=None)
-            ttnn.experimental.paged_update_cache(self.v_cache[li], ttnn.interleaved_to_sharded(v, self._shard), update_idxs_tensor=self._pos, page_table=None)
+            # Fused per-head Q/K/V split (replaces 3 slice + 3 reshape + 2 interleaved_to_sharded).
+            # Outputs are height-sharded in L1: K/V feed paged_update_cache directly, Q feeds sdpa_decode.
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                ttnn.reshape(qkv, [1, 1, 1, 3 * N_EMBD]), num_heads=N_HEAD, num_kv_heads=N_HEAD
+            )
+            ttnn.experimental.paged_update_cache(self.k_cache[li], k, update_idxs_tensor=self._pos, page_table=None)
+            ttnn.experimental.paged_update_cache(self.v_cache[li], v, update_idxs_tensor=self._pos, page_table=None)
             attn = ttnn.transformer.scaled_dot_product_attention_decode(
                 q, self.k_cache[li], self.v_cache[li], cur_pos_tensor=self._pos, scale=SCALE, compute_kernel_config=COMPUTE_KERNEL_CONFIG
             )
