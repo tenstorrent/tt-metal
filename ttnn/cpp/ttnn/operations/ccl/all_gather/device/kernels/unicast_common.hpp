@@ -138,12 +138,16 @@ public:
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
+        // The scatter command has fixed-size address/chunk arrays even when the
+        // contiguous-page path below uses a larger terminal unicast payload.
+        // Only initialize the entries the scatter command can represent.
+        constexpr uint32_t scatter_header_pages_per_packet = std::min(pages_per_packet, max_pages_per_packet);
 #ifdef FABRIC_2D
         fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
             scatter_packet_header,
             dst_dev_id,
             dst_mesh_id,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), scatter_header_pages_per_packet));
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, dst_dev_id, dst_mesh_id);
@@ -152,7 +156,7 @@ public:
         fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
             scatter_packet_header,
             num_hops,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), scatter_header_pages_per_packet));
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, num_hops);
