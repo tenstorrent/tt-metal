@@ -18,6 +18,12 @@ from loguru import logger
 from ....pipelines.ideogram4.pipeline_ideogram4 import Ideogram4Pipeline
 from ....utils.test import line_params, ring_params
 
+# The pipeline needs the gated fp8 checkpoint (create_pipeline raises ValueError without it);
+# skip (don't error) when it isn't configured, matching the component tests.
+_NEEDS_WEIGHTS = pytest.mark.skipif(
+    not os.environ.get("IDEOGRAM4_WEIGHTS"), reason="IDEOGRAM4_WEIGHTS not set (gated fp8 checkpoint)"
+)
+
 
 def _typography_prompt_json() -> str:
     """Typography-heavy in-distribution JSON caption that showcases Ideogram 4's
@@ -99,6 +105,7 @@ _PIPE_CONFIGS = [
 ]
 
 
+@_NEEDS_WEIGHTS
 @pytest.mark.parametrize(("mesh_device", "device_params"), _PIPE_CONFIGS, indirect=True)
 @pytest.mark.parametrize(
     ("height", "width"), [(512, 512), (1024, 1024), (2048, 2048)], ids=["512px", "1024px", "2048px"]
@@ -119,6 +126,7 @@ def test_pipeline_class(*, mesh_device, height, width, preset) -> None:
     assert arr.std() > 1.0
 
 
+@_NEEDS_WEIGHTS
 @pytest.mark.parametrize(("mesh_device", "device_params"), _PIPE_CONFIGS, indirect=True)
 def test_2048_presets(*, mesh_device) -> None:
     """UNTRACED 2048px generation across all 3 sampler presets, saved for manual review.
