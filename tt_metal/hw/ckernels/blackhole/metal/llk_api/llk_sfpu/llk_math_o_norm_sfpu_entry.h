@@ -22,7 +22,11 @@ inline void llk_math_o_norm_sfpu_init() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int NUM_REDUCE_TILES>
 inline void llk_math_o_norm_sfpu(
     std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_in2, std::uint32_t dst_index_out, std::uint32_t eps_bits) {
-    _llk_math_eltwise_sfpu_start_(dst_index_in0);
+    // Start at tile 0: calculate_o_norm converts each operand index to an
+    // absolute sfpi::dst_reg[...] offset (the same absolute-index convention as
+    // the ternary SFPU params wrapper), so the destination base must not be
+    // rebased to dst_index_in0.
+    _llk_math_eltwise_sfpu_start_(0);
     sfpu::calculate_o_norm<APPROXIMATION_MODE, is_fp32_dest_acc_en, data_format, NUM_REDUCE_TILES>(
         dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, eps_bits);
     _llk_math_eltwise_sfpu_done_();

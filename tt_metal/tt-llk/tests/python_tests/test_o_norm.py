@@ -12,6 +12,7 @@
 import struct
 
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
 from helpers.llk_params import ApproximationMode, DestAccumulation, format_dict
@@ -47,11 +48,16 @@ def _o_norm_golden(
     return o * inv_rms * gamma2 * torch.sigmoid(g_out)
 
 
-# The reference kernel is written for 16-bit bf16 DEST (matches the tt-llk PR
-# #1674 scope); dest_acc=Yes (32-bit DEST) is left for follow-up.
+# o_norm is implemented for Blackhole only (its C++ driver includes a
+# Blackhole-only LLK header), and the reference kernel is written for 16-bit
+# bf16 DEST (matches the tt-llk PR #1674 scope); dest_acc=Yes (32-bit DEST) is
+# left for follow-up. num_reduce_tiles=2 exercises the cross-tile reduction
+# (3 inputs + 1 output = 8 tiles, exactly filling the SyncHalf FP16 dest).
+@skip_for_wormhole
+@skip_for_quasar
 @parametrize(
     dest_acc=[DestAccumulation.No],
-    num_reduce_tiles=[1],
+    num_reduce_tiles=[1, 2],
 )
 def test_o_norm(dest_acc, num_reduce_tiles):
     torch.manual_seed(0)

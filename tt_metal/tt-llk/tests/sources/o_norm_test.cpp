@@ -90,8 +90,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    llk_math_o_norm_sfpu_init<APPROX_MODE>();
-
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     // All operands must be resident in Dest simultaneously for the reduction.
@@ -100,6 +98,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             tile, formats.math, formats.math);
     }
+
+    // Reset the dest RWC to the tile-0 base after the datacopies advanced it, so
+    // the sfpi dst_reg[...] absolute offsets in calculate_o_norm start from tile
+    // 0 (matches sfpu_ternary_test.cpp). Init the SFPU only after this reset.
+    _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
+    llk_math_o_norm_sfpu_init<APPROX_MODE>();
 
     llk_math_o_norm_sfpu<APPROX_MODE, is_fp32_dest_acc_en, static_cast<DataFormat>(UNPACK_A_IN), NUM_REDUCE_TILES>(
         O_NORM_DST_O, O_NORM_DST_GAMMA, O_NORM_DST_GOUT, O_NORM_DST_OUT, O_NORM_EPS_BITS);
