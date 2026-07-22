@@ -11,10 +11,14 @@ Linear copy of `num_elements × elem_size` bytes from `src` to `dst` in a single
 **Parameters:** `src_base`, `dst_base` (compile-time args)
 
 **Sequence:**
-1. Configure `cmdbuf_0` for IDMA copy (`idma_setup_as_copy_cmdbuf_0`)
-2. Set src/dst addresses via `set_src_cmdbuf_0` / `set_dest_cmdbuf_0`
-3. Set transfer length and issue one transaction
-4. Wait for IDMA ack
+1. Select complex command buffer 0 with `overlay::ComplexCommandBuffer0`
+2. Configure its MISC and virtual-channel registers for an iDMA copy
+3. Program the source, destination, and transfer length registers
+4. Issue one transaction and wait for `idma_acks_pending()` to reach zero
+
+This kernel is also a direct usage example for the typed Quasar command-buffer
+hardware API. The strided example remains on the compatibility API while the
+higher-level data-movement migration is in progress.
 
 **Host verification:** host writes a known pattern to `src`, reads back `dst` after kernel completes, and checks `dst == src`.
 

@@ -2,2014 +2,343 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
+
 /**
  * @file cmdbuff_api.hpp
- * @brief Quasar command buffer configuration and transaction API.
+ * @brief Quasar command buffer hardware reference API.
  *
- * The API contains both register-level primitives and
- * convenience functions that reset, configure, and issue a transaction. Those
- * convenience functions are not suitable for issuing overlapping work because
- * reset can disturb outstanding transactions.
+ * This header is the instruction-level description of the command buffer
+ * hardware. Quasar has two equivalent complex command buffers and one simple
+ * command buffer with a smaller, distinct instruction set.
  *
- * The macro generates buffer-specific variants because command buffer IDs are
- * encoded directly in the RoCC instruction:
- * - `xxx_cmdbuf_0()` - Functions for command buffer 0
- * - `xxx_cmdbuf_1()` - Functions for command buffer 1
+ * Complex command buffer IDs and register selectors are template arguments
+ * because both are encoded directly in a RoCC instruction. The API therefore
+ * cannot perform runtime command buffer or register selection.
  *
- * ## Transaction ID Management
- *
- * Each command buffer maintains separate transaction ID ranges to avoid conflicts:
- * - **Buffer 0**: Static TID 1, wrapping range 2-6
- * - **Buffer 1**: Static TID 7, wrapping range 8-12
- *
+ * This layer intentionally does not assign NoC or iDMA ownership. Ownership is
+ * kernel policy and belongs in the data movement layer above this hardware API.
+ * It also does not reset or reconfigure a command buffer as a side effect of
+ * issuing a transaction.
  */
+
 #pragma once
 
 #include <cstdint>
-#include "../noc/noc_parameters.h"
-#include "rocc_instructions.hpp"
 
-#define CMDBUF_0 0
-#define CMDBUF_1 1
+#include "meta/registers/overlay_reg.h"
+#include "rocc_template_instructions.hpp"
 
 namespace overlay {
 
-/// Default transaction ID for both command buffers.
-constexpr std::uint32_t CMDBUF_DEF_TRID = 0;
-/// Static transaction ID reserved for command buffer 0.
-constexpr std::uint32_t CMDBUF_0_TRID_STATIC = 1;
-/// First transaction ID in command buffer 0's wrapping range.
-constexpr std::uint32_t CMDBUF_0_TRID_START = 2;
-/// Last transaction ID in command buffer 0's wrapping range.
-constexpr std::uint32_t CMDBUF_0_TRID_END = 6;
-/// Static transaction ID reserved for command buffer 1.
-constexpr std::uint32_t CMDBUF_1_TRID_STATIC = 7;
-/// First transaction ID in command buffer 1's wrapping range.
-constexpr std::uint32_t CMDBUF_1_TRID_START = 8;
-/// Last transaction ID in command buffer 1's wrapping range.
-constexpr std::uint32_t CMDBUF_1_TRID_END = 12;
+/**
+ * Instruction-level access to one of the two complex command buffers.
+ *
+ * @tparam CommandBufferId Physical complex command buffer ID. Valid values are
+ *         0 and 1.
+ */
+template <std::uint32_t CommandBufferId>
+class ComplexCommandBuffer {
+    static_assert(CommandBufferId < 2, "Quasar has exactly two complex command buffers: 0 and 1");
 
-/// Read-request virtual channel used by both complex command buffers.
-constexpr std::uint32_t CMDBUF_RD_REQ_VC = 1;
-/// Read-response virtual channel used by both complex command buffers.
-constexpr std::uint32_t CMDBUF_RD_RESP_VC = 12;
-/// Write-request virtual channel used by both complex command buffers.
-constexpr std::uint32_t CMDBUF_WR_REQ_VC = 2;
-/// Write-response virtual channel used by both complex command buffers.
-constexpr std::uint32_t CMDBUF_WR_RESP_VC = 13;
-/// Multicast request virtual channel used by both complex command buffers.
-constexpr std::uint32_t CMDBUF_MCAST_REQ_VC = 8;
-/// Multicast response virtual channel used by both complex command buffers.
-constexpr std::uint32_t CMDBUF_MCAST_RESP_VC = 14;
-
-#define DEFINE_CMD_BUFS(buf_name, cmdbuf)                                                                              \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Reset command-buffer state.                                                                              \
-     * @warning Resetting is unsafe while this command buffer has outstanding work.                                    \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void reset_##buf_name() { CMDBUF_RESET(cmdbuf); }                            \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Configures command buffer for copy operations with customizable settings                                 \
-     *                                                                                                                 \
-     * @param wr Indicates if the operation is a write (true) or read (false)                                          \
-     * @param mcast Enables multicast if true; default is false                                                        \
-     * @param mcast_exclude A `TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u` structure specifying which cores to exclude        \
-     *                      from multicast. Defaults to no exclusions                                                  \
-     * @param wrapping_en Enables address wrapping functionality; default is true                                      \
-     * @param posted Enables posted transactions for better performance; default is true                               \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_as_copy_##buf_name(                                               \
-        bool wr,                                                                                                       \
-        bool mcast = false,                                                                                            \
-        TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0},                                                       \
-        bool wrapping_en = true,                                                                                       \
-        bool posted = true) {                                                                                          \
-        TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
-        misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
-                                                                                                                       \
-        misc.f.linked = mcast;                                                                                         \
-        misc.f.posted = wr && posted;                                                                                  \
-        misc.f.multicast = mcast;                                                                                      \
-        misc.f.write_trans = wr;                                                                                       \
-        misc.f.wrapping_en = wrapping_en;                                                                              \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
-                                                                                                                       \
-        if (mcast) {                                                                                                   \
-            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_EXCLUDE_REG_OFFSET, mcast_exclude.val);   \
-        }                                                                                                              \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Configures the specified command buffer as a scatter list with customizable settings.                    \
-     *                                                                                                                 \
-     * This function enables scatter-list functionality for a command buffer.                                          \
-     *                                                                                                                 \
-     * @param wr Retained for source compatibility; atomic setup ignores this value.                                   \
-     * @param apply_scatter_to_dest Indicates if scatter list should be applied to the destination address.            \
-     * @param mcast Enables multicast if true; default is false.                                                       \
-     * @param linked Enables linked transaction                                                                        \
-     * @param mcast_exclude A `TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u` structure specifying which cores to exclude        \
-     *                      from multicast. Defaults to no exclusions.                                                 \
-     * @param scatter_list_contains_size Specifies if the scatter list includes size information.                      \
-     * @param scatter_list_contains_xy Specifies if the scatter list includes XY coordinates. When true,               \
-     *                                 each element in the scatter list includes XY positioning.                       \
-     *                                                                                                                 \
-     * @note To be used with set_scatter_list_x(_)                                                                     \
-     * @note Same thing can be achieved with setup_x() function                                                        \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_as_scatter_list_##buf_name(                                       \
-        bool wr,                                                                                                       \
-        bool apply_scatter_to_dest,                                                                                    \
-        bool mcast = false,                                                                                            \
-        bool linked = false,                                                                                           \
-        TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0},                                                       \
-        bool scatter_list_contains_size = false,                                                                       \
-        bool scatter_list_contains_xy = false,                                                                         \
-        bool wrapping_en = true,                                                                                       \
-        bool posted = true) {                                                                                          \
-        TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
-        misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
-                                                                                                                       \
-        misc.f.linked = linked;                                                                                        \
-        misc.f.posted = wr && posted;                                                                                  \
-        misc.f.multicast = mcast;                                                                                      \
-        misc.f.scatter_list_en = true;                                                                                 \
-        misc.f.scatter_list_to_dest_addr = apply_scatter_to_dest;                                                      \
-        misc.f.write_trans = wr;                                                                                       \
-        misc.f.scatter_list_has_size = scatter_list_contains_size;                                                     \
-        misc.f.scatter_list_has_xy = scatter_list_contains_xy;                                                         \
-        misc.f.wrapping_en = wrapping_en;                                                                              \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
-                                                                                                                       \
-        if (mcast) {                                                                                                   \
-            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_EXCLUDE_REG_OFFSET, mcast_exclude.val);   \
-        }                                                                                                              \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring command buffer for atomic transactions                                          \
-     *                                                                                                                 \
-     * @param wr Indicates if the operation is a write (true) or read (false).                                         \
-     *                                                                                                                 \
-     * @note Overwrites existing command buffer settings                                                               \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_as_atomic_##buf_name(bool wr) {                                   \
-        (void)wr;                                                                                                      \
-        TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
-        misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
-                                                                                                                       \
-        misc.f.posted = 1;                                                                                             \
-        misc.f.write_trans = 0;                                                                                        \
-        misc.f.atomic_trans = 1;                                                                                       \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring command buffer for iDMA copy operations                                         \
-     *                                                                                                                 \
-     * @param wrapping_en Enables address wrapping; default is true                                                    \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void idma_setup_as_copy_##buf_name(bool wrapping_en = true) {                \
-        TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
-        misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
-                                                                                                                       \
-        misc.f.write_trans = 1;                                                                                        \
-        misc.f.idma_en = 1;                                                                                            \
-        misc.f.wrapping_en = wrapping_en;                                                                              \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring command buffer for iDMA scatter list operations                                 \
-     *                                                                                                                 \
-     * @param apply_scatter_to_dest Indicates if scatter list should be applied to the destination address             \
-     * @param scatter_list_contains_size Specifies if the scatter list includes size information                       \
-     * @param scatter_list_contains_xy Specifies if the scatter list includes XY coordinates                           \
-     * @param wrapping_en Enables address wrapping; default is true                                                    \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void idma_setup_as_scatter_list_##buf_name(                                  \
-        bool apply_scatter_to_dest,                                                                                    \
-        bool scatter_list_contains_size = false,                                                                       \
-        bool scatter_list_contains_xy = false,                                                                         \
-        bool wrapping_en = true) {                                                                                     \
-        TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
-        misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
-                                                                                                                       \
-        misc.f.scatter_list_en = true;                                                                                 \
-        misc.f.scatter_list_to_dest_addr = apply_scatter_to_dest;                                                      \
-        misc.f.write_trans = 1;                                                                                        \
-        misc.f.scatter_list_has_size = scatter_list_contains_size;                                                     \
-        misc.f.scatter_list_has_xy = scatter_list_contains_xy;                                                         \
-        misc.f.idma_en = 1;                                                                                            \
-        misc.f.wrapping_en = wrapping_en;                                                                              \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Programs the AXI_OPT_1 cmdbuf register. All fields not exposed as parameters                             \
-     *        are written at their TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT values.                                       \
-     *                                                                                                                 \
-     * @param src_protocol AXI source protocol selector                                                                \
-     * @param decouple_aw  Decouple AXI AW from W channel                                                              \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_axi_opt_1_##buf_name(                                               \
-        std::uint8_t src_protocol, std::uint8_t decouple_aw) {                                                         \
-        TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u axi_opt_1;                                                                     \
-        axi_opt_1.val = TT_ROCC_CMD_BUF_AXI_OPT_1_REG_DEFAULT;                                                         \
-        axi_opt_1.f.src_protocol = src_protocol;                                                                       \
-        axi_opt_1.f.decouple_aw = decouple_aw;                                                                         \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET, axi_opt_1.val);               \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring incrementing logic for command buffer                                           \
-     * Addresses, vcs and transaction ids can be configure to be self incrementing after each transactions             \
-     *                                                                                                                 \
-     * @param src_addr_inc_en If enabled source address will increment after issue                                     \
-     * @param dest_addr_inc_en If enabled destination address will increment after issue                               \
-     * @param trid_inc_en If enabled transaction ID will increment after issue                                         \
-     * @param req_vc_inc_en If enabled request VC will increment after issue                                           \
-     * @param resp_vc_inc_en If enabled response VC will increment after issue                                         \
-     * @param req_vc_inc_on_entire_trans Request VC increment on entire transaction                                    \
-     * @param resp_vc_inc_on_entire_trans Response VC increment on entire transaction                                  \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_ongoing_##buf_name(                                               \
-        bool src_addr_inc_en,                                                                                          \
-        bool dest_addr_inc_en,                                                                                         \
-        bool trid_inc_en,                                                                                              \
-        bool req_vc_inc_en,                                                                                            \
-        bool resp_vc_inc_en,                                                                                           \
-        bool req_vc_inc_on_entire_trans = false,                                                                       \
-        bool resp_vc_inc_on_entire_trans = false) {                                                                    \
-        TT_ROCC_CMD_BUF_AUTOINC_reg_u ongoing;                                                                         \
-        ongoing.val = TT_ROCC_CMD_BUF_AUTOINC_REG_DEFAULT;                                                             \
-                                                                                                                       \
-        ongoing.f.src_addr_inc_en = src_addr_inc_en;                                                                   \
-        ongoing.f.dest_addr_inc_en = dest_addr_inc_en;                                                                 \
-        ongoing.f.trid_inc_en = trid_inc_en;                                                                           \
-        ongoing.f.req_vc_inc_en = req_vc_inc_en;                                                                       \
-        ongoing.f.resp_vc_inc_en = resp_vc_inc_en;                                                                     \
-        ongoing.f.req_vc_inc_on_entire_trans = req_vc_inc_on_entire_trans;                                             \
-        ongoing.f.resp_vc_inc_on_entire_trans = resp_vc_inc_on_entire_trans;                                           \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AUTOINC_REG_OFFSET, ongoing.val);                   \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring virtual channels based on global values defined in this file                    \
-     *                                                                                                                 \
-     * @param wr If enabled, will use write VCs                                                                        \
-     * @param mcast If enabled, will use multicast VCs                                                                 \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_vcs_##buf_name(bool wr, bool mcast = false) {                     \
-        if (wr) {                                                                                                      \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET,                                                \
-                mcast ? CMDBUF_MCAST_REQ_VC : CMDBUF_WR_REQ_VC);                                                       \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET,                                               \
-                mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);                                                     \
-        } else {                                                                                                       \
-            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, CMDBUF_RD_REQ_VC);           \
-            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, CMDBUF_RD_RESP_VC);         \
-        }                                                                                                              \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring wrapping feature of request and response virtual channels                       \
-     *                                                                                                                 \
-     * @param wr Retained for source compatibility; the explicit VC arguments determine the configuration.             \
-     * @param req_start_vc Starting virtual channel for requests                                                       \
-     * @param req_end_vc End virtual channel for requests                                                              \
-     * @param req_vc_offset Offset while wrapping for requests                                                         \
-     * @param resp_start_vc Starting virtual channel for responses                                                     \
-     * @param resp_end_vc End virtual channel for responses                                                            \
-     * @param resp_vc_offset Offset while wrapping for responses                                                       \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_wrapping_vcs_##buf_name(                                          \
-        bool wr,                                                                                                       \
-        std::uint32_t req_start_vc,                                                                                    \
-        std::uint32_t req_end_vc,                                                                                      \
-        std::uint32_t req_vc_offset = 0,                                                                               \
-        std::uint32_t resp_start_vc = 0,                                                                               \
-        std::uint32_t resp_end_vc = 0,                                                                                 \
-        std::uint32_t resp_vc_offset = 0) {                                                                            \
-        (void)wr;                                                                                                      \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, req_start_vc + req_vc_offset);   \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_BASE_REG_OFFSET, req_start_vc);              \
-        CMDBUF_WR_REG(                                                                                                 \
-            cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_SIZE_REG_OFFSET, req_end_vc - req_start_vc + 1);       \
-        CMDBUF_WR_REG(                                                                                                 \
-            cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, resp_start_vc + resp_vc_offset);          \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_BASE_REG_OFFSET, resp_start_vc);            \
-        CMDBUF_WR_REG(                                                                                                 \
-            cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_SIZE_REG_OFFSET, resp_end_vc - resp_start_vc + 1);    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring transaction ID based on macros defined in this file                             \
-     * If wrapping feature for transaction ID is enabled, specified ID is used as offset                               \
-     *                                                                                                                 \
-     * @param trid_offset Transaction ID, if wrapping is enabled this serves as transaction ID offset                  \
-     * @param wrapping Enables wrapping feature for transaction IDs                                                    \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_trids_##buf_name(                                                 \
-        std::uint32_t trid_offset = CMDBUF_DEF_TRID, bool wrapping = false) {                                          \
-        if (cmdbuf == CMDBUF_0) {                                                                                      \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET,                                         \
-                wrapping ? CMDBUF_0_TRID_START + trid_offset : trid_offset);                                           \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET,                                          \
-                wrapping ? CMDBUF_0_TRID_START + trid_offset : trid_offset);                                           \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET,                                                 \
-                wrapping ? CMDBUF_0_TRID_START + trid_offset : trid_offset);                                           \
-            if (wrapping) {                                                                                            \
-                CMDBUF_WR_REG(                                                                                         \
-                    cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_BASE_REG_OFFSET, CMDBUF_0_TRID_START);          \
-                CMDBUF_WR_REG(                                                                                         \
-                    cmdbuf,                                                                                            \
-                    TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_SIZE_REG_OFFSET,                                        \
-                    CMDBUF_0_TRID_END - CMDBUF_0_TRID_START + 1);                                                      \
-            }                                                                                                          \
-        } else {                                                                                                       \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET,                                         \
-                wrapping ? CMDBUF_1_TRID_START + trid_offset : trid_offset);                                           \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET,                                          \
-                wrapping ? CMDBUF_1_TRID_START + trid_offset : trid_offset);                                           \
-            CMDBUF_WR_REG(                                                                                             \
-                cmdbuf,                                                                                                \
-                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET,                                                 \
-                wrapping ? CMDBUF_1_TRID_START + trid_offset : trid_offset);                                           \
-            if (wrapping) {                                                                                            \
-                CMDBUF_WR_REG(                                                                                         \
-                    cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_BASE_REG_OFFSET, CMDBUF_1_TRID_START);          \
-                CMDBUF_WR_REG(                                                                                         \
-                    cmdbuf,                                                                                            \
-                    TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_SIZE_REG_OFFSET,                                        \
-                    CMDBUF_1_TRID_END - CMDBUF_1_TRID_START + 1);                                                      \
-            }                                                                                                          \
-        }                                                                                                              \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Swaps current transaction ID with new one and returns previous value                                     \
-     *                                                                                                                 \
-     * @param new_trid New transaction ID to set                                                                       \
-     * @return Previous transaction ID value                                                                           \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) std::uint32_t swap_trid_##buf_name(std::uint32_t new_trid) {                 \
-        std::uint32_t prev_trid = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET);        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET, new_trid);                        \
-        return prev_trid;                                                                                              \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets maximum bytes per packet for command buffer                                                         \
-     *                                                                                                                 \
-     * @param max_bytes_in_packet Maximum bytes allowed in single packet                                               \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline                                                                                                             \
-        __attribute__((always_inline)) void setup_max_bytes_in_packet_##buf_name(std::uint64_t max_bytes_in_packet) {  \
-        CMDBUF_WR_REG(                                                                                                 \
-            cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET, max_bytes_in_packet);         \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Function for configuring snoop and flush bit of transaction                                              \
-     *                                                                                                                 \
-     * @param snoop_bit Enables destination NIU for cache snoop mechanisms                                             \
-     * @param flush_bit Enables destination NIU to commit all parts of the flit before committing the next packet      \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void setup_packet_tags_##buf_name(bool snoop_bit, bool flush_bit) {          \
-        TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u misc;                                                                        \
-        misc.val = TT_ROCC_CMD_BUF_PACKET_TAGS_REG_DEFAULT;                                                            \
-                                                                                                                       \
-        misc.f.snoop_bit = snoop_bit;                                                                                  \
-        misc.f.flush_bit = flush_bit;                                                                                  \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET, misc.val);                  \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Returns source address for transactions                                                                  \
-     *                                                                                                                 \
-     * @return Source address with noc coordinates embedded                                                            \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) std::uint64_t get_src_##buf_name() {                                         \
-        return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET);                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up source configuration                                                                             \
-     *                                                                                                                 \
-     * @param addr Source address without coordinates (0-4mbs)                                                         \
-     * @param coordinate Coordinate generated using NOC_XY_COORD macro                                                 \
-     * @param base Base address, if wrapping is enabled                                                                \
-     * @param size Size of transfer in bytes                                                                           \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_src_##buf_name(                                                     \
-        std::uint64_t addr, std::uint64_t coordinate, std::uint64_t base, std::uint64_t size) {                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_BASE_REG_OFFSET, base);                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_SIZE_REG_OFFSET, size);                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);                  \
-    }                                                                                                                  \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up source configuration with base address                                                           \
-     *                                                                                                                 \
-     * @param addr Source address without coordinates                                                                  \
-     * @param coordinate Coordinate generated using NOC_XY_COORD macro                                                 \
-     * @param base Base address for wrapping                                                                           \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_src_##buf_name(                                                     \
-        std::uint64_t addr, std::uint64_t coordinate, std::uint64_t base) {                                            \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_BASE_REG_OFFSET, base);                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);                  \
-    }                                                                                                                  \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up source configuration with address and coordinate                                                 \
-     *                                                                                                                 \
-     * @param addr Source address without coordinates                                                                  \
-     * @param coordinate Coordinate generated using NOC_XY_COORD macro                                                 \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_src_##buf_name(std::uint64_t addr, std::uint64_t coordinate) {      \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);                  \
-    }                                                                                                                  \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up source address only                                                                              \
-     *                                                                                                                 \
-     * @param addr Source address                                                                                      \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_src_##buf_name(std::uint64_t addr) {                                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);                         \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Returns destination address for transactions                                                             \
-     *                                                                                                                 \
-     * @return Destination address with noc coordinates embedded                                                       \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) std::uint64_t get_dest_##buf_name() {                                        \
-        return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET);                       \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up destination configuration                                                                        \
-     *                                                                                                                 \
-     * @param addr Destination address without coordinates (0-4mbs)                                                    \
-     * @param coordinates Coordinate generated using NOC_XY_COORD macro                                                \
-     * @param base Base address, if wrapping is enabled                                                                \
-     * @param size Size of transfer in bytes                                                                           \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_dest_##buf_name(                                                    \
-        std::uint64_t addr, std::uint64_t coordinates, std::uint64_t base, std::uint64_t size) {                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_BASE_REG_OFFSET, base);                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_SIZE_REG_OFFSET, size);                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
-    }                                                                                                                  \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up destination configuration with base address                                                      \
-     *                                                                                                                 \
-     * @param addr Destination address without coordinates                                                             \
-     * @param coordinates Coordinate generated using NOC_XY_COORD macro                                                \
-     * @param base Base address for wrapping                                                                           \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_dest_##buf_name(                                                    \
-        std::uint64_t addr, std::uint64_t coordinates, std::uint64_t base) {                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_BASE_REG_OFFSET, base);                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
-    }                                                                                                                  \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up destination configuration with address and coordinate                                            \
-     *                                                                                                                 \
-     * @param addr Destination address without coordinates                                                             \
-     * @param coordinates Coordinate generated using NOC_XY_COORD macro                                                \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_dest_##buf_name(std::uint64_t addr, std::uint64_t coordinates) {    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
-    }                                                                                                                  \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Sets up destination address only                                                                         \
-     *                                                                                                                 \
-     * @param addr Destination address                                                                                 \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_dest_##buf_name(std::uint64_t addr) {                               \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Configure scatter list parameters                                                                        \
-     *                                                                                                                 \
-     * @param addr Scatter list address                                                                                \
-     * @param base Base address                                                                                        \
-     * @param index Index value                                                                                        \
-     * @param times Number of times                                                                                    \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_scatter_list_##buf_name(                                            \
-        std::uint64_t addr, std::uint64_t base, std::uint64_t index, std::uint64_t times) {                            \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_LIST_ADDR_REG_OFFSET, addr);                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_BASE_ADDR_REG_OFFSET, base);                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_INDEX_REG_OFFSET, index);                   \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_TIMES_REG_OFFSET, times);                   \
-    }                                                                                                                  \
-    /** @brief Set the scatter-list wrapping base address. */                                                          \
-    inline __attribute__((always_inline)) void set_scatter_list_base_##buf_name(std::uint64_t base) {                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_BASE_ADDR_REG_OFFSET, base);                \
-    }                                                                                                                  \
-    /** @brief Set the current scatter-list entry index. */                                                            \
-    inline __attribute__((always_inline)) void set_scatter_list_index_##buf_name(std::uint64_t index) {                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_INDEX_REG_OFFSET, index);                   \
-    }                                                                                                                  \
-    /** @brief Set the number of scatter-list iterations. */                                                           \
-    inline __attribute__((always_inline)) void set_scatter_list_times_##buf_name(std::uint64_t times) {                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_TIMES_REG_OFFSET, times);                   \
-    }                                                                                                                  \
-    /** @brief Return the configured scatter-list address. */                                                          \
-    inline __attribute__((always_inline)) std::uint64_t get_scatter_list_addr_##buf_name() {                           \
-        return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_LIST_ADDR_REG_OFFSET);               \
-    }                                                                                                                  \
-    /** @brief Return the configured scatter-list wrapping base address. */                                            \
-    inline __attribute__((always_inline)) std::uint64_t get_scatter_list_base_##buf_name() {                           \
-        return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_BASE_ADDR_REG_OFFSET);               \
-    }                                                                                                                  \
-    /** @brief Return the current scatter-list entry index. */                                                         \
-    inline __attribute__((always_inline)) std::uint64_t get_scatter_list_index_##buf_name() {                          \
-        return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_INDEX_REG_OFFSET);                   \
-    }                                                                                                                  \
-    /** @brief Return the configured scatter-list iteration count. */                                                  \
-    inline __attribute__((always_inline)) std::uint64_t get_scatter_list_times_##buf_name() {                          \
-        return CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SCATTER_TIMES_REG_OFFSET);                   \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Configures size of transfer in bytes                                                                     \
-     *                                                                                                                 \
-     * @param size_bytes Size in bytes                                                                                 \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void set_len_##buf_name(std::uint64_t size_bytes) {                          \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET, size_bytes);                  \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Issue the transaction currently configured in the command buffer.                                        \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void issue_##buf_name() { CMDBUF_ISSUE_TRANS(cmdbuf); }                      \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Issues read transaction                                                                                  \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void issue_read_##buf_name() { issue_##buf_name(); }                         \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Issues write transaction                                                                                 \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void issue_write_##buf_name() { issue_##buf_name(); }                        \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Issue an inline NoC write using the configured address and length.                                       \
-     *                                                                                                                 \
-     * @param data Inline data to be written                                                                           \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void issue_write_inline_##buf_name(std::uint64_t data) {                     \
-        CMDBUF_ISSUE_INLINE_TRANS(cmdbuf, data);                                                                       \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Issue an inline NoC write with address, length, and packet tags encoded in the instruction.              \
-     *                                                                                                                 \
-     * @param data Inline data to be written                                                                           \
-     * @param dest_addr Destination address (with or without xy coordinates embedded)                                  \
-     * @param size_bytes Size of data in bytes                                                                         \
-     * @param has_xy Flag for specifying if address contains noc coordinates using NOC_XY_COORD                        \
-     * @param posted Flag if transfer should be posted or not                                                          \
-     * @param snoop Flag for enabling snoop bit                                                                        \
-     * @param flush Flag for enabling flush bit                                                                        \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void issue_write_inline_len_##buf_name(                                      \
-        std::uint64_t data,                                                                                            \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t size_bytes,                                                                                      \
-        std::uint64_t has_xy = 1,                                                                                      \
-        std::uint64_t posted = 0,                                                                                      \
-        std::uint64_t snoop = 0,                                                                                       \
-        std::uint64_t flush = 0) {                                                                                     \
-        std::uint64_t rs2 =                                                                                            \
-            dest_addr | ((size_bytes - 1) << 57) | (has_xy << 60) | (posted << 61) | (snoop << 62) | (flush << 63);    \
-        CMDBUF_ISSUE_INLINE_ADDR_TRANS(cmdbuf, data, rs2);                                                             \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable generic command-buffer interrupt @p id, which must be in [0, 2]. */                              \
-    inline __attribute__((always_inline)) void interrupt_enable_##buf_name(int id) {                                   \
-        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        val.val |= (1ULL << id);                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable generic command-buffer interrupt @p id, which must be in [0, 2]. */                             \
-    inline __attribute__((always_inline)) void interrupt_disable_##buf_name(int id) {                                  \
-        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        val.val &= ~(1ULL << id);                                                                                      \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete generic pending-interrupt register. */                                              \
-    inline __attribute__((always_inline)) std::uint64_t interrupts_pending_##buf_name() {                              \
-        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
-        return val.val;                                                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear generic command-buffer interrupt @p id, which must be in [0, 2]. */                               \
-    inline __attribute__((always_inline)) void interrupt_clear_##buf_name(int id) {                                    \
-        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
-        val.val = ~(1ULL << id);                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-    /** @brief Enable the count-zero interrupt for @p trid. */                                                         \
-    inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_enable_##buf_name(int trid) {             \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
-        val |= (1ULL << trid);                                                                                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the count-zero interrupt for @p trid. */                                                        \
-    inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_disable_##buf_name(int trid) {            \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
-        val &= ~(1ULL << trid);                                                                                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete count-zero interrupt-enable field. */                                               \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_count_zero_get_interrupt_enable_##buf_name() {        \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the complete count-zero interrupt-enable field with @p val. */                                  \
-    inline                                                                                                             \
-        __attribute__((always_inline)) void per_trid_count_zero_set_interrupt_enable_##buf_name(std::uint32_t val) {   \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);               \
-        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete count-zero pending-interrupt field. */                                              \
-    inline __attribute__((always_inline)) std::uint64_t per_trid_count_zero_interrupts_pending_##buf_name() {          \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete count-zero pending-interrupt field. */                                              \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_count_zero_get_interrupt_pending_##buf_name() {       \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the complete count-zero pending-interrupt field with @p val. */                                 \
-    inline                                                                                                             \
-        __attribute__((always_inline)) void per_trid_count_zero_set_interrupt_pending_##buf_name(std::uint32_t val) {  \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);               \
-        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the count-zero pending interrupt for @p trid. */                                                  \
-    inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_clear_##buf_name(int trid) {              \
-        std::uint64_t val;                                                                                             \
-        val = ~(1ULL << trid);                                                                                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the NoC-write count-zero interrupt for @p trid. */                                               \
-    inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_enable_##buf_name(int trid) {          \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
-        val |= (1ULL << (trid + 32));                                                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the NoC-write count-zero interrupt for @p trid. */                                              \
-    inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_disable_##buf_name(int trid) {         \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
-        val &= ~(1ULL << (trid + 32));                                                                                 \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete NoC-write count-zero interrupt-enable field. */                                     \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_wr_count_zero_get_interrupt_enable_##buf_name() {     \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC-write count-zero interrupt-enable field with @p val. */                                 \
-    inline __attribute__((always_inline)) void per_trid_wr_count_zero_set_interrupt_enable_##buf_name(                 \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);               \
-        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((std::uint64_t)(val & 0xFFFFFFFFULL) << 32);                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete NoC-write count-zero pending-interrupt field. */                                    \
-    inline __attribute__((always_inline)) std::uint64_t per_trid_wr_count_zero_interrupts_pending_##buf_name() {       \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete NoC-write count-zero pending-interrupt field. */                                    \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_wr_count_zero_get_interrupt_pending_##buf_name() {    \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC-write count-zero pending-interrupt field with @p val. */                                \
-    inline __attribute__((always_inline)) void per_trid_wr_count_zero_set_interrupt_pending_##buf_name(                \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);               \
-        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((std::uint64_t)(val & 0xFFFFFFFFULL) << 32);                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the NoC-write count-zero pending interrupt for @p trid. */                                        \
-    inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_clear_##buf_name(int trid) {           \
-        std::uint64_t val;                                                                                             \
-        val = ~(1ULL << (trid + 32));                                                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the iDMA count-zero interrupt for @p trid. */                                                    \
-    inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_enable_##buf_name(int trid) {        \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
-        val |= (1ULL << trid);                                                                                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the iDMA count-zero interrupt for @p trid. */                                                   \
-    inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_disable_##buf_name(int trid) {       \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
-        val &= ~(1ULL << trid);                                                                                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete iDMA count-zero interrupt-enable field. */                                          \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_idma_count_zero_get_interrupt_enable_##buf_name() {   \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the iDMA count-zero interrupt-enable field with @p val. */                                      \
-    inline __attribute__((always_inline)) void per_trid_idma_count_zero_set_interrupt_enable_##buf_name(               \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);               \
-        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete iDMA count-zero pending-interrupt field. */                                         \
-    inline __attribute__((always_inline)) std::uint64_t per_trid_idma_count_zero_interrupts_pending_##buf_name() {     \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL;                                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the complete iDMA count-zero pending-interrupt field. */                                         \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_idma_count_zero_get_interrupt_pending_##buf_name() {  \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the iDMA count-zero pending-interrupt field with @p val. */                                     \
-    inline __attribute__((always_inline)) void per_trid_idma_count_zero_set_interrupt_pending_##buf_name(              \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);               \
-        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the iDMA count-zero pending interrupt for @p trid. */                                             \
-    inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_clear_##buf_name(int trid) {         \
-        std::uint64_t val;                                                                                             \
-        val = ~(1ULL << trid);                                                                                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the NoC-read tiles-to-process interrupt for @p trid. */                                          \
-    inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_enable_##buf_name(int trid) {       \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
-        val |= (1ULL << (trid + 32));                                                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the NoC-read tiles-to-process interrupt for @p trid. */                                         \
-    inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_disable_##buf_name(int trid) {      \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
-        val &= ~(1ULL << (trid + 32));                                                                                 \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC-read tiles-to-process interrupt-enable field. */                                         \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_tiles_to_process_get_interrupt_enable_##buf_name() {  \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC-read tiles-to-process interrupt-enable field with @p val. */                            \
-    inline __attribute__((always_inline)) void per_trid_tiles_to_process_set_interrupt_enable_##buf_name(              \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);               \
-        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((std::uint64_t)(val & 0xFFFFFFFFULL) << 32);                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC-read tiles-to-process pending-interrupt field. */                                        \
-    inline __attribute__((always_inline)) std::uint64_t per_trid_tiles_to_process_interrupts_pending_##buf_name() {    \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL;                                                                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC-read tiles-to-process pending-interrupt field. */                                        \
-    inline __attribute__((always_inline)) std::uint32_t per_trid_tiles_to_process_get_interrupt_pending_##buf_name() { \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC-read tiles-to-process pending-interrupt field with @p val. */                           \
-    inline __attribute__((always_inline)) void per_trid_tiles_to_process_set_interrupt_pending_##buf_name(             \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);               \
-        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((std::uint64_t)(val & 0xFFFFFFFFULL) << 32);                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the NoC-read tiles-to-process pending interrupt for @p trid. */                                   \
-    inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_clear_##buf_name(int trid) {        \
-        std::uint64_t val;                                                                                             \
-        val = ~(1ULL << (trid + 32));                                                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the NoC-write tiles-to-process interrupt for @p trid. */                                         \
-    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_enable_##buf_name(int trid) {    \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
-        val |= (1ULL << trid);                                                                                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the NoC-write tiles-to-process interrupt for @p trid. */                                        \
-    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_disable_##buf_name(int trid) {   \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
-        val &= ~(1ULL << trid);                                                                                        \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC-write tiles-to-process interrupt-enable field. */                                        \
-    inline                                                                                                             \
-        __attribute__((always_inline)) std::uint32_t per_trid_wr_tiles_to_process_get_interrupt_enable_##buf_name() {  \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC-write tiles-to-process interrupt-enable field with @p val. */                           \
-    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_set_interrupt_enable_##buf_name(           \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);               \
-        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC-write tiles-to-process pending-interrupt field. */                                       \
-    inline __attribute__((always_inline)) std::uint64_t per_trid_wr_tiles_to_process_interrupts_pending_##buf_name() { \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL;                                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC-write tiles-to-process pending-interrupt field. */                                       \
-    inline                                                                                                             \
-        __attribute__((always_inline)) std::uint32_t per_trid_wr_tiles_to_process_get_interrupt_pending_##buf_name() { \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
-        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC-write tiles-to-process pending-interrupt field with @p val. */                          \
-    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_set_interrupt_pending_##buf_name(          \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);               \
-        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the NoC-write tiles-to-process pending interrupt for @p trid. */                                  \
-    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_clear_##buf_name(int trid) {     \
-        std::uint64_t val;                                                                                             \
-        val = ~(1ULL << trid);                                                                                         \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the iDMA tiles-to-process interrupt for @p trid. */                                              \
-    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_enable_##buf_name(int trid) {  \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
-        val |= (1ULL << (trid + 32));                                                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the iDMA tiles-to-process interrupt for @p trid. */                                             \
-    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_disable_##buf_name(int trid) { \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
-        val &= ~(1ULL << (trid + 32));                                                                                 \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the iDMA tiles-to-process interrupt-enable field. */                                             \
-    inline __attribute__((                                                                                             \
-        always_inline)) std::uint32_t per_trid_idma_tiles_to_process_get_interrupt_enable_##buf_name() {               \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the iDMA tiles-to-process interrupt-enable field with @p val. */                                \
-    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_set_interrupt_enable_##buf_name(         \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);               \
-        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((std::uint64_t)(val & 0xFFFFFFFFULL) << 32);                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the iDMA tiles-to-process pending-interrupt field. */                                            \
-    inline                                                                                                             \
-        __attribute__((always_inline)) std::uint64_t per_trid_idma_tiles_to_process_interrupts_pending_##buf_name() {  \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL;                                                                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the iDMA tiles-to-process pending-interrupt field. */                                            \
-    inline __attribute__((                                                                                             \
-        always_inline)) std::uint32_t per_trid_idma_tiles_to_process_get_interrupt_pending_##buf_name() {              \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
-        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the iDMA tiles-to-process pending-interrupt field with @p val. */                               \
-    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_set_interrupt_pending_##buf_name(        \
-        std::uint32_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);               \
-        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((std::uint64_t)(val & 0xFFFFFFFFULL) << 32);                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, reg_val);                \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the iDMA tiles-to-process pending interrupt for @p trid. */                                       \
-    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_clear_##buf_name(int trid) {   \
-        std::uint64_t val;                                                                                             \
-        val = ~(1ULL << (trid + 32));                                                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, val);                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the NoC VC-has-space interrupt for @p vc, which must be in [0, 11]. */                           \
-    inline __attribute__((always_inline)) void per_vc_has_space_interrupt_enable_##buf_name(int vc) {                  \
-        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        val.val |= (1ULL << (vc + 32));                                                                                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the NoC VC-has-space interrupt for @p vc, which must be in [0, 11]. */                          \
-    inline __attribute__((always_inline)) void per_vc_has_space_interrupt_disable_##buf_name(int vc) {                 \
-        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        val.val &= ~(1ULL << (vc + 32));                                                                               \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC VC-has-space interrupt-enable field. */                                                  \
-    inline __attribute__((always_inline)) std::uint16_t per_vc_has_space_get_interrupt_enable_##buf_name() {           \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                               \
-        return (val & TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_MASK) >> TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_SHIFT;    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC VC-has-space interrupt-enable field with @p val. */                                     \
-    inline __attribute__((always_inline)) void per_vc_has_space_set_interrupt_enable_##buf_name(std::uint16_t val) {   \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        reg_val = (reg_val & ~TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_MASK) |                                           \
-                  ((static_cast<std::uint64_t>(val) << TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_SHIFT) &                 \
-                   TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_MASK);                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, reg_val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC VC-has-space pending-interrupt field. */                                                 \
-    inline __attribute__((always_inline)) std::uint64_t per_vc_has_space_interrupts_pending_##buf_name() {             \
-        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
-        return (val.val & TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK) >>                                              \
-               TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT;                                                           \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the NoC VC-has-space pending-interrupt field. */                                                 \
-    inline __attribute__((always_inline)) std::uint16_t per_vc_has_space_get_interrupt_pending_##buf_name() {          \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                               \
-        return (val & TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK) >> TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT;    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the NoC VC-has-space pending-interrupt field with @p val. */                                    \
-    inline __attribute__((always_inline)) void per_vc_has_space_set_interrupt_pending_##buf_name(std::uint16_t val) {  \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
-        reg_val = (reg_val & ~TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK) |                                           \
-                  ((static_cast<std::uint64_t>(val) << TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT) &                 \
-                   TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK);                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, reg_val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the NoC VC-has-space interrupt for @p vc, which must be in [0, 11]. */                            \
-    inline __attribute__((always_inline)) void per_vc_has_space_interrupt_clear_##buf_name(int vc) {                   \
-        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
-        val.val = ~(1ULL << (vc + 32));                                                                                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Enable the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11]. */                          \
-    inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_enable_##buf_name(int vc) {             \
-        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        val.val |= (1ULL << (vc + 48));                                                                                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Disable the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11]. */                         \
-    inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_disable_##buf_name(int vc) {            \
-        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        val.val &= ~(1ULL << (vc + 48));                                                                               \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the iDMA VC-has-space interrupt-enable field. */                                                 \
-    inline __attribute__((always_inline)) std::uint16_t per_idma_vc_has_space_get_interrupt_enable_##buf_name() {      \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                               \
-        return (val & TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_MASK) >>                                             \
-               TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_SHIFT;                                                      \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the iDMA VC-has-space interrupt-enable field with @p val. */                                    \
-    inline                                                                                                             \
-        __attribute__((always_inline)) void per_idma_vc_has_space_set_interrupt_enable_##buf_name(std::uint16_t val) { \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
-        reg_val = (reg_val & ~TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_MASK) |                                      \
-                  ((static_cast<std::uint64_t>(val) << TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_SHIFT) &            \
-                   TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_MASK);                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, reg_val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the iDMA VC-has-space pending-interrupt field. */                                                \
-    inline __attribute__((always_inline)) std::uint64_t per_idma_vc_has_space_interrupts_pending_##buf_name() {        \
-        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
-        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
-        return (val.val & TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_MASK) >>                                         \
-               TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT;                                                      \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return the iDMA VC-has-space pending-interrupt field. */                                                \
-    inline __attribute__((always_inline)) std::uint16_t per_idma_vc_has_space_get_interrupt_pending_##buf_name() {     \
-        std::uint64_t val;                                                                                             \
-        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                               \
-        return (val & TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_MASK) >>                                             \
-               TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT;                                                      \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Replace the iDMA VC-has-space pending-interrupt field with @p val. */                                   \
-    inline __attribute__((always_inline)) void per_idma_vc_has_space_set_interrupt_pending_##buf_name(                 \
-        std::uint16_t val) {                                                                                           \
-        std::uint64_t reg_val;                                                                                         \
-        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
-        reg_val = (reg_val & ~TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_MASK) |                                      \
-                  ((static_cast<std::uint64_t>(val) << TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT) &            \
-                   TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_MASK);                                                  \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, reg_val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Clear the iDMA VC-has-space interrupt for @p vc, which must be in [0, 11]. */                           \
-    inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_clear_##buf_name(int vc) {              \
-        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
-        val.val = ~(1ULL << (vc + 48));                                                                                \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Standalone noc read function which uses custom ASM instruction, bypassing all configurations             \
-     * Does not need any other configuring                                                                             \
-     *                                                                                                                 \
-     * @param src_addr Remote source address                                                                           \
-     * @param dest_addr Local L1 destination address                                                                   \
-     * @param len_bytes Size of data in bytes                                                                          \
-     * @param has_xy Flag for specifying if address contains noc coordinates using NOC_XY_COORD                        \
-     * @param posted Flag if transfer should be posted or not                                                          \
-     * @param snoop Flag for enabling snoop bit                                                                        \
-     * @param flush Flag for enabling flush bit                                                                        \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_fast_read_##buf_name(                                               \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint32_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint64_t has_xy = 1,                                                                                      \
-        std::uint64_t posted = 0,                                                                                      \
-        std::uint64_t snoop = 0,                                                                                       \
-        std::uint64_t flush = 0) {                                                                                     \
-        std::uint64_t rs1 = (len_bytes << 32) | dest_addr;                                                             \
-        std::uint64_t rs2 = src_addr | (has_xy << 60) | (posted << 61) | (snoop << 62) | (flush << 63);                \
-        CMDBUF_ISSUE_READ2_TRANS(cmdbuf, rs1, rs2);                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Reset, configure, and issue one NoC read.                                                                \
-     * @warning Resetting is unsafe while this command buffer has outstanding work.                                    \
-     *                                                                                                                 \
-     * @param src_coordinate Coordinate of source core packed with NOC_XY_COORD macro                                  \
-     * @param src_addr Remote source address                                                                           \
-     * @param dest_coordinate Coordinate of destination core packed with NOC_XY_COORD macro                            \
-     * @param dest_addr Local L1 destination address                                                                   \
-     * @param len_bytes Size of data in bytes                                                                          \
-     * @param transaction_id Transaction ID for this operation                                                         \
-     * @param snoop_bit Flag for enabling snoop bit                                                                    \
-     * @param flush_bit Flag for enabling flush bit                                                                    \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_read_##buf_name(                                                    \
-        std::uint64_t src_coordinate,                                                                                  \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint64_t dest_coordinate,                                                                                 \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                \
-        bool snoop_bit = false,                                                                                        \
-        bool flush_bit = false) {                                                                                      \
-        reset_##buf_name();                                                                                            \
-        setup_as_copy_##buf_name(false, false, {0}, false);                                                            \
-        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(false);                                                                                   \
-        setup_trids_##buf_name(transaction_id);                                                                        \
-        if (snoop_bit || flush_bit) {                                                                                  \
-            setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
-        }                                                                                                              \
-        set_src_##buf_name(src_addr, src_coordinate);                                                                  \
-        set_dest_##buf_name(dest_addr, dest_coordinate);                                                               \
-        set_len_##buf_name(len_bytes);                                                                                 \
-        issue_read_##buf_name();                                                                                       \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     * @brief Reset and configure a NoC write without issuing it.                                                      \
-     * @note Resetting is unsafe while this command buffer has outstanding work.                                       \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_write_prep_##buf_name(                                              \
-        std::uint64_t src_coordinate,                                                                                  \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint64_t dest_coordinate,                                                                                 \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                \
-        bool mcast = false,                                                                                            \
-        bool snoop_bit = false,                                                                                        \
-        bool flush_bit = false,                                                                                        \
-        bool posted = true) {                                                                                          \
-        reset_##buf_name();                                                                                            \
-        setup_as_copy_##buf_name(true, mcast, {0}, false, posted);                                                     \
-        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(true, mcast);                                                                             \
-        setup_trids_##buf_name(transaction_id);                                                                        \
-        if (snoop_bit || flush_bit) {                                                                                  \
-            setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
-        }                                                                                                              \
-        set_src_##buf_name(src_addr, src_coordinate);                                                                  \
-        set_dest_##buf_name(dest_addr, dest_coordinate);                                                               \
-        set_len_##buf_name(len_bytes);                                                                                 \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     * @brief Reset and configure a NoC read without issuing it.                                                       \
-     * @note Resetting is unsafe while this command buffer has outstanding work.                                       \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_read_prep_##buf_name(                                               \
-        std::uint64_t src_coordinate,                                                                                  \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint64_t dest_coordinate,                                                                                 \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                \
-        bool snoop_bit = false,                                                                                        \
-        bool flush_bit = false) {                                                                                      \
-        reset_##buf_name();                                                                                            \
-        setup_as_copy_##buf_name(false, false, {0}, false);                                                            \
-        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(false);                                                                                   \
-        setup_trids_##buf_name(transaction_id);                                                                        \
-        if (snoop_bit || flush_bit) {                                                                                  \
-            setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
-        }                                                                                                              \
-        set_src_##buf_name(src_addr, src_coordinate);                                                                  \
-        set_dest_##buf_name(dest_addr, dest_coordinate);                                                               \
-        set_len_##buf_name(len_bytes);                                                                                 \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Standalone noc write function which uses custom ASM instruction, bypassing all configurations            \
-     * Does not need any other configuring (reset cmd buffer before use)                                               \
-     *                                                                                                                 \
-     * @param src_addr Local L1 source address                                                                         \
-     * @param dest_addr Remote destination address                                                                     \
-     * @param len_bytes Size of data in bytes                                                                          \
-     * @param has_xy Flag for specifying if address contains noc coordinates using NOC_XY_COORD                        \
-     * @param posted Flag if transfer should be posted or not                                                          \
-     * @param snoop Flag for enabling snoop bit                                                                        \
-     * @param flush Flag for enabling flush bit                                                                        \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_fast_write_##buf_name(                                              \
-        std::uint32_t src_addr,                                                                                        \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint64_t has_xy = 1,                                                                                      \
-        std::uint64_t posted = 0,                                                                                      \
-        std::uint64_t snoop = 0,                                                                                       \
-        std::uint64_t flush = 0) {                                                                                     \
-        std::uint64_t rs1 = (len_bytes << 32) | src_addr;                                                              \
-        std::uint64_t rs2 = dest_addr | (has_xy << 60) | (posted << 61) | (snoop << 62) | (flush << 63);               \
-        CMDBUF_ISSUE_WRITE2_TRANS(cmdbuf, rs1, rs2);                                                                   \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Reset, configure, and issue one NoC write.                                                               \
-     * @warning Resetting is unsafe while this command buffer has outstanding work.                                    \
-     *                                                                                                                 \
-     * @param src_coordinate Coordinate of source core                                                                 \
-     * @param src_addr Local L1 source address                                                                         \
-     * @param dest_coordinate Coordinate of destination core                                                           \
-     * @param dest_addr Remote destination address                                                                     \
-     * @param len_bytes Size of data in bytes                                                                          \
-     * @param transaction_id Transaction ID for this operation                                                         \
-     * @param mcast Enable multicast                                                                                   \
-     * @param snoop_bit Flag for enabling snoop bit                                                                    \
-     * @param flush_bit Flag for enabling flush bit                                                                    \
-     * @param posted Flag if transfer should be posted or not                                                          \
-     * @param mcast_exclude Multicast exclusion settings                                                               \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_write_##buf_name(                                                   \
-        std::uint64_t src_coordinate,                                                                                  \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint64_t dest_coordinate,                                                                                 \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                \
-        bool mcast = false,                                                                                            \
-        bool snoop_bit = false,                                                                                        \
-        bool flush_bit = false,                                                                                        \
-        bool posted = true,                                                                                            \
-        TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0}) {                                                     \
-        reset_##buf_name();                                                                                            \
-        setup_as_copy_##buf_name(true, mcast, mcast_exclude, false, posted);                                           \
-        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(true, mcast);                                                                             \
-        setup_trids_##buf_name(transaction_id);                                                                        \
-        if (snoop_bit || flush_bit) {                                                                                  \
-            setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
-        }                                                                                                              \
-        set_src_##buf_name(src_addr, src_coordinate);                                                                  \
-        set_dest_##buf_name(dest_addr, dest_coordinate);                                                               \
-        set_len_##buf_name(len_bytes);                                                                                 \
-        issue_write_##buf_name();                                                                                      \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Complete iDMA copy operation                                                                             \
-     *                                                                                                                 \
-     * @param src_addr Source address                                                                                  \
-     * @param dest_addr Destination address                                                                            \
-     * @param len_bytes Size of data in bytes                                                                          \
-     * @param transaction_id Transaction ID for this operation                                                         \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void idma_copy_##buf_name(                                                   \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint32_t transaction_id = CMDBUF_DEF_TRID) {                                                              \
-        reset_##buf_name();                                                                                            \
-        idma_setup_as_copy_##buf_name(false);                                                                          \
-        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(true);                                                                                    \
-        setup_trids_##buf_name(transaction_id);                                                                        \
-        set_src_##buf_name(src_addr);                                                                                  \
-        set_dest_##buf_name(dest_addr);                                                                                \
-        set_len_##buf_name(len_bytes);                                                                                 \
-        issue_##buf_name();                                                                                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Atomic increment function                                                                                \
-     *                                                                                                                 \
-     * @param noc_coordinate NOC coordinate of target                                                                  \
-     * @param addr Remote destination address                                                                          \
-     * @param incr Increment value                                                                                     \
-     * @param wrap Wrap value                                                                                          \
-     * @param snoop_bit Flag for enabling snoop bit                                                                    \
-     * @param flush_bit Flag for enabling flush bit                                                                    \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void noc_atomic_increment_##buf_name(                                        \
-        std::uint64_t noc_coordinate,                                                                                  \
-        std::uint64_t addr,                                                                                            \
-        std::uint32_t incr = 1,                                                                                        \
-        std::uint32_t wrap = 31,                                                                                       \
-        bool snoop_bit = false,                                                                                        \
-        bool flush_bit = false) {                                                                                      \
-        std::uint64_t at_len = NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) |                                   \
-                               NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0);                                \
-        setup_as_atomic_##buf_name(true);                                                                              \
-        if (snoop_bit || flush_bit) {                                                                                  \
-            setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
-        }                                                                                                              \
-        set_dest_##buf_name(addr, noc_coordinate);                                                                     \
-        set_len_##buf_name(at_len);                                                                                    \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET, (std::uint64_t)incr);       \
-        issue_##buf_name();                                                                                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Returns amount of free buffer space in virtual channel buffer                                            \
-     *                                                                                                                 \
-     * @param vc Virtual channel ID                                                                                    \
-     * @return Amount in bytes                                                                                         \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) std::uint64_t free_space_##buf_name(std::uint32_t vc) {                      \
-        return CMDBUF_GET_VC_SPACE_VC(cmdbuf, vc);                                                                     \
-    }                                                                                                                  \
-    /** @brief Return free space for the currently configured NoC request VC. */                                       \
-    inline __attribute__((always_inline)) std::uint64_t free_space_##buf_name() {                                      \
-        return CMDBUF_GET_VC_SPACE(cmdbuf);                                                                            \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return free space for iDMA virtual channel @p vc. */                                                    \
-    inline __attribute__((always_inline)) std::uint64_t idma_free_space_##buf_name(std::uint32_t vc) {                 \
-        return CMDBUF_IDMA_GET_VC_SPACE_VC(cmdbuf, vc);                                                                \
-    }                                                                                                                  \
-    /** @brief Return free space for the currently configured iDMA request VC. */                                      \
-    inline __attribute__((always_inline)) std::uint64_t idma_free_space_##buf_name() {                                 \
-        return CMDBUF_IDMA_GET_VC_SPACE(cmdbuf);                                                                       \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Checks if transaction with argument trid is completed                                                    \
-     *                                                                                                                 \
-     * @param transaction_id Transaction id to check                                                                   \
-     * @return True when the transaction has completed.                                                                \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) bool noc_reads_acked_##buf_name(std::uint32_t transaction_id) {              \
-        return CMDBUF_TR_ACK_TRID(cmdbuf, transaction_id) == 0;                                                        \
-    }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending NoC read acknowledgements. */                  \
-    inline __attribute__((always_inline)) bool noc_reads_acked_##buf_name() { return CMDBUF_TR_ACK(cmdbuf) == 0; }     \
-                                                                                                                       \
-    /** @brief Return whether every transaction ID reserved for this buffer has completed its NoC reads. */            \
-    inline __attribute__((always_inline)) bool all_noc_reads_acked_##buf_name() {                                      \
-        bool all = true;                                                                                               \
-        if (cmdbuf == CMDBUF_0) {                                                                                      \
-            for (std::uint32_t k = CMDBUF_0_TRID_STATIC; k <= CMDBUF_0_TRID_END; k++) {                                \
-                all = all && CMDBUF_TR_ACK_TRID(cmdbuf, k) == 0;                                                       \
-            }                                                                                                          \
-        } else {                                                                                                       \
-            for (std::uint32_t k = CMDBUF_1_TRID_STATIC; k <= CMDBUF_1_TRID_END; k++) {                                \
-                all = all && CMDBUF_TR_ACK_TRID(cmdbuf, k) == 0;                                                       \
-            }                                                                                                          \
-        }                                                                                                              \
-        return all;                                                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return whether @p transaction_id has no pending iDMA acknowledgements. */                               \
-    inline __attribute__((always_inline)) bool idma_acked_##buf_name(std::uint32_t transaction_id) {                   \
-        return CMDBUF_IDMA_TR_ACK_TRID(cmdbuf, transaction_id) == 0;                                                   \
-    }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending iDMA acknowledgements. */                      \
-    inline __attribute__((always_inline)) bool idma_acked_##buf_name() { return CMDBUF_IDMA_TR_ACK(cmdbuf) == 0; }     \
-                                                                                                                       \
-    /** @brief Return whether every transaction ID reserved for this buffer has completed its iDMA work. */            \
-    inline __attribute__((always_inline)) bool all_idma_acked_##buf_name() {                                           \
-        bool all = true;                                                                                               \
-        if (cmdbuf == CMDBUF_0) {                                                                                      \
-            for (std::uint32_t k = CMDBUF_0_TRID_STATIC; k <= CMDBUF_0_TRID_END; k++) {                                \
-                all = all && CMDBUF_IDMA_TR_ACK_TRID(cmdbuf, k) == 0;                                                  \
-            }                                                                                                          \
-        } else {                                                                                                       \
-            for (std::uint32_t k = CMDBUF_1_TRID_STATIC; k <= CMDBUF_1_TRID_END; k++) {                                \
-                all = all && CMDBUF_IDMA_TR_ACK_TRID(cmdbuf, k) == 0;                                                  \
-            }                                                                                                          \
-        }                                                                                                              \
-        return all;                                                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Checks if write with provided transaction ID is completed                                                \
-     *                                                                                                                 \
-     * @param transaction_id Transaction id to check                                                                   \
-     * @return True when the write has been sent.                                                                      \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) bool noc_writes_sent_##buf_name(std::uint32_t transaction_id) {              \
-        return CMDBUF_WR_SENT_TRID(cmdbuf, transaction_id) == 0;                                                       \
-    }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending NoC write sends. */                            \
-    inline __attribute__((always_inline)) bool noc_writes_sent_##buf_name() { return CMDBUF_WR_SENT(cmdbuf) == 0; }    \
-                                                                                                                       \
-    /** @brief Return whether every transaction ID reserved for this buffer has sent its NoC writes. */                \
-    inline __attribute__((always_inline)) bool all_noc_writes_sent_##buf_name() {                                      \
-        bool all = true;                                                                                               \
-        if (cmdbuf == CMDBUF_0) {                                                                                      \
-            for (std::uint32_t k = CMDBUF_0_TRID_STATIC; k <= CMDBUF_0_TRID_END; k++) {                                \
-                all = all && CMDBUF_WR_SENT_TRID(cmdbuf, k) == 0;                                                      \
-            }                                                                                                          \
-        } else {                                                                                                       \
-            for (std::uint32_t k = CMDBUF_1_TRID_STATIC; k <= CMDBUF_1_TRID_END; k++) {                                \
-                all = all && CMDBUF_WR_SENT_TRID(cmdbuf, k) == 0;                                                      \
-            }                                                                                                          \
-        }                                                                                                              \
-        return all;                                                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     *                                                                                                                 \
-     * @brief Checks if nonposted write transaction is acknowledged                                                    \
-     *                                                                                                                 \
-     * @param transaction_id Transaction id to check                                                                   \
-     * @return True if nonposted write is acknowledged                                                                 \
-     *                                                                                                                 \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_##buf_name(std::uint32_t transaction_id) {   \
-        return CMDBUF_TR_ACK_TRID(cmdbuf, transaction_id) == 0;                                                        \
-    }                                                                                                                  \
-    /** @brief Return whether the current transaction ID has no pending non-posted write acknowledgements. */          \
-    inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_##buf_name() {                               \
-        return CMDBUF_TR_ACK(cmdbuf) == 0;                                                                             \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Return whether all reserved transaction IDs have completed their non-posted writes. */                  \
-    inline __attribute__((always_inline)) bool all_noc_nonposted_writes_acked_##buf_name() {                           \
-        bool all = true;                                                                                               \
-        if (cmdbuf == CMDBUF_0) {                                                                                      \
-            for (std::uint32_t k = CMDBUF_0_TRID_STATIC; k <= CMDBUF_0_TRID_END; k++) {                                \
-                all = all && CMDBUF_TR_ACK_TRID(cmdbuf, k) == 0;                                                       \
-            }                                                                                                          \
-        } else {                                                                                                       \
-            for (std::uint32_t k = CMDBUF_1_TRID_STATIC; k <= CMDBUF_1_TRID_END; k++) {                                \
-                all = all && CMDBUF_TR_ACK_TRID(cmdbuf, k) == 0;                                                       \
-            }                                                                                                          \
-        }                                                                                                              \
-        return all;                                                                                                    \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Configure the L1 atomic-accumulate format, saturation, and operation. */                                \
-    inline __attribute__((always_inline)) void l1_atomic_instr_##buf_name(                                             \
-        std::uint32_t fmt, bool no_sat, std::uint32_t atomic_op) {                                                     \
-        TT_ROCC_CMD_BUF_L1_ACCUM_CFG_reg_u l1_atomic_instr;                                                            \
-        l1_atomic_instr.val = TT_ROCC_CMD_BUF_L1_ACCUM_CFG_REG_DEFAULT;                                                \
-                                                                                                                       \
-        l1_atomic_instr.f.l1_atomic_fmt = fmt;                                                                         \
-        l1_atomic_instr.f.disable_sat = no_sat;                                                                        \
-        l1_atomic_instr.f.l1_atomic_operation = atomic_op;                                                             \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_L1_ACCUM_CFG_REG_OFFSET, l1_atomic_instr.val);      \
-    }                                                                                                                  \
-                                                                                                                       \
-    /** @brief Configure this complex command buffer for iDMA L1 atomic accumulation. */                               \
-    inline __attribute__((always_inline)) void idma_setup_as_atomic_accum_##buf_name(bool wrapping_en = true) {        \
-        TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
-        misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
-                                                                                                                       \
-        misc.f.write_trans = 1;                                                                                        \
-        misc.f.idma_en = 1;                                                                                            \
-        misc.f.wrapping_en = wrapping_en;                                                                              \
-        misc.f.l1_accum_en = 1;                                                                                        \
-                                                                                                                       \
-        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
-    }                                                                                                                  \
-                                                                                                                       \
-    /**                                                                                                                \
-     * @brief Reset, configure, and issue one iDMA L1 atomic-accumulate transaction.                                   \
-     * @note Resetting is unsafe while this command buffer has outstanding work.                                       \
-     */                                                                                                                \
-    inline __attribute__((always_inline)) void idma_l1_atomic_accum_##buf_name(                                        \
-        std::uint64_t src_addr,                                                                                        \
-        std::uint64_t dest_addr,                                                                                       \
-        std::uint64_t len_bytes,                                                                                       \
-        std::uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                \
-        std::uint64_t fmt = 0x0,                                                                                       \
-        std::uint64_t op = 0x9) {                                                                                      \
-        reset_##buf_name();                                                                                            \
-        idma_setup_as_atomic_accum_##buf_name(false);                                                                  \
-        l1_atomic_instr_##buf_name(fmt, false, op);                                                                    \
-        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(true);                                                                                    \
-        setup_trids_##buf_name(transaction_id);                                                                        \
-        set_src_##buf_name(src_addr);                                                                                  \
-        set_dest_##buf_name(dest_addr);                                                                                \
-        set_len_##buf_name(len_bytes);                                                                                 \
-        issue_##buf_name();                                                                                            \
+    template <std::uint32_t InstructionIndex>
+    static constexpr std::uint32_t function() {
+        return (CommandBufferId * 64 + InstructionIndex) & 0x7f;
     }
 
-DEFINE_CMD_BUFS(cmdbuf_0, CMDBUF_0)
-DEFINE_CMD_BUFS(cmdbuf_1, CMDBUF_1)
+public:
+    static constexpr std::uint32_t id = CommandBufferId;
 
-#undef DEFINE_CMD_BUFS
-
-// Simple command buffer API.
-//
-// The simple buffer supports NoC transactions only. Its custom instruction encoding
-// differs from the two complex command buffers, so these functions intentionally use
-// the existing `reg_cmdbuf` suffix rather than the generated complex-buffer names.
-
-/** @brief Reset the simple command buffer state. */
-inline __attribute__((always_inline)) void reset_reg_cmdbuf() { SCMDBUF_RESET(); }
-
-/**
- * @brief Configure the simple command buffer for a NoC copy.
- * @param wr Select a write when true or a read when false.
- * @param mcast Enable multicast and linked mode.
- * @param mcast_exclude Multicast destinations to exclude.
- * @param posted Enable posted writes; ignored for reads.
- */
-inline __attribute__((always_inline)) void setup_as_copy_reg_cmdbuf(
-    bool wr, bool mcast = false, TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0}, bool posted = true) {
-    TT_ROCC_CMD_BUF_MISC_reg_u misc;
-    misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;
-
-    misc.f.linked = mcast;
-    misc.f.posted = wr && posted;
-    misc.f.multicast = mcast;
-    misc.f.write_trans = wr;
-
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);
-
-    if (mcast) {
-        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_EXCLUDE_REG_OFFSET, mcast_exclude.val);
+    /**
+     * Write a generated command buffer register.
+     *
+     * RegisterSelector is the byte offset (or generated aligned register
+     * selector) accepted by CMDBUF_WR_REG. It is encoded in the instruction and
+     * must therefore be a compile-time constant.
+     */
+    template <std::uint32_t RegisterSelector>
+    static inline __attribute__((always_inline)) void write_register(std::uint64_t value) {
+        static_assert((RegisterSelector & 0x7) == 0, "Command buffer register selector must be 8-byte aligned");
+        static_assert(
+            RegisterSelector < TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REG_FILE_SIZE,
+            "Command buffer register selector is outside the generated register file");
+        rocc::instruction_s<rocc::kCustom0Opcode, function<RegisterSelector / 8>()>(value);
     }
-}
 
-/**
- * @brief Configure the simple command buffer for a NoC atomic transaction.
- * @param wr Retained for source compatibility; atomic setup ignores this value.
- */
-inline __attribute__((always_inline)) void setup_as_atomic_reg_cmdbuf(bool wr) {
-    (void)wr;
-    TT_ROCC_CMD_BUF_MISC_reg_u misc;
-    misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;
-
-    misc.f.posted = 1;
-    misc.f.write_trans = 0;
-    misc.f.atomic_trans = 1;
-
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);
-}
-
-/**
- * @brief Select the conventional request and response virtual channels.
- * @param wr Select write VCs when true or read VCs when false.
- * @param mcast Select multicast write VCs when true.
- */
-inline __attribute__((always_inline)) void setup_vcs_reg_cmdbuf(bool wr, bool mcast = false) {
-    if (wr) {
-        SCMDBUF_WR_REG(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, mcast ? CMDBUF_MCAST_REQ_VC : CMDBUF_WR_REQ_VC);
-        SCMDBUF_WR_REG(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
-    } else {
-        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, CMDBUF_RD_REQ_VC);
-        SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, CMDBUF_RD_RESP_VC);
+    /** Read a generated command buffer register selected by byte offset. */
+    template <std::uint32_t RegisterSelector>
+    static inline __attribute__((always_inline)) std::uint64_t read_register() {
+        static_assert((RegisterSelector & 0x7) == 0, "Command buffer register selector must be 8-byte aligned");
+        static_assert(
+            RegisterSelector < TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REG_FILE_SIZE,
+            "Command buffer register selector is outside the generated register file");
+        return rocc::instruction_d<rocc::kCustom0Opcode, function<RegisterSelector / 8>()>();
     }
-}
 
-/** @brief Set the transaction ID used by the simple command buffer. */
-inline __attribute__((always_inline)) void setup_trids_reg_cmdbuf(std::uint32_t trid_offset = CMDBUF_DEF_TRID) {
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET, trid_offset);
-}
-
-/** @brief Replace the current transaction ID and return its previous value. */
-inline __attribute__((always_inline)) std::uint32_t swap_trid_reg_cmdbuf(std::uint32_t new_trid) {
-    std::uint32_t prev_trid = SCMDBUF_RD_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET, new_trid);
-    return prev_trid;
-}
-
-/** @brief Configure the NoC packet snoop and flush tag bits. */
-inline __attribute__((always_inline)) void setup_packet_tags_reg_cmdbuf(bool snoop_bit, bool flush_bit) {
-    TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u misc;
-    misc.val = TT_ROCC_CMD_BUF_PACKET_TAGS_REG_DEFAULT;
-
-    misc.f.snoop_bit = snoop_bit;
-    misc.f.flush_bit = flush_bit;
-
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET, misc.val);
-}
-
-/** @brief Return the configured source address. */
-inline __attribute__((always_inline)) std::uint64_t get_src_reg_cmdbuf() {
-    return SCMDBUF_RD_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET);
-}
-
-/** @brief Set the source address and NoC coordinate. */
-inline __attribute__((always_inline)) void set_src_reg_cmdbuf(std::uint64_t addr, std::uint64_t coordinate) {
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, coordinate);
-}
-
-/** @brief Set the source address without changing its NoC coordinate. */
-inline __attribute__((always_inline)) void set_src_reg_cmdbuf(std::uint64_t addr) {
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET, addr);
-}
-
-/** @brief Return the configured destination address. */
-inline __attribute__((always_inline)) std::uint64_t get_dest_reg_cmdbuf() {
-    return SCMDBUF_RD_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET);
-}
-
-/** @brief Set the destination address and NoC coordinate. */
-inline __attribute__((always_inline)) void set_dest_reg_cmdbuf(std::uint64_t addr, std::uint64_t coordinates) {
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);
-}
-
-/** @brief Set the destination address without changing its NoC coordinate. */
-inline __attribute__((always_inline)) void set_dest_reg_cmdbuf(std::uint64_t addr) {
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);
-}
-
-/** @brief Set the transaction length in bytes. */
-inline __attribute__((always_inline)) void set_len_reg_cmdbuf(std::uint64_t size_bytes) {
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET, size_bytes);
-}
-
-/** @brief Issue the transaction currently configured in the simple command buffer. */
-inline __attribute__((always_inline)) void issue_reg_cmdbuf() { SCMDBUF_ISSUE_TRANS(); }
-
-/** @brief Issue the currently configured NoC read. */
-inline __attribute__((always_inline)) void issue_read_reg_cmdbuf() { issue_reg_cmdbuf(); }
-
-/** @brief Issue the currently configured NoC write. */
-inline __attribute__((always_inline)) void issue_write_reg_cmdbuf() { issue_reg_cmdbuf(); }
-
-/** @brief Issue an inline NoC write using the configured address and length. */
-inline __attribute__((always_inline)) void issue_write_inline_reg_cmdbuf(std::uint64_t data) {
-    SCMDBUF_ISSUE_INLINE_TRANS(data);
-}
-
-/**
- * @brief Issue an inline NoC write with address, length, and packet tags encoded in the instruction.
- * @param data Inline payload.
- * @param dest_addr Destination address, optionally including NoC coordinates.
- * @param size_bytes Number of bytes to write.
- * @param has_xy Whether @p dest_addr contains NoC coordinates.
- * @param posted Whether the write is posted.
- * @param snoop Snoop packet tag.
- * @param flush Flush packet tag.
- */
-inline __attribute__((always_inline)) void issue_write_inline_len_reg_cmdbuf(
-    std::uint64_t data,
-    std::uint64_t dest_addr,
-    std::uint64_t size_bytes,
-    std::uint64_t has_xy = 1,
-    std::uint64_t posted = 0,
-    std::uint64_t snoop = 0,
-    std::uint64_t flush = 0) {
-    std::uint64_t rs2 =
-        dest_addr | ((size_bytes - 1) << 57) | (has_xy << 60) | (posted << 61) | (snoop << 62) | (flush << 63);
-    SCMDBUF_ISSUE_INLINE_ADDR_TRANS(data, rs2);
-}
-
-/** @brief Enable generic simple-command-buffer interrupt @p id, which must be in [0, 2]. */
-inline __attribute__((always_inline)) void interrupt_enable_reg_cmdbuf(int id) {
-    TT_ROCC_CMD_BUF_IE_reg_u val;
-    val.val = SCMDBUF_RD_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);
-    val.val |= (1ULL << id);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);
-}
-
-/** @brief Disable generic simple-command-buffer interrupt @p id, which must be in [0, 2]. */
-inline __attribute__((always_inline)) void interrupt_disable_reg_cmdbuf(int id) {
-    TT_ROCC_CMD_BUF_IE_reg_u val;
-    val.val = SCMDBUF_RD_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);
-    val.val &= ~(1ULL << id);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);
-}
-
-/** @brief Return the complete generic pending-interrupt register. */
-inline __attribute__((always_inline)) std::uint64_t interrupts_pending_reg_cmdbuf() {
-    TT_ROCC_CMD_BUF_IP_reg_u val;
-    val.val = SCMDBUF_RD_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);
-    return val.val;
-}
-
-/** @brief Clear generic simple-command-buffer interrupt @p id, which must be in [0, 2]. */
-inline __attribute__((always_inline)) void interrupt_clear_reg_cmdbuf(int id) {
-    TT_ROCC_CMD_BUF_IP_reg_u val;
-    val.val = ~(1ULL << id);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);
-}
-
-/**
- * @brief Issue a NoC read with all operands encoded directly in the instruction.
- * @param src_addr Source address, optionally including NoC coordinates.
- * @param dest_addr Local destination address.
- * @param len_bytes Number of bytes to read.
- * @param has_xy Whether @p src_addr contains NoC coordinates.
- * @param posted Posted transaction flag.
- * @param snoop Snoop packet tag.
- * @param flush Flush packet tag.
- */
-inline __attribute__((always_inline)) void noc_fast_read_reg_cmdbuf(
-    std::uint64_t src_addr,
-    std::uint32_t dest_addr,
-    std::uint64_t len_bytes,
-    std::uint64_t has_xy = 1,
-    std::uint64_t posted = 0,
-    std::uint64_t snoop = 0,
-    std::uint64_t flush = 0) {
-    std::uint64_t rs1 = (len_bytes << 32) | dest_addr;
-    std::uint64_t rs2 = src_addr | (has_xy << 60) | (posted << 61) | (snoop << 62) | (flush << 63);
-    SCMDBUF_ISSUE_READ2_TRANS(rs1, rs2);
-}
-
-/**
- * @brief Reset, configure, and issue one NoC read.
- * @note Resetting is unsafe while the simple command buffer has outstanding work.
- */
-inline __attribute__((always_inline)) void noc_read_reg_cmdbuf(
-    std::uint64_t src_coordinate,
-    std::uint64_t src_addr,
-    std::uint64_t dest_coordinate,
-    std::uint64_t dest_addr,
-    std::uint64_t len_bytes,
-    std::uint32_t transaction_id = CMDBUF_DEF_TRID,
-    bool snoop_bit = false,
-    bool flush_bit = false) {
-    reset_reg_cmdbuf();
-    setup_as_copy_reg_cmdbuf(false, false, {0});
-    setup_vcs_reg_cmdbuf(false);
-    setup_trids_reg_cmdbuf(transaction_id);
-    if (snoop_bit || flush_bit) {
-        setup_packet_tags_reg_cmdbuf(snoop_bit, flush_bit);
+    /** Reset every register in this command buffer to its hardware default. */
+    static inline __attribute__((always_inline)) void reset() {
+        rocc::instruction<rocc::kCustom0Opcode, function<59>()>();
     }
-    set_src_reg_cmdbuf(src_addr, src_coordinate);
-    set_dest_reg_cmdbuf(dest_addr, dest_coordinate);
-    set_len_reg_cmdbuf(len_bytes);
-    issue_read_reg_cmdbuf();
-}
 
-/**
- * @brief Issue a NoC write with all operands encoded directly in the instruction.
- * @param src_addr Local source address.
- * @param dest_addr Destination address, optionally including NoC coordinates.
- * @param len_bytes Number of bytes to write.
- * @param has_xy Whether @p dest_addr contains NoC coordinates.
- * @param posted Whether the write is posted.
- * @param snoop Snoop packet tag.
- * @param flush Flush packet tag.
- */
-inline __attribute__((always_inline)) void noc_fast_write_reg_cmdbuf(
-    std::uint32_t src_addr,
-    std::uint64_t dest_addr,
-    std::uint64_t len_bytes,
-    std::uint64_t has_xy = 1,
-    std::uint64_t posted = 0,
-    std::uint64_t snoop = 0,
-    std::uint64_t flush = 0) {
-    std::uint64_t rs1 = (len_bytes << 32) | src_addr;
-    std::uint64_t rs2 = dest_addr | (has_xy << 60) | (posted << 61) | (snoop << 62) | (flush << 63);
-    SCMDBUF_ISSUE_WRITE2_TRANS(rs1, rs2);
-}
-
-/**
- * @brief Reset, configure, and issue one NoC write.
- * @note Resetting is unsafe while the simple command buffer has outstanding work.
- */
-inline __attribute__((always_inline)) void noc_write_reg_cmdbuf(
-    std::uint64_t src_coordinate,
-    std::uint64_t src_addr,
-    std::uint64_t dest_coordinate,
-    std::uint64_t dest_addr,
-    std::uint64_t len_bytes,
-    std::uint32_t transaction_id = CMDBUF_DEF_TRID,
-    bool mcast = false,
-    bool snoop_bit = false,
-    bool flush_bit = false,
-    bool posted = true) {
-    reset_reg_cmdbuf();
-    setup_as_copy_reg_cmdbuf(true, mcast, {0}, posted);
-    setup_vcs_reg_cmdbuf(true, mcast);
-    setup_trids_reg_cmdbuf(transaction_id);
-    if (snoop_bit || flush_bit) {
-        setup_packet_tags_reg_cmdbuf(snoop_bit, flush_bit);
+    /** Return free space for the currently configured NoC request VC. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_vc_space() {
+        return rocc::instruction_d<rocc::kCustom0Opcode, function<62>()>();
     }
-    set_src_reg_cmdbuf(src_addr, src_coordinate);
-    set_dest_reg_cmdbuf(dest_addr, dest_coordinate);
-    set_len_reg_cmdbuf(len_bytes);
-    issue_write_reg_cmdbuf();
-}
+
+    /** Return free space for the specified NoC virtual channel. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_vc_space(std::uint32_t virtual_channel) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<62>()>(virtual_channel);
+    }
+
+    /** Return pending NoC write sends for the configured transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_writes_pending() {
+        return rocc::instruction_d<rocc::kCustom0Opcode, function<61>()>();
+    }
+
+    /** Return pending NoC write sends for the specified transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_writes_pending(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<61>()>(transaction_id);
+    }
+
+    /** Return pending NoC acknowledgements for the configured transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_acks_pending() {
+        return rocc::instruction_d<rocc::kCustom0Opcode, function<60>()>();
+    }
+
+    /** Return pending NoC acknowledgements for the specified transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_acks_pending(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<60>()>(transaction_id);
+    }
+
+    /** Return free space for the currently configured iDMA request VC. */
+    static inline __attribute__((always_inline)) std::uint64_t idma_vc_space() {
+        return rocc::instruction_d<rocc::kCustom0Opcode, function<58>()>();
+    }
+
+    /** Return free space for the specified iDMA virtual channel. */
+    static inline __attribute__((always_inline)) std::uint64_t idma_vc_space(std::uint32_t virtual_channel) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<58>()>(virtual_channel);
+    }
+
+    /** Return pending iDMA acknowledgements for the configured transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t idma_acks_pending() {
+        return rocc::instruction_d<rocc::kCustom0Opcode, function<57>()>();
+    }
+
+    /** Return pending iDMA acknowledgements for the specified transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t idma_acks_pending(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<57>()>(transaction_id);
+    }
+
+    /** Issue the transaction currently configured in the command buffer. */
+    static inline __attribute__((always_inline)) void issue() {
+        rocc::instruction<rocc::kCustom0Opcode, function<63>()>();
+    }
+
+    /** Issue an inline transaction using one packed operand. */
+    static inline __attribute__((always_inline)) void issue_inline(std::uint64_t value) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<63>()>(value);
+    }
+
+    /** Issue an inline transaction using packed data and address operands. */
+    static inline __attribute__((always_inline)) void issue_inline(std::uint64_t value, std::uint64_t packed_address) {
+        rocc::instruction_ss<rocc::kCustom0Opcode, function<63>()>(value, packed_address);
+    }
+
+    /** Issue a read using one packed operand and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_read(std::uint64_t packed_parameters) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<56>()>(packed_parameters);
+    }
+
+    /** Issue a read using two packed operands and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_read(
+        std::uint64_t packed_parameters_1, std::uint64_t packed_parameters_2) {
+        rocc::instruction_ss<rocc::kCustom0Opcode, function<56>()>(packed_parameters_1, packed_parameters_2);
+    }
+
+    /** Issue a write using one packed operand and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_write(std::uint64_t packed_parameters) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<55>()>(packed_parameters);
+    }
+
+    /** Issue a write using two packed operands and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_write(
+        std::uint64_t packed_parameters_1, std::uint64_t packed_parameters_2) {
+        rocc::instruction_ss<rocc::kCustom0Opcode, function<55>()>(packed_parameters_1, packed_parameters_2);
+    }
+
+    /** Return the NoC acknowledgement tiles-to-process count for a transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_ack_tiles_to_process(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<54>()>(transaction_id);
+    }
+
+    /** Return the NoC write tiles-to-process count for a transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_write_tiles_to_process(
+        std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<53>()>(transaction_id);
+    }
+
+    /** Return the iDMA acknowledgement tiles-to-process count for a transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t idma_ack_tiles_to_process(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<52>()>(transaction_id);
+    }
+
+    /** Clear the NoC acknowledgement tiles-to-process count. A following nop is required. */
+    static inline __attribute__((always_inline)) void clear_noc_ack_tiles_to_process(std::uint32_t transaction_id) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<51>()>(transaction_id);
+    }
+
+    /** Clear the NoC write tiles-to-process count. A following nop is required. */
+    static inline __attribute__((always_inline)) void clear_noc_write_tiles_to_process(std::uint32_t transaction_id) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<50>()>(transaction_id);
+    }
+
+    /** Clear the iDMA acknowledgement tiles-to-process count. A following nop is required. */
+    static inline __attribute__((always_inline)) void clear_idma_ack_tiles_to_process(std::uint32_t transaction_id) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<49>()>(transaction_id);
+    }
+};
+
+using ComplexCommandBuffer0 = ComplexCommandBuffer<0>;
+using ComplexCommandBuffer1 = ComplexCommandBuffer<1>;
 
 /**
- * @brief Configure and issue a NoC atomic increment.
- * @param noc_coordinate Destination NoC coordinate.
- * @param addr Destination byte address.
- * @param incr Increment value.
- * @param wrap Atomic wrap field.
- * @param snoop_bit Snoop packet tag.
- * @param flush_bit Flush packet tag.
+ * Instruction-level access to the simple command buffer.
+ *
+ * The simple command buffer is not complex command buffer 2. It uses CUSTOM_1
+ * for its normal instruction interface and does not expose iDMA operations.
  */
-inline __attribute__((always_inline)) void noc_atomic_increment_reg_cmdbuf(
-    std::uint64_t noc_coordinate,
-    std::uint64_t addr,
-    std::uint32_t incr = 1,
-    std::uint32_t wrap = 31,
-    bool snoop_bit = false,
-    bool flush_bit = false) {
-    std::uint64_t at_len =
-        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0);
-    setup_as_atomic_reg_cmdbuf(true);
-    if (snoop_bit || flush_bit) {
-        setup_packet_tags_reg_cmdbuf(snoop_bit, flush_bit);
+class SimpleCommandBuffer {
+    template <std::uint32_t InstructionIndex>
+    static constexpr std::uint32_t function() {
+        return (64 + InstructionIndex) & 0x7f;
     }
-    set_dest_reg_cmdbuf(addr, noc_coordinate);
-    set_len_reg_cmdbuf(at_len);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET, (std::uint64_t)incr);
-    issue_reg_cmdbuf();
-}
 
-/** @brief Return free space for NoC virtual channel @p vc. */
-inline __attribute__((always_inline)) std::uint64_t free_space_reg_cmdbuf(std::uint32_t vc) {
-    return SCMDBUF_GET_VC_SPACE_VC(vc);
-}
+public:
+    /** Write a generated command buffer register selected by byte offset. */
+    template <std::uint32_t RegisterSelector>
+    static inline __attribute__((always_inline)) void write_register(std::uint64_t value) {
+        static_assert((RegisterSelector & 0x7) == 0, "Command buffer register selector must be 8-byte aligned");
+        static_assert(
+            RegisterSelector < TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REG_FILE_SIZE,
+            "Command buffer register selector is outside the generated register file");
+        rocc::instruction_s<rocc::kCustom1Opcode, function<RegisterSelector / 8>()>(value);
+    }
 
-/** @brief Return free space for the currently configured NoC request VC. */
-inline __attribute__((always_inline)) std::uint64_t free_space_reg_cmdbuf() { return SCMDBUF_GET_VC_SPACE(); }
+    /** Read a generated command buffer register selected by byte offset. */
+    template <std::uint32_t RegisterSelector>
+    static inline __attribute__((always_inline)) std::uint64_t read_register() {
+        static_assert((RegisterSelector & 0x7) == 0, "Command buffer register selector must be 8-byte aligned");
+        static_assert(
+            RegisterSelector < TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REG_FILE_SIZE,
+            "Command buffer register selector is outside the generated register file");
+        return rocc::instruction_d<rocc::kCustom1Opcode, function<RegisterSelector / 8>()>();
+    }
 
-/** @brief Return whether @p transaction_id has no pending NoC read acknowledgements. */
-inline __attribute__((always_inline)) bool noc_reads_acked_reg_cmdbuf(std::uint32_t transaction_id) {
-    return SCMDBUF_TR_ACK_TRID(transaction_id) == 0;
-}
+    /** Reset every register in the simple command buffer to its hardware default. */
+    static inline __attribute__((always_inline)) void reset() {
+        rocc::instruction<rocc::kCustom1Opcode, function<59>()>();
+    }
 
-/** @brief Return whether the current transaction ID has no pending NoC read acknowledgements. */
-inline __attribute__((always_inline)) bool noc_reads_acked_reg_cmdbuf() { return SCMDBUF_TR_ACK() == 0; }
+    /** Return free space for the currently configured NoC request VC. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_vc_space() {
+        return rocc::instruction_d<rocc::kCustom1Opcode, function<62>()>();
+    }
 
-/** @brief Return whether @p transaction_id has no pending NoC write sends. */
-inline __attribute__((always_inline)) bool noc_writes_sent_reg_cmdbuf(std::uint32_t transaction_id) {
-    return SCMDBUF_WR_SENT_TRID(transaction_id) == 0;
-}
+    /** Return free space for the specified NoC virtual channel. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_vc_space(std::uint32_t virtual_channel) {
+        return rocc::instruction_ds<rocc::kCustom1Opcode, function<62>()>(virtual_channel);
+    }
 
-/** @brief Return whether the current transaction ID has no pending NoC write sends. */
-inline __attribute__((always_inline)) bool noc_writes_sent_reg_cmdbuf() { return SCMDBUF_WR_SENT() == 0; }
+    /** Return pending NoC write sends for the configured transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_writes_pending() {
+        return rocc::instruction_d<rocc::kCustom1Opcode, function<61>()>();
+    }
 
-/** @brief Return whether @p transaction_id has no pending non-posted write acknowledgements. */
-inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_reg_cmdbuf(std::uint32_t transaction_id) {
-    return SCMDBUF_TR_ACK_TRID(transaction_id) == 0;
-}
+    /** Return pending NoC write sends for the specified transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_writes_pending(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom1Opcode, function<61>()>(transaction_id);
+    }
 
-/** @brief Return whether the current transaction ID has no pending non-posted write acknowledgements. */
-inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_reg_cmdbuf() { return SCMDBUF_TR_ACK() == 0; }
+    /** Return pending NoC acknowledgements for the configured transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_acks_pending() {
+        return rocc::instruction_d<rocc::kCustom1Opcode, function<60>()>();
+    }
+
+    /** Return pending NoC acknowledgements for the specified transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_acks_pending(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom1Opcode, function<60>()>(transaction_id);
+    }
+
+    /** Issue the transaction currently configured in the command buffer. */
+    static inline __attribute__((always_inline)) void issue() {
+        rocc::instruction<rocc::kCustom1Opcode, function<63>()>();
+    }
+
+    /** Issue an inline transaction using one packed operand. */
+    static inline __attribute__((always_inline)) void issue_inline(std::uint64_t value) {
+        rocc::instruction_s<rocc::kCustom1Opcode, function<63>()>(value);
+    }
+
+    /** Issue an inline transaction using packed data and address operands. */
+    static inline __attribute__((always_inline)) void issue_inline(std::uint64_t value, std::uint64_t packed_address) {
+        rocc::instruction_ss<rocc::kCustom1Opcode, function<63>()>(value, packed_address);
+    }
+
+    /** Issue a read using one packed operand and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_read(std::uint64_t packed_parameters) {
+        rocc::instruction_s<rocc::kCustom1Opcode, function<56>()>(packed_parameters);
+    }
+
+    /** Issue a read using two packed operands and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_read(
+        std::uint64_t packed_parameters_1, std::uint64_t packed_parameters_2) {
+        rocc::instruction_ss<rocc::kCustom1Opcode, function<56>()>(packed_parameters_1, packed_parameters_2);
+    }
+
+    /** Issue a write using one packed operand and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_write(std::uint64_t packed_parameters) {
+        rocc::instruction_s<rocc::kCustom1Opcode, function<55>()>(packed_parameters);
+    }
+
+    /** Issue a write using two packed operands and hardware defaults. */
+    static inline __attribute__((always_inline)) void issue_write(
+        std::uint64_t packed_parameters_1, std::uint64_t packed_parameters_2) {
+        rocc::instruction_ss<rocc::kCustom1Opcode, function<55>()>(packed_parameters_1, packed_parameters_2);
+    }
+
+    /**
+     * Return the NoC acknowledgement tiles-to-process count.
+     *
+     * The instruction map places simple-buffer tile-counter operations on
+     * CUSTOM_0 even though its normal interface uses CUSTOM_1.
+     */
+    static inline __attribute__((always_inline)) std::uint64_t noc_ack_tiles_to_process(std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<54>()>(transaction_id);
+    }
+
+    /** Return the NoC write tiles-to-process count for a transaction ID. */
+    static inline __attribute__((always_inline)) std::uint64_t noc_write_tiles_to_process(
+        std::uint32_t transaction_id) {
+        return rocc::instruction_ds<rocc::kCustom0Opcode, function<53>()>(transaction_id);
+    }
+
+    /** Clear the NoC acknowledgement tiles-to-process count. A following nop is required. */
+    static inline __attribute__((always_inline)) void clear_noc_ack_tiles_to_process(std::uint32_t transaction_id) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<51>()>(transaction_id);
+    }
+
+    /** Clear the NoC write tiles-to-process count. A following nop is required. */
+    static inline __attribute__((always_inline)) void clear_noc_write_tiles_to_process(std::uint32_t transaction_id) {
+        rocc::instruction_s<rocc::kCustom0Opcode, function<50>()>(transaction_id);
+    }
+};
 
 }  // namespace overlay
+
+// Existing bring-up kernels still use the generated free-function API. Keep it
+// source compatible while new architecture backends move to the typed hardware
+// reference above. Reference-layer tests can define this macro to exclude the
+// compatibility surface and its higher-level NoC dependencies.
+#ifndef TT_METAL_QUASAR_DISABLE_LEGACY_COMMAND_BUFFER_API
+#include "cmdbuff_legacy_api.hpp"
+#endif
