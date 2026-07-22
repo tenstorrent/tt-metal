@@ -19,6 +19,14 @@ struct RotaryEmbeddingProgramFactory {
         const RotaryEmbeddingParams& operation_attributes,
         const RotaryEmbeddingInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    // Re-applies the token_idx-derived runtime args on every cache hit (the value is excluded from the hash).
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const RotaryEmbeddingParams& operation_attributes,
+        const RotaryEmbeddingInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
