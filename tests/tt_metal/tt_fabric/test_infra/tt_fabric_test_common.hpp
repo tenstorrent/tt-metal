@@ -717,23 +717,26 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
-        // Cross-mesh route: prefer a direct Z-link hop when the destination is a Z-neighbor.
-        // The hop map cannot express a cardinal count that means "in the *other* mesh's
-        // coordinate space" — coordinate subtraction across meshes is meaningless — so for
-        // Z-link inter-mesh setups we emit {Z: 1} for direct Z-neighbors. For inter-mesh
-        // setups whose stitching is cardinal (no Z direction assigned in the MGD), fall
-        // through to the displacement-based path so we preserve the prior behavior for
-        // cardinal-stitched multi-mesh topologies.
-        if (src_node_id.mesh_id != dst_node_id.mesh_id) {
-            const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
-            const bool dst_is_direct_z_neighbor =
-                std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
-            if (dst_is_direct_z_neighbor) {
-                return {{RoutingDirection::Z, 1}};
-            }
-            // Non-Z-neighbor cross-mesh: fall through to displacement. This matches main
-            // for cardinal-stitched multi-mesh and is a known approximation for Z-link
-            // multi-hop cross-mesh (which the 2D routing path doesn't depend on anyway).
+        // Prefer a direct Z-link hop whenever the destination is a direct Z-neighbor of the
+        // source, regardless of whether it lives in the same mesh. Two cases require this:
+        //   1. Inter-mesh Z stitching: a hop map cannot express a cardinal count in the *other*
+        //      mesh's coordinate space (coordinate subtraction across meshes is meaningless), so
+        //      a direct Z-neighbor in another mesh must be emitted as {Z: 1}.
+        //   2. Intra-mesh Z skip-links: the fabric routing table always prefers the (strictly
+        //      shorter) skip over the cardinal ring for a direct skip endpoint. If we instead
+        //      emitted the displacement-based cardinal hop map (e.g. {S: 3} for a 3-row skip),
+        //      the worker would attach to the cardinal (South) router while the fabric routes
+        //      the packet over the Z skip — a first-hop direction mismatch that drops every
+        //      packet and hangs the flow.
+        // Non-Z-neighbor pairs — cardinal-stitched multi-mesh (no Z direction in the MGD) and
+        // ordinary cardinal intra-mesh routes — fall through to the displacement-based path,
+        // preserving prior behavior. On architectures without Z-links get_all_neighbor_node_ids
+        // returns empty here, so this is a no-op for those meshes.
+        const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
+        const bool dst_is_direct_z_neighbor =
+            std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
+        if (dst_is_direct_z_neighbor) {
+            return {{RoutingDirection::Z, 1}};
         }
 
         const auto& src_coord = get_device_coord(src_node_id);

@@ -230,6 +230,40 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
+// Expand a SkipLink pattern into intra-mesh endpoint chip-id pairs (linearized row-major).
+// Tiles the chosen axis into `step`-wide blocks starting at `start`, connecting each block's
+// endpoints (block_start <-> block_start + step - 1) and skipping the interior nodes. The
+// pattern is replicated across every line in the orthogonal axis. `ring_wrap` wraps the final
+// block past the boundary (RING); LINE drops blocks that would wrap. Caller validates step >= 2
+// and axis_len % step == 0.
+static std::vector<std::pair<ChipId, ChipId>> expand_skip_link_edges(
+    const MeshShape& mesh_shape, bool along_rows, uint32_t start, uint32_t step, bool ring_wrap) {
+    std::vector<std::pair<ChipId, ChipId>> edges;
+    const uint32_t rows = mesh_shape[0];  // device_topology dim 0
+    const uint32_t cols = mesh_shape[1];  // device_topology dim 1
+    const uint32_t axis_len = along_rows ? rows : cols;
+    const uint32_t ortho_len = along_rows ? cols : rows;
+    if (step < 2 || axis_len < step) {
+        return edges;
+    }
+    const uint32_t num_blocks = axis_len / step;
+    for (uint32_t ortho = 0; ortho < ortho_len; ++ortho) {
+        for (uint32_t b = 0; b < num_blocks; ++b) {
+            const uint32_t a_coord = (start + b * step) % axis_len;
+            const uint32_t raw_end = start + b * step + step - 1;
+            if (!ring_wrap && raw_end >= axis_len) {
+                continue;  // LINE axis: no wrap, so a block straddling the boundary is dropped
+            }
+            const uint32_t b_coord = raw_end % axis_len;
+            // Map (axis coord, orthogonal coord) -> linearized chip id (row-major: row * cols + col).
+            const ChipId src = along_rows ? (a_coord * cols + ortho) : (ortho * cols + a_coord);
+            const ChipId dst = along_rows ? (b_coord * cols + ortho) : (ortho * cols + b_coord);
+            edges.emplace_back(src, dst);
+        }
+    }
+    return edges;
+}
+
 void MeshGraph::initialize_from_mgd(
     const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
@@ -423,6 +457,34 @@ void MeshGraph::initialize_from_mgd(
             ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
             this->intra_mesh_connectivity_[*mesh_id][src_chip_id] =
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, effective_fabric_type);
+        }
+
+        // Layer declared skip links on top of the fully-populated base grid. Each pattern expands to
+        // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
+        // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
+        // trimming). Wrap follows the dimension's torus-ness in effective_fabric_type (TORUS_Y wraps
+        // dim 0, TORUS_X dim 1), matching get_valid_connections.
+        for (const auto& skip : mesh_desc->skip_links()) {
+            const uint32_t dim = skip.dim_idx();
+            TT_FATAL(dim < 2, "MeshGraph: SkipLink dim_idx {} out of range for 2D mesh (mesh M{})", dim, *mesh_id);
+            const bool along_rows = (dim == 0);
+            const uint32_t dim_len = mesh_shape[dim];
+            const uint32_t step = skip.pattern().step();
+            TT_FATAL(step >= 2, "MeshGraph: SkipLink step must be >= 2 (mesh M{})", *mesh_id);
+            TT_FATAL(
+                dim_len % step == 0,
+                "MeshGraph: SkipLink step {} must divide dim {} length {} for uniform tiling (mesh M{})",
+                step,
+                dim,
+                dim_len,
+                *mesh_id);
+            const bool ring_wrap = along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
+                                              : has_flag(effective_fabric_type, FabricType::TORUS_X);
+            for (const auto& [a, b] :
+                 expand_skip_link_edges(mesh_shape, along_rows, skip.pattern().start(), step, ring_wrap)) {
+                this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);
+                this->add_to_connectivity(mesh_id, b, mesh_id, a, RoutingDirection::Z);
+            }
         }
 
         MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));

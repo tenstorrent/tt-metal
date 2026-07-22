@@ -53,6 +53,14 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
 }
 
 void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity) {
+    // GATED OVERLAY (skip-link sub-torus routing). Populated per-mesh in the loop below.
+    // chord_family[chip] = the base-hop span of that chip's skip (Z) chord, i.e. its ring family
+    // (ex4 -> span 3, ex8 -> span 7; 0 = no chord). mesh_has_skip gates the entire overlay: with
+    // no intra-mesh Z edges it stays false and N/S routing is byte-identical to the base policy.
+    // (Intra-mesh Z edges are added only from declared skip_links -- see mesh_graph.cpp -- so this
+    //  is an exact gate on "skip_links exist".)
+    std::vector<int> chord_family;
+    bool mesh_has_skip = false;
     const auto get_shorter_direction_on_row_or_col = [&](std::uint32_t mesh_id_val,
                                                          std::uint32_t src_chip_id,
                                                          std::uint32_t dst_chip_id,
@@ -97,9 +105,168 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             mesh_id_val);
         return RoutingDirection::NONE;  // This line should never be reached
     };
+    // Shortest hop-distance from `start` to `goal` traversing only edges whose port_direction is in
+    // `allowed`. Returns -1 if unreachable. Used to compare base-ring-only vs skip-inclusive distance.
+    const auto bfs_dist = [&](std::uint32_t mesh_id_val,
+                              ChipId start,
+                              ChipId goal,
+                              std::initializer_list<RoutingDirection> allowed) -> int {
+        if (start == goal) {
+            return 0;
+        }
+        const auto is_allowed = [&](RoutingDirection d) {
+            for (auto a : allowed) {
+                if (a == d) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        std::vector<int> dist(intra_mesh_connectivity[mesh_id_val].size(), -1);
+        std::queue<ChipId> q;
+        dist[start] = 0;
+        q.push(start);
+        while (!q.empty()) {
+            ChipId cur = q.front();
+            q.pop();
+            for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][cur]) {
+                if (!is_allowed(edge.port_direction) || dist[next_chip_id] != -1) {
+                    continue;
+                }
+                dist[next_chip_id] = dist[cur] + 1;
+                if (next_chip_id == goal) {
+                    return dist[next_chip_id];
+                }
+                q.push(next_chip_id);
+            }
+        }
+        return -1;
+    };
+    // DEADLOCK-FREE skip-link policy along one axis: first-hop direction on a SHORTEST path that
+    // spends at most ONE ring crossover. Layered BFS over (chip, crossovers_used in {0,1}), scoped
+    // to {a, b, Z}. A crossover is a base hop (dir a/b) between two express nodes of DIFFERENT ring
+    // families (a contact link); chords (Z) and same-family / leaf base hops are free. This gives
+    // ring containment (I1) + at most one crossover (I5); it is loop-free because the safe distance
+    // to `goal` strictly decreases every hop, and memoryless because the decision depends only on
+    // (current, goal). Reduces to a plain shortest path when no crossover is ever possible
+    // (single ring / skip-free axis). Returns NONE if `goal` is unreachable within the budget --
+    // that only happens for configs outside the proven envelope (>1 accelerator ring family).
+    const auto safe_first_hop_along_axis = [&](std::uint32_t mesh_id_val,
+                                               ChipId src,
+                                               ChipId goal,
+                                               RoutingDirection a,
+                                               RoutingDirection b) -> RoutingDirection {
+        const std::size_t num_chips = intra_mesh_connectivity[mesh_id_val].size();
+        // state = chip * 2 + crossovers_used
+        std::vector<int> dist(num_chips * 2, -1);
+        std::vector<RoutingDirection> first_dir(num_chips * 2, RoutingDirection::NONE);
+        std::queue<int> q;
+        const int start_state = static_cast<int>(src) * 2;
+        dist[start_state] = 0;
+        q.push(start_state);
+        while (!q.empty()) {
+            const int state = q.front();
+            q.pop();
+            const ChipId u = state / 2;
+            const int c = state % 2;
+            if (u == goal) {
+                return first_dir[state];
+            }
+            // Deterministic neighbour order: base (a/b) hops before the chord (Z), then by chip id.
+            // intra_mesh_connectivity is an unordered_map, so without this the tie-break between two
+            // equal-length safe paths would follow hash order (non-reproducible tables). Preferring
+            // the base hop keeps equal-length ties on the ring rather than taking a chord.
+            std::vector<std::pair<int, RoutingDirection>> neighbours;  // (chip, dir)
+            for (const auto& [v, edge] : intra_mesh_connectivity[mesh_id_val][u]) {
+                const RoutingDirection d = edge.port_direction;
+                if (d == a || d == b || d == RoutingDirection::Z) {
+                    neighbours.emplace_back(static_cast<int>(v), d);
+                }
+            }
+            std::sort(neighbours.begin(), neighbours.end(), [](const auto& x, const auto& y) {
+                const bool x_is_z = x.second == RoutingDirection::Z;
+                const bool y_is_z = y.second == RoutingDirection::Z;
+                if (x_is_z != y_is_z) {
+                    return y_is_z;  // base hops first
+                }
+                return x.first < y.first;  // then lower chip id
+            });
+            for (const auto& [v, d] : neighbours) {
+                const bool is_crossover = (d != RoutingDirection::Z) && chord_family[u] > 0 && chord_family[v] > 0 &&
+                                          chord_family[u] != chord_family[v];
+                // Directional deadlock rule: a crossover into the SPARSER ring (dense->sparse, e.g.
+                // ex4->ex8, where the chord span / family INCREASES) is only allowed as a TERMINAL
+                // delivery hop -- the sparser node must be the destination. Sparse->dense (ex8->ex4)
+                // is a free injection. This keeps the cross-ring dependency one-directional so the two
+                // per-ring bubble domains cannot close a cycle. (Without it the BFS takes shorter but
+                // UNSAFE non-terminal ex4->ex8 shortcuts.)
+                if (is_crossover && chord_family[v] > chord_family[u] && v != static_cast<int>(goal)) {
+                    continue;
+                }
+                const int nc = c + (is_crossover ? 1 : 0);
+                if (nc > 1) {
+                    continue;  // crossover budget exhausted
+                }
+                const int next_state = v * 2 + nc;
+                if (dist[next_state] != -1) {
+                    continue;
+                }
+                dist[next_state] = dist[state] + 1;
+                first_dir[next_state] = (state == start_state) ? d : first_dir[state];
+                q.push(next_state);
+            }
+        }
+        return RoutingDirection::NONE;
+    };
     const auto& mesh_graph = topology_mapper_.get_mesh_graph();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
+
+        // Ring decomposition depends on whether the row axis (dim 0) closes into a torus. Detect the
+        // wrap edge (a base N/S hop between the first and last row):
+        //   * dim-0 WRAPS: ex4 and ex8 each close their OWN ring -> DISJOINT rings. Family = the chord's
+        //     base-hop span (ex4 -> 3, ex8 -> 7), so a base hop between the two families is a rationed,
+        //     one-directional crossover (the full 4x32 case).
+        //   * dim-0 does NOT wrap (partial column, e.g. 4x16 / 4x24): ex8 cannot close its own ring, so
+        //     ex4 + ex8 form a SINGLE ring for the whole column. All chords get ONE family -> no
+        //     ex4<->ex8 crossover -> routing is shortest path on that one ring. Its only bubble-gated
+        //     injections are hops leaving a leaf node, which device flow-control handles; the table just
+        //     needs shortest / contained / loop-free paths, which the merged single family produces.
+        const int L0 = static_cast<int>(mesh_graph.get_mesh_shape(mesh_id)[0]);
+        bool row_axis_wraps = false;
+        for (ChipId u = 0; u < intra_mesh_connectivity[mesh_id_val].size() && !row_axis_wraps; u++) {
+            const int ru = mesh_graph.chip_to_coordinate(mesh_id, u)[0];
+            if (ru != 0 && ru != L0 - 1) {
+                continue;
+            }
+            for (const auto& [v, edge] : intra_mesh_connectivity[mesh_id_val][u]) {
+                if (edge.port_direction != RoutingDirection::N && edge.port_direction != RoutingDirection::S) {
+                    continue;
+                }
+                const int rv = mesh_graph.chip_to_coordinate(mesh_id, v)[0];
+                if ((ru == 0 && rv == L0 - 1) || (ru == L0 - 1 && rv == 0)) {
+                    row_axis_wraps = true;
+                    break;
+                }
+            }
+        }
+
+        // Recover the skip-link structure from the intra-mesh Z edges (gated overlay). Each express
+        // node has exactly one chord; leaves have no chord (family 0). No Z edges -> mesh_has_skip
+        // stays false -> N/S routing is unchanged.
+        chord_family.assign(intra_mesh_connectivity[mesh_id_val].size(), 0);
+        mesh_has_skip = false;
+        for (ChipId u = 0; u < intra_mesh_connectivity[mesh_id_val].size(); u++) {
+            for (const auto& [v, edge] : intra_mesh_connectivity[mesh_id_val][u]) {
+                if (edge.port_direction == RoutingDirection::Z) {
+                    mesh_has_skip = true;
+                    chord_family[u] = row_axis_wraps
+                                          ? bfs_dist(mesh_id_val, u, v, {RoutingDirection::N, RoutingDirection::S})
+                                          : 1;  // merged single ring: one family -> no ex4<->ex8 crossover
+                }
+            }
+        }
+
         for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             for (ChipId dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
                 auto src_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, src_chip_id);
@@ -110,14 +277,22 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     // Move North or South
                     MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
                     auto target_chip_id = mesh_graph.coordinate_to_chip(mesh_id, target_coord_on_column);
-                    auto direction = get_shorter_direction_on_row_or_col(
-                        mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
+                    // GATED OVERLAY: a skip-link mesh uses the deadlock-free policy along the row
+                    // (N/S) axis; every other case uses the base dimension-order policy, byte-identical
+                    // to main. This is the only place the skip overlay changes routing behaviour.
+                    auto direction =
+                        mesh_has_skip
+                            ? safe_first_hop_along_axis(
+                                  mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S)
+                            : get_shorter_direction_on_row_or_col(
+                                  mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // TODO: today we are not updating the weight of the edge, should we use weight to balance
                     //  routing traffic?
                     //  intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else if (src_mesh_coord[1] != dst_mesh_coord[1]) {
-                    // Move East or West
+                    // Move East or West. The E/W axis carries no chords, so it always uses the base
+                    // policy -- identical to main.
                     auto direction = get_shorter_direction_on_row_or_col(
                         mesh_id_val, src_chip_id, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;

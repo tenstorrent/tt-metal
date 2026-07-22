@@ -52,7 +52,12 @@ RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirectio
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
-    Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1, bool enable_mesh_pass_through) {
+    Topology topology,
+    RoutingDirection direction,
+    bool has_z,
+    bool enable_vc1,
+    bool enable_mesh_pass_through,
+    bool has_intra_mesh_z) {
     RouterConnectionMapping mapping;
 
     // VC0 receiver_channel channels for mesh routers
@@ -63,6 +68,16 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     if (topology == Topology::Linear || topology == Topology::Ring) {
         // 1D topology: Only channel 1 connects to opposite direction peer
         // Ring is also 1D but with wrap-around (handled by FabricBuilder connection logic)
+        //
+        // Intra-mesh Z (skip-link) routers are not supported under 1D (Linear/Ring) routing yet: a Z
+        // endpoint has no single "opposite" direction and the 1D connection layout has no slot for a
+        // skip-link peer. Fail clearly here rather than hitting get_opposite_direction()'s default-case
+        // TT_FATAL ("Invalid routing direction for opposite calculation: 4"), which is opaque.
+        TT_FATAL(
+            direction != RoutingDirection::Z,
+            "Intra-mesh Z (skip-link) routers are unsupported for 1D (Linear/Ring) topology. Skip links require "
+            "2D (Mesh/Torus) routing; run this skip-link mesh graph descriptor under a Mesh/Torus topology, or "
+            "drop the skip_links for 1D runs.");
         RoutingDirection opposite = get_opposite_direction(direction);
         mapping.add_target(
             0,  // VC0
@@ -85,10 +100,6 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         // For WEST router: sends to EAST (primary), NORTH, SOUTH
 
         std::vector<RoutingDirection> outbound_directions;
-        RoutingDirection opposite = get_opposite_direction(direction);
-        outbound_directions.push_back(opposite);  // Primary (channel 1)
-
-        // Add cross directions (channels 2-3)
         std::vector<RoutingDirection> all_directions = {
             RoutingDirection::N,
             RoutingDirection::E,
@@ -96,10 +107,33 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
             RoutingDirection::W
         };
 
-        for (auto dir : all_directions) {
-            if (dir != direction && dir != opposite) {
-                outbound_directions.push_back(dir);
+        const bool is_intra_mesh_z_router = (direction == RoutingDirection::Z);
+        if (is_intra_mesh_z_router) {
+            // Intra-mesh Z (sub-torus skip-link) endpoint: a MESH-variant router whose own eth link is the
+            // skip link. It has no "opposite" mesh direction; it forwards skip-link traffic to / receives
+            // from all four mesh-direction routers on this device. (get_opposite_direction has no Z case.)
+            outbound_directions = all_directions;
+        } else {
+            RoutingDirection opposite = get_opposite_direction(direction);
+            outbound_directions.push_back(opposite);  // Primary (channel 1)
+
+            // Add cross directions (channels 2-3)
+            for (auto dir : all_directions) {
+                if (dir != direction && dir != opposite) {
+                    outbound_directions.push_back(dir);
+                }
             }
+        }
+
+        // VC0 outbound directions are the mesh directions plus, for sub-torus skip links, intra-mesh Z.
+        // Intra-mesh Z maps to VC0 target sender channel 4 (the slot reserved by the 5-wide
+        // intra-mesh-Z VC0 layout), letting intra-mesh Z traffic ride VC0 alongside E/W/N/S.
+        // NOTE: VC0-only — VC1 (inter-mesh) keeps using the mesh directions exclusively (see below).
+        // The intra-mesh Z router itself only forwards to the four mesh directions (already covered above);
+        // it does not get an additional Z outbound (it would be a self-edge).
+        std::vector<RoutingDirection> vc0_outbound_directions = outbound_directions;
+        if (has_intra_mesh_z && !is_intra_mesh_z_router) {
+            vc0_outbound_directions.push_back(RoutingDirection::Z);
         }
 
         // Map sender channels 1-3 to outbound directions on VC0
@@ -120,10 +154,17 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         //    continue to use VC0, while inter-mesh connections use VC1
         // 5. The VC assignment is determined by the connection type, not the router capabilities
         //
-        TT_FATAL(outbound_directions.size() <= builder_config::num_downstream_edms_2d_vc0, "Outbound directions size must be less than or equal to num_downstream_edms_2d_vc0");
+        const size_t max_vc0_outbound =
+            builder_config::get_vc0_downstream_edm_count(/*is_2D_routing=*/true, has_intra_mesh_z);
+        TT_FATAL(
+            vc0_outbound_directions.size() <= max_vc0_outbound,
+            "VC0 outbound directions size ({}) must be <= VC0 downstream EDM count ({}) (has_intra_mesh_z={})",
+            vc0_outbound_directions.size(),
+            max_vc0_outbound,
+            has_intra_mesh_z);
 
-        // Add VC0 targets for intra-mesh traffic
-        for (size_t i = 0; i < outbound_directions.size(); ++i) {
+        // Add VC0 targets for intra-mesh traffic (mesh directions + intra-mesh Z when present)
+        for (size_t i = 0; i < vc0_outbound_directions.size(); ++i) {
             mapping.add_target(
                 0,  // VC0 - for intra-mesh traffic
                 0,  // Receiver channel 0
@@ -131,13 +172,15 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
                     ConnectionType::INTRA_MESH,
                     0,      // Target VC0
                     i + 1,  // Target sender channel
-                    outbound_directions[i]));
+                    vc0_outbound_directions[i]));
         }
 
         // Add VC1 targets for intra-mesh routers (to forward inter-mesh traffic)
         // VC1 connections are only for intra-mesh routers in multi-mesh topologies
-        // They forward inter-mesh traffic that was received via VC1
-        if (enable_vc1) {
+        // They forward inter-mesh traffic that was received via VC1.
+        // NOTE: intra-mesh Z is VC0-only, so VC1 keeps iterating the mesh directions exclusively, and the
+        // intra-mesh Z router itself (direction == Z) does not service VC1.
+        if (enable_vc1 && !is_intra_mesh_z_router) {
             for (size_t i = 0; i < outbound_directions.size(); ++i) {
                 mapping.add_target(
                     1,  // VC1 - for inter-mesh traffic forwarding

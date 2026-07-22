@@ -71,6 +71,24 @@ public:
     // Queries control plane to see if any ethernet channels are assigned Z direction
     bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
 
+    // Check if a fabric node has an INTRA-mesh Z neighbor (sub-torus "skip link"): a RoutingDirection::Z
+    // edge within the same mesh. Distinct from has_z_router_on_device (inter-mesh Z router). When true,
+    // the standard mesh router gains a 5th VC0 sender channel (channel 4 = intra-mesh Z).
+    bool has_intra_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+
+    // Fabric-wide check: true if ANY node in ANY mesh has an intra-mesh Z edge (sub-torus skip link).
+    // Used to size the fabric-wide max sender channel counts: a single intra-mesh Z router widens VC0
+    // from 4 -> 5, so the shared EDM config must reserve the 5th VC0 sender channel.
+    bool has_any_intra_mesh_z_router(const ControlPlane& control_plane) const;
+
+    // Check if a fabric node has an INTER-mesh Z neighbor (galaxy Z router bridging two meshes): a
+    // RoutingDirection::Z edge in inter-mesh connectivity. This is the precise signal for inter-mesh Z
+    // router presence; unlike has_z_router_on_device (which is true for ANY active Z eth channel, including
+    // intra-mesh sub-torus skip-links), it stays false on a device whose only Z links are intra-mesh.
+    // Used to gate the inter-mesh-Z-specific builder behavior (VC1 4th sender channel + MESH_TO_Z) and to
+    // select the Z_ROUTER variant for a Z-direction router.
+    bool has_inter_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
     // Queried from MetalContext at init time

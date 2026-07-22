@@ -110,21 +110,26 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
     const auto& compressed_route = routing_info->paths[dst_chip_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
+    uint8_t z_present = compressed_route.get_z_present();
+    uint8_t z_before = compressed_route.get_z_before();
 
+    if (z_present && z_before == 0) {
+        // z_before counts cardinal hops preceding the skip. Zero means the skip is the very first hop,
+        // so the worker injects straight into the Z (skip) router, regardless of the skip's physical axis.
+        return static_cast<uint32_t>(eth_chan_directions::Z);
+    }
+
+    // First hop is the leading cardinal hop in dimension order (NS if any NS hops exist, else EW). Use the
+    // stored direction bits (ns_direction: 1=South/0=North, ew_direction: 1=East/0=West) instead of a
+    // dst-vs-my chip-id compare: a skip moves the packet non-linearly along an axis, so the chip-id
+    // heuristic is unreliable, whereas the encoded direction bits always reflect the true first-hop sense.
+    (void)my_chip_id;
     if (ns_hops > 0) {
-        // is there another way to know whether it's north or south hops?
-        if (dst_chip_id < my_chip_id) {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::NORTH);
-        } else {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::SOUTH);
-        }
+        initial_dir = compressed_route.get_ns_direction() ? static_cast<uint32_t>(eth_chan_directions::SOUTH)
+                                                          : static_cast<uint32_t>(eth_chan_directions::NORTH);
     } else if (ew_hops > 0) {
-        // is there another way to know whether it's east or west hops?
-        if (dst_chip_id < my_chip_id) {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::WEST);
-        } else {
-            initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
-        }
+        initial_dir = compressed_route.get_ew_direction() ? static_cast<uint32_t>(eth_chan_directions::EAST)
+                                                          : static_cast<uint32_t>(eth_chan_directions::WEST);
     }
 
     return initial_dir;

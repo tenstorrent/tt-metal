@@ -1947,4 +1947,108 @@ TEST(MeshGraphDescriptorTests, PinningsEmpty) {
     EXPECT_TRUE(pinnings.empty()) << "Should have no pinnings when none are specified";
 }
 
+// skip_links expands into the expected intra-mesh Z edges on the 8x4 [LINE, RING] descriptor.
+TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
+
+    EXPECT_NO_THROW(
+        tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
+
+    // LINE row axis (len 8): only block [2,5] fits, the wrapping block is dropped. chip = row*4 + col.
+    const std::vector<std::pair<int, int>> expected_skip_edges = {{8, 20}, {9, 21}, {10, 22}, {11, 23}};
+
+    for (const auto& [a, b] : expected_skip_edges) {
+        EXPECT_EQ(m0[a].count(b), 1u) << "missing skip edge " << a << " -> " << b;
+        EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse skip edge " << b << " -> " << a;
+        if (m0[a].count(b) && m0[b].count(a)) {
+            EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+        }
+    }
+
+    EXPECT_EQ(m0[4].count(24), 0u);  // rows outside block [2,5] get no skip
+
+    // chip 8 keeps its 4 base-grid neighbors plus the one skip edge
+    EXPECT_EQ(m0[8].count(4), 1u);
+    EXPECT_EQ(m0[8].count(12), 1u);
+    EXPECT_EQ(m0[8].count(9), 1u);
+    EXPECT_EQ(m0[8].count(11), 1u);
+    EXPECT_EQ(m0[8].size(), 5u);
+
+    // 4 bidirectional skip edges = 8 directed Z entries, no others
+    int z_directed = 0;
+    for (int c = 0; c < 32; ++c) {
+        for (const auto& [nb, edge] : m0[c]) {
+            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
+                ++z_directed;
+            }
+        }
+    }
+    EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional skip edges (8 directed Z entries)";
+}
+
+// skip_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
+TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
+
+    EXPECT_NO_THROW(
+        tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
+
+    // dim 0 (32 rows, RING). chip = row*4 + col. Two patterns:
+    //   start=2 step=4 -> 8 row pairs (last wraps)
+    //   start=0 step=8 -> 4 row pairs
+    const std::vector<std::pair<int, int>> row_blocks = {
+        {2, 5},
+        {6, 9},
+        {10, 13},
+        {14, 17},
+        {18, 21},
+        {22, 25},
+        {26, 29},
+        {30, 1},  // start=2 step=4
+        {0, 7},
+        {8, 15},
+        {16, 23},
+        {24, 31}};  // start=0 step=8
+    for (const auto& [ra, rb] : row_blocks) {
+        for (int col = 0; col < 4; ++col) {
+            const int a = ra * 4 + col;
+            const int b = rb * 4 + col;
+            EXPECT_EQ(m0[a].count(b), 1u) << "missing skip edge " << a << " -> " << b;
+            EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse skip edge " << b << " -> " << a;
+            if (m0[a].count(b) && m0[b].count(a)) {
+                EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+                EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            }
+        }
+    }
+
+    // (8 + 4) blocks x 4 columns = 48 bidirectional skip edges = 96 directed Z entries, no others
+    int z_directed = 0;
+    for (int c = 0; c < 128; ++c) {
+        for (const auto& [nb, edge] : m0[c]) {
+            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
+                ++z_directed;
+            }
+        }
+    }
+    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional skip edges (96 directed Z entries)";
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

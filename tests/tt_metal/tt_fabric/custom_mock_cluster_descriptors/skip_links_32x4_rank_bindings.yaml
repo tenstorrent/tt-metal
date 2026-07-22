@@ -1,0 +1,18 @@
+# 4-rank binding for the 32x4 skip-link mesh (all ranks on mesh 0; each owns an 8x4 row block).
+# mesh_graph_desc_path points at the SKIP descriptor so the multi-rank control plane builds the skip
+# (Z) edges. Pair with the 4 mock cluster files via
+#   --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+
+  - rank: 1
+    mesh_id: 0
+
+  - rank: 2
+    mesh_id: 0
+
+  - rank: 3
+    mesh_id: 0
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto"

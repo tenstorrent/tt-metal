@@ -105,54 +105,78 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ew_hops = 0;
         uint8_t ns_direction = 0;
         uint8_t ew_direction = 0;
-
-        auto is_ns = [](RoutingDirection d) { return d == RoutingDirection::N || d == RoutingDirection::S; };
-        auto is_ew = [](RoutingDirection d) { return d == RoutingDirection::E || d == RoutingDirection::W; };
+        // Z (intra-mesh skip link) is a dedicated dimension carrying at most one hop per route. Rather
+        // than pin it to a specific axis, z_before records how many cardinal hops (NS then EW, in
+        // dimension order) precede the Z hop. This lets the skip sit anywhere in the route: inside the
+        // NS run (NS-axis skip) or inside the EW run (EW-axis skip, e.g. a wide 8x16 mesh). z_present
+        // marks that the route contains a single Z hop.
+        uint8_t z_present = 0;
+        uint8_t z_before = 0;
 
         auto make_node = [mesh_id](uint16_t chip) { return tt::tt_fabric::FabricNodeId(mesh_id, chip); };
         auto next_dir = [&](uint16_t from_chip, uint16_t to_chip) {
             return control_plane.get_forwarding_direction(make_node(from_chip), make_node(to_chip));
         };
-        auto ns_bit = [](RoutingDirection d) { return (uint8_t)(d == RoutingDirection::S); };
-        auto ew_bit = [](RoutingDirection d) { return (uint8_t)(d == RoutingDirection::E); };
-        auto it = best_chip_sequence.cbegin();
+
+        bool seen_ns = false;
+        bool seen_ew = false;
+        bool seen_z = false;
         uint16_t prev_chip = src_chip_id;
-        auto consume_axis = [&](auto is_axis, auto dir_to_bit, uint8_t& hops, uint8_t& dir_bit) {
-            if (it == best_chip_sequence.cend()) {
-                return;
-            }
-            uint16_t curr_chip = *it;
+        for (uint16_t curr_chip : best_chip_sequence) {
             auto dir_opt = next_dir(prev_chip, curr_chip);
-            if (!dir_opt.has_value() || dir_opt.value() == RoutingDirection::NONE) {
-                TT_ASSERT(false, "Invalid direction between chips {} and {}", prev_chip, curr_chip);
-            }
-            if (!is_axis(*dir_opt)) {
-                return;  // start of other axis
-            }
-
-            dir_bit = dir_to_bit(*dir_opt);
-            do {
-                ++hops;
-                prev_chip = curr_chip;
-                ++it;
-                if (it == best_chip_sequence.cend()) {
-                    break;
+            TT_ASSERT(
+                dir_opt.has_value() && dir_opt.value() != RoutingDirection::NONE,
+                "Invalid direction between chips {} and {}",
+                prev_chip,
+                curr_chip);
+            const RoutingDirection d = dir_opt.value();
+            if (d == RoutingDirection::N || d == RoutingDirection::S) {
+                const uint8_t bit = (uint8_t)(d == RoutingDirection::S);
+                if (!seen_ns) {
+                    ns_direction = bit;
+                    seen_ns = true;
+                } else {
+                    TT_ASSERT(
+                        ns_direction == bit,
+                        "Non-monotone NS traversal (with skip) is not supported: chip {} -> {}",
+                        prev_chip,
+                        curr_chip);
                 }
-                curr_chip = *it;
-                dir_opt = next_dir(prev_chip, curr_chip);
-                if (!dir_opt.has_value()) {
-                    break;
+                if (!seen_z) {
+                    ++z_before;
                 }
-            } while (dir_opt.has_value() && is_axis(*dir_opt));
-        };
-
-        if (it != best_chip_sequence.cend()) {
-            // Consume NS first (if present), then EW
-            consume_axis(is_ns, ns_bit, ns_hops, ns_direction);
-            consume_axis(is_ew, ew_bit, ew_hops, ew_direction);
+                ++ns_hops;
+            } else if (d == RoutingDirection::E || d == RoutingDirection::W) {
+                const uint8_t bit = (uint8_t)(d == RoutingDirection::E);
+                if (!seen_ew) {
+                    ew_direction = bit;
+                    seen_ew = true;
+                } else {
+                    TT_ASSERT(
+                        ew_direction == bit,
+                        "Non-monotone EW traversal is not supported: chip {} -> {}",
+                        prev_chip,
+                        curr_chip);
+                }
+                if (!seen_z) {
+                    ++z_before;
+                }
+                ++ew_hops;
+            } else if (d == RoutingDirection::Z) {
+                TT_ASSERT(!seen_z, "More than one Z (skip) hop per route is not supported: chip {}", curr_chip);
+                z_present = 1;
+                seen_z = true;
+            } else {
+                TT_ASSERT(false, "Unexpected routing direction between chips {} and {}", prev_chip, curr_chip);
+            }
+            prev_chip = curr_chip;
         }
 
-        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, ns_hops);
+        // turn_point marks the NS->EW turn position in the emitted route. A Z hop only shifts the turn
+        // when it is spliced inside (or right after) the NS run, i.e. z_before <= ns_hops; an EW-axis
+        // skip sits after the turn and does not move it.
+        const uint8_t turn_point = (uint8_t)(ns_hops + ((z_present && z_before <= ns_hops) ? 1 : 0));
+        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_point, z_present, z_before);
     }
 }
 

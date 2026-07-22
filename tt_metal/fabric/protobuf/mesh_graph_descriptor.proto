@@ -138,6 +138,60 @@ message MeshDescriptor {
 
     // Optional list of explicit intra-mesh express links.
     repeated ExpressConnection express_connections = 7;
+
+    // Optional regular families of intra-mesh skip links (sub-torus connectivity).
+    // Declared by pattern rather than enumerated pairs; see SkipLink.
+    repeated SkipLink skip_links = 8;
+}
+
+// -----------------------------------------------------------------------------
+// SkipLink
+// A regular family of intra-mesh "skip" links layered on top of the base
+// device_topology, used to express sub-torus connectivity (links that jump several
+// hops along one dimension).
+//
+// Geometry:
+// - `dim_idx` is a 0-based index into device_topology.dims selecting the dimension the
+//   skip links jump ALONG (0 = dims[0], 1 = dims[1], ...). A skip hop changes a node's
+//   coordinate only along `dim_idx`; the pattern is replicated across the other dimension(s).
+// - Along that dimension the line is tiled into consecutive blocks of `pattern.step`
+//   nodes starting at coordinate `pattern.start`. Each block contributes one skip
+//   link connecting its two endpoints: block_start <-> block_start + step - 1.
+//   The interior nodes get no skip link (the link "skips" them).
+// - Wrap follows the dimension's device_topology dim_type: RING tiles with wrap-around
+//   (the final block wraps past the boundary, e.g. on a 32-node RING dim the last
+//   block [30,31,0,1] yields edge 30<->1); LINE does not wrap.
+// - The pattern is replicated across every line in the other dimension, and
+//   endpoints are mapped (per-dim coords) -> linearized chip id (row-major).
+//
+// Example (device_topology { dims: [32, 4] dim_types: [RING, RING] }):
+//   skip_links { dim_idx: 0  pattern { start: 2  step: 4 } }
+//   -> 8 blocks/line ([2,5][6,9]...[26,29][30,1]) x 4 columns = 32 skip links.
+//
+// Validation expectations:
+// - dim_idx < number of device_topology dimensions.
+// - pattern.step >= 2 (a 1-node block has no distinct endpoints).
+// - Prefer dim_length % step == 0 for uniform tiling under RING wrap.
+//
+// Note: how skip links are presented to routing (their RoutingDirection / plane
+// identity) is resolved by the control plane and is intentionally not declared here.
+message SkipLink {
+    // Block tiling pattern along `dim_idx`.
+    message Pattern {
+        uint32 start = 1;  // coordinate where the first block begins (phase offset)
+        uint32 step = 2;   // block width: nodes spanned start..end inclusive; must be >= 2
+    }
+
+    // The dimension the skip links jump along: 0-based index into device_topology.dims
+    // (the skip pattern is propagated down this dimension).
+    uint32 dim_idx = 1;
+
+    // Tiling pattern (start offset + block width) along `dim_idx`.
+    Pattern pattern = 2;
+
+    // Optional lane count/policy for these skip links. If omitted, the skip links
+    // inherit the mesh's `channels`.
+    Channels channels = 3;
 }
 
 // -----------------------------------------------------------------------------

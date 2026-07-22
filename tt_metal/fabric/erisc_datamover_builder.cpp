@@ -1096,6 +1096,53 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["TO_SENDER_1_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_acked_id;
     named_args["TO_SENDER_2_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_acked_id;
     named_args["TO_SENDER_3_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_acked_id;
+    // The 5th VC0 sender channel (intra-mesh Z skip-link forwarding) needs its own first-level-ack stream.
+    // VC0's ack namespace only has 4 dedicated registers (streams 2-5), so reuse vc_1_free_slots edge 4
+    // (stream 21) — the register that would otherwise hold VC1 free-slots for a downstream inter-mesh Z
+    // router. On a fabric with skip links (intra-mesh Z) but no inter-mesh Z router, that register is idle,
+    // so this is a genuinely-free stream rather than a live borrow.
+    //
+    // CRITICAL — this MUST match on both ends of every eth link that can carry channel-4 traffic, so it is
+    // gated on the FABRIC-WIDE intra-mesh-Z presence, NOT the per-node has_intra_mesh_z_router(). Reasons:
+    //   1. A single intra-mesh Z edge widens VC0 to 5 for the whole fabric instance (has_any_intra_mesh_z_router,
+    //      used when sizing max channel counts), so EVERY router is 5-wide, not just skip endpoints.
+    //   2. First-level acks are keyed by src_ch_id and the RECEIVER credits the SENDER using its OWN
+    //      to_sender_packets_acked_streams[src_ch_id] (see fabric_router_flow_control.hpp send_ack_credit()).
+    //      A Z router forwards onward onto a downstream cardinal's channel 4 (get_downstream_sender_channel
+    //      maps the Z direction to the highest sender channel), and that cardinal's eth-link peer is an
+    //      ordinary, non-skip-endpoint mesh router. If we gated per-node, that peer would have index-4 == 0
+    //      and, on receiving from-Z traffic (src_ch_id == 4), would mis-credit stream 0 (the VC0 receiver
+    //      pkts_sent counter) instead of stream 21 — corrupting the receiver counter and starving the
+    //      channel-4 sender (stall after one buffer depth). Gating fabric-wide keeps sender and receiver in
+    //      agreement on stream 21 for index 4 everywhere.
+    // Completions are unaffected: to_sender_4_pkts_completed is a fixed stream (10) assigned unconditionally.
+    //
+    // NOTE — do NOT additionally gate on this router being 5-wide (actual_sender_channels_vc0 == 5). Router
+    // width is per-node: only skip-endpoint chips push Z into their VC0 outbound set and become 5-wide;
+    // ordinary chips stay 4-wide. But a 4-wide chip is still the eth-link RECEIVER of channel-4 "from-Z"
+    // traffic emitted by a neighboring 5-wide endpoint's cardinal router (that cardinal forwards Z-router
+    // output onto the peer's channel 4). On receiving src_ch_id == 4 it must credit stream 21 on the sender,
+    // so index 4 must resolve to stream 21 on the 4-wide receiver too. Gating on width would leave those
+    // receivers at index-4 == 0 (the previous behavior), which is exactly the bug: they mis-credit stream 0
+    // and the endpoint's channel-4 sender starves. Assigning stream 21 on a 4-wide chip is harmless: it has
+    // no channel-4 sender, and stream 21 (vc_1_free_slots edge 4) is idle whenever there is no inter-mesh Z.
+    uint32_t to_sender_4_pkts_acked_id = 0;
+    const bool has_intra_mesh_z = fabric_context.has_any_intra_mesh_z_router(control_plane);
+    const bool has_inter_mesh_z = fabric_context.has_inter_mesh_z_router(control_plane, local_fabric_node_id);
+    if (has_intra_mesh_z) {
+        // If this device also has an inter-mesh Z router, its X/Y routers forward VC1 to that Z router over
+        // vc_1_free_slots edge 4 (stream 21), so it is no longer free and the 5th VC0 sender has no spare
+        // first-level-ack register on this 32-stream eth core. That configuration is unsupported here: the
+        // intra-mesh-Z forwarding channel would need to run without first-level acks instead.
+        TT_FATAL(
+            !has_inter_mesh_z,
+            "Intra-mesh Z (5-wide VC0) on a device that also has an inter-mesh Z router: stream {} "
+            "(vc_1_free_slots edge 4) is already used for VC1->Z forwarding, leaving no free first-level-ack "
+            "stream for the 5th VC0 sender channel. This combined-Z device configuration is unsupported.",
+            StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4);
+        to_sender_4_pkts_acked_id = StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4;
+    }
+    named_args["TO_SENDER_4_PKTS_ACKED_ID"] = to_sender_4_pkts_acked_id;
     named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_completed_id;
     named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_completed_id;
     named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_completed_id;

@@ -170,11 +170,15 @@ RouterChannelCounts compute_router_channel_counts(
     const auto topology = fabric_context.get_fabric_topology();
     const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const bool downstream_is_tensix_builder = !is_dispatch_link && fabric_tensix_config == FabricTensixConfig::MUX;
-    const bool has_z_router = fabric_context.has_z_router_on_device(control_plane, fabric_node_id);
-    const auto variant = (direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    // Inter-mesh Z (galaxy Z router) vs intra-mesh Z (sub-torus skip-link) are distinct: only inter-mesh Z
+    // uses the dedicated Z_ROUTER variant + VC1 4th sender channel; intra-mesh Z rides VC0 on a MESH router.
+    const bool has_inter_mesh_z = fabric_context.has_inter_mesh_z_router(control_plane, fabric_node_id);
+    const bool has_intra_mesh_z = fabric_context.has_intra_mesh_z_router(control_plane, fabric_node_id);
+    const auto variant =
+        (direction == RoutingDirection::Z && has_inter_mesh_z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
+    auto channel_mapping = FabricRouterChannelMapping(
+        topology, downstream_is_tensix_builder, variant, &intermesh_config, has_inter_mesh_z, has_intra_mesh_z);
 
     RouterChannelCounts counts;
     const uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
@@ -263,14 +267,23 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
-    // Determine the router variant
-    bool has_z_router = fabric_context.has_z_router_on_device(control_plane, local_node);
-    RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    // Determine the router variant.
+    // A Z-direction router is the dedicated inter-mesh Z_ROUTER only when this physical link actually
+    // crosses meshes (remote node is in a different mesh). An intra-mesh "skip-link" (sub-torus) Z endpoint
+    // stays in the same mesh and is a standard MESH router that carries its skip-link traffic on VC0
+    // (the 5th VC0 sender channel, channel 4 = intra-mesh Z).
+    const bool has_inter_mesh_z = fabric_context.has_inter_mesh_z_router(control_plane, local_node);
+    const bool has_intra_mesh_z = fabric_context.has_intra_mesh_z_router(control_plane, local_node);
+    const bool is_inter_mesh_z_link =
+        (location.direction == RoutingDirection::Z) && (local_node.mesh_id != location.remote_node.mesh_id);
+    RouterVariant variant = is_inter_mesh_z_link ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
 
-    // Create channel mapping EARLY (needed for computing injection flags)
+    // Create channel mapping EARLY (needed for computing injection flags).
+    // has_inter_mesh_z (not has_z_router_on_device) gates the VC1 4th sender channel, which only exists to
+    // forward traffic to an inter-mesh Z router.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
+    auto channel_mapping = FabricRouterChannelMapping(
+        topology, downstream_is_tensix_builder, variant, &intermesh_config, has_inter_mesh_z, has_intra_mesh_z);
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;
@@ -282,8 +295,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
         // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
         bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
+        // has_inter_mesh_z gates the MESH_TO_Z connection (forwarding to an inter-mesh Z router).
         connection_mapping = RouterConnectionMapping::for_mesh_router(
-            topology, location.direction, has_z_router, enable_vc1, enable_mesh_pass_through);
+            topology, location.direction, has_inter_mesh_z, enable_vc1, enable_mesh_pass_through, has_intra_mesh_z);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders

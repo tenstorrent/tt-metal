@@ -102,6 +102,11 @@ struct __attribute__((packed)) compressed_route_2d_t {
     static constexpr uint32_t NS_DIR_WIDTH = 1;
     static constexpr uint32_t EW_DIR_WIDTH = 1;
     static constexpr uint32_t TURN_POINT_WIDTH = 7;
+    // Dedicated first-class Z (intra-mesh skip link) dimension. Z is ordered ahead of NS/EW: a route
+    // may take a skip link with z_before NS links preceding the Z egress, then the remaining NS/EW
+    // links continue after the skip landing. z_present marks that the route contains a single Z hop.
+    static constexpr uint32_t Z_PRESENT_WIDTH = 1;
+    static constexpr uint32_t Z_BEFORE_WIDTH = 7;
 
     // Bit positions (derived from widths)
     static constexpr uint32_t NS_HOPS_SHIFT = 0;
@@ -109,6 +114,8 @@ struct __attribute__((packed)) compressed_route_2d_t {
     static constexpr uint32_t NS_DIR_SHIFT = EW_HOPS_SHIFT + EW_HOPS_WIDTH;    // 14
     static constexpr uint32_t EW_DIR_SHIFT = NS_DIR_SHIFT + NS_DIR_WIDTH;      // 15
     static constexpr uint32_t TURN_POINT_SHIFT = EW_DIR_SHIFT + EW_DIR_WIDTH;  // 16
+    static constexpr uint32_t Z_PRESENT_SHIFT = TURN_POINT_SHIFT + TURN_POINT_WIDTH;  // 23
+    static constexpr uint32_t Z_BEFORE_SHIFT = Z_PRESENT_SHIFT + Z_PRESENT_WIDTH;     // 24
 
     // Masks (derived from widths)
     static constexpr uint32_t NS_HOPS_MASK = (1U << NS_HOPS_WIDTH) - 1;        // 0x7F
@@ -116,14 +123,24 @@ struct __attribute__((packed)) compressed_route_2d_t {
     static constexpr uint32_t NS_DIR_MASK = (1U << NS_DIR_WIDTH) - 1;          // 0x1
     static constexpr uint32_t EW_DIR_MASK = (1U << EW_DIR_WIDTH) - 1;          // 0x1
     static constexpr uint32_t TURN_POINT_MASK = (1U << TURN_POINT_WIDTH) - 1;  // 0x7F
+    static constexpr uint32_t Z_PRESENT_MASK = (1U << Z_PRESENT_WIDTH) - 1;    // 0x1
+    static constexpr uint32_t Z_BEFORE_MASK = (1U << Z_BEFORE_WIDTH) - 1;      // 0x7F
 
     uint32_t data;
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    void set(uint8_t ns_hops, uint8_t ew_hops, uint8_t ns_dir, uint8_t ew_dir, uint8_t turn_point) {
+    void set(
+        uint8_t ns_hops,
+        uint8_t ew_hops,
+        uint8_t ns_dir,
+        uint8_t ew_dir,
+        uint8_t turn_point,
+        uint8_t z_present = 0,
+        uint8_t z_before = 0) {
         data = (ns_hops & NS_HOPS_MASK) | ((ew_hops & EW_HOPS_MASK) << EW_HOPS_SHIFT) |
                ((ns_dir & NS_DIR_MASK) << NS_DIR_SHIFT) | ((ew_dir & EW_DIR_MASK) << EW_DIR_SHIFT) |
-               ((turn_point & TURN_POINT_MASK) << TURN_POINT_SHIFT);
+               ((turn_point & TURN_POINT_MASK) << TURN_POINT_SHIFT) |
+               ((z_present & Z_PRESENT_MASK) << Z_PRESENT_SHIFT) | ((z_before & Z_BEFORE_MASK) << Z_BEFORE_SHIFT);
     }
 #else
     uint8_t get_ns_hops() const { return data & NS_HOPS_MASK; }
@@ -131,6 +148,8 @@ struct __attribute__((packed)) compressed_route_2d_t {
     uint8_t get_ns_direction() const { return (data >> NS_DIR_SHIFT) & NS_DIR_MASK; }
     uint8_t get_ew_direction() const { return (data >> EW_DIR_SHIFT) & EW_DIR_MASK; }
     uint8_t get_turn_point() const { return (data >> TURN_POINT_SHIFT) & TURN_POINT_MASK; }
+    uint8_t get_z_present() const { return (data >> Z_PRESENT_SHIFT) & Z_PRESENT_MASK; }
+    uint8_t get_z_before() const { return (data >> Z_BEFORE_SHIFT) & Z_BEFORE_MASK; }
 #endif
 };
 
@@ -182,15 +201,18 @@ struct RoutingFieldsConstants {
 
     // 2D Constants (Mesh)
     struct Mesh {
-        static constexpr uint32_t FIELD_WIDTH = 8;    // 8 bits per hop command
-        static constexpr uint32_t FIELD_MASK = 0b1111;  // 4-bit mask
+        static constexpr uint32_t FIELD_WIDTH = 8;       // 8 bits per hop command
+        static constexpr uint32_t FIELD_MASK = 0b11111;  // 5-bit mask (bit 4 is the dedicated Z hop)
 
-        // Basic direction commands (4-bit encoding for each direction)
-        static constexpr uint8_t NOOP = 0b0000;
-        static constexpr uint8_t FORWARD_EAST = 0b0001;
-        static constexpr uint8_t FORWARD_WEST = 0b0010;
-        static constexpr uint8_t FORWARD_NORTH = 0b0100;
-        static constexpr uint8_t FORWARD_SOUTH = 0b1000;
+        // Basic direction commands (bit-per-direction encoding, matching eth_chan_directions).
+        // Bit 4 (FORWARD_Z) is a first-class dimension for intra-mesh skip (Z) links: a cardinal
+        // router forwards it to its Z downstream, and the destination Z router delivers it locally.
+        static constexpr uint8_t NOOP = 0b00000;
+        static constexpr uint8_t FORWARD_EAST = 0b00001;
+        static constexpr uint8_t FORWARD_WEST = 0b00010;
+        static constexpr uint8_t FORWARD_NORTH = 0b00100;
+        static constexpr uint8_t FORWARD_SOUTH = 0b01000;
+        static constexpr uint8_t FORWARD_Z = 0b10000;
 
         // Multicast combinations (OR of direction bits for write-and-forward)
         static constexpr uint8_t WRITE_AND_FORWARD_EW = FORWARD_EAST | FORWARD_WEST;    // 0b0011
@@ -432,42 +454,76 @@ inline void encode_2d_unicast(
     uint8_t ew_dir,
     uint8_t* buffer,
     uint32_t max_buffer_size,
-    bool prepend_one_hop = false) {
+    bool prepend_one_hop = false,
+    uint8_t z_present = 0,
+    uint8_t z_before = 0) {
     using MeshFields = RoutingFieldsConstants::Mesh;
     uint32_t idx = 0;
 
-    // Forward commands based on direction
+    // Forward commands per dimension. Z is a first-class dimension (intra-mesh skip link): a cardinal
+    // router forwards FORWARD_Z to its Z downstream, and the landing Z router forwards it cardinally or
+    // (when it is the destination) delivers it locally.
     const uint8_t ns_fwd = (ns_dir == 1) ? MeshFields::FORWARD_SOUTH : MeshFields::FORWARD_NORTH;
     const uint8_t ew_fwd = (ew_dir == 1) ? MeshFields::FORWARD_EAST : MeshFields::FORWARD_WEST;
+    const uint8_t z_fwd = MeshFields::FORWARD_Z;
 
-    // Final hop uses OPPOSITE direction to stop packet (destination logic)
-    // If traveling South (ns_dir=1), final command is North (opposite)
-    // If traveling East (ew_dir=1), final command is West (opposite)
+    // Final hop uses OPPOSITE direction to stop the packet at the destination (cardinal). For a Z
+    // landing destination the delivering router is the Z router, which consumes FORWARD_Z as a local write.
     const uint8_t ns_write = (ns_dir == 1) ? MeshFields::FORWARD_NORTH : MeshFields::FORWARD_SOUTH;
     const uint8_t ew_write = (ew_dir == 1) ? MeshFields::FORWARD_WEST : MeshFields::FORWARD_EAST;
+    const uint8_t z_write = MeshFields::FORWARD_Z;
 
-    if (ns_hops > 0 && ew_hops > 0) {
-        // NS -> EW turn: (ns_hops-1 + prepend) NS forwards, ew_hops EW forwards, 1 EW write
-        for (auto i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
-            buffer[idx++] = ns_fwd;
+    // Build the ordered hop-direction list. Cardinal hops follow dimension order (all NS, then all EW);
+    // the single optional Z (skip) hop is spliced in after z_before cardinal hops. Because z_before
+    // counts cardinal hops across BOTH axes, the skip can land inside the NS run (NS-axis skip) or inside
+    // the EW run (EW-axis skip, e.g. a wide 8x16 mesh whose skips ride the long EW axis):
+    //   cardinal = [ns]*ns_hops ++ [ew]*ew_hops
+    //   route    = cardinal[0 : z_before] ++ [Z]? ++ cardinal[z_before : ]
+    // Each entry is (forward_cmd, write_cmd) for that hop's dimension.
+    uint8_t fwd_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
+    uint8_t wr_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
+    uint32_t num_hops = 0;
+    const uint32_t total_cardinal = (uint32_t)ns_hops + (uint32_t)ew_hops;
+    for (uint32_t c = 0; c < total_cardinal; ++c) {
+        // Splice the Z hop in once exactly z_before cardinal hops have been emitted.
+        if (z_present && c == z_before) {
+            fwd_list[num_hops] = z_fwd;
+            wr_list[num_hops] = z_write;
+            ++num_hops;
         }
-        for (auto i = 0; i < ew_hops; ++i) {
-            buffer[idx++] = ew_fwd;
+        if (c < ns_hops) {
+            fwd_list[num_hops] = ns_fwd;
+            wr_list[num_hops] = ns_write;
+        } else {
+            fwd_list[num_hops] = ew_fwd;
+            wr_list[num_hops] = ew_write;
         }
-        buffer[idx++] = ew_write;
-    } else if (ns_hops > 0) {
-        // Only NS: (ns_hops-1 + prepend) NS forwards, 1 NS write
-        for (auto i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
-            buffer[idx++] = ns_fwd;
-        }
-        buffer[idx++] = ns_write;
-    } else if (ew_hops > 0) {
-        // Only EW: (ew_hops-1 + prepend) EW forwards, 1 EW write
-        for (auto i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
-            buffer[idx++] = ew_fwd;
-        }
-        buffer[idx++] = ew_write;
+        ++num_hops;
     }
+    // Skip at the tail of the route (z_before >= total_cardinal), which also covers the pure-Z route
+    // (no cardinal hops at all, e.g. a direct skip-endpoint-to-skip-endpoint unicast).
+    if (z_present && z_before >= total_cardinal) {
+        fwd_list[num_hops] = z_fwd;
+        wr_list[num_hops] = z_write;
+        ++num_hops;
+    }
+
+    if (num_hops == 0) {
+        while (idx < max_buffer_size) {
+            buffer[idx++] = MeshFields::NOOP;
+        }
+        return;
+    }
+
+    // buffer[i] is the action performed at the (i+1)-th chip after the source. The source leaves via
+    // hop 0 (the "initial direction", not encoded here) unless prepend_one_hop is set (router usage),
+    // in which case hop 0's forward is emitted too. Every intermediate chip forwards the *next* hop,
+    // and the destination chip performs the write for the final hop.
+    const uint32_t first_hop = prepend_one_hop ? 0 : 1;
+    for (uint32_t k = first_hop; k < num_hops; ++k) {
+        buffer[idx++] = fwd_list[k];
+    }
+    buffer[idx++] = wr_list[num_hops - 1];
 
     // Fill remainder with NOOP
     while (idx < max_buffer_size) {

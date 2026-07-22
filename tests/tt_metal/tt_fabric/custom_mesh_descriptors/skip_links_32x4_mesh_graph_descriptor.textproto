@@ -1,0 +1,16 @@
+# Full-system 32x4 BLACKHOLE torus (4 hosts, 4x1 along the 32-row axis) with two dim-0 skip-link
+# patterns -- the multi-rank counterpart of skip_links_8x4_mesh_graph_descriptor.textproto.
+# device_topology [32,4] dim_types [RING,RING] -> FABRIC_2D_TORUS_XY.
+# skip_links dim=0 start=2 step=4:
+# blocks along the 32-row RING ([2,5][6,9]...[26,29][30,1(wrap)]) x 4 columns = 32 skip edges.
+# skip_links dim=0 start=0 step=8: 8x4 sub torus skip links (blocks [0,7][8,15][16,23][24,31]).
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [32, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [4, 1] }
+  channels { count: 2 policy: RELAXED }
+  skip_links { dim_idx: 0  pattern { start: 2  step: 4 } }
+  skip_links { dim_idx: 0  pattern { start: 0  step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

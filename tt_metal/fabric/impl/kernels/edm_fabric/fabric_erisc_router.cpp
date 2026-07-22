@@ -434,7 +434,14 @@ constexpr size_t TURN_STATUS_ARRAY_SIZE = (MAX_NUM_SENDER_CHANNELS_VC0 > MAX_NUM
 constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, TURN_STATUS_ARRAY_SIZE> {
     std::array<bool, TURN_STATUS_ARRAY_SIZE> turn_statuses = {};
 
-    if constexpr (!is_spine_direction(static_cast<eth_chan_directions>(my_direction))) {
+    // Turn channels only exist on E/W routers, where N/S sender channels represent a packet turning
+    // off the E/W spine. A Z router *is* the (intra-mesh skip) link itself and has no turn semantics:
+    // every eth send it makes is a linear hop that must advance hop_index by +1, not jump to a branch
+    // offset. Its downstream directions map to {E,W,N,S}, so the N/S entries would otherwise be
+    // mis-flagged as turns and corrupt hop_index on the skip-link send.
+    if constexpr (
+        !is_spine_direction(static_cast<eth_chan_directions>(my_direction)) &&
+        static_cast<eth_chan_directions>(my_direction) != eth_chan_directions::Z) {
         for (size_t sender_channel = 1; sender_channel < TURN_STATUS_ARRAY_SIZE; sender_channel++) {
             size_t compact_index = sender_channel - 1;
             eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
@@ -712,6 +719,13 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
                            downstream_edm_interfaces, local_relay_interface);
     }
+    if constexpr (z_router_enabled) {
+        if ((hop_cmd & MeshRoutingFields::FORWARD_Z) && my_direction != eth_chan_directions::Z) {
+            ret_val =
+                ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
+                               downstream_edm_interfaces, local_relay_interface);
+        }
+    }
     return ret_val;
 #else
     bool ret_val = false;
@@ -726,6 +740,18 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             if constexpr (z_router_enabled) {
                 ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
                     downstream_edm_interfaces, local_relay_interface);
+            }
+            break;
+        case MeshRoutingFields::FORWARD_Z:
+            // Dedicated intra-mesh skip (Z) hop. The Z router itself delivers locally (no downstream
+            // needed); any cardinal router forwards onto its Z downstream.
+            if constexpr (z_router_enabled) {
+                if constexpr (my_direction == Z) {
+                    ret_val = true;
+                } else {
+                    ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
+                        downstream_edm_interfaces, local_relay_interface);
+                }
             }
             break;
         case MeshRoutingFields::FORWARD_EAST:
@@ -939,6 +965,24 @@ FORCE_INLINE
 
     switch (hop_cmd) {
         case MeshRoutingFields::NOOP:
+            if constexpr (z_router_enabled) {
+                if constexpr (my_direction == Z) {
+                    forward_to_local_destination<rx_channel_id>(
+                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                } else {
+                    constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
+                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        packet_start,
+                        payload_size_bytes,
+                        cached_routing_fields,
+                        downstream_edm_interfaces[edm_index],
+                        transaction_id);
+                }
+            }
+            break;
+        case MeshRoutingFields::FORWARD_Z:
+            // Dedicated intra-mesh skip (Z) hop. At the destination Z router deliver locally; otherwise
+            // forward the packet onto the Z downstream (skip link).
             if constexpr (z_router_enabled) {
                 if constexpr (my_direction == Z) {
                     forward_to_local_destination<rx_channel_id>(
@@ -3051,6 +3095,12 @@ void kernel_main() {
         init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
         init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
+        // 5th VC0 sender channel (intra-mesh Z) first-level-ack stream. Only present (non-zero) on a
+        // 5-wide-VC0 intra-mesh-Z MESH router; other routers leave index 4 == 0 (no first level ack), so
+        // guard on non-zero to avoid clobbering stream register 0 (the VC0 receiver pkts_sent counter).
+        if constexpr (to_sender_packets_acked_streams[4] != 0) {
+            init_ptr_val<to_sender_packets_acked_streams[4]>(0);
+        }
 
         // Initialize completion streams and sender channel free slots for channels 2..MAX-1 using compile-time loop.
         // Index sequence covers Is=0..7 → channels 2..9 (MAX_NUM_SENDER_CHANNELS=10).
