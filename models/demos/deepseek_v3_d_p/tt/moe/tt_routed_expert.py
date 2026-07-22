@@ -212,7 +212,10 @@ class TtRoutedExpert(LightweightModule):
             experts_per_chip: Number of local experts per chip
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
-            max_tokens: Maximum tokens per expert (default: 1600, used for program config)
+            max_tokens: Maximum tokens per expert (default: 1600, used for program config).
+                          The FFN kernel sizes chunk_M_tiles/per_core_M to each expert's
+                          ACTUAL token count at runtime (read device-side), so no expected-
+                          token hint is needed.
             torch_weights: Optional list of dicts with keys 'gate_proj', 'up_proj', 'down_proj'
                           containing torch tensors. Length must be num_devices * experts_per_chip
                           (total routed experts), with weights ordered by global expert index.

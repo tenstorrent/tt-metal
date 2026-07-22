@@ -42,6 +42,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "../adaptive_chunk.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
@@ -64,15 +65,19 @@ void kernel_main() {
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(2);
+    // per_core_M_max: CB-sized max per-core M. The runtime per_core_M is picked
+    // from the device count below; the down matmul packs the full max ring (so
+    // cb_out carries per_core_M_max rows) and this writer emits only the first
+    // (runtime) per_core_M of them.
+    constexpr uint32_t per_core_M_max = get_compile_time_arg_val(2);
     constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(3);
     constexpr uint32_t per_core_N_d = get_compile_time_arg_val(4);
     constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(7);
     constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(8);
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(9);
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(10);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(11);
+    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(12);
     // device-side count read.
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(13);
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(14);
@@ -99,7 +104,10 @@ void kernel_main() {
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(23);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
-    constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
+    // Full compile-time M-subblock count of cb_out (the down matmul copies the
+    // full max ring). The writer DRAINS all of them but only WRITES the first
+    // (runtime) per_core_M rows (see the drain loop below).
+    constexpr uint32_t d_in1_num_subblocks_M = per_core_M_max / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -141,8 +149,11 @@ void kernel_main() {
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
     const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
-    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
-    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
+    // Runtime chunk layout from the actual count (same math as reader/compute so
+    // the row mapping agrees). per_core_M is per-chunk (see the loop).
+    const uint32_t effective_chunks_runtime = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+    const uint32_t effective_chunks =
+        effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
 
     // Destination tile-row offset for direct-write mode. In direct-write
     // mode the output buffer is a SHARED buffer and this expert's slice
@@ -200,8 +211,12 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
+#ifndef RE_SKIP_WEIGHT_READ
+                                // RE_SKIP_WEIGHT_READ (perf-investigation only): skip the
+                                // DRAM read, keep pointer advance for the read-bound ceiling.
                                 noc_up.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
+#endif
                             } else {
                                 volatile tt_l1_ptr uint64_t* p =
                                     reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
@@ -219,9 +234,19 @@ void kernel_main() {
         }
 
         // ---- Drain cb_out (down matmul output) to DRAM ----
-        const uint32_t row0 = chunk * chunk_M_tiles + my_mt * per_core_M;
+        // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
+        // for the tail); chunk starts are uniform at chunk*chunk_M_max. Contiguous
+        // row map: this core owns rows [row0, row0 + per_core_M).
+        const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+        const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
         const uint32_t col0 = my_nt_d * per_core_N_d;
-        for (uint32_t sb_m = 0; sb_m < d_in1_num_subblocks_M; ++sb_m) {
+        // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
+        // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
+        // rows to keep cb_out balanced — but only WRITE the first per_core_M
+        // (runtime) rows; the rest are MAC-skipped zeros that map onto other
+        // cores' rows and must not be emitted (the sb_m < per_core_M guard below).
+        const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+        for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                 cb_out_buf.wait_front(d_out_subblock_num_tiles);
                 uint32_t subblock_tile_offset = 0;
@@ -243,7 +268,10 @@ void kernel_main() {
                         //   * row < count_tiles: the last chunk's per_core_M
                         //     rows extend past count_tiles when count_tiles
                         //     is not chunk-aligned.
-                        if (col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
+                        //   * sb_m < per_core_M: cb_out carries per_core_M_max
+                        //     rows (full ring); rows past the runtime per_core_M
+                        //     are zeros that belong to other cores — never write.
+                        if (sb_m < per_core_M && col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
                             // The destination tile-row must stay inside the
                             // (possibly shared) output buffer. ttnn::insert
                             // asserted the whole-slice fit
@@ -256,12 +284,18 @@ void kernel_main() {
                             ASSERT(dst_row < dst_M_tiles);
                             if (dst_row < dst_M_tiles) {
                                 const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
+#ifndef RE_SKIP_OUTPUT_WRITE
+                                // RE_SKIP_OUTPUT_WRITE (perf-investigation only): drop the
+                                // output DRAM write while still draining cb_out (below), so
+                                // the down matmul's write-bandwidth cost is isolated. Output
+                                // in DRAM is left stale.
                                 noc.async_write(
                                     cb_out_buf,
                                     out_acc,
                                     out_tile_bytes,
                                     {.offset_bytes = subblock_tile_offset},
                                     {.page_id = tile_idx});
+#endif
                             }
                         }
                         subblock_tile_offset += out_tile_bytes;

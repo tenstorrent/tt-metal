@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -26,6 +27,22 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 
 namespace {
 constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
+
+// Perf-investigation toggles (env-var gated, default off). These strip work
+// from the JIT-compiled kernels to isolate DRAM I/O from compute:
+//   RE_SKIP_MATMUL      -> compute kernel skips the matmul MAC inner loops
+//                          (keeps all CB handshakes/packs), leaving the I/O floor.
+//   RE_SKIP_OUTPUT_WRITE -> writer skips the output DRAM write (keeps cb_out
+//                          drain), isolating the down-matmul write-bandwidth cost.
+// Both produce incorrect output and must never be set in production runs.
+//
+// Deliberately not tt::parse_env<bool>: that uses std::stoi and throws on any
+// non-numeric value, whereas these dev toggles accept any truthy string
+// (e.g. RE_SKIP_MATMUL=1 / on / yes) and treat unset or "0" as off.
+bool env_flag_set(const char* name) {
+    const char* v = std::getenv(name);
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
 
 // CB index allocation (kept stable across kernels via named compile-time args).
 constexpr uint32_t CB_IN0_X = tt::CBIndex::c_0;
@@ -88,29 +105,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // silu and multiply).
     constexpr uint32_t kMaxGridX = 11;
     constexpr uint32_t MAX_GRID_Y = 8;
-    // Short-sequence regime: for small allocated M the 2D layout is stall-bound
-    // (FPU idle), dominated by the gate/up weight DRAM read and by per_core_M.
-    // Both shrink with the grid (pure host config): more N-columns parallelise
-    // the read, and maximising GRID_Y drives per_core_M down to 1-2 for the cost
-    // of a cheap weight multicast. So: GRID_X tuned below, GRID_Y =
-    // min(8, M_tiles_full), single chunk; GRID_Y == 1 drops the multicast.
+    // Full 2D grid, always. The short-sequence special case was removed: real
+    // dispatch buffers are always in the long-sequence range, and the runtime
+    // kernel picker (adaptive_chunk.hpp) already shrinks per_core_M for small
+    // token counts, so no host-side small-M grid tuning is needed.
     //
-    // Branches purely on ALLOCATED M (x.padded_shape); the runtime token count
-    // still bounds the chunk loop device-side. Production keeps M_tiles_full
-    // large, so it stays on the unchanged 2D path.
-    constexpr uint32_t kShortSeqMaxMTiles = 32;  // <= 1024 tokens
+    // chunk_M_tiles here is the CB-sized MAXIMUM chunk (op.chunk_M_tiles, default
+    // 64 => per_core_M_max 8). All three kernels pick the ACTUAL chunk_M /
+    // per_core_M / num_chunks at runtime from the device token count, never
+    // exceeding this max; the CBs below are sized to the max so a smaller pick
+    // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = kMaxGridX;
     uint32_t GRID_Y = MAX_GRID_Y;
     uint32_t chunk_M_tiles = op.chunk_M_tiles;
     uint32_t in0_block_w_gu = 16;
-    const bool short_seq = M_tiles_full <= kShortSeqMaxMTiles;
-    if (short_seq) {
-        // Maximise rows to minimise per_core_M (1 for M <= 8, 2 for M <= 16, ...).
-        GRID_Y = std::min(MAX_GRID_Y, M_tiles_full);
-        GRID_Y = std::max<uint32_t>(GRID_Y, 1);
-        const uint32_t per_core_M_short = (M_tiles_full + GRID_Y - 1) / GRID_Y;
-        chunk_M_tiles = per_core_M_short * GRID_Y;  // single chunk (>= M_tiles_full)
-    }
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= kMaxGridX && grid_size.y >= MAX_GRID_Y,
@@ -119,90 +127,21 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         MAX_GRID_Y,
         grid_size.x,
         grid_size.y);
-    // per_core_M upper bound (requested). `chunk_M_tiles` here is either
-    // op.chunk_M_tiles (general 2D path) or the short_seq single-chunk value;
-    // the adaptive L1-budget guard below may shrink per_core_M / in0_block_w_gu
-    // (and hence chunk_M_tiles) to fit the device's per-core L1.
+    // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
+    // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
+    // fit the device's per-core L1 on large models.
     const uint32_t per_core_M_max = chunk_M_tiles / GRID_Y;
     TT_FATAL(
         per_core_M_max * GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
         "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
         chunk_M_tiles,
         GRID_Y);
-    // Effective per_core_M. The general path may reduce it below per_core_M_max
-    // to fit L1 (short_seq keeps its picker's value). Also read by the short_seq
-    // GRID_X search below (est_l1_bytes).
+    // Effective (CB-sized) per_core_M. The L1 guard below may reduce it to fit L1.
     uint32_t per_core_M = per_core_M_max;
-    // M_tiles_full is NOT required to divide chunk_M_tiles. The kernel runs
-    // ceil(M_tiles_full / chunk_M_tiles) chunks; the reader zero-fills L1
+    // M_tiles_full is NOT required to divide chunk_M_tiles. The kernels run
+    // ceil(count_tiles / chunk_M_tiles_runtime) chunks; the reader zero-fills L1
     // rows past min(count_tiles, M_tiles_full) in the last chunk; the writer
-    // skips OOB writes for output rows >= M_tiles_full. Avoids the host-side
-    // pad/slice round-trip in the composite for non-aligned M.
-
-    // Per-core L1 footprint estimator, mirroring the CreateCircularBuffer sizes
-    // below. Bounds the short-seq GRID_X search to the known-good 2D footprint
-    // so we never risk an L1 OOM.
-    const uint32_t x_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype()));
-    const uint32_t w_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_proj.dtype()));
-    const uint32_t p_ts = tt::tile_size(tt::DataFormat::Float16_b);
-    const uint32_t im_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
-    const uint32_t out_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype()));
-    auto est_l1_bytes = [&](uint32_t gx, uint32_t pcM, uint32_t ibw_gu) -> uint64_t {
-        const uint32_t pcN_gu = (N_gate_tiles_full + gx - 1) / gx;
-        const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
-        const uint32_t ibw_d = pcN_gu;
-        uint64_t b = 0;
-        b += 2ull * pcM * ibw_gu * x_ts;     // CB_IN0_X (double-buffered)
-        b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_GATE
-        b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_UP
-        b += 2ull * ibw_d * pcN_d * w_ts;    // CB_IN1_DOWN
-        b += 1ull * pcM * pcN_gu * im_ts;    // CB_GATE_INT
-        b += 1ull * pcM * pcN_gu * im_ts;    // CB_ACTIVATED
-        b += 1ull * pcM * pcN_gu * p_ts;     // CB_PARTIALS_GU
-        b += 1ull * pcM * pcN_gu * p_ts;     // CB_PARTIALS_UP
-        b += 1ull * pcM * pcN_d * p_ts;      // CB_PARTIALS_D
-        b += 2ull * 8 * out_ts;              // CB_OUT (subblock <= 8 tiles, staged x2)
-        b += 2ull * pcM * ibw_d * im_ts;     // CB_IN0_DOWN_FULL
-        b += 8192;                           // counts + idx scratch
-        return b;
-    };
-
-    if (short_seq) {
-        // Reference footprint: the largest 2D config (GRID_X=11, per_core_M=8,
-        // in0_block_w_gu=16) is known to fit, so any smaller config fits too.
-        constexpr uint32_t kMax2dPerCoreM = 8;
-        const uint64_t budget = est_l1_bytes(kMaxGridX, kMax2dPerCoreM, 16);
-        // gate/up K-block widths to try (descending = fewest handshakes),
-        // restricted to divisors of K_gate_tiles.
-        const uint32_t ibw_candidates[] = {56, 32, 28, 16, 8, 4, 2, 1};
-        uint32_t best_gx = kMaxGridX;
-        uint32_t best_ibw = 16;
-        bool found = false;
-        // Candidate GRID_X: more N-columns parallelise the dominant weight read,
-        // so prefer gx=8, then 11, then 4. Restricted to values whose
-        // per_core_N_gu has a large (<=8) output-subblock divisor — gx 5/6/7
-        // give per_core_N_gu with only divisor 1, forcing 1-wide pack subblocks
-        // that erase the saving.
-        const uint32_t gx_candidates[] = {8, kMaxGridX, 4};
-        for (uint32_t gx : gx_candidates) {
-            if (found) {
-                break;
-            }
-            for (uint32_t ibw : ibw_candidates) {
-                if (ibw > K_gate_tiles || (K_gate_tiles % ibw) != 0) {
-                    continue;
-                }
-                if (est_l1_bytes(gx, per_core_M, ibw) <= budget) {
-                    best_gx = gx;
-                    best_ibw = ibw;
-                    found = true;
-                    break;  // largest fitting ibw for this gx
-                }
-            }
-        }
-        GRID_X = best_gx;
-        in0_block_w_gu = best_ibw;
-    }
+    // skips OOB writes for output rows >= M_tiles_full.
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
@@ -287,9 +226,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     //      weight re-reads, the dominant DRAM cost;
     //   2. then the largest in0_block_w_gu (divisor of K_gate_tiles) that fits —
     //      wider gate/up K-blocks pipeline DRAM I/O better.
-    // Runs after the short_seq GRID_X/in0_block_w_gu picker, so it also caps
-    // short_seq configs at the real L1 ceiling. This mirrors the CB allocations
-    // in the "circular buffers" section below; keep the two in sync.
+    // The resulting per_core_M is the CB-sized MAX; the runtime picker never
+    // exceeds it. This mirrors the CB allocations in the "circular buffers"
+    // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
         total += static_cast<uint64_t>(M * w_gu * 2) * x_tile_size;                               // cb_in0_x
@@ -321,12 +260,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
 
     // If the requested config — (per_core_M_max, in0_block_w_gu) from
-    // op.chunk_M_tiles and either the short_seq picker or the default 16 —
-    // overflows the real L1 budget, shrink to fit: reduce per_core_M first (the
-    // kernel just runs more chunks; keeping per_core_M large minimises full
-    // weight re-reads, the dominant DRAM cost), then narrow in0_block_w_gu to
-    // the largest divisor of K_gate_tiles that fits. No-op when the requested
-    // config already fits (all DSV3 / M2.7 dims and every short_seq config).
+    // op.chunk_M_tiles and the default in0_block_w_gu=16 — overflows the real L1
+    // budget, shrink to fit: reduce per_core_M first (fewer weight re-reads, the
+    // dominant DRAM cost), then narrow in0_block_w_gu to the largest divisor of
+    // K_gate_tiles that fits. No-op when the requested config already fits (all
+    // DSV3 / M2.7 dims).
     if (cb_footprint_bytes(per_core_M, in0_block_w_gu) > l1_budget) {
         // Candidate gate/up K-block widths: divisors of K_gate_tiles no wider
         // than the requested in0_block_w_gu, largest first.
@@ -378,7 +316,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         K_gate_tiles,
         in0_block_w_gu);
 
-    const uint32_t num_chunks = (M_tiles_full + chunk_M_tiles - 1) / chunk_M_tiles;
+    // num_chunks is the compile-time UPPER BOUND on the runtime chunk count used
+    // only to clamp the kernels' loop defensively. The runtime picker may choose
+    // a chunk as small as min(16, chunk_M_tiles) (per_core_M 2), so the worst
+    // case is ceil(M_tiles_full / that min). Matches adaptive_chunk.hpp's
+    // kMinChunkMTiles = 16.
+    constexpr uint32_t kMinChunkMTiles = 16;
+    const uint32_t min_chunk = (chunk_M_tiles < kMinChunkMTiles) ? chunk_M_tiles : kMinChunkMTiles;
+    const uint32_t num_chunks = (M_tiles_full + min_chunk - 1) / min_chunk;
 
     // Phase-level numbers.
     const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
@@ -650,12 +595,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // (unread when read_x_at_offset is 0), keeping the CT-arg layout stable.
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
+    // Perf-investigation toggle (see env_flag_set): skip weight DRAM reads to
+    // quantify the read-bound ceiling (reads stripped, mcasts/handshakes kept).
+    const bool skip_weight_read = env_flag_set("RE_SKIP_WEIGHT_READ");
+    std::map<std::string, std::string> reader_defines{};
+    if (skip_weight_read) {
+        reader_defines["RE_SKIP_WEIGHT_READ"] = "1";
+    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_reader.cpp",
         core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args, reader_defines));
 
     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
     std::vector<uint32_t> writer_ct_args = {
@@ -704,12 +656,21 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
 
+    // Perf-investigation toggles (see env_flag_set): strip the output DRAM write
+    // and/or the `up` weight DRAM read (the latter for the read-bound ceiling).
+    std::map<std::string, std::string> writer_defines{};
+    if (env_flag_set("RE_SKIP_OUTPUT_WRITE")) {
+        writer_defines["RE_SKIP_OUTPUT_WRITE"] = "1";
+    }
+    if (skip_weight_read) {
+        writer_defines["RE_SKIP_WEIGHT_READ"] = "1";
+    }
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_writer.cpp",
         core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args, writer_defines));
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -786,6 +747,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
+    }
+    // Perf-investigation toggle (see env_flag_set): strip the matmul MAC.
+    const bool skip_matmul = env_flag_set("RE_SKIP_MATMUL");
+    if (skip_matmul) {
+        compute_defines["RE_SKIP_MATMUL"] = "1";
     }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(

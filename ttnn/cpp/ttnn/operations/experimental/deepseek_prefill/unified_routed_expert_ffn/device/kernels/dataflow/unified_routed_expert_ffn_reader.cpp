@@ -30,6 +30,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "../adaptive_chunk.hpp"
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -98,7 +99,10 @@ void kernel_main() {
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(6);
 
     constexpr uint32_t local_expert_id = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    // per_core_M_max: the CB-sized maximum per-core M (= chunk_M_max / GRID_Y).
+    // The RUNTIME per_core_M is picked from the device token count below and is
+    // <= this. CBs are allocated to the max; a smaller runtime pick uses fewer.
+    constexpr uint32_t per_core_M_max = get_compile_time_arg_val(8);
     constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(9);
     constexpr uint32_t per_core_N_d = get_compile_time_arg_val(10);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(11);
@@ -108,8 +112,11 @@ void kernel_main() {
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(15);
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(16);
     constexpr uint32_t M_tiles_full = get_compile_time_arg_val(17);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(18);
-    constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(19);
+    // num_chunks_max: compile-time upper bound on the runtime chunk count (clamp).
+    // chunk_M_max: CB-sized maximum chunk (per_core_M_max * GRID_Y); the runtime
+    // picker never exceeds it.
+    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(18);
+    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(19);
     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
@@ -126,9 +133,12 @@ void kernel_main() {
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
-    constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
-    constexpr uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
+    // cb_in0_down_full stays sized to the compile-time MAX per-core M: the down
+    // matmul keeps a full ring and MAC-skips rows >= the runtime per_core_M, so
+    // the reader pushes the full block (filling only per_core_M runtime rows via
+    // the activated mcast; the rest are MAC-skipped downstream).
+    constexpr uint32_t d_in0_block_num_tiles = per_core_M_max * in0_block_w_d;
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
@@ -223,9 +233,15 @@ void kernel_main() {
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
     // (if any) are skipped — no DRAM reads, no mcasts, no compute.
     const uint32_t count_tiles = (count_value + 31) / 32;
-    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
-    // Clamp to compile-time num_chunks just in case (defensive against bad input).
-    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
+    // Runtime chunk layout from the actual token count (identical math in the
+    // compute and writer kernels, so all three agree on the row mapping). Full
+    // chunks span chunk_M_max tile-rows; the tail chunk shrinks per_core_M to the
+    // remainder. per_core_M is thus per-chunk (see the loop) and ADAPTS to the
+    // count with minimal phantom work; the chunk count is the minimum.
+    const uint32_t effective_chunks_runtime = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+    // Clamp to the compile-time max just in case (defensive against bad input).
+    const uint32_t effective_chunks =
+        effective_chunks_runtime < num_chunks_max ? effective_chunks_runtime : num_chunks_max;
 
     // x-read row offset. Zero unless read_x_at_offset: then x is a shared buffer
     // and this expert's rows begin at start[global_id]. Fetch the start page and
@@ -283,14 +299,20 @@ void kernel_main() {
 
     // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
     // so this expert only does work proportional to its actual token count,
-    // not the max-tokens-padded shape of the input. Eliminates the host-side
-    // count read that previously had to narrow the input tensor.
+    // not the max-tokens-padded shape of the input. chunk_M_tiles / per_core_M
+    // were picked from the count above; the row mapping is contiguous (core gy
+    // owns rows [chunk*chunk_M + gy*per_core_M, + per_core_M)).
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        const uint32_t this_core_first_row = chunk * chunk_M_tiles + my_mt * per_core_M;
+        // Per-chunk per_core_M: per_core_M_max for full chunks, a smaller divisor
+        // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
+        // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
+        const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+        const uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
+        const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
 
         // Pre-zero both DB slots of cb_in0_x for this chunk IFF this core
         // (as in0 sender) has any M-rows past M_bound. The K-loop below
-        // overwrites valid rows but skips writes for invalid rows — those
+        // overwrites valid rows but skips writes for invalid rows -- those
         // rows must already be zero in L1 to avoid feeding garbage (or
         // leftover chunk-N-1 real data) into the matmul. Fires only on
         // tail chunks of non-aligned M.
@@ -378,8 +400,13 @@ void kernel_main() {
                             // x_start_tile_idx offsets into this expert's region
                             // of a shared buffer (0 when x is per-expert).
                             const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+#ifndef RE_SKIP_WEIGHT_READ
+                            // RE_SKIP_WEIGHT_READ (perf-investigation only): skip the DRAM
+                            // read but keep the pointer advance + mcast so the read-bound
+                            // ceiling can be measured. Data is stale.
                             noc_read.async_read(
                                 x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+#endif
                             l1_x += x_tile_bytes;
                         }
                     } else {
@@ -433,12 +460,14 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
+#ifndef RE_SKIP_WEIGHT_READ
                             noc_read.async_read(
                                 gate_acc,
                                 CoreLocalMem<uint32_t>(l1_w_gate),
                                 gate_tile_bytes,
                                 {.page_id = tile_idx},
                                 {});
+#endif
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
                             for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
@@ -616,8 +645,10 @@ void kernel_main() {
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
+#ifndef RE_SKIP_WEIGHT_READ
                             noc_read.async_read(
                                 down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
+#endif
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
                             for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
@@ -633,13 +664,20 @@ void kernel_main() {
             // act_sender starts as soon as compute pushes cb_activated AND
             // the ready acks are in (already done in step 1).
             if (is_act_sender) {
-                cb_activated_obj.wait_front(d_in0_block_num_tiles);
+                // cb_activated holds this core's per_core_M (runtime) x in0_block_w_d
+                // activated tiles; read/mcast/pop exactly that many. cb_in0_down_full
+                // is pushed FULL (compile-time max) below so the down matmul's ring
+                // stays aligned — the rows past per_core_M are MAC-skipped there.
+                const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
+                if (re_act_tiles > 0) {
+                    cb_activated_obj.wait_front(re_act_tiles);
+                }
                 act_ready_sem.wait(GRID_X_NOC - 1);
                 act_ready_sem.set(0);
 
                 const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
                 const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
-                const uint32_t mcast_bytes = d_in0_block_num_tiles * intermed_tile_bytes;
+                const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
                 // delivered AFTER the data at every receiver. With linked=false
@@ -652,25 +690,29 @@ void kernel_main() {
                 // wait on) — only path-linking orders the sem behind the data.
                 // Mirrors the canonical matmul in0 sender
                 // (reader_bmm_tile_layout_in0_sender_padding.cpp).
-                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                    CoreLocalMem<uint32_t>(src_l1),
-                    MulticastEndpoint{},
-                    mcast_bytes,
-                    GRID_X_NOC,
-                    {.offset_bytes = 0},
-                    {.noc_x_start = mrow_first_nx,
-                     .noc_y_start = mrow_first_ny,
-                     .noc_x_end = mrow_last_nx,
-                     .noc_y_end = mrow_last_ny,
-                     .addr = dst_l1},
-                    /*linked=*/true);
+                if (mcast_bytes > 0) {
+                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                        CoreLocalMem<uint32_t>(src_l1),
+                        MulticastEndpoint{},
+                        mcast_bytes,
+                        GRID_X_NOC,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = mrow_first_nx,
+                         .noc_y_start = mrow_first_ny,
+                         .noc_x_end = mrow_last_nx,
+                         .noc_y_end = mrow_last_ny,
+                         .addr = dst_l1},
+                        /*linked=*/true);
+                }
                 noc.async_writes_flushed();
 
                 act_valid_sem.set(ACT_VALID);
                 act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                     noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
 
-                cb_activated_obj.pop_front(d_in0_block_num_tiles);
+                if (re_act_tiles > 0) {
+                    cb_activated_obj.pop_front(re_act_tiles);
+                }
             }
 
             // Step 4: in1_down sender finishes — barrier on DRAM reads (NoC 0,

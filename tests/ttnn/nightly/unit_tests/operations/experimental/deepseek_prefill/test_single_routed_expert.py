@@ -8,6 +8,8 @@ Minimal single-device, single-expert test for TtRoutedExpert profiling.
 The simplest scenario: 1 chip, 1 expert, minimal dimensions.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -37,10 +39,39 @@ SINGLE_CHIP_MESH_PARAMS = [
 
 # Token-count sweep for the single-expert profiling test, applied per model with that model's
 # (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
+#
+# NOTE on sub-tile counts: TILE_LAYOUT pads the input to a 32-row tile, so any
+# num_tokens <= 32 maps to a single M tile-row and produces identical device work
+# (the runtime count only bounds the chunk loop, min 1 chunk). The perf-meaningful
+# granularity is therefore multiples of 32; the sub-32 entries are kept so the
+# collapse is visible in a sweep.
 _TOKEN_SWEEP = [
+    (2, "2"),
+    (4, "4"),
+    (8, "8"),
+    (16, "16"),
+    (32, "32"),
+    (64, "64"),
+    (128, "128"),
+    (256, "256"),
+    (512, "512"),
     (1024, "1k"),
+    (2048, "2k"),
+    (4096, "4k"),
+    (8192, "8k"),
+    (16384, "16k"),
     (25600, "25k"),
 ]
+
+
+def _perf_toggle_makes_output_garbage():
+    """True when an RE_SKIP_* perf-investigation toggle is set. Those toggles strip
+    compute/output/read work to isolate DRAM I/O, so the numerical result is garbage
+    and PCC/NaN checks must be skipped on that run."""
+    return any(
+        os.environ.get(var) not in (None, "", "0")
+        for var in ("RE_SKIP_MATMUL", "RE_SKIP_OUTPUT_WRITE", "RE_SKIP_WEIGHT_READ")
+    )
 
 
 def run_single_routed_expert(
@@ -125,10 +156,20 @@ def run_single_routed_expert(
         activation=ttnn.RoutedExpertActivation.Silu,
     )
 
-    # Run TTNN forward
-    logger.debug("Running TTNN forward...")
-    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    # Run TTNN forward. ROUTED_EXPERT_PERF_ITERS > 1 repeats the op back-to-back
+    # (warm, cached program) so a tracy profiling run captures multiple device
+    # invocations to median over; the first (cold) iteration is dropped in
+    # analysis. The signpost above brackets the whole loop.
+    perf_iters = max(1, int(os.environ.get("ROUTED_EXPERT_PERF_ITERS", "1")))
+    logger.debug(f"Running TTNN forward ({perf_iters} iters)...")
+    for _ in range(perf_iters):
+        tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    ttnn.synchronize_device(mesh_device)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
+
+    if _perf_toggle_makes_output_garbage():
+        logger.warning("RE_SKIP_* set: skipping PCC/NaN checks (perf-only run)")
+        return
 
     # Convert back to torch for comparison. For a 1-device replicated tensor,
     # ConcatMeshToTensor(dim=0) with 1 slice is a no-op that returns the tensor.
@@ -218,9 +259,27 @@ def test_single_routed_expert_models(mesh_device, device_params, num_tokens: int
 
 # (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
 # model with that model's (emb_dim, hidden_dim). The alloc/active pairs are model-independent.
+# Count-sparsity sweep: a FIXED 5120-token dispatch buffer with a varying number of
+# active (real) tokens; the rest is zero padding the kernel must skip via the
+# device-side count. This mirrors the real MoE dispatch layout (buffer sized for the
+# max, sparsely filled). Tags are fixed-width (aNNNNN) so pytest -k selects each
+# uniquely (no substring collisions). 25k is intentionally omitted.
 _FAKED_SWEEP = [
-    (1024, 0, "1k-alloc-0k-active"),
-    (25600, 4096, "25k-alloc-4k-active"),
+    (5120, 0, "a00000"),
+    (5120, 1, "a00001"),
+    (5120, 2, "a00002"),
+    (5120, 4, "a00004"),
+    (5120, 8, "a00008"),
+    (5120, 16, "a00016"),
+    (5120, 32, "a00032"),
+    (5120, 64, "a00064"),
+    (5120, 128, "a00128"),
+    (5120, 256, "a00256"),
+    (5120, 512, "a00512"),
+    (5120, 1024, "a01024"),
+    (5120, 2048, "a02048"),
+    (5120, 4096, "a04096"),
+    (5120, 5120, "a05120"),
 ]
 
 
@@ -292,9 +351,25 @@ def run_single_routed_expert_faked_token_count(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         activation=ttnn.RoutedExpertActivation.Silu,
+        # chunk_M_tiles / per_core_M are sized to the ACTIVE token count at runtime,
+        # inside the kernel (read device-side) — no host-side hint needed.
     )
 
-    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    perf_iters = max(1, int(os.environ.get("ROUTED_EXPERT_PERF_ITERS", "1")))
+    for _ in range(perf_iters):
+        tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
+    ttnn.synchronize_device(mesh_device)
+
+    if _perf_toggle_makes_output_garbage():
+        logger.warning("RE_SKIP_* set: skipping PCC/NaN checks (perf-only run)")
+        return
+
+    # Empty-expert case: an expert can be routed zero tokens (count_tiles==0), which
+    # drives the device-side early-out (effective_chunks==0, no chunk loop). There is
+    # no active slice to PCC; reaching here without a hang IS the assertion.
+    if active_tokens == 0:
+        logger.debug("active_tokens==0: empty-expert early-out completed without hang")
+        return
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
