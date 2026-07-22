@@ -52,24 +52,6 @@ def test_recurrent_kda_op(device, T, HV, K, V):
     assert ok, f"PCC too low: {pcc}"
 
 
-@pytest.mark.parametrize("T,C", [(64, 64), (128, 64), (256, 64)])
-@pytest.mark.parametrize("HV,K,V", [(4, 64, 64), (8, 128, 128)])
-def test_chunk_kda_op(device, T, C, HV, K, V):
-    """Chunked KDA prefill vs torch naive_chunk_kda (the perf path)."""
-    from models.experimental.kimi_delta_attention.tt.ttnn_kda_chunk import chunk_kda_ttnn
-
-    B, H = 1, HV
-    q, k, v, g, beta = _mk_inputs(B, T, H, HV, K, V)
-    o_ref, _ = ref.naive_chunk_kda(q, k, v, g, beta, chunk_size=C)
-    o_tt, _ = chunk_kda_ttnn(
-        _to_dev(q, device), _to_dev(k, device), _to_dev(v, device),
-        _to_dev(g, device), _to_dev(beta, device), device=device, chunk_size=C,
-    )
-    ok, pcc = comp_pcc(o_ref, ttnn.to_torch(o_tt), pcc=0.98)
-    logger.info(f"[chunk_kda_op] T={T} C={C} HV={HV} K={K} V={V} PCC={pcc}")
-    assert ok, f"PCC too low: {pcc}"
-
-
 def test_kda_gate_op(device):
     B, T, HV, K = 1, 8, 8, 64
     g_pre = torch.randn(B, T, HV, K)

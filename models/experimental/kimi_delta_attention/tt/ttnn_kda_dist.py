@@ -19,7 +19,6 @@ from einops import rearrange
 
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import create_global_semaphores
 
-from .ttnn_kda_chunk import chunk_kda_ttnn
 from .ttnn_kda_ops import (
     causal_conv1d_silu_ttnn,
     kda_gate_ttnn,

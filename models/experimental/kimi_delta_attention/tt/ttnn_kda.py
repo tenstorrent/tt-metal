@@ -14,7 +14,6 @@ import torch
 import ttnn
 from einops import rearrange
 
-from .ttnn_kda_chunk import chunk_kda_ttnn
 from .ttnn_kda_ops import causal_conv1d_silu_ttnn, conv_weight_taps, kda_gate_ttnn, l2norm_ttnn, recurrent_kda_ttnn
 
 _CHUNK = 32  # chunked prefill when T % _CHUNK == 0, else token-recurrent (decode / ragged)
