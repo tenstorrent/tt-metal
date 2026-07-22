@@ -41,6 +41,7 @@ stages build on each other:
 | Stage | Delivers |
 |---|---|
 | 01 functional-decoder | A correct TTNN decoder layer, validated against the HF reference (PCC) |
+| 01b fused-decoder (optional) | The functional layer with `$graph-fusing` applied — dedicated ops, merged structural ops, folded adjacencies — before optimize |
 | 02 optimized-decoder | The same layer made fast on one chip: precision, sharding, program configs |
 | 03 multichip-decoder | The layer parallelized across the chip mesh |
 | 04 optimized-multichip-decoder | The multichip layer optimized: async collectives, fused ops |

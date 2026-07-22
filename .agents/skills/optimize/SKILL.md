@@ -13,7 +13,7 @@ This skill assumes you have runnable TTNN code with passing correctness tests. I
 
 Roughly in priority order. Treat them as inspiration, not mandates: aim for each, do the best you can, and keep what measures better.
 
-1. Fix topology before tuning knobs: run `$graph-rewrite`, then the operation-topology audit.
+1. Fix topology before tuning knobs: run `$graph-fusing`, then the operation-topology audit.
 2. Check the modules in "Code Paths Worth Reading": if one is close or expected to be similar, reuse it, or copy its decisions into your hand-rolled path.
 3. Sweep precision and fidelity per tensor group, and verify the chosen policy in the measured `tt-perf-report` rows (OPT-007, OPT-013, OPT-014; "Precision And Fidelity"). Settle data formats before sharding, since dtype changes shard sizes and program configs.
 4. [layout seed] Run `$shard-advise` once on the rewritten dense attention+MLP block for a first-candidate L1 layout + 1D program configs (OPT-015; setup/recipe in `.agents/skills/shard-advise/SETUP.md`). Apply as a first candidate onto the rewritten graph, then re-tune per "Optimization Recommendations" below. The shard-advise matmul config is one candidate for the OPT-004 DRAM-sharded sweep, not a replacement, and it only covers dense linears (not `sparse_matmul`/SSM).
@@ -39,7 +39,7 @@ A note on the term "sharding" - tt-metal uses this to mean two things. On-device
 
 Profile warmed prefill and decode separately. Use `tt-perf-report` to find bottlenecks and suggestions for decoder, module, and non-serving full-model optimization. Try applicable advice. Keep changes that improve the target without unacceptable correctness or complexity cost. Record why rejected advice was rejected. If advice seems wrong, incomplete, or misleading, call that out as a candidate improvement to `tt-perf-report`.
 
-Before operation-level optimization and knob tuning first use $graph-rewrite skill to optimize the structure of the graph. This will reduce the number of operations, and improve the data movement and layout of the graph.
+Before operation-level optimization and knob tuning first use $graph-fusing skill to optimize the structure of the graph. This will reduce the number of operations, and improve the data movement and layout of the graph.
 
 Before local knob tuning, do an operation-topology audit of the measured path. Read the code and perf report together, then write a small table with the current operation sequence, material repeated matmuls, material collectives, reshard/layout conversions, candidate fused or lower-movement replacements, dtype/fidelity constraints for each candidate, and the action taken. This is not a comparison to any one existing model. Derive it from the target model's dataflow: if multiple projections consume the same activation, if a collective feeds a matmul, if a matmul is immediately followed by a collective, or if tensors gather/reshard only to satisfy a local helper, that is optimization work.
 
@@ -463,7 +463,7 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
 -[ ] Prefill activations generally DRAM interleaved; use 2D matmul program configs for large prefill matmuls.
 -[ ] Operation-topology audit completed: current op sequence, repeated same-input matmuls, collectives, reshard/layout conversions, candidate fused/lower-movement replacements, dtype/fidelity constraints, and action taken are recorded.
--[ ] `$graph-rewrite` applied before knob tuning: primitive op sequences replaced with dedicated ops (tt-metal repo explored for existing ops), structural ops merged/simplified, and adjacent ops folded into existing ops; each kept rewrite is PCC-verified.
+-[ ] `$graph-fusing` applied before knob tuning: primitive op sequences replaced with dedicated ops (tt-metal repo explored for existing ops), structural ops merged/simplified, and adjacent ops folded into existing ops; each kept rewrite is PCC-verified.
 -[ ] `$shard-advise` was run **this pass** on the rewritten dense block; its `report.json` + `final_ir.mlir` are saved under `doc/optimized_decoder/shard_advise/`, its per-op L1 layout + program config were seeded as first candidates before the local search, and any op left at a DRAM/interleaved default has a recorded before/after and rejection reason. (Running + documenting the advisor is mandatory; keeping its config is not.)
 -[ ] Multi-device topology candidates were measured as coherent families when applicable: residual layout, collective placement, fused CCL+matmul use, projection packing or separation, activation/CCL dtype, and persistent-buffer use. A rejection measured only under an incompatible residual/layout contract does not complete this item.
 -[ ] Lower-movement residual candidates were measured without an immediate old-contract restore when applicable. If a reduce-scatter or fused CCL+matmul path only lost after an immediate all-gather or full replication, a stack-compatible sharded/fractured residual path was also measured or a minimal repro proves the next op cannot consume that layout.

@@ -1,21 +1,44 @@
 ---
-name: graph-rewrite
-description: Rewrite a TTNN op graph into a faster numerically-equivalent one by (1) replacing a primitive op sequence with a dedicated tt-metal op, (2) simplifying/merging structural ops, and (3) folding adjacent ops into an existing op. Use during the operation-topology audit in $optimize, before local program-config tuning, whenever the measured path spells out math that a single op could do, runs redundant data-movement ops, or leaves bias/activation/scale/transpose unfused next to a matmul/conv.
+name: graph-fusing
+description: Fuse a TTNN op graph into a faster numerically-equivalent one by (1) replacing a primitive op sequence with a dedicated tt-metal op, (2) simplifying/merging structural ops, and (3) folding adjacent ops into an existing op. Use during the operation-topology audit in $optimize, before local program-config tuning, whenever the measured path spells out math that a single op could do, runs redundant data-movement ops, or leaves bias/activation/scale/transpose unfused next to a matmul/conv.
 ---
 
-# Graph Rewrite (Fusion)
-
-Use this skill during the operation-topology audit step of `$optimize`, before tuning individual program configs.
-
-The governing principle: **fewer, larger, more specialized ops beat many small primitive ops.** A dedicated kernel does in one dispatch, with fused compute and tuned data movement, what a spelled-out primitive sequence does in many. Most graph wins come from recognizing that a subgraph *is* an op you already have.
+# Graph Fusing
 
 This is a correctness-preserving transform. Every rewrite must be proven numerically equivalent to the graph it replaces — see **Verify every rewrite** below. Do not land a rewrite you have not PCC-checked on real shapes and dtypes.
+
+
+## Steps to execute graph fusion
+
+### Step 1
+
+Follow instructions from `### Dedicated fused ops` and explore the tt-metal repo for all possible ops that can be used in this graph.
+
+### Step 2
+
+From the perf report + code you are performing fusing on, write out the full op sequence — a short table of each op with its inputs and the data movement (reshard/layout/collective) between them — so repeated ops, redundant movement, and spelled-out-math subgraphs become visible.
+
+### Step 3
+
+Scan table and the implementation for existing patterns in this skill and the new ones you found in step 1. For each candidate subgraph, classify it and choose the most promising candidate to apply, **priority order: Dedicated fused ops first, then Graph rewrites, then Op merging.**
+
+### Step 4
+
+After the graph change, run a PCC equivalence test (unfused vs fused) on device. Keep it only if PCC still meets the threshold (0.99) and the fused path is faster on the measured workload. See **Verify every rewrite** below. Do not give up on a graph rewrite if the first run fails. Try to solve the problem. Read the implementation and validation of the op that you added and figure out if there is something that can be changed in order for the op to be valid for your case. Sometimes even adding an additional input layout change can help.
+
+### Step 5
+
+Once the selected pattern is applied or rejected go back to Step 2 and run the procedure again.
+Try every pattern that makes sense, do not stop after you successfully applied one pattern. Only stop when there is nothing else left to try.
+
 
 ## The three kinds of rewrite, in priority order
 
 ### Dedicated fused ops — replace a primitive op sequence with a dedicated tt-metal op  (HIGHEST PRIORITY)
 
 The graph spells out the math of an operation (several primitive ops) that a hand-written tt-metal op already implements as one kernel. Collapse the sequence into that op.
+
+The governing principle: **fewer, larger, more specialized ops beat many small primitive ops.** A dedicated kernel does in one dispatch, with fused compute and tuned data movement, what a spelled-out primitive sequence does in many. Most graph wins come from recognizing that a subgraph *is* an op you already have.
 
 **Always explore the tt-metal repo existing ops as potential fusing candidates.** This is the highest-value move and almost always improves performance. Two things to find: whether a dedicated op exists at all, and how a real model already wires it (leading models often assemble the fast op sequence for you, and some ship custom fused kernels you can reuse or imitate).
 
@@ -72,14 +95,6 @@ An anchor op stays in the graph; a neighbor (bias, activation, scale, transpose,
 - Reduction + reshape: `reduce(keepdim=False) → reshape` → `reduce(keepdim=True)`.
 - Scaled-sum → mean: `sum(x)·(1/N)` → `ttnn.mean(x)`.
 - RoPE decode / decode-reshape: fold the decode layout `permute`/`reshape` into a decode-mode rotary embedding (`token_index=0`).
-
-
-## Approach to graph rewrite
-
-1. From the perf report + code, write out the op sequence for the measured path — a short table of each op with its inputs and the data movement (reshard/layout/collective) between them — so repeated ops, redundant movement, and spelled-out-math subgraphs become visible.
-2. Follow instructions from `### Dedicated fused ops` and explore the tt-metal repo for all possible ops that can be used in this graph.
-3. Scan table and the implementation for existing patterns in this skill and the new ones you found. For each candidate subgraph, classify it and apply the three kinds in **priority order: Dedicated fused ops first, then Graph rewrites, then Op merging.**
-4. After each rewrite, run a PCC equivalence test (unfused vs fused) on device. Keep it only if PCC still meets the threshold (0.99) and the fused path is faster on the measured workload. See **Verify every rewrite** below.
 
 
 ## Verify every rewrite
