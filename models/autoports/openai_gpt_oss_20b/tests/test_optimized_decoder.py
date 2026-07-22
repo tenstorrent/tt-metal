@@ -63,6 +63,11 @@ def _optimization_config(variant: str | None = None) -> OptimizationConfig:
             dram_attention_weight_dtype="bfloat16",
             attention_math_fidelity="hifi4",
         ),
+        "dram_attention_bf16_lofi": base.with_changes(
+            use_dram_sharded_attention=True,
+            dram_attention_weight_dtype="bfloat16",
+            attention_math_fidelity="lofi",
+        ),
         "kv_bfp8": base.with_changes(kv_cache_dtype="bfloat8_b"),
         "kv_bf16": base.with_changes(kv_cache_dtype="bfloat16"),
         "kv_bfp8_sdpa_k32": base.with_changes(
@@ -79,12 +84,16 @@ def _optimization_config(variant: str | None = None) -> OptimizationConfig:
         "prefill_2d_8x4": base.with_changes(prefill_matmul_config="2d_8x4"),
         "prefill_2d_10x4": base.with_changes(prefill_matmul_config="2d_10x4"),
         "dense": base.with_changes(use_sparse_experts=False),
+        "dense_prefill_auto": base.with_changes(use_sparse_experts=False, prefill_matmul_config="auto"),
         "advisor_dense_moe": base.with_changes(
             use_sparse_experts=False,
             use_shard_advisor_dense_moe_layouts=True,
         ),
         "sparse_bf16": base.with_changes(expert_weight_dtype="bfloat16"),
+        "sparse_hifi2": base.with_changes(expert_math_fidelity="hifi2"),
+        "sparse_packed_gate_up": base.with_changes(use_packed_sparse_gate_up=True),
         "expert_input_l1": base.with_changes(expert_input_l1=True),
+        "expert_input_dram": base.with_changes(expert_input_l1=False),
         "sparse_bfp4": base.with_changes(expert_weight_dtype="bfloat4_b"),
         "sparse_bfp4_5x6": base.with_changes(
             expert_weight_dtype="bfloat4_b",
@@ -119,6 +128,7 @@ def _decoder(
     *,
     layer_idx: int = SLIDING_LAYER,
     batch: int = 1,
+    max_cache_len: int = 128,
     variant: str | None = None,
 ):
     return OptimizedDecoder.from_state_dict(
@@ -127,6 +137,7 @@ def _decoder(
         layer_idx=layer_idx,
         mesh_device=mesh_device,
         batch=batch,
+        max_cache_len=max_cache_len,
         optimization_config=_optimization_config(variant),
     )
 
@@ -140,8 +151,10 @@ def _empty_caches_for_decoder(config, mesh_device, decoder, *, batch=1):
 def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
     policy = OptimizationConfig()
     assert policy.use_sparse_experts
+    assert policy.expert_math_fidelity == "lofi"
+    assert policy.expert_input_l1
     assert policy.kv_cache_dtype == "bfloat8_b"
-    assert policy.prefill_matmul_config == "2d_10x4"
+    assert policy.prefill_matmul_config == "auto"
     assert policy.explicit_sdpa_program_config
     assert OptimizedDecoder.prefill_forward is not FusedDecoder.prefill_forward
     assert OptimizedDecoder.decode_forward is not FusedDecoder.decode_forward
@@ -150,6 +163,8 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
 
     runtime_methods = (
         OptimizedDecoder._route,
+        OptimizedDecoder._apply_fused_swiglu,
+        OptimizedDecoder._sparse_decode_experts,
         OptimizedDecoder._optimized_moe_forward,
         OptimizedDecoder._prefill_attention,
         OptimizedDecoder._decode_attention,
@@ -182,8 +197,65 @@ def test_optimized_runtime_is_distinct_and_has_no_host_fallback():
     assert "nlp_concat_heads_decode(" in inspect.getsource(OptimizedDecoder._decode_attention)
 
 
+@pytest.mark.parametrize("layer_idx,expected_window", [(SLIDING_LAYER, 128), (FULL_LAYER, None)])
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_large_prefill_uses_selected_2d_program_configs(mesh_device):
+def test_real_weight_layer_kind_boundary_beyond_emitted_cache(mesh_device, layer_idx, expected_window):
+    """Cross the sliding-window boundary and the functional stage's cache extent."""
+
+    prefill_len = 128
+    with _functional_helpers_for_layer(layer_idx):
+        config = functional_test._config()
+        state = functional_test._real_state()
+        decoder = _decoder(state, config, mesh_device, layer_idx=layer_idx, max_cache_len=256)
+        reference_layer = functional_test._hf_layer(state, config)
+        key_cache, value_cache = decoder.create_kv_cache()
+        generator = torch.Generator().manual_seed(16100 + layer_idx)
+        hidden = torch.randn((1, 1, prefill_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        decoder.prefill_forward(functional_test._tt_tensor(hidden, mesh_device), key_cache, value_cache)
+
+        assert decoder.max_cache_len == 256
+        assert decoder.attention_window == expected_window
+
+        decode_hidden = torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        # Recompute the HF reference over the complete history. HF's dynamic
+        # sliding cache truncates to 128 entries, while this test intentionally
+        # crosses that boundary using a 256-entry paged TT cache.
+        reference_history = torch.cat((hidden, decode_hidden), dim=2)
+        reference_decode, decode_key, decode_value, _ = functional_test._reference_layer(
+            reference_layer,
+            reference_history,
+            config,
+        )
+        actual_decode = decoder.decode_forward(
+            functional_test._tt_tensor(decode_hidden, mesh_device),
+            key_cache,
+            value_cache,
+            current_pos=prefill_len,
+        )
+        functional_test._assert_pcc(
+            reference_decode[:, :, -1:, :],
+            functional_test._to_host(actual_decode),
+            0.99,
+            f"layer{layer_idx} decode position={prefill_len}",
+        )
+        functional_test._assert_pcc(
+            decode_key[:, :, -1:, :],
+            functional_test._to_host(key_cache)[:, :, prefill_len : prefill_len + 1, :],
+            0.99,
+            f"layer{layer_idx} boundary key",
+        )
+        functional_test._assert_pcc(
+            decode_value[:, :, -1:, :],
+            functional_test._to_host(value_cache)[:, :, prefill_len : prefill_len + 1, :],
+            0.99,
+            f"layer{layer_idx} boundary value",
+        )
+        del decoder, reference_layer, state
+        gc.collect()
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_large_prefill_uses_correct_auto_program(mesh_device):
     config = functional_test._config()
     state = functional_test._synthetic_state(config)
     decoder = _decoder(state, config, mesh_device)
@@ -208,8 +280,8 @@ def test_large_prefill_uses_selected_2d_program_configs(mesh_device):
         0.99,
         "optimized value S=128",
     )
-    assert decoder.prefill_qkv_program_config is not None
-    assert decoder.prefill_o_program_config is not None
+    assert decoder.prefill_qkv_program_config is None
+    assert decoder.prefill_o_program_config is None
     del decoder, reference_layer, state
     gc.collect()
 
@@ -548,53 +620,79 @@ def _measure_decoder(decoder_cls, state, config, mesh_device, *, optimization_co
 def test_profile_optimized_warmed_windows(mesh_device, device_params):
     config = functional_test._config()
     state = functional_test._real_state()
-    decoder = _decoder(state, config, mesh_device, layer_idx=SLIDING_LAYER)
     generator = torch.Generator().manual_seed(5501)
-    prefill_input = functional_test._tt_tensor(
-        torch.randn(
-            (1, 1, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
-            generator=generator,
-            dtype=torch.bfloat16,
-        ),
-        mesh_device,
-    )
-    decode_input = functional_test._tt_tensor(
-        torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16),
-        mesh_device,
-    )
-    key_cache, value_cache = decoder.create_kv_cache()
-    output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
-    ttnn.synchronize_device(mesh_device)
-    output.deallocate(True)
-    signpost(header="PERF_PREFILL")
-    output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
-    ttnn.synchronize_device(mesh_device)
-    signpost(header="PERF_PREFILL_END")
-    output.deallocate(True)
 
-    output = decoder.decode_forward(
-        decode_input,
-        key_cache,
-        value_cache,
-        current_pos=EMITTED_PREFILL_SEQUENCE,
+    def profile_decoder(decoder, prefix: str):
+        prefill_input = functional_test._tt_tensor(
+            torch.randn(
+                (1, 1, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+                generator=generator,
+                dtype=torch.bfloat16,
+            ),
+            mesh_device,
+        )
+        decode_input = functional_test._tt_tensor(
+            torch.randn((1, 1, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16),
+            mesh_device,
+        )
+        key_cache, value_cache = _empty_caches_for_decoder(config, mesh_device, decoder)
+        output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
+        ttnn.synchronize_device(mesh_device)
+        output.deallocate(True)
+        signpost(header=f"{prefix}_PREFILL")
+        output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
+        ttnn.synchronize_device(mesh_device)
+        signpost(header=f"{prefix}_PREFILL_END")
+        output.deallocate(True)
+
+        output = decoder.decode_forward(
+            decode_input,
+            key_cache,
+            value_cache,
+            current_pos=EMITTED_PREFILL_SEQUENCE,
+        )
+        ttnn.synchronize_device(mesh_device)
+        output.deallocate(True)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_output = decoder.decode_forward(
+            decode_input,
+            key_cache,
+            value_cache,
+            current_pos=EMITTED_PREFILL_SEQUENCE,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        signpost(header=f"{prefix}_DECODE")
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        signpost(header=f"{prefix}_DECODE_END")
+        assert tuple(trace_output.shape) == (1, 1, 1, config.hidden_size)
+        ttnn.release_trace(mesh_device, trace_id)
+        trace_output.deallocate(True)
+
+    baseline = FusedDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=SLIDING_LAYER,
+        mesh_device=mesh_device,
     )
+    profile_decoder(baseline, "FUSED")
+    del baseline
+    gc.collect()
+
+    decoder = _decoder(state, config, mesh_device, layer_idx=SLIDING_LAYER)
+    profile_decoder(decoder, "OPTIMIZED")
+    prefill_128 = functional_test._tt_tensor(
+        torch.randn((1, 1, 128, config.hidden_size), generator=generator, dtype=torch.bfloat16), mesh_device
+    )
+    key_cache_128, value_cache_128 = decoder.create_kv_cache()
+    output = decoder.prefill_forward(prefill_128, key_cache_128, value_cache_128)
     ttnn.synchronize_device(mesh_device)
     output.deallocate(True)
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    trace_output = decoder.decode_forward(
-        decode_input,
-        key_cache,
-        value_cache,
-        current_pos=EMITTED_PREFILL_SEQUENCE,
-    )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    signpost(header="OPTIMIZED_PREFILL_128")
+    output = decoder.prefill_forward(prefill_128, key_cache_128, value_cache_128)
     ttnn.synchronize_device(mesh_device)
-    signpost(header="PERF_DECODE")
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-    signpost(header="PERF_DECODE_END")
-    assert tuple(trace_output.shape) == (1, 1, 1, config.hidden_size)
-    ttnn.release_trace(mesh_device, trace_id)
-    trace_output.deallocate(True)
+    signpost(header="OPTIMIZED_PREFILL_128_END")
+    output.deallocate(True)
     del decoder, state
     gc.collect()
 
@@ -604,7 +702,7 @@ def test_profile_optimized_warmed_windows(mesh_device, device_params):
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_optimized_beats_fused_warmed_prefill_and_traced_decode(mesh_device, device_params):
     config = functional_test._config()
-    state = functional_test._synthetic_state(config)
+    state = functional_test._real_state()
     baseline = _measure_decoder(FusedDecoder, state, config, mesh_device)
     optimized_config = _optimization_config(os.environ.get("OPTIMIZED_DECODER_PERF_VARIANT", "optimized"))
     optimized = _measure_decoder(

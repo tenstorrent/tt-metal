@@ -1,28 +1,28 @@
 {
   "hf_model": "openai/gpt-oss-20b",
   "hf_advertised_context": 131072,
-  "current_supported_context": 128,
-  "limiting_reason": "device_dram",
+  "current_supported_context": 131072,
+  "limiting_reason": null,
   "capacity_evidence": {
     "device": "one Blackhole chip from a P300c endpoint (TT_VISIBLE_DEVICES=0)",
     "device_allocator_dram_banks": 8,
     "device_allocator_bytes_per_bank": 4272341376,
     "device_allocator_total_bytes": 34178731008,
     "capacity_probe": "ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)",
-    "advertised_context_bf16_dense_attention_mask_bytes": 34359738368,
     "advertised_context_bf16_input_bytes": 754974720,
     "advertised_context_bf16_single_layer_kv_cache_bytes": 268435456,
-    "formula": "Mask: 1*1*131072*131072*2 bytes. Input: 1*1*131072*2880*2 bytes. KV: 1*8*131072*64*2(K,V)*2 bytes.",
+    "formula": "Input: 1*1*131072*2880*2 bytes. KV: 1*8*131072*64*2(K,V)*2 bytes.",
     "functional_decoder_static_weight_bytes": 1646373824,
     "fused_gate_up_split_copy_bytes": 1062051840,
     "fused_decoder_static_weight_bytes": 2708425664,
-    "stage_scope": "The optimized batch-one path releases the inherited dense expert tensors after loading routed BFP8_B sparse-expert weights and stores the configured 128-entry K/V cache in BFP8_B. Optimized prefill is validated through the complete configured S=128 extent. At the advertised HF length, the inherited dense causal-mask design alone still exceeds allocator-reported DRAM before weights, input, KV cache, outputs, and temporaries.",
-    "validated_prefill_context": 128,
-    "configured_cache_and_mask_extent": 128,
-    "first_proven_infeasible_context_for_this_dense_mask_design": 131072,
-    "unprobed_interval": "129 through 131071; current_supported_context equals the configured cache/mask extent and is a validation boundary, not a claim that the HF-advertised length fits this dense-mask design"
+    "stage_scope": "The optimized batch-one path releases inherited dense expert tensors after loading routed BFP8_B sparse-expert weights and stores persistent K/V in BFP8_B. It removes the functional decoder's quadratic dense causal-mask allocation, accepts caller-selected max_cache_len, extends RoPE tables to that extent, and has no public sequence-alignment or 128-token capacity restriction. The logical context contract therefore returns to the HF-advertised 131072 tokens. Hardware execution in this decoder-only stage qualifies a 256-entry cache through decode position 128; it does not claim an end-to-end 131072-token performance or accuracy run.",
+    "real_weight_qualified_prefill_context": 17,
+    "synthetic_qualified_prefill_context": 128,
+    "validated_extended_cache_extent": 256,
+    "validated_decode_position": 128,
+    "unprobed_interval": "Hardware accuracy and performance above decode position 128 through the HF-advertised 131072-token extent remain unvalidated in this decoder-only stage."
   },
-  "notes": "The functional starting point validates prefill through S=17, and the fused stage extends non-aligned validation through S=33. The optimized stage preserves non-aligned S=3/17/33 behavior and validates prefill at the complete configured S=128 cache/mask extent, so the supported validation boundary advances without reducing capability. Decode is validated at positions 3 through 18, including repeated paged updates and trace replay. The batch-one optimized cache uses BFP8_B; its tile-padded storage is smaller than BF16, while current-token K/V remain BF16 inputs to attention before cache writes. The dense-mask design remains proven infeasible at the HF target; contexts above the configured extent were not probed. A different long-context memory policy is deferred.",
+  "notes": "The functional starting point validates real-weight prefill through S=17, and the fused stage validates non-aligned synthetic prefill through S=33. The optimized stage removes the dense-mask design limit and preserves the HF-advertised logical context without introducing a smaller public cap. It preserves non-aligned S=3/17/33 behavior and qualifies its large-prefill program at synthetic S=128. Real-weight S=128 output PCC (layer 12: 0.98922; layer 13: 0.98700) is recorded but is below the selected functional bar, so it is not claimed as real-weight prefill qualification. A complete S=128 prefill plus decode at position 128 validates the extended 256-entry BFP8_B paged cache and layer-aware sliding/full attention boundary behavior. Routine decode positions 3 through 18, repeated paged updates, and trace replay are also validated. Current-token K/V remain BF16 before cache writes. Longer-context hardware qualification is deferred to a later stage; that validation boundary is not exposed as a public context cap.",
   "fused_decoder_stage": {
     "validated_prefill_context": 33,
     "validated_decode_position": 17,
@@ -32,15 +32,17 @@
     "capacity_change": "No supported-context reduction; current_supported_context advances from 17 to the largest fused prefill validation S=33."
   },
   "optimized_decoder_stage": {
-    "validated_prefill_context": 128,
-    "validated_decode_positions": "3 through 18",
+    "real_weight_qualified_prefill_context": 17,
+    "synthetic_qualified_prefill_context": 128,
+    "validated_decode_positions": "3 through 18 and position 128 after a real-weight S=128 prefill",
     "non_aligned_lengths": [3, 17, 33],
     "large_prefill_lengths": [128],
     "cache_dtype": "BFP8_B",
     "cache_layout": "TILE, DRAM interleaved",
-    "cache_extent": 128,
+    "default_cache_extent": 128,
+    "validated_extended_cache_extent": 256,
     "cache_storage_change": "BFP8_B replaces BF16 for persistent K/V. For this 1x8x128x64 cache pair, the nominal payload drops from 262144 BF16 bytes to 131072 BFP8 mantissa bytes plus block-exponent metadata.",
-    "capacity_change": "No supported-context reduction; current_supported_context advances from 33 to the complete configured and PCC-validated S=128 extent."
+    "capacity_change": "The quadratic dense-mask allocation is removed, so the optimized decoder no longer imposes the earlier device-DRAM context reduction and preserves the HF-advertised 131072-token logical contract. Hardware qualification remains explicitly narrower: synthetic S=128 prefill and real-weight decode at position 128 pass, while real-weight S=128 prefill output remains below the functional PCC bar."
   },
   "paths": {
     "prefill": {

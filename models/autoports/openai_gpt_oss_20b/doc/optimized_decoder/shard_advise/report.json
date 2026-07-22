@@ -2,8 +2,8 @@
   "function": "decode",
   "optimization_level": 2,
   "pipeline": "scoped",
-  "total_ops": 43,
-  "final_choices": 40,
+  "total_ops": 39,
+  "final_choices": 38,
   "spill": {
     "ran": true,
     "total_spills": 0
@@ -323,10 +323,10 @@
       "output_revert": false
     },
     {
-      "kind": "to_layout",
-      "producer": "input",
+      "kind": "to_memory_config",
+      "producer": "reshape",
       "consumer": "?",
-      "from": "dram/interleaved/1x1",
+      "from": "l1/interleaved/10x11",
       "to": "dram/interleaved/1x1",
       "output_revert": false
     },
@@ -335,54 +335,6 @@
       "producer": "reshape",
       "consumer": "?",
       "from": "l1/interleaved/10x11",
-      "to": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
-      "output_revert": false
-    },
-    {
-      "kind": "to_layout",
-      "producer": "slice_static",
-      "consumer": "?",
-      "from": "dram/interleaved/1x1",
-      "to": "dram/interleaved/1x1",
-      "output_revert": false
-    },
-    {
-      "kind": "to_layout",
-      "producer": "input",
-      "consumer": "?",
-      "from": "dram/interleaved/1x1",
-      "to": "dram/interleaved/1x1",
-      "output_revert": false
-    },
-    {
-      "kind": "to_memory_config",
-      "producer": "reshape",
-      "consumer": "?",
-      "from": "l1/interleaved/10x11",
-      "to": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
-      "output_revert": false
-    },
-    {
-      "kind": "to_layout",
-      "producer": "slice_static",
-      "consumer": "?",
-      "from": "dram/interleaved/1x1",
-      "to": "dram/interleaved/1x1",
-      "output_revert": false
-    },
-    {
-      "kind": "to_layout",
-      "producer": "input",
-      "consumer": "scaled_dot_product_attention_decode",
-      "from": "dram/interleaved/1x1",
-      "to": "dram/interleaved/1x1",
-      "output_revert": false
-    },
-    {
-      "kind": "to_layout",
-      "producer": "input",
-      "consumer": "scaled_dot_product_attention_decode",
-      "from": "dram/interleaved/1x1",
       "to": "dram/interleaved/1x1",
       "output_revert": false
     },

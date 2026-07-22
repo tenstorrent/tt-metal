@@ -51,6 +51,14 @@ _CAPTURE_DEVICE = _CaptureDevice()
 _HOST_FROM_TORCH = ttnn.from_torch
 
 
+class _InputSpec:
+    """Tracer metadata input that avoids host-side packed-dtype conversion."""
+
+    def __init__(self, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+
+
 def _from_torch_without_silicon(tensor, *args, device=None, mesh_mapper=None, memory_config=None, **kwargs):
     del device, mesh_mapper, memory_config
     return _HOST_FROM_TORCH(tensor, *args, **kwargs)
@@ -143,6 +151,17 @@ def _install_capture_handlers():
             return tracer.ttir.reshape(result=result_type, input=input.mlir_value, shape=result_shape)
 
     tracer._EXPERIMENTAL_VALUE["nlp_concat_heads_decode"] = concat_decode_handler
+
+    def paged_update_cache_handler(jit_ctx, cache, input, *, update_idxs_tensor=None, page_table=None, **kwargs):
+        # This advisor branch can trace ttir.paged_update_cache but cannot
+        # legalize it to TTNN in either scoped or full pipelines.  Cache update
+        # has no tunable layout choice, so thread the selected BFP8 cache value
+        # through unchanged and keep SDPA plus the complete dense block in the
+        # graph.  Runtime cache semantics are covered by the optimized tests.
+        del jit_ctx, input, update_idxs_tensor, page_table, kwargs
+        return cache.mlir_value
+
+    tracer._EXPERIMENTAL_VALUE["paged_update_cache"] = paged_update_cache_handler
 
     def sdpa_decode_handler(
         jit_ctx,
@@ -253,6 +272,7 @@ def make_inputs(device):
         "experts_per_token": 4,
         "rms_norm_eps": 1e-5,
         "sliding_window": 128,
+        "attention_window": 128,
         "swiglu_limit": 7.0,
         "scale": head_dim**-0.5,
         "compute_kernel_config": None,
@@ -272,7 +292,7 @@ def make_inputs(device):
         "down_bias": _host_tensor((experts, 1, hidden)),
         "rotary_cos": _host_tensor((1, 1, MAX_CACHE_LEN, head_dim)),
         "rotary_sin": _host_tensor((1, 1, MAX_CACHE_LEN, head_dim)),
-        "attention_mask": _host_tensor((1, 1, MAX_CACHE_LEN, MAX_CACHE_LEN)),
+        "attention_mask": None,
         "position_indices": _host_tensor(
             (MAX_CACHE_LEN,),
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -289,15 +309,28 @@ def make_inputs(device):
         "prefill_rotary_views": {},
         "decode_position_views": {},
         "moe_policy": "auto",
-        "optimization_config": OptimizationConfig(use_sparse_experts=False),
+        # Capture from the rewritten dense graph before applying the advisor's
+        # own layouts.  This both avoids seeding the capture with its previous
+        # answer and keeps the harness reproducible when OptimizedDecoder's
+        # production defaults enable advisor layouts.
+        "optimization_config": OptimizationConfig(
+            use_sparse_experts=False,
+            use_shard_advisor_attention_layouts=False,
+            use_shard_advisor_router_layouts=False,
+        ),
         "experts": None,
     }
     for name, value in attributes.items():
         setattr(_DECODER, name, value)
+    # __init__ was intentionally bypassed above. Recreate the non-device
+    # configuration state required by the owned decode path; these helpers
+    # only build memory/program/compute descriptors during make_inputs.
+    _DECODER._configure_dram_attention_candidate()
+    _DECODER._configure_attention_program_candidates()
     return (
         _host_tensor((1, BATCH, 1, hidden)),
-        _host_tensor((BATCH, num_kv_heads, MAX_CACHE_LEN, head_dim)),
-        _host_tensor((BATCH, num_kv_heads, MAX_CACHE_LEN, head_dim)),
+        _InputSpec((BATCH, num_kv_heads, MAX_CACHE_LEN, head_dim), ttnn.bfloat8_b),
+        _InputSpec((BATCH, num_kv_heads, MAX_CACHE_LEN, head_dim), ttnn.bfloat8_b),
     )
 
 
