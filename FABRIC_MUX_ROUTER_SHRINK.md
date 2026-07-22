@@ -69,3 +69,22 @@ unaffected. **VERIFY FIRST on-device** whether the mux run's `get_fabric_tensix_
 needed" and this gated edit. Then fix blocker #2 (Watcher-isolate the mux writer/reader eth-sync
 deadlock) before the path runs end-to-end. Full analysis:
 `tt-ccl-codegen/docs/pending_upstream/rs_line_mux_SILICON_BLOCKER.md`.
+
+## FINAL verdict (2026-07-22) — the real blocker is a fabric credit-return deadlock
+
+On-device diagnosis with strict reset hygiene settled it:
+- **Blocker #1 (30816 overflow) is a device-hygiene artifact, not a config limit.** `tt-smi -r` +
+  `flush.sh` before every run -> 0 overflows in 8 runs; the `[NKAPRE-2ERISC]` log (added at
+  `erisc_datamover_builder.cpp` on this branch) shows `tensix_cfg=DISABLED two_erisc=true` — the split
+  is active and fits. The gated `is_fabric_two_erisc_enabled()` edit above is therefore a no-op for
+  this path (kept as instrumentation only). **num_workers=1 is 5/5 PASS.**
+- **Blocker #2 (num_workers=2 hang) is a genuine tt-metal FABRIC credit-return DEADLOCK** — the real
+  wall. Live mid-hang Watcher dump: both mux relay cores wedge in `wait_for_empty_write_slot()`
+  (`edm_fabric_worker_adapters.hpp:305`); `tt_fabric_mux.cpp:115` `forward_data()` never gets an
+  outbound send slot — the EDM/router credit never returns. Reproduces on BOTH ring_size 2 AND 4.
+
+**The fix belongs to fabric transport, not the pybind or the codegen:** mux/EDM credit servicing under
+2-erisc-split + MUX mode (`tt_fabric_mux.cpp`, `erisc_datamover_builder.cpp`
+`should_risc_service_{sender,receiver}_channels`). This branch's pybind is correct and complete; the
+credit-deadlock fix is the remaining upstream work. Full evidence:
+`tt-ccl-codegen/docs/pending_upstream/rs_line_mux_SILICON_BLOCKER.md` (Update 3).
