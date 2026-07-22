@@ -137,12 +137,17 @@ class TtXttsGptModel(LightweightModule):
     # Prefill covers only [cond | text]; the start_audio token is fed as the first
     # decode step, so mel positions match the reference (start=0, code_i=i+1).
     # ------------------------------------------------------------------ #
-    def prefill(self, text_ids, cond_latents):
-        """Populate the KV cache from the prompt ``[cond_latents | text]``.
-
-        ``text_ids`` is a torch int tensor ``[b, text_len]``; ``cond_latents`` is a
-        ttnn tensor ``[b, n_cond, hidden]`` (TILE). Returns the per-layer KV list.
-        No logits are produced here — see the note above."""
+    # ------------------------------------------------------------------ #
+    # Autoregressive decode over a FIXED-size KV cache (the model's PREFILL + DECODE — mirrors
+    # the block's two forwards). The cache is a [1, heads, max_seq, head_dim] buffer written in
+    # place at a device-driven position, so every decode step is the SAME static-shape op sequence
+    # (no concat growth, and capturable as one trace). Prefill covers only [cond | text]; the
+    # start_audio token is fed as the first decode step (mel positions: start=0, code_i=i+1).
+    # ------------------------------------------------------------------ #
+    def _prefill_kv(self, text_ids, cond_latents):
+        """Compute per-layer K/V from the prompt ``[cond_latents | text]`` (internal helper used to
+        seed the fixed cache). ``text_ids`` torch ``[b, text_len]``; ``cond_latents`` ttnn
+        ``[b, n_cond, hidden]`` (TILE). Returns the per-layer ``(k, v)`` list; no logits."""
         text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
         prefix = ttnn.concat([cond_latents, text_emb], dim=1)  # [b, n_cond + text_len, hidden]
         ttnn.deallocate(text_emb)  # copied into prefix; cond_latents is the caller's
@@ -150,39 +155,27 @@ class TtXttsGptModel(LightweightModule):
         ttnn.deallocate(prompt_ln)  # prompt-position outputs are unused (only the cache is kept)
         return kv
 
+    def prefill(self, text_ids, cond_latents, max_seq):
+        """PREFILL: enable the fixed-size KV cache (``max_seq``), seed it from the ``[cond | text]``
+        prompt, and remember ``prompt_len`` (mel token ``i`` occupies cache position
+        ``prompt_len + i``). Returns the per-layer fixed KV cache the decode loop updates in place."""
+        self.init_static_decode(max_seq)
+        kv, prompt_len = self.prefill_static(text_ids, cond_latents)
+        self.prompt_len = prompt_len
+        return kv
+
     def decode(self, token_id, mel_pos, kv):
-        """One decode step for a single mel token.
-
-        ``token_id`` / ``mel_pos`` are Python ints. Returns
-        ``(logits [b, 1, NUM_AUDIO_TOKENS], latent [b, 1, hidden], kv)`` where
-        ``latent`` is the post-``final_norm`` hidden state (the HiFiGAN decoder input)
-        and ``logits`` are the ``mel_head`` outputs for greedy selection."""
-        ids = torch.tensor([[token_id]], dtype=torch.int32)
-        pos = torch.tensor([[mel_pos]], dtype=torch.int32)
-        ids_tt = ttnn.from_torch(ids, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32)
-        pos_tt = ttnn.from_torch(pos, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32)
-        tok = ttnn.to_layout(ttnn.embedding(ids_tt, self.mel_emb_weight), ttnn.TILE_LAYOUT)
-        ttnn.deallocate(ids_tt)
-        posn = ttnn.to_layout(ttnn.embedding(pos_tt, self.mel_pos_weight), ttnn.TILE_LAYOUT)
-        ttnn.deallocate(pos_tt)
-        x = ttnn.add(tok, posn)  # [b, 1, hidden]
-        ttnn.deallocate(tok)
-        ttnn.deallocate(posn)
-
-        hidden, kv = self.stack.forward_decode(x, kv)  # frees x internally
-        latent = ttnn.layer_norm(
-            hidden, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS
+        """One DECODE step (single mel token) over the FIXED cache — no concat growth. ``token_id`` /
+        ``mel_pos`` are Python ints. Builds the per-step device index/position tensors and runs the
+        static in-place decode. Returns ``(logits [1, 1, NUM_AUDIO_TOKENS], latent [1, 1, hidden],
+        kv)`` — ``kv`` is the same fixed cache, updated in place."""
+        logits, latent = self.decode_static(
+            self._pos_ids(token_id), self._pos_ids(mel_pos), self.cache_pos(self.prompt_len + mel_pos), kv
         )
-        ttnn.deallocate(hidden)
-        logits = ttnn.linear(latent, self.mel_head_weight, bias=self.mel_head_bias)
         return logits, latent, kv
 
     # ------------------------------------------------------------------ #
-    # Trace-compatible static-KV decode (parallel path; see tt/xtts_gpt_stack.py). The
-    # concat-based prefill/decode above are unchanged. Here the KV cache is a fixed
-    # [1, heads, max_seq, head_dim] buffer written in place at a device-driven position, so
-    # every decode step is the SAME static-shape, host-sync-free op sequence -> capturable
-    # as one ttnn trace and replayed at any position.
+    # Static-KV helpers shared by the eager decode above and the traced pipeline.
     # ------------------------------------------------------------------ #
     def init_static_decode(self, max_seq):
         """Enable the static-KV decode path for a fixed context length ``max_seq``."""
@@ -211,7 +204,7 @@ class TtXttsGptModel(LightweightModule):
         """Seed fixed-size caches from the ``[cond | text]`` prompt. Reuses the (eager, one-shot)
         concat prefill, then pads each layer's K/V out to ``max_seq``. Returns ``(kv, prompt_len)``
         where the mel token for step ``i`` occupies absolute cache position ``prompt_len + i``."""
-        kv = self.prefill(text_ids, cond_latents)  # list of (k, v) [1, heads, prompt_len, head_dim]
+        kv = self._prefill_kv(text_ids, cond_latents)  # list of (k, v) [1, heads, prompt_len, head_dim]
         prompt_len = kv[0][0].shape[2]
         pad = self.max_seq - prompt_len
         kv_static = []
@@ -240,12 +233,15 @@ class TtXttsGptModel(LightweightModule):
         capture replays at any position: ``token_ids``/``mel_pos_ids`` are ``[1, 1]`` uint32
         (audio code id + mel position for the embeddings); ``cache_pos`` is ``[1, 1, 1, max_seq]``
         (absolute cache write/attention position). Returns ``(logits, latent, new_kv)``."""
-        tok = ttnn.to_layout(ttnn.embedding(token_ids, self.mel_emb_weight), ttnn.TILE_LAYOUT)
-        posn = ttnn.to_layout(ttnn.embedding(mel_pos_ids, self.mel_pos_weight), ttnn.TILE_LAYOUT)
-        x = ttnn.add(tok, posn)  # [1, 1, hidden]
+        # Gather both embeddings in ROW_MAJOR and add there, then a SINGLE tilize to TILE. A
+        # per-embedding to_layout(TILE) is two TilizeWithValPadding ops (each padding the seq-1 row
+        # to a full tile) on the decode hot path; adding first folds them into one conversion.
+        tok = ttnn.embedding(token_ids, self.mel_emb_weight)  # ROW_MAJOR
+        posn = ttnn.embedding(mel_pos_ids, self.mel_pos_weight)  # ROW_MAJOR
+        x = ttnn.to_layout(ttnn.add(tok, posn), ttnn.TILE_LAYOUT)  # [1, 1, hidden], one tilize
         ttnn.deallocate(tok)
         ttnn.deallocate(posn)
-        hidden = self.stack.forward_decode_static(x, kv, cache_pos)  # kv caches updated in place
+        hidden = self.stack.forward_decode(x, kv, cache_pos)  # kv caches updated in place
         latent = ttnn.layer_norm(
             hidden, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS
         )

@@ -60,6 +60,20 @@ class TtXttsConditioning(LightweightModule):
         e = "gpt.conditioning_encoder."
         p = "gpt.conditioning_perceiver."
 
+        # Block-diagonal group-averaging matrix E [1024, 1024] (E[c,c'] = 1/cpg iff channels c,c'
+        # share a group) used by _group_norm to reduce per-group WITHOUT a reshape to [1,32,32s]
+        # (that reshape needed ROW_MAJOR<->TILE conversions = Tilize/Untilize ops every block).
+        cpg = HIDDEN_SIZE // GROUP_NORM_GROUPS
+        e_mat = torch.zeros(HIDDEN_SIZE, HIDDEN_SIZE)
+        for gi in range(GROUP_NORM_GROUPS):
+            e_mat[gi * cpg : (gi + 1) * cpg, gi * cpg : (gi + 1) * cpg] = 1.0 / cpg
+        self._gn_expand = ttnn.from_torch(
+            e_mat.reshape(1, HIDDEN_SIZE, HIDDEN_SIZE).to(torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            dtype=ttnn.bfloat16,
+        )
+
         # --- ConditioningEncoder ---
         self.init_w = _lin(state_dict[e + "init.weight"], device)  # [80 -> 1024]
         self.init_b = _vec(state_dict[e + "init.bias"], device)
@@ -100,21 +114,20 @@ class TtXttsConditioning(LightweightModule):
 
     # ------------------------------------------------------------------ #
     def _group_norm(self, x, gamma, beta):
-        """GroupNorm(32, 1024) over (channels-in-group, seq). x: [1, s, 1024] -> [1, s, 1024]."""
-        _, s, c = x.shape
+        """GroupNorm(32, 1024) over (channels-in-group, seq). x: [1, s, 1024] -> [1, s, 1024].
+
+        Reshape-FREE: a full group mean/var is order-independent, so per-group stats == the group
+        average of per-channel stats. Compute the per-channel mean over seq (``mean(dim=-1)`` — a
+        TILE reduction), expand to per-group via a matmul with the block-diagonal averaging matrix
+        ``self._gn_expand``, and likewise for the (centered) variance. Everything stays TILE, so
+        this avoids the old reshape-to-[1,32,32s] round trip and its four Tilize/Untilize ops."""
         xt = ttnn.permute(x, (0, 2, 1))  # [1, 1024, s]
-        xt = ttnn.to_layout(xt, ttnn.ROW_MAJOR_LAYOUT)
-        xr = ttnn.reshape(xt, (1, GROUP_NORM_GROUPS, (c // GROUP_NORM_GROUPS) * s))  # [1, 32, 32*s], tile-aligned
-        xr = ttnn.to_layout(xr, ttnn.TILE_LAYOUT)
-
-        mean = ttnn.mean(xr, dim=-1, keepdim=True)
-        xm = ttnn.subtract(xr, mean)
-        var = ttnn.mean(ttnn.multiply(xm, xm), dim=-1, keepdim=True)
-        xn = ttnn.multiply(xm, ttnn.rsqrt(ttnn.add(var, GROUP_NORM_EPS)))
-
-        xn = ttnn.to_layout(xn, ttnn.ROW_MAJOR_LAYOUT)
-        xn = ttnn.reshape(xn, (1, c, s))
-        xn = ttnn.to_layout(xn, ttnn.TILE_LAYOUT)
+        cmean = ttnn.mean(xt, dim=-1, keepdim=True)  # [1, 1024, 1] per-channel mean over seq
+        mu = ttnn.matmul(self._gn_expand, cmean)  # [1, 1024, 1] group mean, expanded per channel
+        xc = ttnn.subtract(xt, mu)  # center by group mean (stable variance)
+        cvar = ttnn.mean(ttnn.multiply(xc, xc), dim=-1, keepdim=True)  # [1, 1024, 1] per-channel var
+        var = ttnn.matmul(self._gn_expand, cvar)  # [1, 1024, 1] group variance
+        xn = ttnn.multiply(xc, ttnn.rsqrt(ttnn.add(var, GROUP_NORM_EPS)))  # [1, 1024, s]
         xn = ttnn.permute(xn, (0, 2, 1))  # [1, s, 1024]
         return ttnn.add(ttnn.multiply(xn, gamma), beta)  # gamma/beta broadcast over seq
 
