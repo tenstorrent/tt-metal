@@ -35,21 +35,45 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.utils.test import line_params, ring_params_8k
 
 # ---------------------------------------------------------------------------
-# Mesh setup — mirror the neighbouring tt_dit ring-joint tests' pattern.
+# Mesh + topology enumeration — one flat row per test config (mirrors
+# test_pipeline_wan_svi.py). Row fields are unpacked directly by each test.
 #
-#   Each parametrization: (mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor, id).
-# The `sp_factor` is the RING factor (== ring_size the op sees).
-# `tp_factor` shards V head-dim across the other mesh axis.
+#   * sp_factor is the RING factor (== ring_size the op sees) on sp_axis.
+#   * tp_factor shards V head-dim across the other mesh axis.
+#   * num_links: 2 for BH 4x8 galaxy, 4 for WH 4x8 galaxy, 1 for WH 2x4.
+#   * Ring topology is only emitted for 4x8 galaxies — 2x4 lacks a closed
+#     fabric loop, so (wh_2x4, ring) would fail at fabric init.
 # ---------------------------------------------------------------------------
 
-_MESH_CONFIGS = [
-    # (mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor, id)
-    ((4, 8), 2, 1, 8, 0, 4, "bh_4x8_sp8tp4"),
-    ((2, 4), 1, 1, 4, 0, 2, "wh_2x4_sp4tp2"),
-    ((4, 8), 4, 1, 8, 0, 4, "wh_4x8_sp8tp4"),
+_SDPA_L1 = {"worker_l1_size": 1344544, "trace_region_size": 1000000}
+_LINE = {**_SDPA_L1, **line_params}  # no router_config for line (matches sibling tests)
+_RING = {**_SDPA_L1, **ring_params_8k}  # ring uses the 8k router config
+
+
+_MESH_TOPOLOGY_CONFIGS = [
+    # (mesh_device_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor, device_params, topology)
+    [(4, 8), 2, 1, 8, 0, 4, _LINE, ttnn.Topology.Linear],
+    [(4, 8), 2, 1, 8, 0, 4, _RING, ttnn.Topology.Ring],
+    [(2, 4), 1, 1, 4, 0, 2, _LINE, ttnn.Topology.Linear],
+    [(4, 8), 4, 1, 8, 0, 4, _LINE, ttnn.Topology.Linear],
+    [(4, 8), 4, 1, 8, 0, 4, _RING, ttnn.Topology.Ring],
 ]
+_MESH_TOPOLOGY_IDS = [
+    "bh_4x8_sp8tp4_line",
+    "bh_4x8_sp8tp4_ring",
+    "wh_2x4_sp4tp2_line",
+    "wh_4x8_sp8tp4_line",
+    "wh_4x8_sp8tp4_ring",
+]
+_MESH_TOPOLOGY = pytest.mark.parametrize(
+    "mesh_device, num_links, sp_axis, sp_factor, tp_axis, tp_factor, device_params, all_gather_topology",
+    _MESH_TOPOLOGY_CONFIGS,
+    ids=_MESH_TOPOLOGY_IDS,
+    indirect=["mesh_device", "device_params"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -329,39 +353,18 @@ def _run_sparse_frames_op(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            ttnn.Topology.Linear,
-        ),
-    ],
-    indirect=["device_params"],
-    ids=["line"],
-)
-@pytest.mark.parametrize(
-    "mesh_config",
-    _MESH_CONFIGS,
-    ids=[c[-1] for c in _MESH_CONFIGS],
-)
 class TestSparseFramesRing:
-    """Sparse-frames ring SDPA correctness across BH 4x8, WH 2x4, WH 4x8."""
+    """Sparse-frames ring SDPA correctness across BH 4x8, WH 2x4, WH 4x8, Line + Ring."""
 
-    def _extract(self, mesh_config):
-        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor, _id = mesh_config
-        return mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor
-
-    @pytest.mark.parametrize(
-        "mesh_device",
-        [c[0] for c in _MESH_CONFIGS],
-        ids=[c[-1] for c in _MESH_CONFIGS],
-        indirect=["mesh_device"],
-    )
+    @_MESH_TOPOLOGY
     def test_small_windowed(
         self,
         mesh_device,
-        mesh_config,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
         device_params,
         all_gather_topology,
         reset_seeds,
@@ -370,9 +373,6 @@ class TestSparseFramesRing:
 
         `nf_real=8 -> nf_padded=8` at sp=8 (already aligned): the simplest case, no padding rows.
         At sp=4 (WH 2x4): `nf_real=6 -> nf_padded=8` — exercises the padding-frame case."""
-        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor = self._extract(mesh_config)
-        if tuple(mesh_device.shape) != mesh_shape:
-            pytest.skip(f"parametrized for mesh {mesh_shape}, got {tuple(mesh_device.shape)}")
         nf_real = 8 if sp_factor == 8 else 6
         nf_padded = 8
         _run_sparse_frames_op(
@@ -393,24 +393,20 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @pytest.mark.parametrize(
-        "mesh_device",
-        [c[0] for c in _MESH_CONFIGS],
-        ids=[c[-1] for c in _MESH_CONFIGS],
-        indirect=["mesh_device"],
-    )
+    @_MESH_TOPOLOGY
     def test_padded_frames(
         self,
         mesh_device,
-        mesh_config,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
         device_params,
         all_gather_topology,
         reset_seeds,
     ):
         """Padded-frames case: nf_real=1 (or 2) with nf_padded=sp_factor (7-6 extra padded frames)."""
-        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor = self._extract(mesh_config)
-        if tuple(mesh_device.shape) != mesh_shape:
-            pytest.skip(f"parametrized for mesh {mesh_shape}, got {tuple(mesh_device.shape)}")
         _run_sparse_frames_op(
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -429,25 +425,21 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @pytest.mark.parametrize(
-        "mesh_device",
-        [c[0] for c in _MESH_CONFIGS],
-        ids=[c[-1] for c in _MESH_CONFIGS],
-        indirect=["mesh_device"],
-    )
+    @_MESH_TOPOLOGY
     def test_no_add_last_frame(
         self,
         mesh_device,
-        mesh_config,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
         device_params,
         all_gather_topology,
         reset_seeds,
     ):
         """Purely centered window (no reference-frame span) — catches kernel logic that assumes
         the two-range case (window + last)."""
-        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor = self._extract(mesh_config)
-        if tuple(mesh_device.shape) != mesh_shape:
-            pytest.skip(f"parametrized for mesh {mesh_shape}, got {tuple(mesh_device.shape)}")
         _run_sparse_frames_op(
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -466,16 +458,15 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @pytest.mark.parametrize(
-        "mesh_device",
-        [c[0] for c in _MESH_CONFIGS],
-        ids=[c[-1] for c in _MESH_CONFIGS],
-        indirect=["mesh_device"],
-    )
+    @_MESH_TOPOLOGY
     def test_sr_720p_shape(
         self,
         mesh_device,
-        mesh_config,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
         device_params,
         all_gather_topology,
         reset_seeds,
@@ -484,9 +475,6 @@ class TestSparseFramesRing:
         add_last_frame=True. Uses n_head=40 / dim=128 (production SR values).
 
         On WH 2x4 (sp=4) nf_padded=24; on sp=8 nf_padded=24 too (21 rounded to 24)."""
-        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor = self._extract(mesh_config)
-        if tuple(mesh_device.shape) != mesh_shape:
-            pytest.skip(f"parametrized for mesh {mesh_shape}, got {tuple(mesh_device.shape)}")
         nf_real = 21
         nf_padded = ((nf_real + sp_factor - 1) // sp_factor) * sp_factor
         _run_sparse_frames_op(
@@ -507,12 +495,7 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
         )
 
-    @pytest.mark.parametrize(
-        "mesh_device",
-        [c[0] for c in _MESH_CONFIGS],
-        ids=[c[-1] for c in _MESH_CONFIGS],
-        indirect=["mesh_device"],
-    )
+    @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
         ("q_chunk_div", "k_chunk_div"),
         [
@@ -525,7 +508,11 @@ class TestSparseFramesRing:
     def test_sub_frame_chunks(
         self,
         mesh_device,
-        mesh_config,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
         device_params,
         all_gather_topology,
         reset_seeds,
@@ -541,9 +528,6 @@ class TestSparseFramesRing:
         multiples of TILE_SIZE=32 too) — use fsl=128 so fsl/2=64, fsl/4=32 are both valid.
         Asymmetric cases prove q and k chunk sizes are independent — the frame_allow indexing
         walks each independently (compute_streaming.hpp:2417 for k, 2474 for q)."""
-        mesh_shape, num_links, sp_axis, sp_factor, tp_axis, tp_factor = self._extract(mesh_config)
-        if tuple(mesh_device.shape) != mesh_shape:
-            pytest.skip(f"parametrized for mesh {mesh_shape}, got {tuple(mesh_device.shape)}")
         frame_seqlen = 128  # supports fsl/1 (128), fsl/2 (64), fsl/4 (32); all tile-aligned
         assert frame_seqlen % q_chunk_div == 0 and (frame_seqlen // q_chunk_div) % ttnn.TILE_SIZE == 0
         assert frame_seqlen % k_chunk_div == 0 and (frame_seqlen // k_chunk_div) % ttnn.TILE_SIZE == 0
