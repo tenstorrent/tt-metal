@@ -69,6 +69,14 @@ EVENT_NAMES = {
     13: "FINISH_LAST_PUSH",  # pack finish
 }
 
+# Program id is emitted as an event id EV_PROG_BASE + program_id (not a DeviceTimestampedData
+# "PROG_ID", which TT_METAL_PROFILER_ACCUMULATE=1 compiles out). The pack_to_unpack metric needs
+# PROG_ID to survive accumulate, so we recover it from the event id: an event in
+# [EV_PROG_BASE, EV_PROG_MAX) maps to zone "PROG_ID" with data = id - EV_PROG_BASE. Keep
+# EV_PROG_BASE in sync with the compute kernel's EV_PROG_BASE.
+EV_PROG_BASE = 64
+EV_PROG_MAX = EV_PROG_BASE + 4096
+
 
 # --------------------------------------------------------------------------- #
 # Device log loading via the official parser (owns the CSV schema for us)
@@ -112,12 +120,17 @@ def load_device_events(log_path: Path) -> tuple[pd.DataFrame, float]:
                     zone = timer_id["zone_name"]
                     dval = _to_int(data)
                     # DeviceRecordEvent markers land as TS_EVENT rows with an empty zone name; recover
-                    # the marker name from the event id (low 16 bits of the timer id). Events carry no
-                    # payload, so data is 0 (the TILE_IDX event is tile 0 by construction).
+                    # the marker name from the event id (low 16 bits of the timer id). Named events
+                    # (TILE_IDX / FINISH_LAST_PUSH) carry no payload (data 0); PROG_ID events encode
+                    # the program in the id itself (data = id - EV_PROG_BASE).
                     if timer_id["type"] == "TS_EVENT":
                         ev = _to_int(timer_id.get("id", 0)) & 0xFFFF
-                        zone = EVENT_NAMES.get(ev, zone)
-                        dval = 0
+                        if ev in EVENT_NAMES:
+                            zone = EVENT_NAMES[ev]
+                            dval = 0
+                        elif EV_PROG_BASE <= ev < EV_PROG_MAX:
+                            zone = "PROG_ID"
+                            dval = ev - EV_PROG_BASE
                     rows.append(
                         {
                             "chip": chip,

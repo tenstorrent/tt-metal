@@ -118,13 +118,15 @@ PRESETS: dict[str, list[tuple[str, dict[str, object]]]] = {
 
 
 def repo_root() -> Path:
-    """Repo root: $TT_METAL_HOME if set, else derived from this file's known
-    tests/... location (self-locating, so the script runs from anywhere)."""
-    env = os.environ.get("TT_METAL_HOME")
-    if env:
-        return Path(env)
+    """Repo root: prefer TT_METAL_RUNTIME_ROOT (the newer runtime-root convention, also
+    honored by the C++ runtime and other scripts), then legacy TT_METAL_HOME, else derive
+    from this file's known tests/... location (self-locating, so it runs from anywhere)."""
+    for var in ("TT_METAL_RUNTIME_ROOT", "TT_METAL_HOME"):
+        val = os.environ.get(var)
+        if val:
+            return Path(val)
     # .../tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_sweep.py
-    return Path(__file__).resolve().parents[6]
+    return Path(__file__).resolve().parents[5]
 
 
 def render_argv(overrides: dict[str, object]) -> list[str]:
