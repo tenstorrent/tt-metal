@@ -180,9 +180,13 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
+          # Runner is not in the mpirun hostfile — only /ci is shared via NFS.
+          # Demo cmds launch ttrun.py on the runner, so copy source locally then
+          # extract the build archive (avoid untarring onto NFS).
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user/tt-metal
-          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
+          cp -r /ci/tt-metal /home/user/
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
