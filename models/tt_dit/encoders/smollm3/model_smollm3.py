@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import torch
+import transformers
 
 import ttnn
 
@@ -20,7 +21,8 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import tensor
+from ...utils import cache, tensor
+from .config import SmolLM3Config
 
 MAX_CHUNK_SIZE = 128
 
@@ -556,3 +558,43 @@ class SmolLM3TextEncoder(Module):
         hidden_states = self.norm.forward(hidden_states)
         all_hidden_states.append(hidden_states)
         return all_hidden_states
+
+
+class SmolLm3Checkpoint:
+    """A SmolLM3 text-encoder checkpoint: reads only config.json up front; loads weights lazily.
+
+    ``build()`` constructs a ``SmolLM3TextEncoder`` and populates it via ``cache.load_model`` — the
+    torch weights are fetched only on a cache miss (and, if ``TT_DIT_CACHE_DIR`` is unset, loaded
+    directly without writing a cache).
+    """
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        hf_config = transformers.AutoConfig.from_pretrained(name, subfolder="text_encoder")
+        self.config = SmolLM3Config.from_hf_config(hf_config)
+
+    def build(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        parallel_config: EncoderParallelConfig,
+        ccl_manager: CCLManager | None = None,
+    ) -> "SmolLM3TextEncoder":
+        model = SmolLM3TextEncoder(self.config, device=device, parallel_config=parallel_config, ccl_manager=ccl_manager)
+        cache.load_model(
+            model,
+            get_torch_state_dict=self._load_state_dict,
+            model_name=self._name,
+            subfolder="text_encoder",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(device.shape),
+        )
+        return model
+
+    def _load_state_dict(self) -> dict[str, torch.Tensor]:
+        torch_model = transformers.AutoModelForCausalLM.from_pretrained(
+            self._name, subfolder="text_encoder", torch_dtype=torch.bfloat16
+        )
+        # Raw full-model state dict; SmolLM3TextEncoder._prepare_torch_state (STATE_CONVERSION) strips
+        # `model.` / drops lm_head+rotary_emb, and the per-attention hook fuses qkv, during load.
+        return torch_model.state_dict()

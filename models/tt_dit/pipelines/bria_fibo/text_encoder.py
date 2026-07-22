@@ -18,12 +18,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import torch
-from transformers import AutoConfig, AutoTokenizer, SmolLM3ForCausalLM
+from transformers import AutoTokenizer
 
 import ttnn
 
-from ...encoders.smollm3.config import SmolLM3Config
-from ...encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+from ...encoders.smollm3.model_smollm3 import SmolLm3Checkpoint
 from ...utils import tensor as tt_tensor
 
 if TYPE_CHECKING:
@@ -81,29 +80,17 @@ class SmolLM3TextEncoderWrapper:
         ccl_manager: "CCLManager | None",
         parallel_config: "EncoderParallelConfig",
         pad_buckets=(1024,),
-        use_torch: bool = False,
     ) -> None:
         self._device = device
-        self._use_torch = use_torch
         self._pad_buckets = tuple(pad_buckets)
         sp = parallel_config.sequence_parallel
         self._sp_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
         self._sp_factor = sp.factor if (sp is not None) else 1
 
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
-
-        if use_torch:
-            self._torch_encoder = SmolLM3ForCausalLM.from_pretrained(checkpoint, subfolder="text_encoder").eval()
-            self._encoder = None
-        else:
-            hf_config = AutoConfig.from_pretrained(checkpoint, subfolder="text_encoder")
-            config = SmolLM3Config.from_hf_config(hf_config)
-            self._encoder = SmolLM3TextEncoder(
-                config, device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
-            )
-            state_dict = SmolLM3ForCausalLM.from_pretrained(checkpoint, subfolder="text_encoder").model.state_dict()
-            self._encoder.load_torch_state_dict(state_dict)
-            self._torch_encoder = None
+        self._encoder = SmolLm3Checkpoint(checkpoint).build(
+            device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
+        )
 
     def _tokenize(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         """Tokenize at true length (no fixed-length padding); special-case empty prompts."""
@@ -124,14 +111,8 @@ class SmolLM3TextEncoderWrapper:
 
     @torch.no_grad()
     def encode_prompt(self, prompt: str) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        input_ids, attention_mask = self._tokenize(prompt)
+        input_ids, _attention_mask = self._tokenize(prompt)
         seq_len = input_ids.shape[1]
-
-        if self._use_torch:
-            output = self._torch_encoder(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
-            all_hidden_states = [h.detach() for h in output.hidden_states]
-            prompt_embeds = torch.cat([all_hidden_states[-1], all_hidden_states[-2]], dim=-1)
-            return prompt_embeds, all_hidden_states
 
         tt_ids, tt_cos, tt_sin = self._prep_inputs(input_ids, seq_len)
         stacked = self._forward(tt_ids, tt_cos, tt_sin)
@@ -147,32 +128,19 @@ class SmolLM3TextEncoderWrapper:
         return host_prompt_embeds, host_hidden_states
 
     def _prep_inputs(self, input_ids: torch.Tensor, seq_len: int) -> tuple:
-        """Host prep: pad to a fixed bucket, build RoPE, move to device (sharded on the SP axis).
-
-        A fixed bucket gives a stable shape (SP sharding + program-cache reuse). The tokenized
-        attention_mask is all-ones, so the encoder runs with attention_mask=None: at sp=1 that is the
-        is_causal SDPA path (the padded tail never influences leading tokens under causal masking); at
-        sp>1 the encoder builds/caches a per-shard rectangular causal bias internally.
-        """
+        """Host prep: pad to a fixed bucket, build RoPE, move to device (sharded on the SP axis)."""
         bucket = pick_bucket(seq_len, self._pad_buckets, self._sp_factor)
         padded_ids = torch.nn.functional.pad(input_ids, (0, bucket - seq_len), value=0)
         cos, sin = self._encoder.create_rope_tensors(1, bucket)
-        if self._sp_factor > 1:
-            tt_ids = tt_tensor.from_torch(
-                padded_ids,
-                device=self._device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axes=[None, self._sp_axis],
-            )
-            tt_cos = tt_tensor.from_torch(cos, device=self._device, mesh_axes=[None, None, self._sp_axis, None])
-            tt_sin = tt_tensor.from_torch(sin, device=self._device, mesh_axes=[None, None, self._sp_axis, None])
-        else:
-            tt_ids = tt_tensor.from_torch(
-                padded_ids, device=self._device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            tt_cos = tt_tensor.from_torch(cos, device=self._device)
-            tt_sin = tt_tensor.from_torch(sin, device=self._device)
+        tt_ids = tt_tensor.from_torch(
+            padded_ids,
+            device=self._device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, self._sp_axis],
+        )
+        tt_cos = tt_tensor.from_torch(cos, device=self._device, mesh_axes=[None, None, self._sp_axis, None])
+        tt_sin = tt_tensor.from_torch(sin, device=self._device, mesh_axes=[None, None, self._sp_axis, None])
         return tt_ids, tt_cos, tt_sin
 
     def _forward(self, tt_ids: ttnn.Tensor, tt_cos: ttnn.Tensor, tt_sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -183,7 +151,7 @@ class SmolLM3TextEncoderWrapper:
         the readback. ``prompt_embeds`` is derived on host from the last two hidden states, so it needs
         no separate readback.
         """
-        all_hidden_states = self._encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+        all_hidden_states = self._encoder.forward(tt_ids, pos_embeds=(tt_cos, tt_sin))
         return ttnn.concat(all_hidden_states, dim=0)  # [N, seq_local, hidden]; seq still sharded on the SP axis
 
     def _read_seq_sharded(self, x: ttnn.Tensor) -> torch.Tensor:
@@ -194,8 +162,6 @@ class SmolLM3TextEncoderWrapper:
         shards from index 0 of the (replicated) other axis via ``get_device_tensors`` and concat the seq
         dim on host. Device order is row-major over mesh coords (axis0-major).
         """
-        if self._sp_factor <= 1:
-            return tt_tensor.to_torch(x)
         rows, cols = tuple[Any, ...](self._device.shape)
         shards = ttnn.get_device_tensors(x)
         # SP shards live along self._sp_axis at index 0 of the other (replicated) axis.
