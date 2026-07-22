@@ -91,8 +91,7 @@ void kernel_main() {
     // The compute kernel consumes these CBs and applies the epilogue exactly once. All gated by defines so
     // the no-fusion compile is byte-identical. ----
 #if defined(FUSE_BIAS) || defined(FUSE_TERNARY) || defined(OUT_CHUNKS)
-    const bool fuse_root = (use_reduce == 0u) || (is_top != 0u);
-    uint32_t fidx = 17u;  // fusion/chunk runtime args follow the base 17 (never combined with diag ablations)
+    uint32_t fidx = 17u;  // fusion/chunk runtime args follow the base 17 writer args
 #endif
 #if defined(FUSE_BIAS)
     constexpr uint32_t bias_cb = 4;

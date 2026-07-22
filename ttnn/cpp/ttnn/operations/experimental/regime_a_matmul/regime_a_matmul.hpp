@@ -9,7 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/regime_a_matmul/device/regime_a_matmul_device_operation_types.hpp"
 

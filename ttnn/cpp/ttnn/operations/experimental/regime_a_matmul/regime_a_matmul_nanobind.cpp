@@ -38,7 +38,7 @@ void bind_regime_a_matmul(nb::module_& mod) {
 
         The activation A ([.., M, K]) is DRAM interleaved. The weight B ([.., K, N]) must be DRAM
         WIDTH_SHARDED across 8 banks — build its MemoryConfig with
-        ``ttnn.experimental.create_regime_a_weight_memory_config``. Output is [.., M, N] in TILE layout.
+        ``ttnn.create_regime_a_weight_memory_config``. Output is [.., M, N] in TILE layout.
 
         Parameters
         ----------

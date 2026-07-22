@@ -18,6 +18,16 @@ namespace ttnn::experimental::prim {
 // IMPORTANT (program-cache identity): every field here feeds compile-time kernel args, so this whole
 // struct must be part of RegimeAMatmulParams (the device-op operation_attributes) and is hashed via
 // the framework's default reflection-based program hash (same mechanism as MinimalMatmulConfig).
+// Manual execution config. The recommended production path is `config=std::nullopt` (auto-pick via
+// auto_select_config); an explicit config is for reproducibility / tuning. The Python binding has NO
+// zero-argument constructor (all five fields must be set explicitly). In C++ the struct keeps aggregate
+// member defaults because the factory/planner normalise 0 -> 1 (`cfg.k_slices ? : 1`), so a
+// value-initialised config is the DEGENERATE all-ones single-band layout: Pk=Ns=Sm=kb=1, nsb=0 => exactly
+// 8 worker cores. That is valid-but-slow, not incorrect — and it is NOT silently accepted where it would not
+// fit: the planner (build_plan) rejects it with an explicit "L1 over budget" error on deep-K shapes and runs
+// it (using only 8 cores) on small ones. No extra C++ guard is added: removing the defaults cannot prevent
+// the all-ones config (0 normalises back to 1), and a required-args constructor would break the picker's
+// designated-initialiser construction — the planner's feasibility check is the backstop.
 struct RegimeAMatmulConfig {
     uint32_t k_slices{1};          // Pk : split-K depth (>=1). Reduction only when >1.
     uint32_t n_slices{1};          // Ns : N-slices per bank-band.

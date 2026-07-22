@@ -124,6 +124,11 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(bias.buffer() != nullptr, "regime_a_matmul bias must be allocated in a device buffer");
         TT_FATAL(bias.device() == act.device(), "regime_a_matmul bias must be on the same device");
         TT_FATAL(bias.layout() == Layout::TILE, "regime_a_matmul bias must be TILE layout");
+        // The writer's feed_fused reads the bias via an interleaved-DRAM TensorAccessor (page = global N tile).
+        TT_FATAL(
+            bias.memory_config().buffer_type() == BufferType::DRAM &&
+                bias.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "regime_a_matmul bias must be DRAM INTERLEAVED");
         // Bias CB (c_4) is hardcoded Float16_b in the program factory; only BFLOAT16 is implemented.
         TT_FATAL(
             bias.dtype() == DataType::BFLOAT16,
@@ -162,6 +167,11 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(t->buffer() != nullptr, "regime_a_matmul addcmul operands must be allocated in device buffers");
             TT_FATAL(t->device() == act.device(), "regime_a_matmul addcmul operands must be on the same device");
             TT_FATAL(t->layout() == Layout::TILE, "regime_a_matmul addcmul operands must be TILE layout");
+            // The writer's feed_fused reads residual/gate via interleaved-DRAM TensorAccessors.
+            TT_FATAL(
+                t->memory_config().buffer_type() == BufferType::DRAM &&
+                    t->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "regime_a_matmul addcmul operands (residual/gate) must be DRAM INTERLEAVED");
             // Only bf16 (residual+gate) and fp32 (gate) CB formats are implemented; residual is further
             // pinned to BFLOAT16 below. BFLOAT8_B/BFLOAT4_B would silently map to the bf16 format => wrong.
             TT_FATAL(

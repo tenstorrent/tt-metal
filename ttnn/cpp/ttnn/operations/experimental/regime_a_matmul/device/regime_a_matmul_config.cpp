@@ -290,7 +290,6 @@ plan::PlanResult make_and_build_plan(
     in.l1_budget_bytes = kL1BudgetBytes;
     in.tb = kTileBytesBf16;  // bf16 tile bytes
     in.tf = kTileBytesFp32;  // fp32 tile bytes
-    in.nn_chain = false;
 
     return plan::build_plan(in);
 }

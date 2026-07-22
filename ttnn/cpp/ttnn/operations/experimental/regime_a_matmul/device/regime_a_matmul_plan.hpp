@@ -94,10 +94,6 @@ struct PlanInputs {
     // Tile byte sizes.
     uint32_t tb{kTileBytesBf16};  // bf16 tile
     uint32_t tf{kTileBytesFp32};  // fp32 tile
-
-    // in0 ring / reduction chain ordering: false = bank order [0..7]; true = nearest-neighbour
-    // Hamiltonian over physical coords (matches --chain nn). v1 defaults to bank order.
-    bool nn_chain{false};
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -407,42 +403,13 @@ inline PlanResult build_plan(const PlanInputs& in) {
     }
 
     // --- Ring membership + ordering (spec §3) ---
-    // For each slice index j, the ring is the 8 cores {order[pos]*preaders + j}. Bank order by
-    // default; nn_chain does a greedy nearest-neighbour Hamiltonian over physical coords (which the
-    // device op supplies as logical here — Manhattan on logical is a proxy; the op can re-run in
-    // physical space if it matters).
+    // For each slice index j, the ring is the 8 cores {pos*preaders + j} in BANK ORDER [0..7]. This is the
+    // canonical plan output (unit-tested offline); the program factory re-derives the physical PARETO ring
+    // order at runtime (optimize_in0_ring_order) from the device's NoC hop distances.
     for (uint32_t j = 0; j < g.preaders; ++j) {
         std::vector<uint32_t> order(8);
         for (uint32_t k = 0; k < 8u; ++k) {
             order[k] = k;
-        }
-        if (in.nn_chain) {
-            std::vector<bool> vis(8, false);
-            std::vector<uint32_t> ord;
-            ord.reserve(8);
-            uint32_t cur = 0;
-            vis[0] = true;
-            ord.push_back(0);
-            for (uint32_t step = 1; step < 8u; ++step) {
-                const auto& cc = plan.cores[cur * g.preaders + j].coord;
-                int best = -1;
-                uint32_t bestd = 0xffffffffu;
-                for (uint32_t cand = 0; cand < 8u; ++cand) {
-                    if (vis[cand]) {
-                        continue;
-                    }
-                    const auto& xc = plan.cores[cand * g.preaders + j].coord;
-                    uint32_t dd = (uint32_t)(std::abs((int)xc.x - (int)cc.x) + std::abs((int)xc.y - (int)cc.y));
-                    if (dd < bestd) {
-                        bestd = dd;
-                        best = (int)cand;
-                    }
-                }
-                vis[best] = true;
-                ord.push_back((uint32_t)best);
-                cur = (uint32_t)best;
-            }
-            order = ord;
         }
         for (uint32_t pos = 0; pos < 8u; ++pos) {
             const uint32_t ci = order[pos] * g.preaders + j;
