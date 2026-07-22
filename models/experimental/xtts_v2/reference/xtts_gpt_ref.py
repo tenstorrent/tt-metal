@@ -98,6 +98,10 @@ def _install_tts_stub():
 
     class _StubModule(types.ModuleType):
         def __getattr__(self, name):
+            # Dunders must behave like a normal (empty) module, or libraries that inspect
+            # sys.modules (e.g. transformers' lazy import of GPT2Model) choke on the placeholder.
+            if name.startswith("__") and name.endswith("__"):
+                raise AttributeError(name)
             return _Placeholder
 
     for name in (

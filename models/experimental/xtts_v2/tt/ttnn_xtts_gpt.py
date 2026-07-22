@@ -62,34 +62,35 @@ def _to_dev(t, device, dtype=DTYPE):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT):
-    """Convert the GPT-core checkpoint tensors to on-device ttnn tensors (HF Conv1D [in,out] as-is)."""
+def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE):
+    """Convert the GPT-core checkpoint tensors to on-device ttnn tensors (HF Conv1D [in,out] as-is).
+    dtype=float32 (default) for the accuracy-first prefill path; bfloat16 for the fast decode path."""
     core = load_gpt_core_state(ckpt_path)  # keys: h.{i}.*, ln_f.*, final_norm.*
-    f = lambda k: core[k].float()
+    to = lambda k: _to_dev(core[k].float(), device, dtype)
     layers = []
     for i in range(N_LAYER):
         p = f"h.{i}."
         layers.append(
             {
-                "ln_1_w": _to_dev(f(p + "ln_1.weight"), device),
-                "ln_1_b": _to_dev(f(p + "ln_1.bias"), device),
-                "attn_w": _to_dev(f(p + "attn.c_attn.weight"), device),  # [1024, 3072] (in,out)
-                "attn_b": _to_dev(f(p + "attn.c_attn.bias"), device),
-                "proj_w": _to_dev(f(p + "attn.c_proj.weight"), device),  # [1024, 1024]
-                "proj_b": _to_dev(f(p + "attn.c_proj.bias"), device),
-                "ln_2_w": _to_dev(f(p + "ln_2.weight"), device),
-                "ln_2_b": _to_dev(f(p + "ln_2.bias"), device),
-                "fc_w": _to_dev(f(p + "mlp.c_fc.weight"), device),  # [1024, 4096]
-                "fc_b": _to_dev(f(p + "mlp.c_fc.bias"), device),
-                "mproj_w": _to_dev(f(p + "mlp.c_proj.weight"), device),  # [4096, 1024]
-                "mproj_b": _to_dev(f(p + "mlp.c_proj.bias"), device),
+                "ln_1_w": to(p + "ln_1.weight"),
+                "ln_1_b": to(p + "ln_1.bias"),
+                "attn_w": to(p + "attn.c_attn.weight"),  # [1024, 3072] (in,out)
+                "attn_b": to(p + "attn.c_attn.bias"),
+                "proj_w": to(p + "attn.c_proj.weight"),  # [1024, 1024]
+                "proj_b": to(p + "attn.c_proj.bias"),
+                "ln_2_w": to(p + "ln_2.weight"),
+                "ln_2_b": to(p + "ln_2.bias"),
+                "fc_w": to(p + "mlp.c_fc.weight"),  # [1024, 4096]
+                "fc_b": to(p + "mlp.c_fc.bias"),
+                "mproj_w": to(p + "mlp.c_proj.weight"),  # [4096, 1024]
+                "mproj_b": to(p + "mlp.c_proj.bias"),
             }
         )
     tail = {
-        "ln_f_w": _to_dev(f("ln_f.weight"), device),
-        "ln_f_b": _to_dev(f("ln_f.bias"), device),
-        "fn_w": _to_dev(f("final_norm.weight"), device),
-        "fn_b": _to_dev(f("final_norm.bias"), device),
+        "ln_f_w": to("ln_f.weight"),
+        "ln_f_b": to("ln_f.bias"),
+        "fn_w": to("final_norm.weight"),
+        "fn_b": to("final_norm.bias"),
     }
     return layers, tail
 
@@ -222,6 +223,120 @@ def run_generate(device, prefix_emb, heads, max_new=24, weights=None, ckpt_path=
         log_list.append(logits)
 
     return {"codes": torch.tensor(codes), "latents": torch.cat(lat_list, dim=1), "logits": torch.cat(log_list, dim=1)}
+
+
+# --------------------------------------------------------------------------------------
+# Fast decode: bf16 flash-decode + paged KV-cache + a position "mailbox" tensor, captured
+# into a device trace and replayed per token (one host dispatch/token instead of ~600).
+# --------------------------------------------------------------------------------------
+class TracedGPTDecoder:
+    """One 30-layer decode step, trace-captured and replayed per token. The position lives in a
+    device tensor (`_pos`) threaded into paged_update_cache (which cache line to write) and
+    scaled_dot_product_attention_decode (how much of the cache to read), so a single captured
+    graph serves every position. bf16 (flash-decode + paged cache are bf16-only). Needs the device
+    opened with a trace_region_size. mel_head / argmax / embedding stay on host (see generate_traced)."""
+
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq=128):
+        self.device = device
+        self.layers, self.tail = load_ttnn_weights(device, ckpt_path, dtype=ttnn.bfloat16)
+        # sdpa_decode is wrong when the cache length is an odd number of 32-tiles -> round to a multiple of 64.
+        self.max_seq = ((max_seq + 63) // 64) * 64
+        zc = torch.zeros(1, N_HEAD, self.max_seq, HEAD_DIM)
+        mk = lambda: ttnn.from_torch(zc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.k_cache = [mk() for _ in range(N_LAYER)]
+        self.v_cache = [mk() for _ in range(N_LAYER)]
+        self._zeros = mk()  # preallocated (before any trace) so reset() never allocates during a trace
+        self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)  # the position mailbox
+        self._in = ttnn.from_torch(torch.zeros(1, 1, N_EMBD), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # paged_update_cache wants the new K/V height-sharded (1 core suffices for batch=1)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        self._shard = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (32, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self.trace_id = None
+        self._out = None
+
+    def _ln(self, x, w, b):
+        return ttnn.layer_norm(x, weight=w, bias=b, epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
+
+    def _decode_step(self, x):  # x [1,1,1024] -> latent [1,1,1024]
+        for li in range(N_LAYER):
+            w = self.layers[li]
+            qkv = ttnn.linear(self._ln(x, w["ln_1_w"], w["ln_1_b"]), w["attn_w"], bias=w["attn_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG)
+            q = ttnn.reshape(ttnn.slice(qkv, [0, 0, 0], [1, 1, N_EMBD]), [1, 1, N_HEAD, HEAD_DIM])
+            k = ttnn.reshape(ttnn.slice(qkv, [0, 0, N_EMBD], [1, 1, 2 * N_EMBD]), [1, 1, N_HEAD, HEAD_DIM])
+            v = ttnn.reshape(ttnn.slice(qkv, [0, 0, 2 * N_EMBD], [1, 1, 3 * N_EMBD]), [1, 1, N_HEAD, HEAD_DIM])
+            ttnn.experimental.paged_update_cache(self.k_cache[li], ttnn.interleaved_to_sharded(k, self._shard), update_idxs_tensor=self._pos, page_table=None)
+            ttnn.experimental.paged_update_cache(self.v_cache[li], ttnn.interleaved_to_sharded(v, self._shard), update_idxs_tensor=self._pos, page_table=None)
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q, self.k_cache[li], self.v_cache[li], cur_pos_tensor=self._pos, scale=SCALE, compute_kernel_config=COMPUTE_KERNEL_CONFIG
+            )
+            attn = ttnn.reshape(attn, [1, 1, N_EMBD])
+            x = ttnn.add(x, ttnn.linear(attn, w["proj_w"], bias=w["proj_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG))
+            x = ttnn.add(x, _mlp(self._ln(x, w["ln_2_w"], w["ln_2_b"]), w))
+        return _apply_tail(x, self.tail)
+
+    def reset(self):
+        for c in self.k_cache + self.v_cache:
+            ttnn.copy(self._zeros, c)
+
+    def _set_pos(self, p):
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([p], dtype=torch.int32)), self._pos)
+
+    def _set_input(self, emb):
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._in)
+
+    def capture(self):
+        """Warm up (compile kernels; trace can't compile) then capture the step into a trace."""
+        self.reset()
+        self._set_pos(0)
+        self._decode_step(self._in)
+        ttnn.synchronize_device(self.device)
+        self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self._out = self._decode_step(self._in)
+        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
+        ttnn.synchronize_device(self.device)
+        self.reset()
+
+    def step(self, emb, pos):  # emb torch [1,1,1024]; pos int -> latent torch [1,1,1024]
+        self._set_input(emb)
+        self._set_pos(pos)
+        if self.trace_id is not None:
+            ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
+            out = self._out
+        else:
+            out = self._decode_step(self._in)  # eager path (for correctness validation before capture)
+        return ttnn.to_torch(out).to(torch.float32)
+
+
+def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trace=True):
+    """Greedy generation with the traced decoder. Feeds the prompt token-by-token to fill the cache,
+    then decodes; mel_head + argmax + embedding run on host. Returns dict(codes [T], latents [1,T,1024])."""
+    dec = TracedGPTDecoder(device, max_seq=max_seq)
+    if use_trace:
+        dec.capture()
+    mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
+    mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]
+    head = lambda latent: latent @ mh_w.t() + mh_b
+
+    dec.reset()
+    pos = 0
+    for t in range(prefix_emb.shape[1]):  # prompt prefill (fill cache, discard latents)
+        dec.step(prefix_emb[:, t : t + 1, :].contiguous(), pos)
+        pos += 1
+    lat = dec.step((mel_emb[START_AUDIO_TOKEN] + mel_pos[0]).view(1, 1, -1), pos)  # start token
+    pos += 1
+    code = int(head(lat).argmax(-1))
+    codes, lats = [code], [lat]
+    for m in range(1, max_new):
+        lat = dec.step((mel_emb[code] + mel_pos[m]).view(1, 1, -1), pos)
+        pos += 1
+        code = int(head(lat).argmax(-1))
+        codes.append(code)
+        lats.append(lat)
+    return {"codes": torch.tensor(codes), "latents": torch.cat(lats, dim=1)}
 
 
 def main():

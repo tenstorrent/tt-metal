@@ -56,6 +56,10 @@ class _Placeholder:
 
 class _StubModule(types.ModuleType):
     def __getattr__(self, name):
+        # Dunders must behave like a normal (empty) module so libraries that inspect sys.modules
+        # (e.g. transformers' lazy imports) don't choke on the placeholder.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
         return _Placeholder
 
 
