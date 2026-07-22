@@ -614,19 +614,16 @@ def _run_dp_smoke(
     all_generated: list = []
     try:
         for i, sm in enumerate(submeshes):
-            try:
-                model = Llama32_3BTransformer1D.from_pretrained(
-                    sm,
-                    hf_model,
-                    max_batch_size=1,
-                    max_seq_len=max_seq_len,
-                    num_layers=None,
-                    cache_dir=cache_dir,
-                    precision=precision,
-                    executor_mode=True,
-                )
-            except Exception as e:
-                pytest.skip(f"Could not build Llama-3.2-3B model (weights / memory / mesh): {e}")
+            model = Llama32_3BTransformer1D.from_pretrained(
+                sm,
+                hf_model,
+                max_batch_size=1,
+                max_seq_len=max_seq_len,
+                num_layers=None,
+                cache_dir=cache_dir,
+                precision=precision,
+                executor_mode=True,
+            )
             models.append((model, sm))
 
             traced_executor = TracedLlama32_3BExecutor(model, sm)
