@@ -40,24 +40,26 @@ def have_vendored_coqui():
     return os.path.isdir(VENDORED_TTS)
 
 
-def _install_tts_stub():
-    class _Placeholder:
-        def __init__(self, *a, **k):
+class _Placeholder:
+    def __init__(self, *a, **k):
+        pass
+
+    def __setstate__(self, state):
+        try:
+            self.__dict__.update(state)
+        except Exception:
             pass
 
-        def __setstate__(self, state):
-            try:
-                self.__dict__.update(state)
-            except Exception:
-                pass
+    def __call__(self, *a, **k):
+        return self
 
-        def __call__(self, *a, **k):
-            return self
 
-    class _StubModule(types.ModuleType):
-        def __getattr__(self, name):
-            return _Placeholder
+class _StubModule(types.ModuleType):
+    def __getattr__(self, name):
+        return _Placeholder
 
+
+def _install_tts_stub():
     for name in (
         "TTS", "TTS.tts", "TTS.tts.models", "TTS.tts.models.xtts",
         "TTS.tts.configs", "TTS.tts.configs.xtts_config", "TTS.tts.configs.shared_configs",
@@ -66,21 +68,36 @@ def _install_tts_stub():
         sys.modules.setdefault(name, _StubModule(name))
 
 
+def _force_stub(names):
+    for name in names:
+        sys.modules[name] = _StubModule(name)
+
+
 def _clear_tts_modules():
     for k in list(sys.modules):
         if k == "TTS" or k.startswith("TTS."):
             del sys.modules[k]
 
 
-def load_gpt_weights(ckpt_path=None):
-    """Extract gpt.* tensors (prefix stripped) with a throwaway TTS stub, then clear the stub."""
+def _extract_weights(prefix, ckpt_path=None):
+    """Extract <prefix>* tensors (prefix stripped) with a throwaway TTS stub, then clear it."""
     ckpt_path = ckpt_path or checkpoint_path()
     _install_tts_stub()
     obj = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = obj["model"] if isinstance(obj, dict) and "model" in obj else obj
-    weights = {k[len("gpt."):]: v for k, v in state.items() if k.startswith("gpt.") and hasattr(v, "shape")}
+    weights = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix) and hasattr(v, "shape")}
     _clear_tts_modules()
     return weights
+
+
+def load_gpt_weights(ckpt_path=None):
+    return _extract_weights("gpt.", ckpt_path)
+
+
+def load_speaker_weights(ckpt_path=None):
+    """ResNet speaker-encoder core weights (front-end torch_spec buffers excluded)."""
+    w = _extract_weights("hifigan_decoder.speaker_encoder.", ckpt_path)
+    return {k: v for k, v in w.items() if not k.startswith("torch_spec.")}
 
 
 def build_coqui_gpt(gpt_weights):
@@ -125,6 +142,30 @@ def coqui_cond(gpt, mel):
     enc = gpt.conditioning_encoder(mel)
     style = gpt.get_style_emb(mel)
     return enc, style
+
+
+def build_coqui_speaker(speaker_weights):
+    """coqui ResNetSpeakerEncoder CORE (front-end off) with the checkpoint weights loaded.
+
+    base_encoder.py pulls training-only deps (TTS.encoder.losses, trainer, coqpit) we don't
+    need; stub them so the import succeeds. Built with use_torch_spec=False / log_input=False
+    so forward(logmel) runs the core directly."""
+    _clear_tts_modules()
+    _force_stub(["TTS.encoder.losses", "trainer", "trainer.generic_utils", "trainer.io", "coqpit"])
+    if REF_DIR not in sys.path:
+        sys.path.insert(0, REF_DIR)
+    from TTS.encoder.models.resnet import ResNetSpeakerEncoder
+
+    enc = ResNetSpeakerEncoder(input_dim=64, proj_dim=512, log_input=False, use_torch_spec=False)
+    enc.eval()
+    enc.load_state_dict(speaker_weights, strict=False)
+    return enc
+
+
+@torch.no_grad()
+def coqui_speaker(enc, logmel):
+    """Run coqui's core from logmel (front-end disabled): logmel [1,64,T] -> d-vector [1,512]."""
+    return enc(logmel.clone(), l2_norm=True)
 
 
 @torch.no_grad()
