@@ -643,6 +643,7 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+@pytest.mark.parametrize("use_persistent_output", [False, True], ids=["fresh_output", "persistent_output"])
 @pytest.mark.parametrize(
     "dtype,width,pcc",
     [
@@ -650,7 +651,7 @@ def test_all_gather_fabric_2d_receiver_layout_fallbacks(mesh_device, fallback_ca
         pytest.param(ttnn.fp8_e4m3, 656, 0.99, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, width, pcc):
+def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, width, pcc, use_persistent_output):
     """Check the same large eight-rank gather under native 1D and physical 2D Fabric."""
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
     rows_per_device = 65536
@@ -664,12 +665,14 @@ def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, wi
         dtype,
         ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=tuple(mesh_device.shape)),
     )
-    persistent_output = _make_row_major_mesh_tensor(
-        mesh_device,
-        torch.zeros(global_shape, dtype=host_dtype),
-        dtype,
-        ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    persistent_output = None
+    if use_persistent_output:
+        persistent_output = _make_row_major_mesh_tensor(
+            mesh_device,
+            torch.zeros(global_shape, dtype=host_dtype),
+            dtype,
+            ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     def run_ag():
         return ttnn.all_gather(
@@ -732,6 +735,103 @@ def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, wi
             )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 2048,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "dtype,width,expected_page_size",
+    [
+        pytest.param(ttnn.bfloat16, 576, 1152, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, 704, id="scaled_fp8_704b_rows"),
+    ],
+)
+def test_all_gather_fabric_2d_matched_large_cached_stability(mesh_device, dtype, width, expected_page_size):
+    """Exercise ten consecutive cached 512K gathers and bound their latency spread."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.skip("native all-gather stability test requires an active realtime device profiler")
+
+    rows_per_device = 65536
+    global_shape = (1, 1, rows_per_device * mesh_device.shape[0], width)
+    torch.manual_seed(0)
+    host_dtype = torch.float32 if dtype == ttnn.fp8_e4m3 else torch.bfloat16
+    torch_input = torch.rand(global_shape, dtype=host_dtype)
+    tt_input = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch_input,
+        dtype,
+        ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=tuple(mesh_device.shape)),
+    )
+    persistent_output = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=host_dtype),
+        dtype,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    page_size = ttnn.get_device_tensors(tt_input)[0].buffer_aligned_page_size()
+    assert page_size == expected_page_size
+
+    def run_ag():
+        return ttnn.all_gather(
+            tt_input,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=0,
+            output_tensor=persistent_output,
+        )
+
+    # Compile once, then drain one profiler delivery so the ten samples below
+    # each correspond to exactly one cached all-gather dispatch.
+    run_ag()
+    ttnn.synchronize_device(mesh_device)
+    _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=False, expected_unicast=True)
+    cache_entries = mesh_device.num_program_cache_entries()
+    durations_ns = [
+        _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=False, expected_unicast=True)[0]
+        for _ in range(10)
+    ]
+    assert mesh_device.num_program_cache_entries() == cache_entries
+
+    median_ns = statistics.median(durations_ns)
+    p90_ns = sorted(durations_ns)[8]
+    assert p90_ns <= 1.05 * median_ns, (
+        f"unstable cached Fabric2D all-gather: median={median_ns / 1e6:.3f} ms "
+        f"p90={p90_ns / 1e6:.3f} ms samples_ms={[round(value / 1e6, 3) for value in durations_ns]}"
+    )
+    print(
+        f"ISOLATED_AG_STABILITY fabric=fabric_2d dtype={dtype} runs=10 "
+        f"median={median_ns / 1e6:.3f}ms p90={p90_ns / 1e6:.3f}ms "
+        f"effective_receive_bw={rows_per_device * page_size * (mesh_device.shape[0] - 1) / median_ns:.3f}GB/s "
+        f"samples_ms={[round(value / 1e6, 3) for value in durations_ns]}"
+    )
+
+    check_output = ttnn.typecast(persistent_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else persistent_output
+    if dtype == ttnn.fp8_e4m3:
+        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
+        expected = torch.cat(
+            [ttnn.to_torch(device_tensor) for device_tensor in ttnn.get_device_tensors(check_input)], dim=2
+        )
+    else:
+        expected = torch_input
+    for device_tensor in ttnn.get_device_tensors(check_output):
+        actual = ttnn.to_torch(device_tensor)
+        if dtype == ttnn.fp8_e4m3:
+            mismatch_fraction = (actual != expected).sum().item() / actual.numel()
+            assert mismatch_fraction < 5e-5
+            assert_with_pcc(actual, expected, pcc=0.9999)
+        else:
+            assert torch.equal(actual, expected)
+
+
 def _make_matched_two_rank_line_tensors(mesh_device, dtype, width):
     rows_per_device = 65536
     global_shape = (1, 1, 2 * rows_per_device, width)
@@ -759,6 +859,7 @@ def _make_matched_two_rank_line_tensors(mesh_device, dtype, width):
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("use_persistent_output", [False, True], ids=["fresh_output", "persistent_output"])
 @pytest.mark.parametrize(
     "dtype,width",
     [
@@ -766,17 +867,27 @@ def _make_matched_two_rank_line_tensors(mesh_device, dtype, width):
         pytest.param(ttnn.fp8_e4m3, 656, id="scaled_fp8_704b_rows"),
     ],
 )
-def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width):
+def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width, use_persistent_output):
     """Exercise terminal one-hop traffic without a store-and-forward relay iteration."""
     _, torch_input, tt_input, persistent_output = _make_matched_two_rank_line_tensors(mesh_device, dtype, width)
-    tt_output = ttnn.all_gather(
-        tt_input,
-        dim=2,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        cluster_axis=1,
-        output_tensor=persistent_output,
-    )
-    ttnn.synchronize_device(mesh_device)
+
+    def run_ag():
+        return ttnn.all_gather(
+            tt_input,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=1,
+            output_tensor=persistent_output if use_persistent_output else None,
+        )
+
+    if ttnn.device.IsProgramRealtimeProfilerActive():
+        tt_output, records = profile_realtime_program(mesh_device, run_ag, collect_all=True, record_timeout_seconds=5.0)
+        sources = [source.replace("\\", "/") for record in records for source in record["kernel_sources"]]
+        assert any(source.endswith("/unicast_writer.cpp") for source in sources)
+        assert not any(source.endswith("/multicast_receiver_writer.cpp") for source in sources)
+    else:
+        tt_output = run_ag()
+        ttnn.synchronize_device(mesh_device)
 
     if dtype == ttnn.fp8_e4m3:
         carried_input = ttnn.typecast(tt_input, ttnn.bfloat16)
@@ -793,6 +904,118 @@ def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width)
 
         for device_tensor in ttnn.get_device_tensors(check_output):
             actual = ttnn.to_torch(device_tensor)
+            assert torch.equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 512,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device,cluster_axis",
+    [pytest.param((4, 2), 0, id="axis0_4rank"), pytest.param((2, 4), 1, id="axis1_4rank")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("use_persistent_output", [False, True], ids=["fresh_output", "persistent_output"])
+@pytest.mark.parametrize(
+    "dtype,width",
+    [
+        pytest.param(ttnn.bfloat16, 576, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, id="scaled_fp8_704b_rows"),
+    ],
+)
+def test_all_gather_fabric_2d_matched_four_rank_line_correctness(
+    mesh_device, cluster_axis, use_persistent_output, dtype, width
+):
+    """Exercise the automatic one-hop backend on four-rank lines in both mesh orientations."""
+    ranks = mesh_device.shape[cluster_axis]
+    assert ranks == 4
+    rows_per_device = 128
+    global_shape = (1, 1, rows_per_device * ranks, width)
+    torch.manual_seed(0)
+    host_dtype = torch.float32 if dtype == ttnn.fp8_e4m3 else torch.bfloat16
+    torch_input = torch.rand(global_shape, dtype=host_dtype)
+    shard_dims = (2, None) if cluster_axis == 0 else (None, 2)
+    tt_input = _make_row_major_mesh_tensor(
+        mesh_device,
+        torch_input,
+        dtype,
+        ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+    )
+    persistent_output = None
+    if use_persistent_output:
+        persistent_output = _make_row_major_mesh_tensor(
+            mesh_device,
+            torch.zeros(global_shape, dtype=host_dtype),
+            dtype,
+            ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def run_ag():
+        return ttnn.all_gather(
+            tt_input,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=cluster_axis,
+            output_tensor=persistent_output,
+        )
+
+    if ttnn.device.IsProgramRealtimeProfilerActive():
+        tt_output, records = profile_realtime_program(mesh_device, run_ag, collect_all=True, record_timeout_seconds=5.0)
+        sources = [source.replace("\\", "/") for record in records for source in record["kernel_sources"]]
+        assert any(source.endswith("/unicast_writer.cpp") for source in sources)
+        assert not any(source.endswith("/multicast_receiver_writer.cpp") for source in sources)
+    else:
+        tt_output = run_ag()
+        ttnn.synchronize_device(mesh_device)
+
+    check_output = ttnn.typecast(tt_output, ttnn.bfloat16) if dtype == ttnn.fp8_e4m3 else tt_output
+    if dtype == ttnn.fp8_e4m3:
+        check_input = ttnn.typecast(tt_input, ttnn.bfloat16)
+        input_shards = ttnn.get_device_tensors(check_input)
+        mesh_rows, mesh_cols = tuple(mesh_device.shape)
+        expected_by_device = []
+        for device_index in range(len(input_shards)):
+            if cluster_axis == 0:
+                column = device_index % mesh_cols
+                gather_group = [input_shards[row * mesh_cols + column] for row in range(mesh_rows)]
+            else:
+                row_start = (device_index // mesh_cols) * mesh_cols
+                gather_group = input_shards[row_start : row_start + mesh_cols]
+            expected_by_device.append(
+                torch.cat([ttnn.to_torch(device_tensor) for device_tensor in gather_group], dim=2)
+            )
+    else:
+        expected_by_device = [torch_input] * len(ttnn.get_device_tensors(check_output))
+    for device_index, (device_tensor, expected) in enumerate(
+        zip(ttnn.get_device_tensors(check_output), expected_by_device)
+    ):
+        actual = ttnn.to_torch(device_tensor)
+        if dtype == ttnn.fp8_e4m3:
+            mismatch = actual != expected
+            mismatch_fraction = mismatch.sum().item() / actual.numel()
+            mismatch_rows = mismatch.nonzero()[:, 2].unique().tolist() if mismatch.any() else []
+            first_mismatch = mismatch.nonzero()[0].tolist() if mismatch.any() else None
+            first_actual = actual[tuple(first_mismatch)].item() if first_mismatch is not None else None
+            first_expected = expected[tuple(first_mismatch)].item() if first_mismatch is not None else None
+            candidate_fractions = [
+                (actual != candidate).sum().item() / actual.numel() for candidate in expected_by_device
+            ]
+            assert mismatch_fraction < 5e-5, (
+                f"device={device_index} mismatch_fraction={mismatch_fraction} first={first_mismatch} "
+                f"actual={first_actual} expected={first_expected} rows={mismatch_rows} "
+                f"candidate_fractions={candidate_fractions}"
+            )
+            assert_with_pcc(actual, expected, pcc=0.9999)
+        else:
             assert torch.equal(actual, expected)
 
 
