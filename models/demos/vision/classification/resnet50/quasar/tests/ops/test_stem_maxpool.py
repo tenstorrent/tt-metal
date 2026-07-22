@@ -117,6 +117,34 @@ def test_quasar_stem_maxpool(mesh_device, input_h, input_w, sid):
         f"in_max={in_max:.4f} dev_max={dev_max:.4f} golden_max={float(golden.max()):.4f}"
     )
 
+    # DIAG (stem-maxpool PCC localizer, leave in until debugged): where are the wrong output pixels?
+    # 8x8 passes and its 4x4 output is ALL border-touching -> edges are fine; the failures must be interior
+    # (clean 3x3 windows). Print a oH x oW map of per-position max-abs-error across channels so we can see
+    # whether the wrong pixels are a spatial border, an interior region, or a periodic (tile/row-stride) pattern.
+    g = golden[0]  # [C, oH, oW]
+    d = tt_out[0]  # [C, oH, oW]
+    perpos = (d - g).abs().amax(dim=0)  # [oH, oW] worst channel error at each output position
+    tol = 5e-2
+    bad = perpos > tol
+    n_bad = int(bad.sum())
+    # border vs interior split of the wrong positions
+    border = torch.zeros_like(bad)
+    border[0, :] = border[-1, :] = border[:, 0] = border[:, -1] = True
+    n_bad_border = int((bad & border).sum())
+    n_bad_interior = int((bad & ~border).sum())
+    print(
+        f"[stem_maxpool {sid} DIAG] out {out_h}x{out_w}  bad(>{tol})={n_bad}/{out_h*out_w} "
+        f"(border={n_bad_border} interior={n_bad_interior})  max_err={float(perpos.max()):.4f}"
+    )
+    # oH x oW hit map: '#' = wrong, '.' = ok
+    for oy in range(out_h):
+        print("  " + "".join("#" if bad[oy, ox] else "." for ox in range(out_w)))
+    # a couple of example interior mismatches: dev vs golden for channel 0
+    ex = (bad & ~border).nonzero()
+    for k in range(min(3, ex.shape[0])):
+        oy, ox = int(ex[k, 0]), int(ex[k, 1])
+        print(f"    interior ({oy},{ox}) ch0: dev={float(d[0, oy, ox]):.4f} golden={float(g[0, oy, ox]):.4f}")
+
     # (2) value-inflation guard: max-pool output can never exceed the input max.
     assert dev_max <= in_max + 1e-2, (
         f"value inflation: device max {dev_max:.4f} > input max {in_max:.4f} "
