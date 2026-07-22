@@ -37,6 +37,23 @@ _TAIL_CONV_OUT_CHUNK_ELEMS = _CONV3D_CHUNK_ELEMS
 _KERNEL_VOLUME = 3 * 3 * 3
 _KERNEL_H = 3
 
+# The decoder blocking sweep tunes valid-conv strips at H=130 input (128 output) and its
+# multiples (258/386 -> 256/384). A chunk whose output height is NOT a multiple of this
+# misses every tuned key and resolves to a generic fallback blocking that is catastrophic:
+# the u3 256->512 upsample conv measured 283 ms at a 129-input (127-output) strip vs 17.5 ms
+# on the aligned 130-input (128-output) strip. So snap valid-conv chunk heights to 128.
+_TUNED_H_STRIP = 128
+
+
+def conv3d_valid_input_h_chunk(output_h_chunk: int) -> int:
+    """Input-H strip height matching a valid-conv output strip (kH=3)."""
+    return output_h_chunk + (_KERNEL_H - 1)
+
+
+def _strip_fits_cap(out_h_strip: int, *, in_channels: int, t: int, w: int, chunk_elems: int) -> bool:
+    """Does a valid-conv output strip of height ``out_h_strip`` keep im2col under the cap?"""
+    return in_channels * t * (out_h_strip + (_KERNEL_H - 1)) * w * _KERNEL_VOLUME <= chunk_elems
+
 
 def conv3d_h_chunk_size(
     *,
@@ -53,7 +70,19 @@ def conv3d_h_chunk_size(
         return None
     h_span = h - (_KERNEL_H - 1) if valid_conv else h
     n_chunks = (im2col_elems + chunk_elems - 1) // chunk_elems
-    return (h_span + n_chunks - 1) // n_chunks
+    hc = (h_span + n_chunks - 1) // n_chunks
+    if valid_conv:
+        # Snap to the tuned strip granularity (multiple of _TUNED_H_STRIP) so every strip
+        # hits a swept blocking. Round down to a tuned multiple (smaller strips only shrink
+        # im2col, so the cap still holds); floor at one strip when that strip fits the cap.
+        aligned = (hc // _TUNED_H_STRIP) * _TUNED_H_STRIP
+        if aligned < _TUNED_H_STRIP and _strip_fits_cap(
+            _TUNED_H_STRIP, in_channels=in_channels, t=t, w=w, chunk_elems=chunk_elems
+        ):
+            aligned = _TUNED_H_STRIP
+        if aligned >= _TUNED_H_STRIP:
+            hc = aligned
+    return hc
 
 
 def conv3d_h_chunk_size_for_conv(

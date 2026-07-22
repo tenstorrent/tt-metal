@@ -31,29 +31,28 @@ from models.experimental.hunyuan_image_3_0.tt.vae.spatial import enable_vae_spat
 from models.tt_dit.parallel.manager import CCLManager
 
 
-def test_tail_conv_out_chunk_pins_1024m_cap():
-    """Tail conv_out keeps 1024M chunk strips even when global threshold is raised."""
+def test_valid_conv_chunk_snaps_to_tuned_strip():
+    """Valid-conv chunk heights snap to the tuned 128 (H=130 input) strip granularity so
+    every strip hits a swept blocking. A misaligned strip (e.g. 127/129) resolves to a
+    generic fallback blocking that is catastrophic (u3 256->512 measured 283ms vs 17.5ms).
+    This must hold regardless of the exact im2col cap (which alone would give 127 or 170)."""
     in_ch = 128
     t, h, w = 4, 512, 512
     hc_tail = conv3d_h_chunk_size(
-        t=t,
-        h=h,
-        w=w,
-        in_channels=in_ch,
-        valid_conv=True,
-        chunk_elems=_TAIL_CONV_OUT_CHUNK_ELEMS,
+        t=t, h=h, w=w, in_channels=in_ch, valid_conv=True, chunk_elems=_TAIL_CONV_OUT_CHUNK_ELEMS
     )
     hc_global_1280 = conv3d_h_chunk_size(
-        t=t,
-        h=h,
-        w=w,
-        in_channels=in_ch,
-        valid_conv=True,
-        chunk_elems=1280 * 1024 * 1024,
+        t=t, h=h, w=w, in_channels=in_ch, valid_conv=True, chunk_elems=1280 * 1024 * 1024
     )
-    assert hc_tail == 128
-    assert hc_global_1280 == 170
-    assert hc_tail < hc_global_1280
+    # Both snap to the tuned 128 strip (raw would be 128 and 170 respectively).
+    assert hc_tail % 128 == 0 and hc_tail == 128
+    assert hc_global_1280 % 128 == 0 and hc_global_1280 == 128
+
+    # The u3 256->512 case that regressed: raw ceil(254/2)=127 must snap up to 128.
+    hc_u3 = conv3d_h_chunk_size(
+        t=4, h=256, w=256, in_channels=256, valid_conv=True, chunk_elems=_TAIL_CONV_OUT_CHUNK_ELEMS
+    )
+    assert hc_u3 == 128, f"u3 chunk must align to 128, got {hc_u3}"
 
 
 @pytest.fixture(scope="function")
