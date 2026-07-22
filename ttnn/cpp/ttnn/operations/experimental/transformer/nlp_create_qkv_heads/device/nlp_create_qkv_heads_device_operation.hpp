@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
 
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -35,14 +36,14 @@ struct NlpCreateHeadsDeviceOperation {
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
     struct Interleaved {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct Sharded {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
