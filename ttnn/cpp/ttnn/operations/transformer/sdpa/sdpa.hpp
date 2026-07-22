@@ -102,7 +102,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    // Sparse-frames extension (SR windowed pattern). All three or none; see
+    // Sparse-frames extension (windowed / block-sparse pattern). All three or none; see
     // ring_joint_sdpa_device_operation_types.hpp for the pattern.
     std::optional<uint32_t> frame_seqlen = std::nullopt,
     std::optional<uint32_t> num_frames_padded = std::nullopt,

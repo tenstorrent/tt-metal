@@ -36,13 +36,13 @@ struct RingJointSDPAParams {
     std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
     uint32_t latent_v_head_dim = 0;
 
-    // Sparse-frames extension (SR windowed block-sparse attention). All three set together or
+    // Sparse-frames extension (windowed / block-sparse attention). All three set together or
     // all unset. `frame_seqlen` is in TOKENS (a multiple of TILE_HEIGHT); `num_frames_padded` is
     // the (sp-aligned) frame count, must divide ring_size and be <= 32. The `frame_allow_packed`
     // is a bitpacked row-major representation of the [nf_padded, nf_padded] allow-table: bit
     // `(q * nf_padded + k)` is 1 iff Q frame q attends K frame k. At most 32 uint32 words (max
-    // nf_padded = 32 -> 1024 bits) — enough for SR's 24 padded frames. Kept host-side and threaded
-    // to kernels as runtime args (see build_ring_joint_program_factory).
+    // nf_padded = 32 -> 1024 bits). Kept host-side and threaded to kernels as runtime args (see
+    // build_ring_joint_program_factory).
     std::optional<std::uint32_t> frame_seqlen = std::nullopt;
     std::optional<std::uint32_t> num_frames_padded = std::nullopt;
     std::vector<std::uint32_t> frame_allow_packed;  // empty when sparse-frames disabled

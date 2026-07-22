@@ -271,7 +271,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Sparse-frames extension (SR windowed pattern): frame_seqlen + num_frames_padded + a
+    // Sparse-frames extension (windowed / block-sparse pattern): frame_seqlen + num_frames_padded + a
     // bit-packed uint32 vector `frame_allow_packed` describe the frame-block-sparse pattern the
     // kernel applies. Constraints:
     //   * frame_allow_packed is required, bit `q*nf_padded + k` = 1 iff Q frame q attends K frame k.

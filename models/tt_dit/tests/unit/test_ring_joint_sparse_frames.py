@@ -3,17 +3,16 @@
 """Unit tests for the sparse-frames extension to `ring_joint_scaled_dot_product_attention`.
 
 The extension adds three optional kwargs (`frame_seqlen`, `num_frames_padded`, `frame_allow`) that
-enable frame-block-sparse attention inside the ring op. This is the primitive powering HeyGen's SR
-windowed sparse self-attention: each Q frame attends only to a centered window of K frames + one
-reference frame.
+enable frame-block-sparse attention inside the ring op: each Q frame attends only to a chosen
+subset of K frames (e.g. a centered window + one reference frame).
 
-These tests are independent of the SR model — they exercise the op directly with a synthetic
-windowed pattern (window=5, add_last_frame) at shapes representative of the SR deliverable:
-  * SR 720p: fsl=3840 tokens/frame, nf=21 (padded to 24), N=92160 padded
+The tests exercise the op directly with a synthetic windowed pattern (window=5, add_last_frame)
+at shapes representative of video-DiT sparse-attention workloads:
+  * 720p-scale: fsl=3840 tokens/frame, nf=21 (padded to 24), N=92160 padded
   * Smaller synthetic shapes for correctness across mesh sizes
 
 Golden = pytorch SDPA with an additive `[N, N]` block-mask matching frame_allow. Ring output must
-PCC-match the golden. The tests SKIP when the tt-metal build lacks the extension.
+PCC-match the golden.
 
 Meshes:
     BH 4x8, WH 2x4, WH 4x8. Only meshes with sufficient devices for the requested sp_factor run;
@@ -265,7 +264,7 @@ def _run_sparse_frames_op(
 
     ccl_sem = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
-    # Sharding: seq on sp_axis, heads on tp_axis (mirrors the SR sparse attention layout).
+    # Sharding: seq on sp_axis, heads on tp_axis (standard video-DiT sparse-attention layout).
     input_shard_dims = [None, None]
     input_shard_dims[sp_axis] = 2
     input_shard_dims[tp_axis] = 1
@@ -497,8 +496,8 @@ class TestSparseFramesRing:
         all_gather_topology,
         reset_seeds,
     ):
-        """SR production deliverable geometry: fsl=3840, nf_real=21 -> nf_padded=sp_multiple, window=5,
-        add_last_frame=True. Uses n_head=40 / dim=128 (production SR values).
+        """720p-scale geometry: fsl=3840, nf_real=21 -> nf_padded=sp_multiple, window=5,
+        add_last_frame=True. n_head=40, dim=128 — representative of a real video-DiT workload.
 
         On WH 2x4 (sp=4) nf_padded=24; on sp=8 nf_padded=24 too (21 rounded to 24)."""
         nf_real = 21

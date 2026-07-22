@@ -76,7 +76,7 @@ void kernel_main() {
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
-    // Sparse-frames extension (SR windowed pattern). All three set together at the host or all
+    // Sparse-frames extension (windowed / block-sparse pattern). All three set together at the host or all
     // zero (feature disabled). Slots placed after the CB block (base = cb_arg_offset + 23 = 72).
     // With `sparse_frames_enabled=1`, the kernel maps each Q chunk to a single frame via integer
     // division (host requires frame_seqlen_tiles % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no

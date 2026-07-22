@@ -657,7 +657,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
         nb::arg("kv_actual_isl").noconvert() = nb::none(),
-        // Sparse-frames extension (all three or none). Enables the SR windowed block-sparse
+        // Sparse-frames extension (all three or none). Enables windowed block-sparse
         // attention pattern inside the ring op via a compact uint8 [1,1,nf_padded,nf_padded]
         // frame_allow table + host-computed active_ring_iter_mask; no [N,N] mask required.
         nb::arg("frame_seqlen") = nb::none(),
