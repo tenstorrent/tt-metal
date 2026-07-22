@@ -1608,12 +1608,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
-        // TT_METAL_DEVICE_PRINT
-        // Use new DEVICE_PRINT system instead of legacy DPRINT.
-        // Default: false (legacy DPRINT is used)
-        // Usage: export TT_METAL_DEVICE_PRINT=1
-        case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
-
         // ========================================
         // EXTERNAL CMAC CONFIGURATION
         // ========================================
