@@ -845,6 +845,14 @@ _PROFILE_CACHE_DIR = Path(tempfile.gettempdir()) / "perf_mcp_profile_cache"
 
 
 def _model_source_fingerprint() -> str:
+    """Cache key for a profiling run: hashes the model's stub/tt source AND the identity
+    of the module + perf-test being profiled.
+
+    Module-level optimize runs every module against the SAME source tree but a DIFFERENT
+    per-module perf test, so a source-only key made all modules collide on one entry — a
+    module could be handed another module's cached profile (e.g. di_t_model's matmuls
+    returned for ace_step_attention). Folding PERF_MCP_TASK + the resolved perf-test node
+    into the key scopes the cache per module. Empty string disables caching."""
     h = hashlib.sha256()
     try:
         root = _MODEL_ROOT
@@ -856,6 +864,10 @@ def _model_source_fingerprint() -> str:
             h.update(f.read_bytes())
     except Exception:
         return ""
+    ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
+    for part in (os.environ.get("PERF_MCP_TASK", ""), ptr.get("path", ""), ptr.get("case", "")):
+        h.update(b"\x00")
+        h.update(str(part).encode())
     return h.hexdigest()
 
 

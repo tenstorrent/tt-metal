@@ -107,6 +107,20 @@ def _module_status(result) -> str:
     return "ran"
 
 
+def _clear_profile_cache() -> None:
+    """Wipe the on-disk profiling cache before a module-level run.
+
+    The cache is keyed per module + perf-test, but entries persist in /tmp across
+    runs; clearing at the start of a fresh module-level optimize guarantees no module
+    inherits a stale profile captured for a different module in an earlier run."""
+    import shutil
+    import tempfile
+
+    cache = Path(tempfile.gettempdir()) / "perf_mcp_profile_cache"
+    if cache.is_dir():
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
     """Optimize graduated modules one at a time by reusing the cc engine per module.
 
@@ -164,6 +178,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
 
     os.environ["TT_PERF_MODULE_LEVEL"] = "1"
     os.environ.setdefault("PERF_MCP_VALIDATE_STALL_SEC", "120")
+    _clear_profile_cache()
     print("  [optimize/module] module-level optimize over %d graduated module(s): %s" % (len(mods), mods))
     rows = []
     for m in mods:
