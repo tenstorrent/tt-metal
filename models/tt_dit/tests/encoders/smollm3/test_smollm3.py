@@ -269,7 +269,7 @@ def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
 
     ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
     wrapper = SmolLM3TextEncoderWrapper(
-        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=pc, pad_buckets=(1024,), use_trace=True
+        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=pc, pad_buckets=(1024,)
     )
 
     hf = _load_hf_smollm3()
@@ -278,11 +278,12 @@ def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
         ref = hf.model(input_ids=ids, output_hidden_states=True)
     hf_json = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
 
-    # Alternate pos/neg across several "generations": first encode of each captures, the rest replay.
+    # Alternate pos/neg across several "generations", all traced: first encode of each captures, the
+    # rest replay (traced=True drives the per-bucket Tracer, the same flag the DiT denoise uses).
     baselines: dict[str, torch.Tensor] = {}
     prompts = [json_prompt, "", json_prompt, "", json_prompt, ""]
     for i, p in enumerate(prompts):
-        embeds, _ = wrapper.encode_prompt(p)
+        embeds, _ = wrapper.encode_prompt(p, traced=True)
         embeds = embeds.float()
         key = "json" if p else "empty"
         if key not in baselines:

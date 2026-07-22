@@ -136,7 +136,7 @@ def _perf_breakdown(
             _read_profiler()  # profile mode: flush this stage's markers so the per-core buffer can't overflow
             return result
 
-        encoded = time_stage("encode", lambda: pipe._encode(prompt, negative_prompt, do_cfg=do_cfg))
+        encoded = time_stage("encode", lambda: pipe._encode(prompt, negative_prompt, do_cfg=do_cfg, traced=traced))
         cond_branch, uncond_branch, timesteps, latent, ssl = time_stage(
             "prepare",
             lambda: pipe._prepare(
@@ -192,6 +192,12 @@ def _perf_breakdown(
     # 1 warmup pass (absorbs op compilation), then N measured passes.
     logger.info(f"perf harness [{label}]: warmup run...")
     run_once({})
+    if traced:
+        # The warmup captured the denoise trace but (by the ordering gate in _encode) left the encoder
+        # untraced. Capture the encoder trace now that the denoise trace + its buffers exist, so ALL
+        # measured runs are pure replay (one warmup suffices, no encoder-capture cost leaking into the
+        # measured encode stage). Mirrors the trailing capture in BriaFiboPipeline.__call__.
+        pipe._text_encoder.encode_prompt(prompt, traced=True)
 
     runs = []
     image = None
@@ -327,7 +333,8 @@ def test_fibo_pipeline_perf_breakdown_json(
 #     -k "mesh_device1" -v -s --timeout=1800
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
-def test_fibo_encode_perf(*, mesh_device):
+@pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
+def test_fibo_encode_perf(*, mesh_device, traced):
     """Encode-only wall-clock perf: time the pipeline's ``_encode`` (positive + negative prompt), no perf-report.
 
     Builds the full ``BriaFiboPipeline`` and times ONLY ``pipe._encode(prompt, negative_prompt, do_cfg=True)``
@@ -335,8 +342,9 @@ def test_fibo_encode_perf(*, mesh_device):
     ``(cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states)``. On the 4x8 Galaxy the encoder
     runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to the fixed 1024 bucket)
     is sharded across the SP axis (all-gather K/V per attention layer) and Q/K/V/O are tensor-parallel on the
-    TP axis. The encoder forward runs UNTRACED (the encoder trace was removed); the encode is dominated by
-    host op-dispatch. The hidden-state readback reads only the SP shards from one TP row via
+    TP axis. ``traced`` captures/replays the encoder device forward (per 1024 bucket, shared by pos+neg) --
+    the same flag the DiT denoise uses; untraced, the encode is host-op-dispatch-bound (the traced replay
+    removes those gaps, ~3.6x on the JSON prompt). The hidden-state readback reads only the SP shards from one TP row via
     get_device_tensors (~0.6 s) instead of the mesh composer over all 32 devices (~10 s). Positive prompt is FIBO's intended structured-JSON caption (the committed
     ``fibo_vlm_prompt.json``, ~833 tokens); negative is a short free-text string. 1 warmup (absorbs op
     compilation) + N measured passes with boundary device syncs; logs encode seconds (avg/min/max) and the
@@ -358,9 +366,13 @@ def test_fibo_encode_perf(*, mesh_device):
     def encode_once():
         ttnn.synchronize_device(submesh)  # drain enqueued work so t0 is a real boundary
         t0 = perf_counter()
-        encoded = pipe._encode(prompt, negative_prompt, do_cfg=True)
+        # Encode-only: no denoise trace exists here, so the pipeline's _encode (which gates encoder
+        # tracing on the denoise trace) would never trace. Trace the encoder directly via the wrapper --
+        # safe because with no denoise trace there are no buffers for the encoder replay to clobber.
+        cond = pipe._text_encoder.encode_prompt(prompt, traced=traced)
+        uncond = pipe._text_encoder.encode_prompt(negative_prompt, traced=traced)
         ttnn.synchronize_device(submesh)  # wait for this encode's device work to finish
-        return perf_counter() - t0, encoded
+        return perf_counter() - t0, (cond, uncond)
 
     logger.info("encode perf: warmup run...")
     encode_once()  # warmup: compile/populate the program cache
@@ -373,7 +385,7 @@ def test_fibo_encode_perf(*, mesh_device):
         times.append(dt)
 
     # Produce/verify the outputs -- the same 4-tuple the pipeline's _encode returns under CFG.
-    cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states = encoded
+    (cond_embeds, cond_hidden_states), (uncond_embeds, uncond_hidden_states) = encoded
     assert cond_embeds is not None and len(cond_hidden_states) > 0, "positive branch produced no output"
     assert uncond_embeds is not None and len(uncond_hidden_states) > 0, "negative branch produced no output"
 

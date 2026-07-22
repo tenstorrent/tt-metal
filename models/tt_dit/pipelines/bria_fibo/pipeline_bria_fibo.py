@@ -68,10 +68,6 @@ class BriaFiboPipelineConfig:
     width: int
     checkpoint_name: str
 
-    # Trace the SmolLM3 encoder device forward (per 1024 bucket, pos+neg share it). Requires a
-    # device trace_region_size. Default off so profile/no-trace-region tests are unaffected.
-    encoder_use_trace: bool = False
-
     @classmethod
     def default(
         cls,
@@ -82,7 +78,6 @@ class BriaFiboPipelineConfig:
         width: int = 1024,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
-        encoder_use_trace: bool = False,
     ) -> BriaFiboPipelineConfig:
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
@@ -137,7 +132,6 @@ class BriaFiboPipelineConfig:
             height=height,
             width=width,
             checkpoint_name=checkpoint_name,
-            encoder_use_trace=encoder_use_trace,
         )
 
 
@@ -194,7 +188,6 @@ class BriaFiboPipeline:
             ccl_manager=self._encoder_ccl_manager,
             parallel_config=config.encoder_parallel_config,
             pad_buckets=(1024,),
-            use_trace=config.encoder_use_trace,
         )
         ttnn.synchronize_device(self._submesh)
 
@@ -260,7 +253,8 @@ class BriaFiboPipeline:
         do_cfg = guidance_scale > 1
 
         # 1-3. Encode, then build per-branch conditioning + schedule + latents.
-        encoded = self._encode(prompt, negative_prompt, do_cfg=do_cfg)
+        # The encoder forward is traced/replayed under the same ``traced`` flag as the DiT denoise.
+        encoded = self._encode(prompt, negative_prompt, do_cfg=do_cfg, traced=traced)
         cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length = self._prepare(
             encoded,
             height=height,
@@ -275,6 +269,15 @@ class BriaFiboPipeline:
             cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length, guidance_scale, traced=traced
         )
 
+        # 4b. Trailing encoder-trace capture (single-warmup ordering). The encoder trace MUST be captured
+        # AFTER the denoise trace (see _encode); doing it here -- once the denoise trace + its buffers
+        # exist -- means the FIRST traced generation leaves BOTH traces ready to replay, so one warmup
+        # generation suffices (no second warmup). Guarded so it captures once per (re)capture cycle;
+        # release_traces() clears it after a denoise recapture so this re-arms it.
+        if traced and self._tracer.trace_captured and not self._text_encoder.has_trace():
+            logger.info("capturing encoder trace (trailing the denoise trace)...")
+            self._text_encoder.encode_prompt(prompt, traced=True)
+
         # 5. Return the pre-VAE latent (PCC gate) or decode to an image.
         if output_type == "latent":
             logger.info("returning pre-VAE latent...")
@@ -284,18 +287,28 @@ class BriaFiboPipeline:
             latent, height=height, width=width, output_type=output_type, force_device_decode=force_device_decode
         )
 
-    def _encode(self, prompt: str, negative_prompt: str, *, do_cfg: bool = True) -> tuple:
+    def _encode(self, prompt: str, negative_prompt: str, *, do_cfg: bool = True, traced: bool = False) -> tuple:
         """Encode the positive prompt (and, when CFG is active, the negative prompt) SEPARATELY.
 
         When ``do_cfg`` is False (``guidance_scale <= 1``) the negative branch is unused, so it is not
-        encoded and the uncond entries are returned as ``None``.
+        encoded and the uncond entries are returned as ``None``. ``traced`` captures/replays the encoder
+        forward (per 1024 bucket, shared by pos+neg) -- the same flag that drives the DiT denoise trace.
         """
         logger.info("encoding prompts...")
         # SP x TP encoder on the whole mesh; positive and negative prompts are encoded sequentially,
         # each padded to the 1024 bucket and sequence-parallel across tokens.
-        cond_embeds, cond_hidden_states = self._text_encoder.encode_prompt(prompt)
+        #
+        # ORDERING CONSTRAINT: the encoder trace MUST be captured AFTER the denoise trace, else the
+        # encoder trace's replay overwrites the denoise trace's persistent buffers (allocated later) and
+        # the denoise replay produces noise (root-caused on 4x8: encoder output stays bit-exact, denoise
+        # latent -> PCC -0.13). So gate encoder tracing on the denoise trace already being captured --
+        # the encoder captures on the 2nd traced generation (denoise buffers resident by then). Whenever
+        # the denoise trace is released/recaptured (prompt-length change), release_traces() also drops the
+        # encoder trace so it recaptures after the new denoise trace.
+        enc_traced = traced and self._tracer.trace_captured
+        cond_embeds, cond_hidden_states = self._text_encoder.encode_prompt(prompt, traced=enc_traced)
         if do_cfg:
-            uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt)
+            uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt, traced=enc_traced)
         else:
             uncond_embeds, uncond_hidden_states = None, None
         return cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states
@@ -548,8 +561,14 @@ class BriaFiboPipeline:
         self._captured_key = key
 
     def release_traces(self) -> None:
-        """Release the denoise trace (call at teardown; mirrors pipeline_wan.py's release_traces)."""
+        """Release the denoise trace (call at teardown; mirrors pipeline_wan.py's release_traces).
+
+        Also releases the encoder trace: it must always be captured AFTER the denoise trace (ordering
+        constraint in ``_encode``), so if the denoise trace is (re)captured the encoder trace must be
+        dropped and recaptured after the new one.
+        """
         self._tracer.release_trace()
+        self._text_encoder.release_traces()
         self._captured_key = None
 
     def _random_latents(

@@ -81,7 +81,6 @@ class SmolLM3TextEncoderWrapper:
         ccl_manager: "CCLManager | None",
         parallel_config: "EncoderParallelConfig",
         pad_buckets=(1024,),
-        use_trace: bool = False,
     ) -> None:
         self._device = device
         self._pad_buckets = tuple(pad_buckets)
@@ -94,11 +93,26 @@ class SmolLM3TextEncoderWrapper:
             device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
         )
 
-        # Trace the device forward (one trace per padding bucket): it is host-dispatch-bound and the
-        # fixed bucket gives it a static shape. Pos+neg (both bucket 1024) share the trace: first encode
-        # captures, later encodes replay.
-        self._use_trace = use_trace
+        # Per-bucket trace cache for the device forward (created lazily on the first traced encode).
+        # The forward is host-dispatch-bound and the fixed bucket gives it a static shape, so pos+neg
+        # (both bucket 1024) share one trace: first traced encode captures, later ones replay. Tracing
+        # is driven per-call by ``encode_prompt(traced=...)`` -- the same flag the DiT denoise uses.
         self._tracers: dict[int, Tracer] = {}
+
+    def release_traces(self) -> None:
+        """Release all captured encoder traces so the next traced encode recaptures.
+
+        Used by the pipeline to keep the encoder trace captured AFTER the denoise trace: when the
+        denoise trace is (re)captured, the encoder trace is dropped and recaptured after it, so the
+        encoder replay never overwrites the denoise trace's buffers.
+        """
+        for tracer in self._tracers.values():
+            tracer.release_trace()
+        self._tracers.clear()
+
+    def has_trace(self) -> bool:
+        """True if an encoder forward trace is currently captured (any bucket)."""
+        return any(tracer.trace_captured for tracer in self._tracers.values())
 
     def _tokenize(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         """Tokenize at true length (no fixed-length padding); special-case empty prompts."""
@@ -118,13 +132,13 @@ class SmolLM3TextEncoderWrapper:
         return tokenized.input_ids, tokenized.attention_mask
 
     @torch.no_grad()
-    def encode_prompt(self, prompt: str) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    def encode_prompt(self, prompt: str, *, traced: bool = False) -> tuple[torch.Tensor, list[torch.Tensor]]:
         input_ids, _attention_mask = self._tokenize(prompt)
         seq_len = input_ids.shape[1]
 
         bucket = pick_bucket(seq_len, self._pad_buckets, self._sp_factor)
         tt_ids, tt_cos, tt_sin = self._prep_inputs(input_ids, seq_len)
-        if self._use_trace:
+        if traced:
             tracer = self._tracers.get(bucket)
             if tracer is None:
                 tracer = Tracer(self._forward, device=self._device, prep_run=True, clone_prep_inputs=False)

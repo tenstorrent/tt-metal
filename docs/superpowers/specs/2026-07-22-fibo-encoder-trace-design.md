@@ -15,9 +15,12 @@
 >   traced and untraced** — not a trace bug.
 > - Therefore the planned **Phase 1/2 (root-cause + fix the noise) collapsed** — the simplification
 >   (SP-only, single-output `_forward`, removed FSDP/mask paths) had already eliminated the cause.
->   Delivered: the `Tracer` behind `use_trace`, a corrected replay-stability gate (asserts
->   traced-replay == captured baseline + json-vs-HF ≥ 0.99), and a gated `encoder_use_trace` pipeline
->   flag (default off; profile/no-trace-region paths unaffected).
+>   Delivered: the per-bucket `Tracer` in the wrapper, driven by a **per-call `traced` flag** on
+>   `encode_prompt` — threaded `pipeline.__call__ → _encode → encode_prompt(traced=...)`, i.e. the SAME
+>   `traced` flag the DiT denoise uses (no separate build-time knob). `traced=True` requires a device
+>   `trace_region_size`, exactly like the denoise trace, so profile/no-trace-region paths (which call
+>   with `traced=False`) are unaffected. Plus a corrected replay-stability gate (asserts traced-replay
+>   == captured baseline + json-vs-HF ≥ 0.99).
 
 > Second attempt at tracing the encoder forward. The first attempt
 > (`docs/superpowers/specs/2026-07-15-fibo-encoder-trace-design.md`, commits `9219018b5ba` …,

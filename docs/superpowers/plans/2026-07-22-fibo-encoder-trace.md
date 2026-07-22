@@ -8,9 +8,11 @@
 > (root-cause) and 3 (fix) collapsed to "already stable." Verified on the 4×8 Galaxy: trace is bit-exact
 > (traced == untraced, PCC 1.0002), stable across 16 isolated replays and 3 full-pipeline generations
 > (gen 2/3 == gen 1 at PCC 0.9999999), and **3.58× faster** on the real JSON encode (1021.8 ms →
-> 285.6 ms). Delivered: `use_trace` + `Tracer` (Task 1), a corrected replay-stability gate (asserts
-> traced-replay == captured baseline; json-vs-HF ≥ 0.99), and a gated `encoder_use_trace` pipeline flag
-> (default off). No CCL fix was needed.
+> 285.6 ms). Delivered: the per-bucket `Tracer` in the wrapper driven by a per-call `traced` flag on
+> `encode_prompt`, threaded `pipeline.__call__ → _encode → encode_prompt(traced=...)` — the SAME flag
+> the DiT denoise uses (no separate build-time knob; `traced=True` needs a trace region, like denoise),
+> plus a corrected replay-stability gate (traced-replay == captured baseline; json-vs-HF ≥ 0.99). No
+> CCL fix was needed.
 
 **Architecture:** Wrap the existing `SmolLM3TextEncoderWrapper._forward` (already a clean device-in/device-out unit returning one stacked tensor) in a `Tracer`, behind a `use_trace` flag. Investigation-first: reproduce the replay-noise, root-cause the encoder CCLManager ping-pong/semaphore phase desync, then apply the fix, gated by an N-encode replay-stability test.
 
