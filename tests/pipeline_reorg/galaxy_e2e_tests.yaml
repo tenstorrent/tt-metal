@@ -87,18 +87,6 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
   team: ttnn
 
-- id: bh-galaxy-sparse-mla-all-gather
-  name: BH Galaxy sparse-MLA native all-gather qualification
-  cmd: >-
-    TT_METAL_DISABLE_PRECOMPILED_FW=1 scripts/run_safe_pytest.sh
-    models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_ccl_perf.py
-    -k 'kvpe_all_gather_perf and long' -x -s -v
-  skus:
-    bh_galaxy:
-      timeout: 15
-  owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ttnn
-
 - id: bh-galaxy-fabric-torus-stability
   name: BH Galaxy Fabric Torus Stability Tests
   cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml

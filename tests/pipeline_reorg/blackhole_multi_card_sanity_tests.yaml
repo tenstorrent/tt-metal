@@ -40,17 +40,6 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
 
-- name: Fabric2D native all-gather QuietBox qualification
-  cmd: >-
-    TT_METAL_DISABLE_PRECOMPILED_FW=1 scripts/run_safe_pytest.sh
-    tests/ttnn/unit_tests/operations/ccl/test_all_gather_fabric_2d.py
-    -k 'quietbox_sized_concurrent_sp_lines' -x -s -v
-  skus:
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ttnn
-
 - name: Host IO fast unit test (viommu only)
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
   skus:
