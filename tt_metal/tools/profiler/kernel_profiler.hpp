@@ -386,8 +386,18 @@ __attribute__((noinline)) void init_profiler(
         profiler_control_buffer[NOC_Y] = my_y[0];
     }
 #endif
-    // Resume this RISC's monotonic tail from L1 (rings persist across launches).
-    wIndex = profiler_control_buffer[TAIL_INDEX];
+    // Seed this RISC's tail from L1 ONCE per FW session, then keep wIndex monotonic across launches --
+    // do NOT re-read TAIL_INDEX per launch. The X280 reader drains a CONTINUOUS stream and tracks its own
+    // head; the standard device profiler resets TAIL_INDEX per program, so resuming from it would rewind
+    // wIndex below the reader's head -> tail-head underflows -> the host decoder wraps the ring and emits
+    // ~30x duplicate zones. wIndex lives in FW .bss (persists across kernel launches); publish_tail keeps
+    // TAIL_INDEX monotonic too, overwriting any host reset. (This is the "init once, outside the per-launch
+    // path" fix -- the ring is never re-initialized per kernel launch.)
+    static bool s_windex_seeded = false;
+    if (!s_windex_seeded) {
+        wIndex = profiler_control_buffer[TAIL_INDEX];
+        s_windex_seeded = true;
+    }
 
     // Re-anchor the wall-clock high half so this launch's first marker emits a fresh STICKY_TIMER.
     // Guards the idle-launch rewind case (a discarded sticky must not leave the host with a stale hi).

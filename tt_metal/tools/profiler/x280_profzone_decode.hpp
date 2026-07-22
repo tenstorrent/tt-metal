@@ -88,12 +88,6 @@ inline void profzone_decode(ProfzoneDecodeState& st, const uint32_t* in, size_t 
             for (uint32_t r = 0; r < kProfzoneNRiscDecode; r++) {
                 const uint32_t head_mod = pp_bulk_head(meta[r]);
                 const uint32_t run = pp_bulk_run(meta[r]);
-                // Defensive: a sub-ring can hold at most RING_CAP valid words. A larger run means the firmware
-                // shipped a stale/underflowed count (worker ring re-init) -- skip it rather than wrap the ring
-                // and emit duplicate zones. (The firmware also guards this now; this protects any consumer.)
-                if (run > kProfzoneRingCap) {
-                    continue;
-                }
                 const uint32_t lane = core * kProfzoneNRiscDecode + r;
                 const uint32_t* ring = raw + (size_t)r * kProfzoneRingCap;
                 uint32_t i = 0;
