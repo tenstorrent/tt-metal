@@ -462,8 +462,18 @@ def generate_image(
         latents = latents / sf
     if hasattr(model.vae, "ffactor_temporal"):
         latents = latents.unsqueeze(2)  # [1,32,1,h,w]
+    # EXPERIMENT (VAE precision): HUNYUAN_VAE_AUTOCAST = "bf16" | "fp16" wraps the
+    # host VAE decode in CPU autocast (fp32 baseline otherwise). bf16 conv3d can hit
+    # oneDNN AVX512-BF16 on host -> may cut the ~57s decode. Correctness = image
+    # sanity (lossy; fine for a demo). Isolated lever, run separately.
+    _vae_ac = os.environ.get("HUNYUAN_VAE_AUTOCAST", "").lower()
     with torch.no_grad():
-        image = model.vae.decode(latents.float(), return_dict=False)[0]  # [1,3,1,H,W]
+        if _vae_ac in ("bf16", "fp16"):
+            _dt = torch.bfloat16 if _vae_ac == "bf16" else torch.float16
+            with torch.autocast(device_type="cpu", dtype=_dt):
+                image = model.vae.decode(latents.float(), return_dict=False)[0]  # [1,3,1,H,W]
+        else:
+            image = model.vae.decode(latents.float(), return_dict=False)[0]  # [1,3,1,H,W]
     if hasattr(model.vae, "ffactor_temporal"):
         image = image.squeeze(2)
     image = pipe.image_processor.postprocess(image, output_type="pil", do_denormalize=[True] * image.shape[0])[0]

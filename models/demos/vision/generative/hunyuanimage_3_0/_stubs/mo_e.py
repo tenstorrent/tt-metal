@@ -41,6 +41,8 @@ path (no mesh) is unchanged and still composes the graduated `top_k_gate` stub.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -254,7 +256,93 @@ class _TtMoE:
         return out
 
     # ------------------------------------------------------------------
+    def _forward_sharded_sparse(self, hidden_states, return_l_aux=False):
+        """EXPERIMENT (HUNYUAN_SPARSE_MOE=1): local per-device token gather so the
+        two expert matmuls run on only the ~C tokens routing to THIS device's epd
+        experts, not all S. Targets the ~30% device-MoE slice (see stage profile).
+
+        DRAFT — the gather/scatter/topk op layouts are marked `# VERIFY` and need
+        on-device checking; `_forward_sharded` wraps this in try/except and falls
+        back to the (exact) dense path on any error, so a run stays alive. Capacity
+        C < S DROPS routed tokens (the reference is no-drop) -> PCC-gate every run;
+        size C safely (default S/2)."""
+        x = hidden_states
+        S = int(x.shape[1])
+        H = int(x.shape[-1])
+        I = self.expert_inter
+        eI = self.experts_per_dev * I
+        C = min(int(os.environ.get("HUNYUAN_SPARSE_CAP", str(S // 2))), S)
+
+        l_aux, router = self.gate(x, return_router=True, need_l_aux=return_l_aux)
+        router_local = ttnn.matmul(router, self.sel)  # [1, S, epd*I], 0 for non-selected
+        ttnn.deallocate(router)
+
+        # per-token "routed to THIS device" weight (max over this device's cols) -> [1, S]
+        tok_w = ttnn.reshape(ttnn.max(router_local, dim=-1), [1, S])  # VERIFY: max keepdim/shape
+        # top-C routed tokens. <C routed -> padding tokens (weight 0 -> contribute 0);
+        # >C routed -> DROP (PCC risk). topi [1, C] (uint).
+        _tv, topi = ttnn.topk(tok_w, C, dim=-1, largest=True, sorted=False)  # VERIFY topk sig
+        ttnn.deallocate(tok_w)
+        ttnn.deallocate(_tv)
+
+        # expand topi [1,C] -> gather indices [1,C,H] and [1,C,epd*I]
+        topi3 = ttnn.reshape(topi, [1, C, 1])
+        idx_h = ttnn.repeat(topi3, ttnn.Shape([1, 1, H]))  # VERIFY repeat/expand of uint idx
+        idx_e = ttnn.repeat(topi3, ttnn.Shape([1, 1, eI]))
+        ttnn.deallocate(topi)
+        ttnn.deallocate(topi3)
+
+        x_g = ttnn.gather(x, dim=1, index=idx_h)  # [1, C, H]  VERIFY gather API/layout
+        rl_g = ttnn.gather(router_local, dim=1, index=idx_e)  # [1, C, epd*I]
+        ttnn.deallocate(router_local)
+        ttnn.deallocate(idx_e)
+
+        gu = ttnn.matmul(x_g, self.exp_gu_cat)  # [1, C, 2*epd*I]
+        ttnn.deallocate(x_g)
+        x1 = ttnn.slice(gu, [0, 0, 0], [1, C, eI])
+        x2 = ttnn.slice(gu, [0, 0, eI], [1, C, 2 * eI])
+        ttnn.deallocate(gu)
+        act = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        act = ttnn.multiply(act, rl_g)
+        ttnn.deallocate(rl_g)
+        comb_g = ttnn.matmul(act, self.exp_down_stack, core_grid=self.mm_core_grid)  # [1, C, H]
+        ttnn.deallocate(act)
+
+        # scatter [1,C,H] back into a per-device zeroed [1,S,H] at the gathered rows
+        combined = ttnn.zeros(
+            [1, S, H],
+            dtype=comb_g.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # VERIFY: per-device zero on mesh (matches dense per-device partial)
+        combined = ttnn.scatter(combined, dim=1, index=idx_h, src=comb_g)  # VERIFY scatter API
+        ttnn.deallocate(comb_g)
+        ttnn.deallocate(idx_h)
+
+        routed = self._mesh_reduce(combined)  # all-reduce over TP -> full expert sum
+        ttnn.deallocate(combined)
+        if self.use_shared:
+            shared = self._swiglu(x, self.shared_gu, self.shared_down, self.shared_inter)
+            out = ttnn.add(shared, routed)
+            ttnn.deallocate(shared)
+            ttnn.deallocate(routed)
+        else:
+            out = routed
+        if return_l_aux:
+            return out, l_aux
+        if l_aux is not None:
+            ttnn.deallocate(l_aux)
+        return out
+
     def _forward_sharded(self, hidden_states, return_l_aux=False):
+        if os.environ.get("HUNYUAN_SPARSE_MOE") == "1":
+            try:
+                return self._forward_sharded_sparse(hidden_states, return_l_aux=return_l_aux)
+            except Exception as e:  # draft path: keep the run alive with the exact dense fallback
+                print(f"[mo_e] SPARSE path failed ({type(e).__name__}: {e}) -> dense fallback")
         x = hidden_states
 
         # --- routing via the composed graduated gate (top_k_gate) ---
