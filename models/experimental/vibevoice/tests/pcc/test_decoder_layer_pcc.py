@@ -7,7 +7,7 @@ Feeds random hidden states one token at a time (batch 1) while advancing KV-cach
 position from an empty cache. Runs ``DECODE_GENERATION_LENGTH`` decode steps (10) at
 positions 0 … 9 and asserts PCC ≥ 0.99 on every step.
 
-Unlike ``test_lm_decode_pcc.py``, this does **not** run a prefill or the full 28-layer LM —
+Unlike the full decode-chain test, this does **not** run a prefill or the full 28-layer LM —
 it isolates layer 0 so decode SDPA can be validated at arbitrary cache depths without
 re-running prefill PCC.
 
