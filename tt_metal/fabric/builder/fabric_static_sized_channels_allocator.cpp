@@ -673,26 +673,6 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         vc2_sender_buffer_slots,
         vc2_receiver_buffer_slots);
 
-    log_info(
-        tt::LogFabric,
-        "FABRIC_CHANNEL_GEOMETRY topology={} senders=[{},{},{}] receivers=[{},{},{}] "
-        "slots_sender=[{},{},{}] slots_receiver=[{},{},{}] available_bytes={} slot_bytes={}",
-        topology,
-        num_used_sender_channels_per_vc[0],
-        num_used_sender_channels_per_vc[1],
-        num_used_sender_channels_per_vc[2],
-        num_used_receiver_channels_per_vc[0],
-        num_used_receiver_channels_per_vc[1],
-        num_used_receiver_channels_per_vc[2],
-        vc0_sender_buffer_slots,
-        vc1_sender_buffer_slots,
-        vc2_sender_buffer_slots,
-        vc0_receiver_buffer_slots,
-        vc1_receiver_buffer_slots,
-        vc2_receiver_buffer_slots,
-        this->available_channel_buffering_space,
-        this->channel_buffer_size_bytes);
-
     // Apply the buffer slot configuration to each VC
     num_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
     num_remote_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
