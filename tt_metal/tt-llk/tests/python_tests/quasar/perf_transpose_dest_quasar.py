@@ -14,6 +14,7 @@ from quasar.test_transpose_dest_quasar import (
     transpose_dest_implied_math_formats,
 )
 
+
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
