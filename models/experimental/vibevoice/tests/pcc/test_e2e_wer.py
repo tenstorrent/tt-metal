@@ -14,11 +14,12 @@ own audio.
 
 Whisper (``WHISPER_MODEL``) transcribes both waveforms and WER (TT vs reference) is reported by
 cumulative transcript-word prefix (32, 64, 128, …). Report-only: asserts audio is finite and
-transcripts non-empty. ``TF_MAX_NEW_TOKENS`` (hardcoded, 512) caps AR steps.
+transcripts non-empty. ``TF_MAX_NEW_TOKENS`` (env ``VV_WER_MAX_NEW_TOKENS``, default 512) caps AR steps.
 """
 
 import contextlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -50,8 +51,9 @@ _OUT_DIR = _VIBEVOICE_ROOT / "output" / "e2e_wer"
 
 # 4-speaker climate script + voice cloning.
 TF_DEMO_ID = "4p_climate_45min"
-# AR-step cap (the fp32 CPU reference free-runs the same input, so this is kept modest).
-TF_MAX_NEW_TOKENS = 512
+# AR-step cap (override with VV_WER_MAX_NEW_TOKENS; the fp32 CPU reference free-runs the same
+# input, so keep it modest — e.g. 32 for a quick smoke test).
+TF_MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
 
 
 @contextlib.contextmanager
