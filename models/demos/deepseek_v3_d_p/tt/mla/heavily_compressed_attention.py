@@ -187,11 +187,14 @@ class TtHCA(_TtHCABase):
         kv_proj_weight: torch.Tensor,
         kv_norm_weight: torch.Tensor,
         sinks: torch.Tensor,
+        o_a_proj_weight: torch.Tensor,
+        o_b_proj_weight: torch.Tensor,
         rotary_emb,
         num_heads: int,
         head_dim: int,
         rope_head_dim: int,
         sliding_window: int,
+        o_groups: int,
         rms_norm_eps: float = 1e-6,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -218,6 +221,15 @@ class TtHCA(_TtHCABase):
         self.q_b_norm_weight = self._from_torch(torch.ones(1, 1, 1, self.head_dim))
         self.wkv = self._to_tt_linear_weight(kv_proj_weight)
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
+
+        # Grouped output projection: o_a_proj is block-diagonal (o_groups independent
+        # (num_heads*head_dim/o_groups) -> o_lora_rank blocks); o_b_proj mixes to hidden.
+        self.o_groups = int(o_groups)
+        in_per_group = self.num_heads * self.head_dim // self.o_groups
+        o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group)
+        self.wo_a = [self._to_tt_linear_weight(o_a_grouped[g]) for g in range(self.o_groups)]
+        self.wo_b = self._to_tt_linear_weight(o_b_proj_weight)
+
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(),
             device=device,
@@ -238,11 +250,14 @@ class TtHCA(_TtHCABase):
             kv_proj_weight=reference.kv_proj.weight,
             kv_norm_weight=reference.kv_norm.weight,
             sinks=reference.sinks,
+            o_a_proj_weight=reference.o_a_proj.weight,
+            o_b_proj_weight=reference.o_b_proj.weight,
             rotary_emb=reference.compressor.rotary_emb,
             num_heads=config.num_attention_heads,
             head_dim=config.head_dim,
             rope_head_dim=config.qk_rope_head_dim,
             sliding_window=config.sliding_window,
+            o_groups=config.o_groups,
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
@@ -337,3 +352,29 @@ class TtHCA(_TtHCABase):
         cos, sin = self._cos_sin(position_ids, negate_sin=True)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
+
+    def _o_proj(self, attn):
+        """Grouped output projection (reference L871-873). ``attn`` [B, num_heads, S, head_dim]
+        -> reshape heads into o_groups blocks -> per-group o_a_proj (block-diagonal) -> concat
+        -> o_b_proj. Returns [B, 1, S, hidden]."""
+        batch, _, seq_len, _ = attn.shape
+        x = ttnn.permute(attn, (0, 2, 1, 3))  # [B, S, num_heads, head_dim]
+        x = ttnn.reshape(x, [batch, 1, seq_len, self.num_heads * self.head_dim])  # [B, 1, S, num_heads*head_dim]
+
+        in_per_group = self.num_heads * self.head_dim // self.o_groups
+        groups = []
+        for g in range(self.o_groups):
+            xg = ttnn.slice(x, [0, 0, 0, g * in_per_group], [batch, 1, seq_len, (g + 1) * in_per_group])
+            groups.append(ttnn.linear(xg, self.wo_a[g], memory_config=self.memory_config))
+        grouped = ttnn.concat(groups, dim=-1)  # [B, 1, S, o_groups * o_lora_rank]
+        return ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)  # [B, 1, S, hidden]
+
+    def forward(self, hidden_states, position_ids: torch.Tensor):
+        """Full HCA block (prefill, single-shot), mirrors ``DeepseekV4Attention.forward``.
+        ``hidden_states`` TTNN [B, 1, S, hidden]; ``position_ids`` torch [B, S]. Returns
+        [B, 1, S, hidden]: query/kv stems -> compressor -> attention core -> output proj."""
+        q = self._q_stem(hidden_states, position_ids)
+        sliding_kv = self._kv_stem(hidden_states, position_ids)
+        compressed_kv, block_bias = self.compressor(hidden_states, position_ids)
+        attn = self._attention(q, sliding_kv, compressed_kv, block_bias, position_ids)
+        return self._o_proj(attn)
