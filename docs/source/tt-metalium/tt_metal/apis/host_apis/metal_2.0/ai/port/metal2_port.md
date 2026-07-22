@@ -656,9 +656,9 @@ Resolve the legacy DM kernel's effective `(processor, noc, noc_mode)` — the *v
 
 #### Compute kernels
 
-The compute config has **two sources, and you must consult both** — the second is the one the "did the helper cover everything?" instinct misses.
+**First, determine how the legacy op builds its compute config, and mirror that.** The config is constructed one of two ways; the port keeps whichever the op uses. This matters because the two config structs default *opposite* ways — the TTNN helper toward **high performance**, the Metal struct toward **high precision** — so moving an op from one style to the other silently changes any field you don't carry over by hand. Whichever style the op uses, two further Metal-only fields fall outside the helper — usually left at their legacy-matching defaults, occasionally set; see *Both styles* below.
 
-1. **The TTNN `ComputeKernelConfig`** — the op-level knobs. Most ops carry one; translate it with `to_compute_hardware_config(device->arch(), config)` (from `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`). Like the DM helper, it selects the generation and returns the matching variant. It covers four knobs, two of them with a representation change baked in:
+**Style A — the op resolves a TTNN `ComputeKernelConfig`** (via `init_device_compute_kernel_config` / `get_compute_kernel_config_args`; most ops do this). Translate the config the op resolved with `to_compute_hardware_config(device->arch(), config)` (from `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`). Like the DM helper, it selects the generation and returns the matching variant. It carries four knobs, two of them with a representation change baked in:
 
    | legacy `ComputeConfig` | Metal 2.0 (`ComputeGen1Config`) | transform |
    |---|---|---|
@@ -667,7 +667,9 @@ The compute config has **two sources, and you must consult both** — the second
    | `fp32_dest_acc_en` | `enable_32_bit_dest` | 1:1 |
    | `dst_full_sync_en` | `double_buffer_dest` | **inverted**: `double_buffer_dest = !dst_full_sync_en` |
 
-2. **The legacy metal `ComputeConfig` at the compute kernel's creation site** — two fields the TTNN config never carried, so the helper *structurally cannot* set them. Sweep the legacy `ComputeConfig{}` and set each by hand on the returned Gen1 config (via `std::get<ComputeGen1Config>(compute_hw).<field> = …`):
+**Style B — the op sets a Metal `ComputeConfig` / `ComputeConfigDescriptor` directly** (literal or computed field values, with no TTNN `ComputeKernelConfig` feeding them). Build a `ComputeGen1Config` directly and copy each field the op set, using the same table above — minding the two non-1:1 transforms (the `math_approx_mode` bool → `Precision` enum, and the `dst_full_sync_en` → `double_buffer_dest` **inversion**). Fields the op left at their Metal defaults need no action: Metal 2.0's `ComputeGen1Config` defaults match the legacy `ComputeConfig` defaults exactly, so an unset field reproduces the legacy value. **Don't reroute these through the TTNN helper to save typing** — the helper's defaults are the high-performance ones, so any field you didn't explicitly copy would flip.
+
+**Both styles — check two Metal-only fields the helper can't reach.** These live only on the Metal side, so the TTNN helper *structurally cannot* set them — but both usually stay at their defaults, which match legacy, so most ports touch neither. Set a field by hand only where the legacy `ComputeConfig{}` set it non-default; the one *forced* exception is `unpack_modes` under FP32, where Metal 2.0 requires an entry legacy didn't (item below). Where a field does need setting, apply it on the Gen1 config (Style A: via `std::get<ComputeGen1Config>(compute_hw).<field> = …` into the returned variant; Style B: on the config you built):
 
    - **`bfp_pack_precision_mode`** (legacy `bfp8_pack_precise`). Rare; a clean bool→enum. Gen1-only — Gen2 replaces BFP with MXFP and has no such field:
 
