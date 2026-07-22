@@ -2,24 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures + helpers for the DFlash drafter tests (issue #49586).
-
-Mirrors the ``deepseek_v3_d_p/tests/conftest.py`` style: env-resolved *resource* fixtures — the real HF
-reference drafter, its device config, and its weights — built on top of ``_``-prefixed support helpers
-(the deepseek conftest does the same with ``_resolve_*`` / ``_check_pretrained_available``). Both
-``test_dflash.py`` (device-vs-HF on a synthetic context feature) and ``test_dflash_prefill_integration.py``
-(device-vs-HF on the real 61-layer verifier's hiddens) consume these instead of hand-rolling the setup.
-
-``$DFLASH_HF_MODEL`` must point at a Kimi-*-DFlash checkout dir (``config.json`` [+ ``model.safetensors``
-for the pretrained axis]); the modeling *code* is the vendored ``reference/speculative_decoding/dflash/
-dflash.py`` — not a ``.py`` in the checkout. Fixtures ``pytest.skip`` cleanly when the model can't be found
-or built.
-
-The ``use_pretrained`` fixture parametrizes both tests over ``[random, pretrained]``; the drafter
-resources depend on it, so the SAME weights (seeded-random or the real checkpoint) feed BOTH the device
-drafter and the HF reference — required for a meaningful PCC.
-"""
-
 import os
 
 import pytest
@@ -30,7 +12,7 @@ from models.demos.deepseek_v3_d_p.tt.speculative_decoding.dflash.dflash_drafter_
 HF_ENV = "DFLASH_HF_MODEL"
 
 
-# --------------------------------------------------------------------------------------- support helpers
+# helpers
 def _is_drafter(m) -> bool:
     return all(hasattr(m, a) for a in ("fc", "hidden_norm", "layers", "target_layer_ids"))
 
@@ -209,7 +191,7 @@ def _hf_context_kv(model, cfg: DFlashDrafterConfig, ctx: torch.Tensor, q_len: in
     return out
 
 
-# --------------------------------------------------------------------------------------- fixtures
+# fixtures
 @pytest.fixture
 def use_pretrained(request) -> bool:
     """Weight axis for the drafter (and, in the integration test, the verifier): ``random`` = seeded
