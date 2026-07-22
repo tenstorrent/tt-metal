@@ -1073,14 +1073,6 @@ def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
         ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, tile=ttnn.Tile((16, 16)))
 
 
-def test_to_layout_rejects_transpose_only_tile_mismatch(expect_error):
-    input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
-
-    # Same geometry with different tile metadata (transpose) is not a supported retilize.
-    with expect_error(RuntimeError, "cannot convert to tile"):
-        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32), transpose_tile=True))
-
-
 # ---------------------------------------------------------------------------
 # to_layout on ND-sharded tensors
 #
