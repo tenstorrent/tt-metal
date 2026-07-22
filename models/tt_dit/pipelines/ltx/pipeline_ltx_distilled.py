@@ -1266,14 +1266,26 @@ class LTXDistilledPipeline(LTXPipeline):
             ref_path, ref_strength = reference_video
             self._build_ref_vae_encoders(ref_pixel_frames, height, width)
             t0 = time.time()
-            ref_clip_s1 = self._load_reference_video(ref_path, s1_height, s1_width, ref_pixel_frames)
-            ref_clip_full = self._load_reference_video(ref_path, height, width, ref_pixel_frames)
-            ref_latent_s1 = self.encode_image(ref_clip_s1, encoder=self.vae_ref_encoder_s1)
-            ref_latent_full = self.encode_image(ref_clip_full, encoder=self.vae_ref_encoder_full)
+            # Memoized like _i2v_cond_cache, and for the same reason: the VAE encoder is eager, and an
+            # encode issued AFTER a denoise trace replay deadlocks the device in the encoder's
+            # gathered read-back (synchronize_device times out; chips drop off the PCIe bus). A
+            # long-lived worker replays traces on its first gen, so an un-cached re-encode kills its
+            # second reference job. The encode is deterministic in (path, R, resolution).
+            key = (ref_path, ref_pixel_frames, height, width)
+            cached = self._ref_latent_cache.get(key)
+            if cached is not None:
+                ref_latent_s1, ref_latent_full = cached
+            else:
+                ref_clip_s1 = self._load_reference_video(ref_path, s1_height, s1_width, ref_pixel_frames)
+                ref_clip_full = self._load_reference_video(ref_path, height, width, ref_pixel_frames)
+                ref_latent_s1 = self.encode_image(ref_clip_s1, encoder=self.vae_ref_encoder_s1)
+                ref_latent_full = self.encode_image(ref_clip_full, encoder=self.vae_ref_encoder_full)
+                self._ref_latent_cache[key] = (ref_latent_s1, ref_latent_full)
             timings.append(("Reference encode", time.time() - t0))
             logger.info(
                 f"IC-LoRA reference {ref_path}: {ref_pixel_frames} looped px frames -> "
-                f"{tuple(ref_latent_full.shape)} latent (strength={ref_strength}) in {time.time() - t0:.1f}s"
+                f"{tuple(ref_latent_full.shape)} latent (strength={ref_strength}) "
+                f"{'(cached)' if cached is not None else ''}in {time.time() - t0:.1f}s"
             )
 
         # IC-LoRA runs on a wider (target+reference) sequence, so it captures / replays its OWN trace

@@ -360,6 +360,9 @@ class LTXPipeline:
         # wasteful and — under a traced replay pass — has hung the device; the encode is
         # deterministic in (path, resolution), so cache the host result and reuse it.
         self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
+        # Same memoization for IC-LoRA reference sheets, keyed by (path, looped frames, H, W) since
+        # the reference is encoded at both stage resolutions: (s1_latent, full_latent).
+        self._ref_latent_cache: dict[tuple[str, int, int, int], tuple[torch.Tensor, torch.Tensor]] = {}
         self.upsampler: LTXLatentUpsampler | None = None
         # Audio decode stack lives behind the adopted LTXAudioDecoderAdapter (ltx-perf refactor).
         # tt_mel_decoder / tt_vocoder_with_bwe are read-only properties delegating to it.

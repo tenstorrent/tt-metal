@@ -313,6 +313,7 @@ def _make_generate_pipe():
     obj.vae_ref_encoder_full = mock.MagicMock(name="ref_enc_full")
     obj.upsampler = mock.MagicMock(name="upsampler")
     obj._i2v_cond_cache = {}
+    obj._ref_latent_cache = {}
 
     obj._device_embed_cache_path = mock.MagicMock(return_value="/nonexistent/embed/cache")
     obj.gemma_encoder_pair = SimpleNamespace(ensure_loaded=mock.MagicMock())
@@ -428,3 +429,19 @@ def test_generate_ref_plus_append_token_asserts(monkeypatch, expect_error):
         r"reference conditioning .*reference_video.* is mutually exclusive with append-token keyframe conditioning",
     ):
         obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/ref.png", 1.0))
+
+
+def test_second_reference_gen_reuses_the_cached_latents(monkeypatch):
+    """A repeat sheet must NOT re-encode: the eager VAE encode deadlocks the device when it follows a
+    denoise trace replay, which is exactly what the second gen of a long-lived worker does."""
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.delenv("LTX_GEN_EAGER_STAGES", raising=False)
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    obj, _ns = _make_generate_pipe()
+    for _ in range(3):
+        obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/ref.png", 1.0))
+    assert obj.encode_image.call_count == 2, "one encode per stage, once — not once per generation"
+
+    # A different sheet (or resolution) is a genuine miss and must still encode.
+    obj.generate("a prompt", num_frames=17, height=64, width=64, reference_video=("/tmp/other.png", 1.0))
+    assert obj.encode_image.call_count == 4
