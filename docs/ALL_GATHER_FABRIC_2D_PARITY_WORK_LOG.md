@@ -307,3 +307,104 @@ The fresh ten-run Fabric2D stability measurements are:
 Fabric2D remains above the 90 GB/s stretch goal for both formats, stays within
 4.3% (BF16) and 3.1% (scaled FP8) of its matched Fabric1D control, and keeps
 p90 less than 1% above median.
+
+## 2026-07-22: production ND-sharded packet coalescing
+
+### Reproducing the remaining sparse-MLA long regression
+
+The eight-rank interleaved fixture remained above 90 GB/s, but the production
+4x2 sparse-MLA long proxy still showed an approximately 11.27 ms main gather.
+An exact isolated fixture was added for the two concurrent four-rank SP lines:
+
+- `64,640` rows per device, matching one SP rank at the long-cache point;
+- BF16 `1,152 B` and scaled-FP8 `704 B` rows;
+- persistent interleaved-DRAM output;
+- either interleaved input or the production 32-row, block-cyclic ND-sharded
+  DRAM cache layout;
+- seven profiled samples after compile and warmup;
+- native-unicast kernel-source assertion and a `40 GB/s` regression floor.
+
+Before the fix, scaled FP8 measured:
+
+| Input storage | Median | Effective receive BW |
+| --- | ---: | ---: |
+| interleaved DRAM | 2.864 ms | 47.659 GB/s |
+| production ND-sharded DRAM | 11.275 ms | 12.108 GB/s |
+
+The ND-sharded result reproduced the model's main gather and showed that the
+transport and four-rank line algorithm were not the bottleneck.
+
+### Root cause and generic fix
+
+The native unicast factory enabled its destination-bank-owned schedule only
+when both the input and output were interleaved. A production ND-sharded cache
+therefore used the generic contiguous worker partition. Its writer could emit
+at most the four entries supported by one NOC scatter command, producing only
+`2,816 B` scaled-FP8 or `4,608 B` BF16 payloads.
+
+The source reader already uses `TensorAccessor`, which resolves arbitrary
+logical pages correctly for ND-sharded inputs. Bank ownership is required only
+for the interleaved destination. The retained fix therefore removes the input
+interleaving requirement while preserving all output geometry, DRAM, row-major,
+slice-divisibility, and resource checks. This allows destination-bank-local
+workers to pack twenty FP8 rows (`14,080 B`) or twelve BF16 rows (`13,824 B`)
+under the `14,336 B` Fabric payload ceiling.
+
+There is no dtype, model, exact-shape, environment-variable, or public API gate.
+Non-interleaved outputs and unsupported geometries retain the generic schedule.
+
+Post-fix production-layout results are:
+
+| Format | Median | Effective receive BW |
+| --- | ---: | ---: |
+| BF16 | 4.707 ms | 47.458 GB/s |
+| scaled FP8 | 2.864 ms | 47.663 GB/s |
+
+Scaled FP8 improves by `3.94x`; interleaved controls remain unchanged. Exact
+four-rank correctness passes on both mesh axes for BF16/scaled FP8, fresh and
+persistent outputs, and interleaved/ND-sharded inputs (`16/16` total, including
+the pre-existing interleaved cases).
+
+### Product A/B after the fix
+
+The complete sparse-MLA performance matrix passed (`12/12`). Device-program
+critical-path time versus the original `6c5573df7a1` baseline is:
+
+| Model | Cache | Warm | Cold | Long |
+| --- | --- | ---: | ---: | ---: |
+| DeepSeek V3.2 | BF16 | 12.570 -> 11.241 ms (`+10.6%`) | 118.699 -> 112.836 ms (`+4.9%`) | 32.810 -> 26.496 ms (`+19.2%`) |
+| DeepSeek V3.2 | scaled FP8 | 11.187 -> 10.074 ms (`+9.9%`) | 104.868 -> 98.928 ms (`+5.7%`) | 27.964 -> 23.826 ms (`+14.8%`) |
+| GLM 5.1 | BF16 | 10.486 -> 9.504 ms (`+9.4%`) | 96.245 -> 90.427 ms (`+6.0%`) | 27.601 -> 21.353 ms (`+22.6%`) |
+| GLM 5.1 | scaled FP8 | 8.915 -> 7.984 ms (`+10.4%`) | 83.032 -> 77.126 ms (`+7.1%`) | 22.464 -> 18.280 ms (`+18.6%`) |
+
+Every scenario is faster than the original baseline. In the DeepSeek scaled-FP8
+long case, the five CCL programs total 4.479 ms instead of 8.311 ms at baseline;
+the main persistent gather is 2.864 ms instead of 5.752 ms.
+
+### Final release qualification on this box
+
+All hardware pytest runs used `scripts/run_safe_pytest.sh`, release firmware,
+and no `--dev`:
+
+- `./build_metal.sh --release`: passed with warnings as errors;
+- route-plan host tests: `7/7` passed;
+- Fabric channel allocator host tests: `2/2` passed;
+- matched eight-rank Fabric1D/Fabric2D correctness/performance matrix: `12/12`
+  passed;
+- ten-run cached Fabric2D stability: `2/2` passed;
+- exact four-rank interleaved/ND-sharded perf matrix: `4/4` passed;
+- complete sparse-MLA correctness suite: `39/39` passed in 918.05 seconds;
+- complete sparse-MLA performance suite (plus dense controls): `27/27` passed.
+
+The final matched 8x1 performance controls are:
+
+| Format | Fabric | Median | Minimum | p90 | Effective receive BW |
+| --- | --- | ---: | ---: | ---: | ---: |
+| BF16 | Fabric1D | 5.565 ms | 5.563 ms | 5.577 ms | 94.964 GB/s |
+| BF16 | Fabric2D | 5.821 ms | 5.803 ms | 5.839 ms | 90.791 GB/s |
+| scaled FP8 | Fabric1D | 3.432 ms | 3.423 ms | 3.435 ms | 94.102 GB/s |
+| scaled FP8 | Fabric2D | 3.526 ms | 3.522 ms | 3.539 ms | 91.583 GB/s |
+
+Fabric2D remains above the 90 GB/s stretch goal, within 4.4% (BF16) and 2.7%
+(scaled FP8) of Fabric1D, while the production ND-sharded fix removes the last
+observed sparse-MLA long regression.

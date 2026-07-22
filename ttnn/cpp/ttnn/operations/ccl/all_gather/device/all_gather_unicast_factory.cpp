@@ -369,15 +369,19 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t num_dram_banks = mesh_device->num_dram_channels();
-    const bool bank_owned_schedule =
+    // Assign logical pages by destination DRAM bank whenever the output is
+    // interleaved. TensorAccessor still resolves each source page correctly
+    // when the input uses an ND-sharded/block-cyclic DRAM layout. Keeping the
+    // destination pages bank-local lets the writer coalesce small rows into a
+    // full Fabric packet instead of falling back to four-entry scatter writes.
+    const bool output_bank_owned_schedule =
         input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && input_tensor.buffer()->is_dram() &&
         output_tensor.buffer()->is_dram() &&
-        input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_chunks_per_page == 1 && split_factor == 1 && output_chunks_per_stripe == num_input_pages &&
         total_slices >= num_dram_banks && total_slices % num_dram_banks == 0 && num_dram_banks % num_links == 0 &&
         workers_per_dir % (num_dram_banks / num_links) == 0 && num_input_pages % total_slices == 0;
-    const uint32_t slice_step = bank_owned_schedule ? num_dram_banks : 1;
+    const uint32_t slice_step = output_bank_owned_schedule ? num_dram_banks : 1;
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -492,7 +496,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const uint32_t input_pages_per_slice = num_input_pages / total_slices;
             const uint32_t remainder = num_input_pages % total_slices;
             uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
-            if (bank_owned_schedule) {
+            if (output_bank_owned_schedule) {
                 const uint32_t banks_per_link = num_dram_banks / num_links;
                 const uint32_t slices_per_bank = workers_per_dir / banks_per_link;
                 const uint32_t bank = link + (w / slices_per_bank) * num_links;
@@ -501,15 +505,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     bank + static_cast<uint64_t>(slice_in_bank) * input_pages_per_slice * num_dram_banks;
             }
             const uint32_t input_tile_id_end =
-                bank_owned_schedule ? input_tile_id_start + input_pages_per_slice * num_dram_banks
-                                    : ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
+                output_bank_owned_schedule
+                    ? input_tile_id_start + input_pages_per_slice * num_dram_banks
+                    : ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
             const uint32_t local_output_start =
-                bank_owned_schedule
+                output_bank_owned_schedule
                     ? input_tile_id_start
                     : (static_cast<uint64_t>(input_tile_id_start) * num_output_chunks) / num_input_pages;
             const uint32_t local_output_end =
-                bank_owned_schedule ? local_output_start + input_pages_per_slice
-                                    : (static_cast<uint64_t>(input_tile_id_end) * num_output_chunks) / num_input_pages;
+                output_bank_owned_schedule
+                    ? local_output_start + input_pages_per_slice
+                    : (static_cast<uint64_t>(input_tile_id_end) * num_output_chunks) / num_input_pages;
             const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
             const uint32_t half = num_worker_output_chunks / 2;
 

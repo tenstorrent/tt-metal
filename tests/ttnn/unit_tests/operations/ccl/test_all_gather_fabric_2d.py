@@ -26,6 +26,25 @@ def _fabric_router_config():
     return config
 
 
+def _sparse_mla_nd_sharded_dram_config(mesh_device, width):
+    """Production KV-cache layout: 32-row chunks round-robin over DRAM banks."""
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0))
+            for bank in range(mesh_device.dram_grid_size().x)
+        ]
+    )
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, 32, width],
+            grid=dram_grid,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
 _MATCHED_RING_DEVICE_PARAMS = [
     pytest.param(
         {
@@ -895,6 +914,7 @@ def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width,
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("use_persistent_output", [False, True], ids=["fresh_output", "persistent_output"])
+@pytest.mark.parametrize("input_storage", ["interleaved", "nd_sharded"])
 @pytest.mark.parametrize(
     "dtype,width",
     [
@@ -903,7 +923,7 @@ def test_all_gather_matched_two_rank_line_correctness(mesh_device, dtype, width,
     ],
 )
 def test_all_gather_fabric_2d_matched_four_rank_line_correctness(
-    mesh_device, cluster_axis, use_persistent_output, dtype, width
+    mesh_device, cluster_axis, use_persistent_output, input_storage, dtype, width
 ):
     """Exercise the automatic one-hop backend on four-rank lines in both mesh orientations."""
     ranks = mesh_device.shape[cluster_axis]
@@ -920,6 +940,10 @@ def test_all_gather_fabric_2d_matched_four_rank_line_correctness(
         dtype,
         ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
     )
+    if input_storage == "nd_sharded":
+        tt_input = ttnn.to_memory_config(tt_input, _sparse_mla_nd_sharded_dram_config(mesh_device, width))
+    else:
+        assert input_storage == "interleaved"
     persistent_output = None
     if use_persistent_output:
         persistent_output = _make_row_major_mesh_tensor(
@@ -1014,6 +1038,117 @@ def test_all_gather_matched_two_rank_line_perf(mesh_device, dtype, width, expect
     print(
         f"ISOLATED_AG_TERMINAL fabric={_fabric_name(ttnn.get_fabric_config())} "
         f"dtype={dtype} ranks=2 links=2 rows_per_device={rows_per_device} page_size={page_size}B "
+        f"median={median_ns / 1e6:.3f}ms min={min_ns / 1e6:.3f}ms p90={p90_ns / 1e6:.3f}ms "
+        f"effective_receive_bw={bandwidth_gbps:.3f}GB/s "
+        f"samples_ms={[round(value / 1e6, 3) for value in durations_ns]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": _fabric_router_config(),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 1024,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "dtype,width,expected_page_size",
+    [
+        pytest.param(ttnn.bfloat16, 576, 1152, id="bf16_1152b_rows"),
+        pytest.param(ttnn.fp8_e4m3, 656, 704, id="scaled_fp8_704b_rows"),
+    ],
+)
+@pytest.mark.parametrize("input_storage", ["interleaved", "nd_sharded"])
+def test_all_gather_sparse_mla_long_four_rank_line_perf(mesh_device, dtype, width, expected_page_size, input_storage):
+    """Exact large gather behind the LoudBox 4x2 sparse-MLA long proxy.
+
+    The two mesh columns execute independent four-rank SP lines concurrently.
+    Each rank owns the same 64,640-row cache depth as one Galaxy SP rank in the
+    512K-token case, and writes into the same persistent interleaved-DRAM shape.
+    """
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.skip("native all-gather perf benchmark requires an active realtime device profiler")
+
+    ranks = mesh_device.shape[0]
+    assert tuple(mesh_device.shape) == (4, 2)
+    rows_per_device = 64640
+    global_shape = (1, 1, rows_per_device * ranks, width)
+    if input_storage == "interleaved":
+        torch.manual_seed(0)
+        torch_input = torch.rand(global_shape, dtype=torch.bfloat16)
+        tt_input = _make_row_major_mesh_tensor(
+            mesh_device,
+            torch_input,
+            dtype,
+            ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=tuple(mesh_device.shape)),
+        )
+    else:
+        assert input_storage == "nd_sharded"
+        tt_input = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, rows_per_device, width]),
+            dtype,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            _sparse_mla_nd_sharded_dram_config(mesh_device, width),
+        )
+        # Match sparse-MLA's cache construction: every chip owns a local
+        # block-cyclic shard even though its distributed topology is replicated.
+        mesh_coords = list(ttnn.MeshCoordinateRange(ttnn.MeshShape(*tuple(mesh_device.shape))))
+        tt_input.update_tensor_topology(
+            ttnn.TensorTopology(
+                ttnn.MeshShape([mesh_device.shape[0] * mesh_device.shape[1]]),
+                [ttnn.PlacementReplicate()],
+                mesh_coords,
+            )
+        )
+    persistent_output = ttnn.empty(
+        global_shape,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    page_size = ttnn.get_device_tensors(tt_input)[0].buffer_aligned_page_size()
+    assert page_size == expected_page_size
+
+    def run_ag():
+        return ttnn.all_gather(
+            tt_input,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=0,
+            output_tensor=persistent_output,
+        )
+
+    run_ag()
+    ttnn.synchronize_device(mesh_device)
+    run_ag()
+    ttnn.synchronize_device(mesh_device)
+    _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=False, expected_unicast=True)
+    durations_ns = [
+        _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=False, expected_unicast=True)[0]
+        for _ in range(7)
+    ]
+    median_ns = statistics.median(durations_ns)
+    min_ns = min(durations_ns)
+    p90_ns = sorted(durations_ns)[6]
+    bytes_received_per_rank = rows_per_device * page_size * (ranks - 1)
+    bandwidth_gbps = bytes_received_per_rank / median_ns
+    assert bandwidth_gbps >= 40.0, (
+        f"four-rank sparse-MLA line bandwidth regressed: {bandwidth_gbps:.3f} GB/s; "
+        "small-row payloads should use destination-bank packet coalescing"
+    )
+    print(
+        f"ISOLATED_AG_FOUR_RANK_LINE fabric={_fabric_name(ttnn.get_fabric_config())} "
+        f"dtype={dtype} input_storage={input_storage} ranks={ranks} "
+        f"concurrent_lines={mesh_device.shape[1]} links=2 "
+        f"rows_per_device={rows_per_device} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms min={min_ns / 1e6:.3f}ms p90={p90_ns / 1e6:.3f}ms "
         f"effective_receive_bw={bandwidth_gbps:.3f}GB/s "
         f"samples_ms={[round(value / 1e6, 3) for value in durations_ns]}"
