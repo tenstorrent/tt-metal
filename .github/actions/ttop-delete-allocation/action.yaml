@@ -69,7 +69,6 @@ runs:
           fi
 
           output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" delete "allocation/${ALLOCATION_NAME}" --ignore-not-found 2>&1) && rc=0 || rc=$?
-          
           if ((rc==0)); then
             echo "::notice::Allocation ${ALLOCATION_NAME} is deleted."
             exit 0
