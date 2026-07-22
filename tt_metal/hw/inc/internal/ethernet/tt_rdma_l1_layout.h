@@ -82,6 +82,13 @@
 #define TT_RDMA_HB_ADDR (TT_RDMA_RCB_ADDR + 0x0u)    // heartbeat counter: kernel -> observer/host
 #define TT_RDMA_STOP_ADDR (TT_RDMA_RCB_ADDR + 0x4u)  // graceful-stop flag: host -> kernel (0=run, !=0=stop)
 
+// TXQ the on-core RDMA kernel emits on. Base FW owns q0 (chip-info/telemetry), so RDMA uses a
+// separate queue + its own TXPKT_CFG row. Shared here (host-safe) so host tools can report it;
+// tt_rdma_eth_tx.h picks it up via its #ifndef guard.
+#ifndef TT_RDMA_TX_QUEUE
+#define TT_RDMA_TX_QUEUE 2u
+#endif
+
 // NOTE: the SEND landing ring (RxWqeRing) is NOT in L1 — it is DMA-pushed to a host hugepage
 // at +128 KB (reverse of the TX DMA-pull). See tt-rdma-fw-arch-rx.md / host-sdk.md.
 

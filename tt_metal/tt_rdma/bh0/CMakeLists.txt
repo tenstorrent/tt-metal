@@ -28,3 +28,8 @@ target_include_directories(bh0_heartbeat PRIVATE ${PROJECT_SOURCE_DIR})
 # used by the deployment/eth tests. (If a standalone main() cannot link against it because
 # of a gtest main dependency, use the gtest alternative above instead.)
 target_link_libraries(bh0_heartbeat PRIVATE test_metal_common_libs)
+
+# BH.1 / M-1a — first TT-RDMA-v1 PROBE frame on the wire (loads bh_rdma_send_probe.cpp).
+add_executable(bh1_send_probe bh1_send_probe_host.cpp)
+target_include_directories(bh1_send_probe PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_send_probe PRIVATE test_metal_common_libs)
