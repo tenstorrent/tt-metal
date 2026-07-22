@@ -18,6 +18,19 @@ CHIP_IN_USE lock the runner already holds, and deadlock.
 `run_schedule()` takes injectable seams (push_fn / now_fn / sleep_fn / rng) so the scheduling logic
 can be unit-tested with no device and reproduced deterministically.
 
+Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env vars. Point at a
+  manifest with ``--manifest <path>`` (or PREFILL_PRODUCER_MANIFEST); it is applied at startup via
+  setdefault, so any explicitly exported PREFILL_* env var still overrides it. Typed blocks map to the
+  env vars documented below; a verbatim ``env:`` block passes any raw PREFILL_* key through (and wins
+  over the typed blocks). See topology_configuration/producer_manifest_example.yaml. Schema:
+    model:     {variant, num_layers, max_seq_len, chunk_size}
+    transport: {sp, tp, h2d_service_id, connect_timeout_s}
+    workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
+                mid_end_prob, seed, check_pcc, trace_dir}
+    migration: {issue, layer_by_layer, dest_endpoint_id, dst_slot_offset, timeout_ms, done_file,
+                client_dir, cmd_queue, table_queue, resp_queue, table_path, device_map_path}
+    env:       {ANY_PREFILL_KEY: value}   # escape hatch for anything unmodeled
+
 Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order run):
   PREFILL_NUM_USERS              concurrent cache slots (default 1)
   PREFILL_PRODUCER_CHUNKS        chunks per request: "N" fixed, or "min,max" random (default "11")
@@ -54,6 +67,9 @@ Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHU
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
 Usage:
+    # From a manifest (env still overrides individual knobs):
+    python -m models.demos.common.prefill.runners.prefill_producer \
+      --manifest models/demos/common/prefill/runners/topology_configuration/producer_manifest_example.yaml
     # 1 user, full depth, with PCC:
     PREFILL_PRODUCER_CHUNKS=11 PREFILL_PRODUCER_CHECK_PCC=1 \
       python -m models.demos.common.prefill.runners.prefill_producer
@@ -64,6 +80,7 @@ Usage:
       python -m models.demos.common.prefill.runners.prefill_producer
 """
 
+import argparse
 import os
 import random
 import struct
@@ -78,6 +95,97 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
+
+
+def _apply_manifest_env(manifest_path: str) -> None:
+    """Populate the PREFILL_* env from a YAML producer manifest (setdefault => an explicitly exported
+    env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim ``env:`` passthrough
+    (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed ``model`` /
+    ``transport`` / ``workload`` / ``migration`` blocks mapped to the same env vars the module
+    constants and _config_from_env() read. MUST run before those reads (see the call below)."""
+    import yaml
+
+    with open(manifest_path) as f:
+        manifest = yaml.safe_load(f) or {}
+
+    def sd(key, val):  # setdefault, stringified; skips None so an absent field leaves the default
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    def sd_bool(key, val):  # YAML true/false -> the "1"/"0" the env parsing expects
+        if val is not None:
+            os.environ.setdefault(key, "1" if val else "0")
+
+    # 1) verbatim escape hatch first — a raw PREFILL_* key wins over the typed blocks (setdefault:
+    #    first write wins; a shell-exported env var pre-empts both).
+    for key, val in (manifest.get("env") or {}).items():
+        sd(key, val)
+
+    # 2) typed blocks -> PREFILL_* env.
+    model = manifest.get("model") or {}
+    sd("PREFILL_MODEL", model.get("variant"))
+    sd("PREFILL_NUM_LAYERS", model.get("num_layers"))
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_CHUNK_SIZE", model.get("chunk_size"))
+
+    transport = manifest.get("transport") or {}
+    sd("PREFILL_SP", transport.get("sp"))
+    sd("PREFILL_TP", transport.get("tp"))
+    sd("PREFILL_H2D_SERVICE_ID", transport.get("h2d_service_id"))
+    sd("PREFILL_H2D_CONNECT_TIMEOUT", transport.get("connect_timeout_s"))
+
+    workload = manifest.get("workload") or {}
+    sd("PREFILL_NUM_USERS", workload.get("num_users"))
+    sd("PREFILL_PRODUCER_CHUNKS", workload.get("chunks"))
+    sd("PREFILL_PRODUCER_MAX_REQUESTS", workload.get("max_requests"))
+    sd("PREFILL_PRODUCER_DURATION_S", workload.get("duration_s"))
+    sd("PREFILL_PRODUCER_INTERLEAVE", workload.get("interleave"))
+    sd("PREFILL_PRODUCER_P_GAP", workload.get("p_gap"))
+    sd("PREFILL_PRODUCER_P_BURST", workload.get("p_burst"))
+    sd("PREFILL_PRODUCER_MID_END_PROB", workload.get("mid_end_prob"))
+    sd("PREFILL_PRODUCER_SEED", workload.get("seed"))
+    sd_bool("PREFILL_PRODUCER_CHECK_PCC", workload.get("check_pcc"))
+    sd("PREFILL_TRACE_DIR", workload.get("trace_dir"))
+    gap_ms = workload.get("gap_ms")  # accept a "lo,hi" string or a [lo, hi] list
+    if gap_ms is not None:
+        sd("PREFILL_PRODUCER_GAP_MS", gap_ms if isinstance(gap_ms, str) else ",".join(str(x) for x in gap_ms))
+
+    migration = manifest.get("migration") or {}
+    sd_bool("PREFILL_PRODUCER_ISSUE_MIGRATION", migration.get("issue"))
+    sd_bool("PREFILL_MIGRATION_LAYER_BY_LAYER", migration.get("layer_by_layer"))
+    sd("PREFILL_MIGRATION_DEST_ENDPOINT_ID", migration.get("dest_endpoint_id"))
+    sd("PREFILL_MIGRATION_DST_SLOT_OFFSET", migration.get("dst_slot_offset"))
+    sd("PREFILL_MIGRATION_TIMEOUT_MS", migration.get("timeout_ms"))
+    sd("MIGRATION_DONE_FILE", migration.get("done_file"))
+    sd("PREFILL_MIGRATION_CLIENT_DIR", migration.get("client_dir"))
+    sd("PREFILL_MIGRATION_CMD_QUEUE", migration.get("cmd_queue"))
+    sd("PREFILL_MIGRATION_TABLE_QUEUE", migration.get("table_queue"))
+    sd("PREFILL_MIGRATION_RESP_QUEUE", migration.get("resp_queue"))
+    sd("PREFILL_MIGRATION_TABLE_PATH", migration.get("table_path"))
+    sd("PREFILL_MIGRATION_DEVICE_MAP_PATH", migration.get("device_map_path"))
+
+    logger.info(f"[producer] applied manifest {manifest_path}")
+
+
+def _resolve_manifest_path() -> str:
+    """Manifest path from ``--manifest``/``-m`` on the CLI (honored only when this module is run as a
+    script, so importing it — e.g. from a unit test — never parses a host process's argv) or, failing
+    that, the PREFILL_PRODUCER_MANIFEST env var. CLI wins."""
+    if __name__ == "__main__":
+        argv = sys.argv[1:]
+        for i, arg in enumerate(argv):
+            if arg in ("--manifest", "-m") and i + 1 < len(argv):
+                return argv[i + 1]
+            if arg.startswith("--manifest="):
+                return arg.split("=", 1)[1]
+    return os.environ.get("PREFILL_PRODUCER_MANIFEST", "")
+
+
+# Apply the manifest BEFORE the module-level constant + _config_from_env() reads below (setdefault, so
+# env still wins). No-op when neither --manifest nor PREFILL_PRODUCER_MANIFEST is given.
+_manifest_path = _resolve_manifest_path()
+if _manifest_path:
+    _apply_manifest_env(_manifest_path)
 
 # PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end].
 METADATA_SIZE_BYTES = 12
@@ -767,6 +875,22 @@ def _write_migration_done_sentinel(stats: "RunStats", *, dst_slot_offset: int) -
 
 
 def main() -> None:
+    # The manifest (--manifest / PREFILL_PRODUCER_MANIFEST) is already applied at import, before the
+    # module constants were read; parse here too so `--help` documents it and unknown args error out.
+    parser = argparse.ArgumentParser(
+        prog="prefill_producer",
+        description="H2D producer for the prefill runner. Config comes from a YAML manifest "
+        "(--manifest / PREFILL_PRODUCER_MANIFEST) mapped to PREFILL_* env vars, with any explicitly "
+        "exported PREFILL_* env var overriding the manifest.",
+    )
+    parser.add_argument(
+        "--manifest",
+        "-m",
+        default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
+        help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
+    )
+    parser.parse_args()
+
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
