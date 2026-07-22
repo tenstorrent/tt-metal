@@ -10,11 +10,8 @@ import ttnn
 # M-dimension tile height. Use 16 for M16 decode paths; 32 for legacy 32×32 geometry.
 TILE_HEIGHT = 16
 TILE_WIDTH = 32
-# Tiny tile (TILE_HEIGHT < 32) only supports bfloat16 activations; the legacy 32×32 geometry keeps
-# the packed bfloat8_b activation dtype.
-ACT_DTYPE = ttnn.bfloat16 if TILE_HEIGHT < 32 else ttnn.bfloat8_b
-
-_BLOCKED_DTYPES = frozenset({ttnn.bfloat8_b, ttnn.bfloat4_b})
+# Packed bfloat8_b activations at the model tile geometry (tiny tiles now support blocked dtypes).
+ACT_DTYPE = ttnn.bfloat8_b
 
 
 def pi05_tile() -> ttnn.Tile:
@@ -31,12 +28,11 @@ def from_torch_pi05(
     tile: Optional[ttnn.Tile] = None,
     **kwargs: Any,
 ) -> ttnn.Tensor:
-    """Upload a host tensor with the model tile shape when the dtype supports it.
-
-    Blocked dtypes (bf8_b / bf4_b) keep the default 32×32 tile — tiny tile heights are
-    not supported for blocked layouts on device."""
+    """Upload a host tensor with the model tile shape (all dtypes, including blocked bf8_b/bf4_b,
+    now support the tiny tile geometry on device). ROW-MAJOR uploads keep the default tile (a custom
+    tile config is only valid for TILE layout)."""
     upload_tile = tile
-    if upload_tile is None and dtype not in _BLOCKED_DTYPES:
+    if upload_tile is None and layout == ttnn.TILE_LAYOUT:
         upload_tile = pi05_tile()
     return ttnn.from_torch(
         tensor,

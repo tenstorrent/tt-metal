@@ -22,7 +22,6 @@ from models.experimental.pi0_5.tt.tile_config import ACT_DTYPE, TILE_HEIGHT, TIL
 from models.experimental.pi0_5.tt._ttnn_compat import (
     concat_heads_matmul,
     decode_all_supported,
-    kv_sdpa,
     nlp_create_qkv_heads_rope,
 )
 
@@ -144,7 +143,9 @@ def _pws_B(device, w_kn, n_blocks):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    return from_torch_pi05(br, device=device, memory_config=mc, dtype=ttnn.bfloat8_b)
+    # matmul_decode requires its weight (inputB) at a full 32x32 tile (only the activation inputA
+    # rides the tiny tile), so pin the tile explicitly rather than the model's tiny default.
+    return from_torch_pi05(br, device=device, memory_config=mc, dtype=ttnn.bfloat8_b, tile=ttnn.Tile((32, 32)))
 
 
 def _ws_in_mc(device, m, k):
@@ -194,72 +195,41 @@ def _gated_residual(residual, gate, x):
     return out
 
 
-def _tiny_to_32_tile(x, device):
-    """Retile a tiny (M<32) TILE-layout activation up to a 32x32 tile, zero-padding the sequence
-    (dim -2) to a multiple of 32. The pad is done via a tile-layout ``concat`` (padding a tiny tile
-    in place corrupts data, and a non-32-aligned collapsed height can't be untilized), then an
-    untilize -> tilize(32) reinterprets the geometry."""
+def _to_tile32_bf8(x):
+    """Retile a tiny (16-row) TILE activation up to a bf8 32x32 tile, zero-padding the sequence
+    (dim -2) to a multiple of 32. A bf8 tiny tile cannot be detiled directly (untilize corrupts it
+    and upcasts to bf16), and untilize also requires a 32-aligned height, so: cast to bf16, pad the
+    sequence to a multiple of 32 with a TILE-layout concat, untilize, then tilize back to bf8 32x32."""
     import torch
 
-    s = x.shape[-2]
+    b16 = ttnn.typecast(x, ttnn.bfloat16)
+    s = b16.shape[-2]
     s32 = ((s + 31) // 32) * 32
     if s32 != s:
-        shp = list(x.shape)
+        shp = list(b16.shape)
         shp[-2] = s32 - s
-        z = from_torch_pi05(torch.zeros(*shp), dtype=x.dtype, device=device, memory_config=_L1)
-        x = ttnn.concat([x, z], dim=2, memory_config=_L1)
+        z = from_torch_pi05(torch.zeros(*shp), dtype=ttnn.bfloat16, device=x.device(), memory_config=_L1)
+        padded = ttnn.concat([b16, z], dim=2, memory_config=_L1)
+        ttnn.deallocate(b16)
         ttnn.deallocate(z)
-    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.tilize(rm, tile=ttnn.Tile((32, 32)), memory_config=_L1)
+        b16 = padded
+    rm = ttnn.to_layout(b16, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(b16)
+    out = ttnn.tilize(rm, tile=ttnn.Tile((32, 32)), dtype=ttnn.bfloat8_b, memory_config=_L1)
     ttnn.deallocate(rm)
     return out
 
 
-def _sdpa_retile_32(q, k, v, scale, device):
-    """SDPA for a tiny-tile (M<32) activation stream. The flash SDPA kernel is only numerically
-    correct with 32-row query/key tiles (a 16-row tile gives PCC ~0.5), so retile q/k/v up to a
-    32x32 tile, run the standard non-causal SDPA with a padded-key mask, then retile the result back
-    to the tiny tile. This decode path is non-causal full attention (the validated mask semantics),
-    so the only masking required is -inf on the zero-padded key columns."""
-    import torch as _torch
-
-    nh, sq, hd = q.shape[1], q.shape[-2], q.shape[-1]
-    skv = k.shape[-2]
-    sq32 = ((sq + 31) // 32) * 32
-    skv32 = ((skv + 31) // 32) * 32
-
-    q32 = _tiny_to_32_tile(q, device)
-    k32 = _tiny_to_32_tile(k, device)
-    v32 = _tiny_to_32_tile(v, device)
-
-    mask_t = _torch.zeros(1, 1, sq32, skv32)
-    if skv32 > skv:
-        mask_t[:, :, :, skv:] = -1e30
-    mask = ttnn.from_torch(
-        mask_t,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        tile=ttnn.Tile((32, 32)),
-    )
-    out32 = ttnn.transformer.scaled_dot_product_attention(
-        q32,
-        k32,
-        v32,
-        attn_mask=mask,
-        is_causal=False,
-        scale=scale,
-        compute_kernel_config=get_sdpa_compute_kernel_config(),
-        memory_config=_L1,
-    )
-    for t in (q32, k32, v32, mask):
-        ttnn.deallocate(t)
-    rm = ttnn.to_layout(out32, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(out32)
-    rm = ttnn.slice(rm, [0, 0, 0, 0], [q.shape[0], nh, sq, hd])
-    out = ttnn.tilize(rm, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), memory_config=_L1)
+def _to_tile16_bf8(x, seq):
+    """Bring a 32x32-tile activation back down to the model bf8 16x32 tile, keeping the first
+    ``seq`` rows (drops the tile-32 sequence padding)."""
+    b16 = ttnn.typecast(x, ttnn.bfloat16)
+    rm = ttnn.to_layout(b16, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(b16)
+    sliced = ttnn.slice(rm, [0, 0, 0, 0], [rm.shape[0], rm.shape[1], seq, rm.shape[-1]])
     ttnn.deallocate(rm)
+    out = ttnn.tilize(sliced, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), dtype=ttnn.bfloat8_b, memory_config=_L1)
+    ttnn.deallocate(sliced)
     return out
 
 
@@ -357,51 +327,41 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         q, k, v = nlp_create_qkv_heads_rope(qkv, cos, sin, self.num_heads, self.num_kv_heads, memory_config=_L1)
         ttnn.deallocate(qkv)
 
-        # decode_all default: route the small-query MQA expert SDPA through ttnn.kv_sdpa -- a specialized
-        # fused-flash op (reuses the production transformer-SDPA sdpa_standard online-softmax, specialized
-        # for Sq == 1 tile / single KV head / non-causal), ~17% faster per denoise layer at PCC ~0.9999.
-        # Guarded to the supported shape (suffix_len == 32, single KV head); otherwise the tuned ttnn SDPA.
-        # kv_sdpa treats attn_mask as a no-op (non-causal full attention -- validated PCC-equal on the mask).
-        _use_kv_sdpa = (
-            _decode_all_active() and hasattr(ttnn, "kv_sdpa") and int(q.shape[-2]) == 32 and int(self.num_kv_heads) == 1
-        )
-        # When not caching, kv_sdpa reads the resident prefix-KV (past_k/past_v) + the new suffix K/V as
-        # two ranges in its reader, so we skip the two ttnn.concat ops (and the [prefix+suffix] tensor).
-        _kv_fold = _KV_FOLD and _use_kv_sdpa and (past_key_value is not None) and (not use_cache)
-        if _kv_fold:
+        # Tile-32 SDPA. q/k/v leave create-heads at the model tiny (16-row) tile, but the flash SDPA
+        # kernel requires q/k/v to share a tile size and the resident prefix-KV is uploaded at a full
+        # 32x32 bf8 tile. Retile the small suffix q/k/v up to a 32x32 bf8 tile (see _to_tile32_bf8),
+        # concat the tile-32 suffix K/V onto the tile-32 prefix, run SDPA, then bring the [.,32,.]
+        # result back down to the tiny tile for the o-proj / gated residual.
+        suffix_sq = q.shape[-2]
+        q = _to_tile32_bf8(q)
+        k = _to_tile32_bf8(k)
+        v = _to_tile32_bf8(v)
+        if past_key_value is not None:
             past_k, past_v = past_key_value
-            attn_out = kv_sdpa(q, k, v, attn_mask=attention_mask, scale=self.scale, past_k=past_k, past_v=past_v)
-            new_cache = None
-        else:
-            if past_key_value is not None:
-                past_k, past_v = past_key_value
-                k = ttnn.concat([past_k, k], dim=2, memory_config=_L1)
-                v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
-            new_cache = (k, v) if use_cache else None
-            if _use_kv_sdpa:
-                attn_out = kv_sdpa(q, k, v, attn_mask=attention_mask, scale=self.scale)
-            elif TILE_HEIGHT < 32:
-                # Tiny-tile activations: flash SDPA is only correct at a 32-row tile, so run it at
-                # 32x32 and retile back (see _sdpa_retile_32).
-                attn_out = _sdpa_retile_32(q, k, v, self.scale, self.device)
-            else:
-                kv_seq = k.shape[-2]
-                _sdpa_kwargs = {"memory_config": _L1}
-                _sdpa_cores = min(_g.x, self.num_heads * ((q.shape[-2] + 31) // 32))
-                _spc = _denoise_sdpa_pcfg(q.shape[-2], kv_seq, _sdpa_cores, 1)
-                if _spc is not None:
-                    _sdpa_kwargs["program_config"] = _spc
-                attn_out = ttnn.transformer.scaled_dot_product_attention(
-                    q,
-                    k,
-                    v,
-                    attn_mask=attention_mask,
-                    is_causal=False,
-                    scale=self.scale,
-                    compute_kernel_config=get_sdpa_compute_kernel_config(),
-                    **_sdpa_kwargs,
-                )
+            k = ttnn.concat([past_k, k], dim=2, memory_config=_L1)
+            v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
+        new_cache = (k, v) if use_cache else None
+        kv_seq = k.shape[-2]
+        _sdpa_kwargs = {"memory_config": _L1}
+        _sdpa_cores = min(_g.x, self.num_heads * ((q.shape[-2] + 31) // 32))
+        _spc = _denoise_sdpa_pcfg(q.shape[-2], kv_seq, _sdpa_cores, 1)
+        if _spc is not None:
+            _sdpa_kwargs["program_config"] = _spc
+        # This decode-expert SDPA is non-causal full attention over prefix+suffix KV, so the
+        # attention_mask is an all-zero no-op (the flash kernel masks its own KV padding). It is
+        # dropped: SDPA corrupts its output when q/k/v are bfloat8_b but the mask is bfloat16 (see
+        # tests/test_tiny_tile_ttnn_bugs.py::test_sdpa_bf8_mask_corrupts).
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=self.scale,
+            compute_kernel_config=get_sdpa_compute_kernel_config(),
+            **_sdpa_kwargs,
+        )
         ttnn.deallocate(q)
+        attn_out = _to_tile16_bf8(attn_out, suffix_sq)
 
         # Fused concat-heads + O-projection (custom op wrapping the tuned 1D-mcast matmul): attn_out
         # is consumed directly as in0 (concat = contiguous tiles for seq<=1 tile, PCC ~1.0); the

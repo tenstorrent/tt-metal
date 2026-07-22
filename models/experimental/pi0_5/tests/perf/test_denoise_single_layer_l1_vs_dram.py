@@ -155,8 +155,14 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
     stage._prefix_kv = []
     for gi in range(_LO, _HI):
         pk, pv = prefix_kv[gi]
-        pk_dev = from_torch_pi05(pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
-        pv_dev = from_torch_pi05(pv, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Resident prefix-KV is uploaded at a full 32x32 bf8 tile: SDPA needs q/k/v to share a tile
+        # size and the suffix q/k/v are retiled up to 32x32 in the block (see denoise_block SDPA).
+        pk_dev = from_torch_pi05(
+            pk, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+        )
+        pv_dev = from_torch_pi05(
+            pv, dtype=ACT_DTYPE, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG, tile=ttnn.Tile((32, 32))
+        )
         stage._prefix_kv.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]
     cond_dev = from_torch_pi05(adarms_cond, dtype=ttnn.bfloat16, device=submesh)

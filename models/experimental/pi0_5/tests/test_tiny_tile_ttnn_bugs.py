@@ -48,9 +48,8 @@ def _to_dev(t: torch.Tensor, dev, tile_h: int, mem=None):
 def test_sdpa_tiny_tile_numerics(mesh_device, tile_h):
     """ttnn.transformer.scaled_dot_product_attention is numerically wrong with 16-row q/k/v tiles.
 
-    Same inputs at a 32-row tile give PCC ~0.9999; at a 16-row tile PCC collapses to ~0.5. The
-    pi0.5 decode block works around this by retiling q/k/v up to a 32 tile around SDPA
-    (denoise_block._sdpa_retile_32).
+    Same inputs at a 32-row tile give PCC ~0.9999; a 16-row tile historically collapsed to ~0.5
+    (guard against a regression of the tiny-tile SDPA numerics).
     """
     torch.manual_seed(0)
     nh, sq, skv, hd = 8, 32, 1056, 256
@@ -111,4 +110,50 @@ def test_addcmul_tiny_tile_promotes_tile(mesh_device, tile_h):
     assert out_tile == (tile_h, 32), (
         f"addcmul promoted the output tile to {out_tile} (expected ({tile_h}, 32)) at tile_h={tile_h} "
         "(tiny-tile addcmul tile-promotion bug)"
+    )
+
+
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@pytest.mark.parametrize("tile_h", [16, 32], ids=["tile16", "tile32x"])
+def test_sdpa_bf8_mask_corrupts(mesh_device, tile_h):
+    """SDPA corrupts its output when q/k/v are bfloat8_b but attn_mask is bfloat16.
+
+    With bfloat8_b q/k/v at a 16-row tile, non-causal SDPA is correct WITHOUT a mask (PCC ~0.9998),
+    but passing an all-zero (no-op) bfloat16 attn_mask scrambles the result (PCC ~0 / |out| blows up
+    to ~1e38). The same masked call at bfloat16 is fine. The pi0.5 decode block sidesteps this by
+    dropping the no-op mask on its bf8 non-causal SDPA (denoise_block attention forward).
+    """
+    torch.manual_seed(0)
+    nh, sq, skv, hd = 8, 16, 1040, 256
+    scale = 1.0 / (hd**0.5)
+    q = torch.randn(1, nh, sq, hd) * 0.1
+    k = torch.randn(1, 1, skv, hd) * 0.1
+    v = torch.randn(1, 1, skv, hd) * 0.1
+    kb, vb = k.expand(1, nh, skv, hd), v.expand(1, nh, skv, hd)
+    ref = torch.softmax((q @ kb.transpose(-1, -2)) * scale, dim=-1) @ vb
+
+    def _bf8(t):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            tile=ttnn.Tile((tile_h, 32)),
+        )
+
+    qt, kt, vt = _bf8(q), _bf8(k), _bf8(v)
+    no_mask = ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(qt, kt, vt, is_causal=False, scale=scale))
+    mask = _to_dev(torch.zeros(1, 1, sq, skv), mesh_device, tile_h, mem=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    masked = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(qt, kt, vt, attn_mask=mask, is_causal=False, scale=scale)
+    )
+    pcc_no_mask, pcc_masked = _pcc(ref, no_mask), _pcc(ref, masked)
+    print(
+        f"\n[SDPA bf8] no-mask PCC={pcc_no_mask:.5f}  masked PCC={pcc_masked:.5f}  masked |max|={masked.abs().max():.2e}"
+    )
+    assert pcc_masked >= _PCC, (
+        f"SDPA with bf8 q/k/v + bf16 attn_mask corrupts output (PCC {pcc_masked:.5f} < {_PCC}; "
+        f"no-mask PCC {pcc_no_mask:.5f}) -- bf8 SDPA attn_mask bug"
     )
