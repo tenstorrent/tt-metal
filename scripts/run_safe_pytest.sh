@@ -279,7 +279,7 @@ precompile_warm() {
     # Warm-pass routing, recorded for the device-timing record. Default: no server
     # configured -> local warm pass.
     local _pc_route="local"
-    TT_TIMING_PRECOMPILE_REASON="no_server"
+    TT_TIMING_PRECOMPILE_REASON="warmup_failed"
     if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
         local _h="${JIT_SERVER_ENDPOINT%:*}" _p="${JIT_SERVER_ENDPOINT##*:}"
         if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
@@ -292,7 +292,6 @@ precompile_warm() {
         SRV_ENV=(TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
                  TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
         _pc_route="farm"
-        TT_TIMING_PRECOMPILE_REASON="ok"
         echo "PRECOMPILE: warm pass -> JIT server ${JIT_SERVER_ENDPOINT} (keepalive on; real run stays local)" >&2
     fi
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
@@ -308,6 +307,8 @@ precompile_warm() {
     # gives real buffer addresses so address-baked kernels (pool/move/conv) warm too. ccache state is
     # INHERITED (untouched) so it matches the real run below — a mismatch would silently miss the warm cache.
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
+    local collect_result="" result_status="" result_reason="" result_pytest_exit=""
+    local result_xpass_strict="" result_other_failures="" warm_ok=false accepted_strict_xpass=false
     echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
     t0=$(date +%s)
     # SRV_ENV (server-enable + preprocess + keepalive) is scoped to THIS subprocess only — it is the
@@ -318,21 +319,51 @@ precompile_warm() {
         pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
-    # Don't pretend it warmed if the collect failed. A non-zero exit (pytest usage/collection error,
-    # plugin failure, OOM, etc.) means we warmed nothing -> say so plainly; the real run still runs COLD
-    # and CORRECT, just without the speedup. (pytest exit 5 = "no tests collected" counts as a failure.)
-    if [[ $cstatus -ne 0 ]]; then
-        echo "PRECOMPILE: ✗ warmup FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
-        grep -iE "error|unrecognized|no tests ran|no tests collected" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
+    # The collector reports compilation separately from pytest's test verdict. Under NO_DISPATCH it
+    # deliberately swallows expected exceptions; strict-xfail tests therefore become XPASS(strict)
+    # and pytest exits 1 even when every collected program compiled successfully. Accept only that
+    # precisely identified case. Collection/setup failures, compiler errors, missing/malformed
+    # diagnostics, and pytest's other non-zero statuses still make the warm pass unusable.
+    collect_result=$(grep '^UP_FRONT_COLLECT_RESULT:' "$clog" 2>/dev/null | tail -1 || true)
+    if [[ "$collect_result" =~ status=([^[:space:]]+) ]]; then result_status="${BASH_REMATCH[1]}"; fi
+    if [[ "$collect_result" =~ reason=([^[:space:]]+) ]]; then result_reason="${BASH_REMATCH[1]}"; fi
+    if [[ "$collect_result" =~ pytest_exit=([0-9]+) ]]; then result_pytest_exit="${BASH_REMATCH[1]}"; fi
+    if [[ "$collect_result" =~ xpass_strict=([0-9]+) ]]; then result_xpass_strict="${BASH_REMATCH[1]}"; fi
+    if [[ "$collect_result" =~ other_failures=([0-9]+) ]]; then result_other_failures="${BASH_REMATCH[1]}"; fi
+
+    if [[ "$result_status" == "ok" && "$result_pytest_exit" == "$cstatus" &&
+          "$result_other_failures" == "0" ]]; then
+        if [[ $cstatus -eq 0 ]]; then
+            warm_ok=true
+        elif [[ $cstatus -eq 1 && "$result_xpass_strict" =~ ^[1-9][0-9]*$ ]]; then
+            warm_ok=true
+            accepted_strict_xpass=true
+        fi
+    fi
+
+    if [[ "$warm_ok" != true ]]; then
+        echo "PRECOMPILE: ✗ warmup unusable (pytest exit $cstatus) after $((t1-t0))s; the real run will compile cache misses inline." >&2
+        grep -E "UP_FRONT_COLLECT_RESULT:|(^|[[:space:]])(ERROR|error:)|unrecognized|no tests ran|no tests collected" \
+            "$clog" 2>/dev/null | head -4 | sed 's/^/PRECOMPILE:   /' >&2
         echo "PRECOMPILE:   (full collect log: $clog)" >&2
-        # The warm pass failed; the real run compiles inline & serial. Attribute
-        # the failure: a farm route that failed is a JIT-farm problem (jit_refused).
+        # Only a collector-reported compile failure on a farm route is a JIT refusal. Pytest,
+        # collection, setup, and missing-diagnostic failures are generic warmup failures.
         TT_TIMING_PRECOMPILE_MODE="cold"
-        [[ "$_pc_route" == "farm" ]] && TT_TIMING_PRECOMPILE_REASON="jit_refused" \
-                                     || TT_TIMING_PRECOMPILE_REASON="warmup_failed"
+        if [[ "$_pc_route" == "farm" && "$result_status" == "failed" &&
+              "$result_reason" =~ ^(compile_errors|incomplete|exception)$ ]]; then
+            TT_TIMING_PRECOMPILE_REASON="jit_refused"
+        else
+            TT_TIMING_PRECOMPILE_REASON="warmup_failed"
+        fi
         return 0
     fi
+
+    if [[ "$accepted_strict_xpass" == true ]]; then
+        echo "PRECOMPILE: ! pytest reported ${result_xpass_strict} XPASS(strict) case(s) in the compile-only pass; compiled cache is valid." >&2
+    fi
     TT_TIMING_PRECOMPILE_MODE="$_pc_route"
+    [[ "$_pc_route" == "farm" ]] && TT_TIMING_PRECOMPILE_REASON="ok" \
+                                 || TT_TIMING_PRECOMPILE_REASON="no_server"
     echo "PRECOMPILE: ✓ warmup complete in $((t1-t0))s — the real run below reuses it. Log: $clog" >&2
 }
 
