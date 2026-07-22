@@ -193,7 +193,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec ArgMaxDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ArgMaxDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -201,7 +201,7 @@ TensorSpec ArgMaxDeviceOperation::compute_output_specs(
 
     const auto& input_tensor = tensor_args.input;
     auto output_shape = get_output_shape(input_tensor, args.dim, args.keepdim);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(output_shape),
         TensorLayout(args.output_dtype, PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }

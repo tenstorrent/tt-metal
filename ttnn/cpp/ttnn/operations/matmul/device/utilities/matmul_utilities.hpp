@@ -48,7 +48,7 @@ uint32_t estimate_interm_tile_size(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     tt::tt_metal::DataType output_dtype);
 
-uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a);
+uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a);
 
 bool is_input_batched(const ttnn::Shape& shape);
 

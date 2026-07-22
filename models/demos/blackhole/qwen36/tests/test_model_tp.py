@@ -404,6 +404,164 @@ def test_model_tp_prefill_paged_slots(mesh_device, B, reset_seeds, ensure_gc):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+@pytest.mark.parametrize("T", [4096, 4352], ids=["exact_2chunks", "2chunks_plus_tail"])
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
+def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, ensure_gc, request):
+    """Online vLLM per-slot prefill (prefill_paged_slots) for LONG prompts (>2048) at B>1.
+
+    This is the path the vLLM wrapper serves once a unified config runs at max_num_seqs>1 for ALL
+    requests. Before the assert-removal + traced-chunk-in-batched work, prefill_paged_slots refused
+    prompts >= chunk_size. Now long prompts are chunked at chunk_size granularity, per user, into the
+    B=1 GDN prefill scratch, snapshotted into each request's decode slot:
+      * eager  (capture_chunk_trace=False): the eager chunk-outer path (assert removal / A1).
+      * traced (capture_chunk_trace=True):  the chunk trace parked against the PERSISTENT B=1 scratch,
+        replayed per user (A3) — the fast path, matching single-sequence long-prefill speed.
+    Both must match the proven B=1 eager chunk-outer reference (prefill_traced_chunked, validated vs
+    the bespoke oracle by test_model_tp_long_prefill), per user: prefill logits, post-prefill GDN
+    recurrent state, and a few batched-decode steps. T=4096 (2 full chunks, no tail) and T=4352
+    (2 chunks + 256 tail) exercise the exact-multiple and multi-chunk+tail branches.
+    """
+    import gc
+
+    nd = mesh_device.get_num_devices()
+    assert nd > 1, "this test exercises the TP (num_devices>1) online-slot prefill path"
+    B, N_DEC, block_size = 8, 2, 64
+    torch.manual_seed(0)
+
+    prompt_lens = [T] * B
+    # bpu covers the longest prompt + decode; %8 keeps the batched warmup page table (B*bpu, B=8) a
+    # multiple of 64, hence 32-aligned for the flexible-SDPA chunk trace.
+    bpu = max(8, -(-(T + N_DEC + 4) // block_size))
+    bpu = ((bpu + 7) // 8) * 8
+
+    def _build(batch):
+        model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=batch, max_seq_len=bpu * block_size, n_layers=8)
+        args = model.args
+        num_blocks = batch * bpu
+        page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(batch)])
+        kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
+        model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=batch)
+        return model, args, page_table, num_blocks
+
+    comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+
+    # ---- per-user B=1 reference: eager chunk-outer prefill + B=1 decode (trusted path) ----
+    # Both variants use the EAGER oracle: it never parks a chunk trace, so its per-user eager decode
+    # compiles freely. (A *traced* oracle would interleave eager-decode compiles with parked-chunk-trace
+    # replays across users and wedge the device — a harness artifact, not a model bug.) prefill_tp can't
+    # be the reference (single-passes the whole sequence -> GDN L1 overflow at T>=4096). The eager
+    # chunk-outer path is validated vs the bespoke oracle by test_model_tp_long_prefill.
+    omodel, args, opt, _ = _build(1)
+    vocab = args.vocab_size
+    prompts = [torch.randint(0, vocab, (T,)).tolist() for _ in range(B)]
+    oracle_pf, oracle_rec, oracle_dec = [], [], [[] for _ in range(B)]
+    for u in range(B):
+        lg = omodel.prefill_traced_chunked(torch.tensor([prompts[u]], dtype=torch.long), opt, actual_len=T)
+        ttnn.synchronize_device(mesh_device)
+        oracle_pf.append(ttnn.to_torch(lg, mesh_composer=comp0).reshape(-1, vocab)[0].float())
+        oracle_rec.append(
+            [
+                ttnn.to_torch(la.attention.rec_state, mesh_composer=comp0)[0].float()  # device-0 shard
+                for la in omodel.layers
+                if not la.is_full_attention
+            ]
+        )
+        pos = T
+        fed = int(torch.argmax(oracle_pf[u]))
+        for _ in range(N_DEC):
+            dev = omodel.prepare_inputs_decode(
+                torch.tensor([[fed]], dtype=torch.int32), torch.tensor([pos], dtype=torch.int32), opt
+            )
+            out, _ = omodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+            ls = omodel.process_output_decode(out, 1)
+            oracle_dec[u].append(ls[0, 0, :vocab].float())
+            fed = int(torch.argmax(ls[0, 0, :vocab]))
+            pos += 1
+    n_gdn = len(oracle_rec[0])
+    omodel.free_kv_caches()
+    del omodel
+    gc.collect()
+
+    # ---- online path: batched warmup (eager|traced) + prefill_paged_slots + batched decode ----
+    bmodel, args, bpt, num_blocks = _build(B)
+    warmup_pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    # Mirror qwen36_vllm.warmup_model_prefill exactly for each variant.
+    if traced:
+        prev = bmodel._bind_gdn_prefill_scratch()
+        try:
+            bmodel.capture_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048, capture_chunk_trace=True)
+        finally:
+            bmodel._unbind_gdn_prefill_scratch(prev)
+        assert bmodel._chunked_trace_id is not None, "traced warmup must park the chunk trace"
+    else:
+        prev = bmodel._alloc_gdn_scratch_b1()
+        try:
+            bmodel.capture_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048, capture_chunk_trace=False)
+        finally:
+            bmodel._restore_gdn_batched(prev)
+        assert bmodel._chunked_trace_id is None, "eager warmup must NOT park the chunk trace"
+
+    token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]
+    # prefill_paged_slots returns host torch logits [1,1,vocab] per user (in call order).
+    bpf = bmodel.prefill_paged_slots(token_list, bpt, list(range(B)), valid_lens=prompt_lens)
+    batched_pf = [bpf[u].reshape(-1, vocab)[0].float() for u in range(B)]
+    # Assembled batched rec_state per GDN layer: [N*B, Nv, Dk, Dv] (device-major); device-0 user u = row u.
+    batched_rec = [
+        ttnn.to_torch(la.attention.rec_state, mesh_composer=comp0).float()
+        for la in bmodel.layers
+        if not la.is_full_attention
+    ]
+    batched_dec = [[] for _ in range(B)]
+    pos = list(prompt_lens)
+    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
+    for _ in range(N_DEC):
+        tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
+        dev = bmodel.prepare_inputs_decode(tokens_step, torch.tensor(pos, dtype=torch.int32), bpt)
+        out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        ls = bmodel.process_output_decode(out, B)
+        for u in range(B):
+            batched_dec[u].append(ls[u, 0, :vocab].float())
+            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
+        pos = [p + 1 for p in pos]
+    bmodel.free_kv_caches()
+    del bmodel
+    gc.collect()
+
+    # ---- per-user prefill logits + GDN state (+ decode for the eager variant) PCC ----
+    # Prefill logits and per-slot GDN rec_state are what prefill_paged_slots actually produces/writes,
+    # so both variants must match the eager reference at the full bar. Decode is asserted only for the
+    # eager variant: the traced chunk forward (_forward_prefill_chunk_tp) is a DIFFERENT kernel from the
+    # eager one (_forward_prefill_chunk_masked_tp), so comparing traced-prefill->decode against the eager
+    # reference compounds that cross-kernel delta (test_model_tp_long_prefill_traced already bounds the
+    # traced-vs-eager prefill delta at 0.99). The traced path's decode-from-state is the same code the
+    # eager variant fully exercises, and its state is validated by the rec_state check below.
+    thr = get_pcc_threshold(request, default=0.97)
+    worst = (1.0, -1, "")
+    for u in range(B):
+        _, pcc_pf = comp_pcc(oracle_pf[u].reshape(-1), batched_pf[u].reshape(-1), thr)
+        if float(pcc_pf) < worst[0]:
+            worst = (float(pcc_pf), u, "prefill")
+        assert float(pcc_pf) >= thr, f"user {u} (T={T}) prefill logits PCC {pcc_pf} < {thr}"
+        if not traced:
+            for s in range(N_DEC):
+                _, pcc_d = comp_pcc(oracle_dec[u][s].reshape(-1), batched_dec[u][s].reshape(-1), thr)
+                if float(pcc_d) < worst[0]:
+                    worst = (float(pcc_d), u, f"decode{s}")
+                assert float(pcc_d) >= thr, f"user {u} decode{s} logits PCC {pcc_d} < {thr}"
+    for li in range(n_gdn):
+        for u in range(B):
+            _, pcc_g = comp_pcc(oracle_rec[u][li].reshape(-1), batched_rec[li][u].reshape(-1), thr)
+            if float(pcc_g) < worst[0]:
+                worst = (float(pcc_g), u, f"gdn{li}")
+            assert float(pcc_g) >= thr, f"gdn layer {li} user {u} rec-state PCC {pcc_g} < {thr}"
+    logger.info(
+        f"PASSED: online per-slot LONG prefill ({'traced' if traced else 'eager'}, B={B}, T={T}) "
+        f"matches B=1 chunk-outer reference; worst PCC = {worst[0]:.5f} @ user{worst[1]} {worst[2]}"
+    )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 @pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
 def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, request):
     """Traced batched short-prompt prefill (TP): traced-bucket-prefill acceptance test.

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import pathlib
 import re
 from datetime import datetime, timedelta
 from functools import partial
@@ -19,6 +20,9 @@ timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
 
 def search_for_tt_smi_version_in_log_file_(log_file):
+    # Defense-in-depth: resolve and confirm this is a real file before opening.
+    log_file = pathlib.Path(log_file).resolve()
+    assert log_file.is_file(), f"Not a readable log file: {log_file}"
     with open(log_file, "r") as log_f:
         for line in log_f:
             regex_match = smi_pattern.match(line)
@@ -28,6 +32,9 @@ def search_for_tt_smi_version_in_log_file_(log_file):
 
 
 def search_for_tt_smi_reset_in_log_file_(log_file):
+    # Defense-in-depth: resolve and confirm this is a real file before opening.
+    log_file = pathlib.Path(log_file).resolve()
+    assert log_file.is_file(), f"Not a readable log file: {log_file}"
     ts_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\s*")
     # Strip GitHub Actions annotation prefixes like ##[error], ##[warning]
     gh_annotation_pattern = re.compile(r"^##\[[a-z]+\]", re.IGNORECASE)
@@ -169,8 +176,9 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
 
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int, workflow_attempt: int):
-    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    logs_dir = _safe_logs_dir(workflow_outputs_dir, workflow_run_id)
 
+    assert logs_dir is not None, f"Invalid or unsafe workflow_run_id: {workflow_run_id}"
     assert logs_dir.exists(), f"Logs dir does not exist: {logs_dir}"
     assert logs_dir.is_dir(), f"Logs path is not a dir: {logs_dir}"
 
@@ -188,14 +196,19 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
         github_job_id = int(filename)
         assert github_job_id > 0
 
-        tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
+        # Re-derive the path from the validated integer ids (containment-checked) so the
+        # path handed to the file readers below is sanitized, not the raw globbed path.
+        safe_log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id)
+        assert safe_log_file is not None and safe_log_file.is_file(), f"Unsafe or missing log file: {log_file}"
+
+        tt_smi_version = search_for_tt_smi_version_in_log_file_(safe_log_file)
         if tt_smi_version:
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
 
-        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(log_file)
+        tt_smi_reset = search_for_tt_smi_reset_in_log_file_(safe_log_file)
         for reset in tt_smi_reset:
             reset["workflow_attempt"] = workflow_attempt
-        assert tt_smi_reset is not None, f"Parser returned None for {log_file}"
+        assert tt_smi_reset is not None, f"Parser returned None for {safe_log_file}"
 
         assert github_job_id not in github_job_ids_to_tt_smi_resets, f"Duplicate reset key detected: {github_job_id}"
 
@@ -210,6 +223,33 @@ def parse_github_log_timestamp(line):
     # is 7 digits for fractional seconds instead of 6, which is the ISO format
     # E.g. 2024-09-25T14:33:11.1060679Z -> 2024-09-25T14:33:11.106067
     return datetime.fromisoformat(timestamp_str[:26])
+
+
+def _resolve_within(base_dir, *parts):
+    """Resolve base_dir / *parts, returning the path only if it stays within base_dir.
+
+    Guards against path traversal from dynamic path components: returns None if the
+    resolved path escapes base_dir (e.g. a component containing "..").
+    """
+    base = base_dir.resolve()
+    candidate = base.joinpath(*parts).resolve()
+    return candidate if candidate.is_relative_to(base) else None
+
+
+def _safe_logs_dir(workflow_outputs_dir, workflow_run_id):
+    """Resolved <workflow_outputs_dir>/<run_id>/logs, or None if run_id is not a plain
+    integer or the path escapes workflow_outputs_dir."""
+    if not str(workflow_run_id).isdigit():
+        return None
+    return _resolve_within(workflow_outputs_dir, str(workflow_run_id), "logs")
+
+
+def _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id):
+    """Resolved <workflow_outputs_dir>/<run_id>/logs/<job_id>.log, or None if either id is
+    not a plain integer or the path escapes workflow_outputs_dir."""
+    if not (str(workflow_run_id).isdigit() and str(github_job_id).isdigit()):
+        return None
+    return _resolve_within(workflow_outputs_dir, str(workflow_run_id), "logs", f"{github_job_id}.log")
 
 
 def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_run_id: int, workflow_job_id: int):
@@ -227,19 +267,11 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
 
     ** Threshold may be reduced in the future
     """
-    log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
-    assert str(workflow_job_id).isdigit()
-    matching_logs = list(log_dir.glob(f"{workflow_job_id}.log"))
-
-    if not matching_logs:
-        logger.warning(f"Unable to find github job log file for job: {workflow_job_id}")
-        return False
-
-    log_file = matching_logs[0]
+    log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, workflow_job_id)
     max_time_delta_seconds = 300
 
-    if not log_file.exists():
-        logger.warning(f"Unable to find github job log file: {log_file}")
+    if log_file is None or not log_file.is_file():
+        logger.warning(f"Unable to find github job log file for job: {workflow_job_id}")
         return False
 
     log_lines = []
@@ -386,9 +418,85 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
     return github_job_id_to_test_reports
 
 
+# Markers printed by the CIv2 runner job-start hook.
+# The same strings appear both as GitHub notice annotations and as plain stdout in the
+# "Set up runner" step of the job log.
+_CIV2_NODE_NAME_LOG_MARKER = "is running on Kubernetes node:"
+_CIV2_SERIAL_LOG_MARKER = "serial number(s):"
+
+
+def get_civ2_node_name_and_serial_from_annotations(annotation_info):
+    """Extract the (node_name, serial) a CIv2 runner emitted at job start.
+
+    CIv2 runners emit GitHub Actions notice annotations at job start
+    (see tenstorrent/github-ci-infra#1408):
+        ::notice title=k8s-node-name::CIV2 runner <name> is running on Kubernetes node: <node>
+        ::notice title=tt-card-serial::CIV2 runner <name> has serial number(s): <serial>
+
+    Returns (node_name, serial), each None if its annotation is absent (e.g. CPU-only
+    runners have no card serial).
+    """
+    node_name, serial = None, None
+    for _annot in annotation_info or []:
+        title = _annot.get("title") or ""
+        message = _annot.get("message") or ""
+        if title == "k8s-node-name" and "Kubernetes node:" in message:
+            node_name = message.rsplit("Kubernetes node:", 1)[-1].strip() or None
+        elif title == "tt-card-serial" and _CIV2_SERIAL_LOG_MARKER in message:
+            serial = message.rsplit(_CIV2_SERIAL_LOG_MARKER, 1)[-1].strip() or None
+    logger.info(f"Extracted node name and serial from annotations: {node_name}, {serial}")
+    return node_name, serial
+
+
+def get_civ2_node_name_and_serial_from_job_log(workflow_outputs_dir, workflow_run_id: int, github_job_id: int):
+    """Fallback parser for the CIv2 (node_name, serial) read from the job log.
+
+    Annotations may be absent. The job-start hook also prints these lines to stdout e.g.:
+        CIV2 runner <name> is running on Kubernetes node: <node>
+        CIV2 runner <name> has serial number(s): <serial>
+
+    Notes:
+    I thought there was an instance where this happens,
+    but it was actually because annotations don't get "reissued" on passing jobs when another attempt is launched
+    (because the job doesn't get rerun)
+
+    So on subsequent workflow run attempts, it looks like passing jobs don't have annotations;
+    the annotations are actually still present, but only visible on the prior run attempt on the UI.
+    From the API, we can always see the annotations.
+    E.g. https://api.github.com/repos/tenstorrent/tt-metal/check-runs/<job id>/annotations
+
+    So we should never have to exercise this fallback parser because we always generate pipeline data on each run attempt's jobs only.
+    (Unless github has an outage and doesn't upload annotations for some reason)
+
+    Returns (node_name, serial), each None if not found (CPU-only runners have no serial).
+    """
+    log_file = _safe_job_log_file(workflow_outputs_dir, workflow_run_id, github_job_id)
+    if log_file is None or not log_file.is_file():
+        logger.warning(f"Unable to find github job log file for job: {github_job_id}")
+        return None, None
+
+    ansi_pattern = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
+    node_name, serial = None, None
+    with open(log_file, "r", encoding="utf-8-sig") as log_f:
+        for line in log_f:
+            line = ansi_pattern.sub("", line)
+            if node_name is None and _CIV2_NODE_NAME_LOG_MARKER in line:
+                node_name = line.rsplit(_CIV2_NODE_NAME_LOG_MARKER, 1)[-1].strip() or None
+            elif serial is None and _CIV2_SERIAL_LOG_MARKER in line:
+                serial = line.rsplit(_CIV2_SERIAL_LOG_MARKER, 1)[-1].strip() or None
+            if node_name is not None and serial is not None:
+                break
+    logger.info(f"Extracted node name and serial from job log: {node_name}, {serial}")
+    return node_name, serial
+
+
 def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
-    # Read <job_id>_annotations.json inside the logs dir
-    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    # Read <job_id>_annotations.json inside the (sanitized) logs dir.
+    logs_dir = _safe_logs_dir(workflow_outputs_dir, workflow_run_id)
+    if logs_dir is None or not logs_dir.is_dir():
+        logger.warning(f"Annotations logs dir not found for run: {workflow_run_id}")
+        return {}
+
     annot_json_files = logs_dir.glob("*_annotations.json")
 
     github_job_ids_to_annotation_jsons = {}

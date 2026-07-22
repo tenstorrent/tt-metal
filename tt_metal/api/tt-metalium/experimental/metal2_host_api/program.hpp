@@ -32,6 +32,8 @@ namespace tt::tt_metal::experimental {
 // PRE-CONDITION: If skip_validation is true, the caller guarantees that
 // the ProgramSpec satisfies all semantic validation requirements.
 //
+// Runtime arguments for Programs created from a ProgramSpec must be configured
+// through SetProgramRunArgs or UpdateProgramRunArgs, not the legacy host APIs.
 Program MakeProgramFromSpec(
     distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
 
