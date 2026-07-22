@@ -13,9 +13,8 @@ attention matmuls take ``LTXAttention.mm_compute_kernel_config`` explicitly and 
 FFN takes ``LTXTransformerBlock.ff_compute_kernel_config``. So a fidelity change here
 means rewriting those two attributes, not per-linear ``compute_config``.
 
-Usage:
-    from models.tt_dit.pipelines.ltx.quant_config import QuantConfig, set_quant_config
-    set_quant_config(pipeline, QuantConfig.all_bf8_lofi())
+The pipeline applies the ``LTX_QUANT`` preset automatically via ``_maybe_apply_quant_config``;
+call ``apply_quant_config(model, QuantConfig.all_bf8_lofi())`` to quant a standalone transformer.
 """
 
 from __future__ import annotations
@@ -87,21 +86,6 @@ class QuantConfig:
 
     # Ring SDPA (self-attention only; cross-attention stays default)
     ring_sdpa: SDPAQuantConfig = field(default_factory=SDPAQuantConfig)
-
-    @staticmethod
-    def default() -> QuantConfig:
-        """All bfloat16, HiFi2 -- matches current baseline."""
-        lc = LinearQuantConfig()
-        return QuantConfig(
-            self_attn_qkv=lc,
-            self_attn_out=lc,
-            cross_attn_q=lc,
-            cross_attn_kv=lc,
-            cross_attn_out=lc,
-            ffn_ff1=lc,
-            ffn_ff2=lc,
-            ring_sdpa=SDPAQuantConfig(),
-        )
 
     @staticmethod
     def all_bf8_lofi() -> QuantConfig:
@@ -306,8 +290,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
     Safe whether or not weights are loaded: weight typecasts no-op when ``_data is None``,
     and the compute-config attributes are always (re)set. With ``dynamic_load=True`` the
-    pipeline evicts/reloads transformer weights, so this must run again after each reload
-    (see ``set_quant_config``).
+    pipeline evicts/reloads transformer weights, so the pipeline reinstalls it via
+    ``_transformer_post_load_hook`` after each reload.
     """
     arch = model.mesh_device.arch()
     blocks = model.transformer_blocks
@@ -338,18 +322,3 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     )
     sdpa_in = ttnn.bfloat8_b if LTX_QUANT_SDPA_BF8 else config.ring_sdpa.input_dtype
     logger.info(f"  Ring SDPA: input_dtype={sdpa_in}, fidelity={config.ring_sdpa.math_fidelity}")
-
-
-def set_quant_config(pipeline, config: QuantConfig) -> None:
-    """Install a quantization config on an LTX pipeline.
-
-    Applies compute configs now (they survive eviction — module attributes, not Parameter
-    data) and installs a post-load hook so the weight typecast re-runs after every reload
-    (required under ``dynamic_load=True``, which evicts/reloads transformer weights). The
-    hook runs inside ``load_model`` BEFORE the cache write, so cached tensorbins hold the
-    quantized dtype and a reload's cache hit matches the module's expected dtype.
-    """
-    for state in pipeline.transformer_states:
-        apply_quant_config(state.model, config)
-
-    pipeline._transformer_post_load_hook = lambda model: apply_quant_config(model, config)

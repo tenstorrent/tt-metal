@@ -27,12 +27,6 @@ from ....utils.tensor import bf16_tensor
 # Set to 0 to restore the double gather for an A/B.
 LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "true", "True")
 
-# TEST ONLY: corrupt the gate's copy of the gathered activation, so the gate reads a wrong-but-
-# right-shaped tensor while Q/QKV reads the correct one. That is the failure the dedup introduces
-# silently if the two consumers end up wired to different tensors; the equivalence gate must catch
-# it. A green gate that has never been shown to go red proves nothing.
-LTX_DEDUP_GATE_MUTANT = os.environ.get("LTX_DEDUP_GATE_MUTANT", "0") in ("1", "true", "True")
-
 
 class LTXAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
@@ -398,15 +392,6 @@ class LTXAttention(Module):
         """True when the gate projection will actually run (and so will gather its input)."""
         return self.apply_gated_attention and self.to_gate_logits.weight._data is not None
 
-    def _corrupt_gate_input(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """TEST ONLY (LTX_DEDUP_GATE_MUTANT): a wrong-but-right-shaped gathered activation.
-
-        Stands in for the dedup miswiring where the gate reads something other than the tensor
-        Q/QKV reads. A scalar rescale, not a shard permute: slicing the CCL's persistent gather
-        buffer to permute it deadlocks the fabric, and a mutant must not be able to hang the box.
-        """
-        return ttnn.multiply(x, 0.5)
-
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
     ) -> ttnn.Tensor | None:
@@ -470,10 +455,7 @@ class LTXAttention(Module):
         qkv_parallel_config = None if (use_nonfused_agmm or dedup_gate_gather) else self.parallel_config
 
         # Per-head gate, computed before QKV consumes spatial_1BND.
-        gate_input = spatial_1BND
-        if dedup_gate_gather and LTX_DEDUP_GATE_MUTANT:
-            gate_input = self._corrupt_gate_input(spatial_1BND)
-        gate_bhne = self._compute_gate(gate_input, qkv_parallel_config)
+        gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
 
         if self.is_self:
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
