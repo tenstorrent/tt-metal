@@ -6,10 +6,15 @@
 //
 // For each of `n_tiles` tiles the kernel:
 //   1. waits for one tile in the input CB and for output-CB space,
-//   2. UNPACK stamps TILE_IDX when tile i compute starts (TRISC_0 only),
+//   2. UNPACK stamps the first-math marker when tile i compute starts (TRISC_0 only),
 //   3. copy_tile + N×TTI_NOP on math TRISC,
 //   4. pack_tile pushes to the output CB (pack TRISC),
-//   5. PACK stamps FINISH_LAST_PUSH once at kernel exit (TRISC_2 only), outside the tile loop.
+//   5. PACK stamps the pack-finish marker once at kernel exit (TRISC_2 only), outside the tile loop.
+//
+// In lean mode (PROFILE_PER_TILE == 0, the CI path) the tile-0 first-math and the pack-finish
+// markers are emitted with DeviceRecordEvent (event id only, no data payload) to minimize profiler
+// perturbation of the op2op gap; op_to_op_postprocess.py maps event ids 12/13 back to the
+// TILE_IDX / FINISH_LAST_PUSH names. In detail mode they are DeviceTimestampedData markers.
 //
 // Compile-time args:
 //   0: input  CB id
@@ -17,8 +22,8 @@
 //   2: NUM_NOPS_PER_TILE  (tunable; 0 disables the spin)
 //   3: PROFILE_PER_TILE   (1 = stamp TILE_IDX + MATH zone every tile, for latency
 //                          analysis; 0 = lean mode for bandwidth measurement: stamp
-//                          TILE_IDX only for tile 0 and drop the per-tile MATH zone so
-//                          the per-tile profiler writes don't pace the consumer and
+//                          the first-math event for tile 0 only and drop the per-tile MATH
+//                          zone so the per-tile profiler writes don't pace the consumer and
 //                          back-pressure the reader. Compute cost is then copy + NOPs
 //                          only, which is what we want when balancing NOPs vs read BW.)
 //
@@ -46,6 +51,13 @@ void kernel_main() {
 
     unary_op_init_common(cb_in, cb_out);
     copy_tile_init(cb_in);
+
+    // Lean-mode markers use DeviceRecordEvent (event id only, no data payload) instead of
+    // DeviceTimestampedData: it writes fewer words to the L1 profiler buffer, so it perturbs the
+    // measured op2op gap less (the pack-finish marker in particular sits right at kernel exit, in
+    // the gap). The event id is recovered host-side as (timer_id & 0xFFFF) and mapped back to these
+    // marker names in op_to_op_postprocess.py (EVENT_NAMES) -- keep the two tables in sync.
+    constexpr uint16_t EV_UNPACK_TILE0 = 12, EV_PACK_FINISH = 13;
 
     DeviceTimestampedData("PROG_ID", program_id);
 
@@ -77,7 +89,7 @@ void kernel_main() {
             UNPACK(DeviceTimestampedData("TILE_IDX", i));
         } else {
             if (i == 0) {
-                UNPACK(DeviceTimestampedData("TILE_IDX", i));
+                UNPACK(DeviceRecordEvent(EV_UNPACK_TILE0));  // lean: payload-free first-math (tile 0)
             }
         }
 
@@ -92,5 +104,6 @@ void kernel_main() {
         cb_pop_front(cb_in, 1);
     }
 
-    PACK(DeviceTimestampedData("FINISH_LAST_PUSH", program_id));
+    // Payload-free pack-finish; the owning program is recovered from the PROG_ID marker above.
+    PACK(DeviceRecordEvent(EV_PACK_FINISH));
 }
