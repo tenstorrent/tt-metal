@@ -299,7 +299,6 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         reconfig_data_format_srca(dfb_interm_pre_add);
         transpose_init(dfb_interm_pre_add);
         two_pass_stats_init();
-        two_pass_stats_clear();
 
         uint32_t block_n = 0;
         for (auto i : block.local()) {

@@ -154,9 +154,11 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     [
         ((32, 16384), -1),
         ((4096, 32), -2),
+        ((4097, 32), -2),
         ((4096, 64), (-2, -1)),
+        ((4097, 64), (-2, -1)),
     ],
-    ids=["W", "H", "HW"],
+    ids=["W", "H_l1_replay", "H_streaming_fallback", "HW_l1_replay", "HW_streaming_fallback"],
 )
 def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
     """Keep a long FP32 reduction stable when the variance is tiny relative to its mean."""
@@ -269,6 +271,23 @@ def test_std_var_bfp8_two_pass_w_replay(device, width):
     for torch_op, ttnn_op, atol in ((torch.var, ttnn.var, 0.125), (torch.std, ttnn.std, 0.03125)):
         reference = torch_op(quantized, dim=-1, keepdim=True, correction=1)
         actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True))).to(
+            torch.float64
+        )
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0, atol=atol)
+
+
+@pytest.mark.parametrize("dim", [-2, (-2, -1)], ids=["H", "HW"])
+def test_std_var_bfp8_two_pass_h_replay(device, dim):
+    torch.manual_seed(20260722)
+    source = torch.randn((1, 1, 768, 64), dtype=torch.float32) * 3.0 + 100.0
+    tt_input = ttnn.from_torch(source, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized = ttnn.to_torch(ttnn.from_device(tt_input)).to(torch.float64)
+
+    for torch_op, ttnn_op, atol in ((torch.var, ttnn.var, 0.125), (torch.std, ttnn.std, 0.03125)):
+        reference = torch_op(quantized, dim=dim, keepdim=True, correction=1)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=dim, keepdim=True, correction=True))).to(
             torch.float64
         )
 

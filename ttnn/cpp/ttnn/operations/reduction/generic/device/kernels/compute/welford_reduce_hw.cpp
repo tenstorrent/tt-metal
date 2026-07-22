@@ -93,10 +93,16 @@ void kernel_main() {
                 two_pass_stats_init_shifted();
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+                    dfb_in_obj.wait_front(ht + 1);
+                    copy_tile(dfb_in, ht, input_dst);
+                    constexpr uint32_t stats_input_dst = input_dst;
+#else
                     dfb_in_obj.wait_front(onetile);
                     const uint32_t stats_input_dst = ht < 3 ? (ht == 0 ? retained_input_dst : ht) : input_dst;
                     copy_tile(dfb_in, 0, stats_input_dst);
                     dfb_in_obj.pop_front(onetile);
+#endif
                     if (ht == 0) {
                         two_pass_stats_update_shifted_rows<false, true>(
                             stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
@@ -107,6 +113,13 @@ void kernel_main() {
                 }
                 two_pass_stats_finish_shifted_mean(two_pass_mean_reciprocal);
 
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+                for (uint32_t ht = 0; ht < Ht; ++ht) {
+                    copy_tile(dfb_in, ht, input_dst);
+                    two_pass_stats_update_rows<true>(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+                }
+                dfb_in_obj.pop_front(Ht);
+#else
                 constexpr uint32_t num_front_retained = Ht < 3 ? Ht : 3;
                 for (uint32_t ht = 0; ht < num_front_retained; ++ht) {
                     const uint32_t stats_input_dst = ht == 0 ? retained_input_dst : ht;
@@ -121,6 +134,7 @@ void kernel_main() {
                     }
                     two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
                 }
+#endif
                 two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
                 tile_regs_commit();
 

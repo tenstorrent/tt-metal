@@ -77,12 +77,21 @@ void kernel_main() {
         uint32_t reset_w = w;
         uint32_t reset_col_start = col_start_tile_id;
 
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+        constexpr uint32_t num_passes = 1;
+#else
         constexpr uint32_t num_passes = sfpu_two_pass && Ht > 4 ? 2 : 1;
+#endif
         for (uint32_t pass = 0; pass < num_passes; ++pass) {
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+            constexpr uint32_t pass_start = 0;
+            constexpr uint32_t pass_end = Ht;
+#else
             // Two-pass compute retains the first three tiles and the final
             // tile in DEST, so pass two only streams the middle tiles.
             const uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, static_cast<uint32_t>(3));
             const uint32_t pass_end = pass == 0 ? Ht : Ht - 1;
+#endif
             uint32_t curr_id = reset_curr_id + pass_start * Wt;
             for (uint32_t j = pass_start; j < pass_end; ++j) {
                 w = reset_w;

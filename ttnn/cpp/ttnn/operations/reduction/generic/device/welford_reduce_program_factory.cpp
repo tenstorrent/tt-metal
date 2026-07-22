@@ -53,10 +53,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    // Keep one complete W-reduction row in L1 when it fits within a conservative
+    // Keep one complete reduction span in L1 when it fits within a conservative
     // per-core budget. The SFPU two-pass kernel can then replay the same CB pages for
-    // variance instead of issuing a second set of DRAM reads. The lower tile threshold
-    // is selected below after work has been split across cores.
+    // variance instead of issuing a second set of DRAM reads. W reductions retain Wt
+    // tiles; H and HW reductions retain one Ht-tile column at a time. The lower tile
+    // threshold is selected below after work has been split across cores.
     constexpr std::uint32_t two_pass_l1_replay_max_bytes = 512 * 1024;
 
     // Float32 input on the statistics path requires fp32_dest_acc_en=true as a prerequisite for
@@ -179,9 +180,10 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     const bool multiple_work_units_per_core =
         num_work_units_per_core_group_1 > 1 || num_work_units_per_core_group_2 > 1;
     const std::uint32_t two_pass_l1_replay_min_tiles = multiple_work_units_per_core ? 8 : 24;
+    const std::uint32_t two_pass_l1_replay_tiles = reduce_w ? Wt : Ht;
     const bool two_pass_l1_replay =
-        reduce_w && Wt >= two_pass_l1_replay_min_tiles &&
-        static_cast<std::uint64_t>(Wt) * input_single_tile_size <= two_pass_l1_replay_max_bytes;
+        two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles &&
+        static_cast<std::uint64_t>(two_pass_l1_replay_tiles) * input_single_tile_size <= two_pass_l1_replay_max_bytes;
 
     ProgramDescriptor desc;
 
@@ -191,7 +193,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // truncate FP32 to TF32). The user scalar is applied as an SFPU post-multiplication on
     // the reduced output, not by pre-scaling the input -- see post_mul_scaler below.
     CBIndex input_cb_index = CBIndex::c_0;
-    std::uint32_t input_tiles_per_cb = two_pass_l1_replay ? Wt : 2;
+    std::uint32_t input_tiles_per_cb = two_pass_l1_replay ? two_pass_l1_replay_tiles : 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_tiles_per_cb * input_single_tile_size,
         .core_ranges = all_cores,
