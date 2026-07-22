@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
 from models.demos.utils.device_sku import get_current_device_sku_name
@@ -24,7 +25,6 @@ from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,

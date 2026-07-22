@@ -108,9 +108,7 @@ def mark_weight_cache_complete(
                 }
             )
         )
-        logger.info(
-            f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights, {len(host)} host-loaded)"
-        )
+        logger.info(f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights, {len(host)} host-loaded)")
     except OSError as e:
         logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
 
