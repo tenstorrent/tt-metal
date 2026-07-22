@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -92,6 +93,8 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)
+    std::once_flag names_once_;  // zone names are loaded LAZILY on first drain (after kernels JIT-compile,
+                                 // so the zone-source-location log exists) -- not at start()/bring-up.
 };
 
 }  // namespace tt::tt_metal

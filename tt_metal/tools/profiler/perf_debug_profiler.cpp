@@ -4,6 +4,8 @@
 
 #include "tools/profiler/perf_debug_profiler.hpp"
 
+#include <atomic>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -61,18 +63,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 
     tracy_ = std::make_unique<PerfDebugTracyHandler>();
-    // Zone-name table: srcloc hash -> name from the compile-time zone-source-location logs (stable node
-    // storage, so a string_view into it stays valid). Unknown hashes fall back to "Zone_0x<hash>" in
-    // HandleWorkerZone.
-    try {
-        for (auto& [h, md] : generateZoneSourceLocationsHashes()) {
-            zone_names_[h] = md.marker_name;
-        }
-    } catch (const std::exception& e) {
-        log_warning(
-            tt::LogMetal, "[perf-debug profiler] zone-name load failed ({}); zones fall back to Zone_0x*.", e.what());
-    }
-    zone_names_[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID (producer back-pressure marker)
+    // NOTE: zone names are loaded LAZILY on the first drain (see drain_loop), NOT here -- at start()
+    // (MeshDevice bring-up) the workload's kernels have not been JIT-compiled yet, so their zone-source-
+    // location entries are not in the log and every name would fall back to "Zone_<hash>".
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         if (!mesh_device->is_local(coord)) {
@@ -263,6 +256,10 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     const uint32_t fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
     std::vector<uint32_t> buf;
     auto backoff = std::chrono::microseconds(50);
+    // Rebase device timestamps to the FIRST one this drain thread sees, so zones land near the Tracy
+    // context origin (host_start) instead of ~device-wall-clock ticks into the timeline (a "multi-hour"
+    // offset that renders zones off-screen). Matches test_x280_realprof / the RT handler's anchoring.
+    uint64_t ts_base = 0;
 
     while (!stop_.load(std::memory_order_acquire)) {
         uint32_t np = sock->pages_available();
@@ -276,6 +273,21 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
         buf.resize(static_cast<size_t>(np) * page_words);
         sock->read(buf.data(), np);  // auto-acks the sender
 
+        // First drain with data => the workload's kernels have JIT-compiled, so the zone-source-location
+        // log now holds their srcloc hashes. Load names ONCE (call_once blocks the sibling drain thread
+        // until done, so the subsequent zone_names_ reads are race-free). Stable node storage => the
+        // string_views handed to Tracy stay valid.
+        std::call_once(names_once_, [this]() {
+            try {
+                for (auto& [h, md] : generateZoneSourceLocationsHashes()) {
+                    zone_names_[h] = md.marker_name;
+                }
+            } catch (const std::exception& e) {
+                log_warning(tt::LogMetal, "[perf-debug profiler] zone-name load failed ({})", e.what());
+            }
+            zone_names_[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
+        });
+
         pz::profzone_decode(
             st,
             buf.data(),
@@ -288,6 +300,23 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
                 if (ci >= ctx.core_virt.size()) {
                     return;
+                }
+                // DIAG (TT_PERF_DEBUG_ZONE_DUMP=1): dump the first decoded markers' per-lane timestamp split
+                // (hi = timer_hi, lo = timer_low) to spot a lane whose timer_hi never got set (-> zones land at
+                // a wildly wrong time and "vanish" when zoomed to the good zones).
+                static const bool zdump = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
+                static std::atomic<int> ndump{0};
+                if (zdump && ndump.fetch_add(1, std::memory_order_relaxed) < 80) {
+                    log_info(
+                        tt::LogMetal,
+                        "[zdump] ci={} risc={} hi={} lo={} ts={} start={} hash=0x{:x}",
+                        ci,
+                        risc,
+                        (uint32_t)(ts >> 32),
+                        (uint32_t)(ts & 0xffffffffu),
+                        ts,
+                        (type == kernel_profiler::ZONE_START),
+                        hash);
                 }
                 const auto [vx, vy] = ctx.core_virt[ci];
                 uint32_t nx = vx, ny = vy;
@@ -309,7 +338,10 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 pkt.risc = risc;
                 pkt.timer_id = hash;
                 pkt.name = name;
-                pkt.timestamp = ts;
+                if (ts_base == 0) {
+                    ts_base = ts;  // first device ts seen -> the rebase origin (maps to the context host_start)
+                }
+                pkt.timestamp = (ts >= ts_base) ? (ts - ts_base) : 0;
                 pkt.is_start = (type == kernel_profiler::ZONE_START);
                 tracy_->HandleWorkerZone(pkt);
             });
