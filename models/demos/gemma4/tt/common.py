@@ -12,19 +12,16 @@ Usage:
 
 import os
 
+from loguru import logger
+
 import ttnn
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
-from loguru import logger
-from models.common.weight_cache import (
-    build_cached_state_dict,
-    mark_weight_cache_complete,
-    weight_cache_is_complete,
-)
 
 # Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
 # loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4/tt):

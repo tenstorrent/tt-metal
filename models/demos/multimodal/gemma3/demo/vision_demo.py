@@ -12,9 +12,9 @@ from PIL import Image as PIL_Image
 from pydantic import BaseModel
 
 from models.common.llama_models import sample_top_p
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
 from models.tt_transformers.tt.generator import create_submeshes
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 
 IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
