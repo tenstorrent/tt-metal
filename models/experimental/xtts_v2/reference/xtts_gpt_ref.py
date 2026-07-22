@@ -320,45 +320,63 @@ def reference_generate(
 
 
 def main():
+    """Regenerate goldens in the real inference order: DECODE (generate codes), then PREFILL
+    over those codes to get the latents that feed the vocoder — mirroring Xtts.inference(),
+    which calls gpt.generate() then gpt(..., return_latent=True) over the generated codes."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default=DEFAULT_CKPT)
     ap.add_argument("--out", default=GOLDEN_DIR)
-    ap.add_argument("--n-text", type=int, default=16)
-    ap.add_argument("--n-mel", type=int, default=48)
-    ap.add_argument("--max-new", type=int, default=24, help="decode golden: max audio codes to generate")
+    ap.add_argument("--n-text", type=int, default=8, help="prefix (text) length for the decode->prefill chain")
+    ap.add_argument("--max-new", type=int, default=24, help="max audio codes to generate")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     print(f"[ref] loading GPT core from {args.ckpt}")
     gpt, final_norm = build_reference(args.ckpt)
-
-    print("[ref] building synthetic inputs_embeds")
-    inputs_embeds = make_synthetic_inputs_embeds(args.ckpt, args.n_text, args.n_mel)
-    print(f"[ref] inputs_embeds {tuple(inputs_embeds.shape)} std={inputs_embeds.std().item():.4f}")
-
-    last_hidden, latents = reference_forward(gpt, final_norm, inputs_embeds)
-    print(f"[ref] latents {tuple(latents.shape)} mean={latents.mean().item():.5f} std={latents.std().item():.5f}")
-
-    torch.save(inputs_embeds, os.path.join(args.out, "inputs_embeds.pt"))
-    torch.save(last_hidden, os.path.join(args.out, "last_hidden_state.pt"))
-    torch.save(latents, os.path.join(args.out, "latents.pt"))
-    torch.save(
-        {"n_text": args.n_text, "n_mel": args.n_mel, "n_embd": N_EMBD, "n_layer": N_LAYER, "n_head": N_HEAD},
-        os.path.join(args.out, "meta.pt"),
-    )
-    print(f"[ref] wrote prefill goldens to {args.out}")
-
-    # ---- decode / generation goldens ----
     heads = load_gen_head(args.ckpt)
-    prefix = make_synthetic_prefix(heads, n_text=8)
+
+    # ---- 1) DECODE: generate audio codes from a prefix (mirrors Xtts: gpt.generate) ----
+    prefix = make_synthetic_prefix(heads, n_text=args.n_text)
     gen = reference_generate(gpt, final_norm, heads, prefix, max_new=args.max_new)
+    codes = gen["codes"]
+    print(f"[ref] decode: generated {codes.numel()} codes: {codes.tolist()}")
+
     gen_dir = os.path.join(args.out, "generate")
     os.makedirs(gen_dir, exist_ok=True)
     for k in ("prefix_emb", "codes", "logits", "latents"):
         torch.save(gen[k], os.path.join(gen_dir, f"{k}.pt"))
-    torch.save({"max_new": args.max_new, "start": START_AUDIO_TOKEN, "stop": STOP_AUDIO_TOKEN}, os.path.join(gen_dir, "meta.pt"))
-    print(f"[ref] generated {gen['codes'].numel()} codes: {gen['codes'].tolist()}")
+    torch.save(
+        {"max_new": args.max_new, "n_text": args.n_text, "start": START_AUDIO_TOKEN, "stop": STOP_AUDIO_TOKEN},
+        os.path.join(gen_dir, "meta.pt"),
+    )
     print(f"[ref] wrote decode goldens to {gen_dir}")
+
+    # ---- 2) PREFILL over the generated codes (mirrors Xtts: gpt(..., return_latent=True)) ----
+    # Rebuild the exact mel sequence decode fed through the transformer:
+    #   tokens = [start, code_0, ..., code_{T-2}]  at mel positions 0..T-1
+    # A single cache-free forward then yields the latents; the mel-position slice is what the
+    # HiFi-GAN vocoder (Block 4) consumes. GPT2's wpe is nulled, so mel_pos is the only position.
+    mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
+    T = codes.numel()
+    mel_ids = torch.cat([torch.tensor([START_AUDIO_TOKEN], dtype=codes.dtype), codes[:-1]])  # [start, code_0..code_{T-2}]
+    mel_seq = mel_emb[mel_ids] + mel_pos[:T]  # [T, 1024]
+    inputs_embeds = torch.cat([prefix, mel_seq.unsqueeze(0)], dim=1)  # [1, P+T, 1024]
+    last_hidden, latents = reference_forward(gpt, final_norm, inputs_embeds)
+    vocoder_latents = latents[:, prefix.shape[1] :]  # [1, T, 1024] -> feeds Block 4
+
+    # Bonus: single prefill vs incremental decode must agree at the mel positions (KV-cache check).
+    consistency = pcc(vocoder_latents, gen["latents"])
+    print(f"[ref] prefill over codes: latents {tuple(latents.shape)}; decode-vs-prefill latent PCC = {consistency:.6f}")
+
+    torch.save(inputs_embeds, os.path.join(args.out, "inputs_embeds.pt"))
+    torch.save(last_hidden, os.path.join(args.out, "last_hidden_state.pt"))
+    torch.save(latents, os.path.join(args.out, "latents.pt"))
+    torch.save(vocoder_latents, os.path.join(args.out, "vocoder_latents.pt"))
+    torch.save(
+        {"prefix_len": prefix.shape[1], "n_codes": int(T), "n_embd": N_EMBD, "n_layer": N_LAYER, "n_head": N_HEAD},
+        os.path.join(args.out, "meta.pt"),
+    )
+    print(f"[ref] wrote prefill goldens to {args.out}")
 
 
 if __name__ == "__main__":
