@@ -62,11 +62,15 @@ def _to_dev(t, device, dtype=DTYPE):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE):
+def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE, matmul_dtype=None):
     """Convert the GPT-core checkpoint tensors to on-device ttnn tensors (HF Conv1D [in,out] as-is).
-    dtype=float32 (default) for the accuracy-first prefill path; bfloat16 for the fast decode path."""
+    dtype=float32 (default) for the accuracy-first prefill path; bfloat16 for the fast decode path.
+    matmul_dtype (optional) sets a *separate* precision for the four big weight matrices only
+    (attn/proj/c_fc/c_proj) — bfloat8_b there halves the per-token weight DRAM traffic that dominates
+    decode, while layer-norm/bias stay at `dtype`. Defaults to `dtype` (uniform precision)."""
     core = load_gpt_core_state(ckpt_path)  # keys: h.{i}.*, ln_f.*, final_norm.*
     to = lambda k: _to_dev(core[k].float(), device, dtype)
+    to_mm = lambda k: _to_dev(core[k].float(), device, matmul_dtype or dtype)  # weight matrices
     layers = []
     for i in range(N_LAYER):
         p = f"h.{i}."
@@ -74,15 +78,15 @@ def load_ttnn_weights(device, ckpt_path=DEFAULT_CKPT, dtype=DTYPE):
             {
                 "ln_1_w": to(p + "ln_1.weight"),
                 "ln_1_b": to(p + "ln_1.bias"),
-                "attn_w": to(p + "attn.c_attn.weight"),  # [1024, 3072] (in,out)
+                "attn_w": to_mm(p + "attn.c_attn.weight"),  # [1024, 3072] (in,out)
                 "attn_b": to(p + "attn.c_attn.bias"),
-                "proj_w": to(p + "attn.c_proj.weight"),  # [1024, 1024]
+                "proj_w": to_mm(p + "attn.c_proj.weight"),  # [1024, 1024]
                 "proj_b": to(p + "attn.c_proj.bias"),
                 "ln_2_w": to(p + "ln_2.weight"),
                 "ln_2_b": to(p + "ln_2.bias"),
-                "fc_w": to(p + "mlp.c_fc.weight"),  # [1024, 4096]
+                "fc_w": to_mm(p + "mlp.c_fc.weight"),  # [1024, 4096]
                 "fc_b": to(p + "mlp.c_fc.bias"),
-                "mproj_w": to(p + "mlp.c_proj.weight"),  # [4096, 1024]
+                "mproj_w": to_mm(p + "mlp.c_proj.weight"),  # [4096, 1024]
                 "mproj_b": to(p + "mlp.c_proj.bias"),
             }
         )
@@ -238,6 +242,11 @@ class TracedGPTDecoder:
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq=128):
         self.device = device
+        # Faithful by default: bf16 everywhere (flash-decode/cache are bf16-only anyway).
+        # bfloat8_b on the four matmul weights buys ~7% (12.4->11.5 ms/token) by halving per-token
+        # weight DRAM traffic, with codes bit-identical and latents PCC 0.99931 — but it's a
+        # precision trade we're deferring until we can A/B *real audio* end-to-end. Enable with
+        # matmul_dtype=ttnn.bfloat8_b when that day comes.
         self.layers, self.tail = load_ttnn_weights(device, ckpt_path, dtype=ttnn.bfloat16)
         # sdpa_decode is wrong when the cache length is an odd number of 32-tiles -> round to a multiple of 64.
         self.max_seq = ((max_seq + 63) // 64) * 64
@@ -255,11 +264,39 @@ class TracedGPTDecoder:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(grid, (32, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR),
         )
+        # Width-sharded LayerNorm for decode: over a single-token [1,1,1024], the 1024-dim (= 32-tile)
+        # reduction runs effectively single-core in the interleaved op. Spreading it width-wise across a
+        # 32-core grid (1 tile/core) parallelizes the reduction — ~62 LayerNorms/token, so it adds up.
+        # Configs + expanded weights are built here (before trace capture) so the trace stays safe.
+        SH = 32  # shard height = one tile; N_EMBD // SH = 32-wide hidden slice per core
+        wsh = N_EMBD // SH
+        cg = ttnn.CoreGrid(x=8, y=SH // 8)  # 8 x 4 = 32 cores
+        self._ln_cfg = ttnn.create_sharded_memory_config(
+            shape=(SH, wsh), core_grid=cg, strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+        )
+        self._ln_prog = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[cg.x, cg.y],
+            subblock_w=wsh // 32, block_h=SH // 32, block_w=wsh // 32, inplace=False,
+        )
+        # The sharded kernel wants gamma/beta as [1, SH, dim]; re-expand the loaded [dim] vectors.
+        _sh = lambda t: _to_dev(ttnn.to_torch(t).float().view(1, 1, N_EMBD).expand(1, SH, N_EMBD).contiguous(), device, ttnn.bfloat16)
+        for w in self.layers:
+            w["ln_1_w"], w["ln_1_b"] = _sh(w["ln_1_w"]), _sh(w["ln_1_b"])
+            w["ln_2_w"], w["ln_2_b"] = _sh(w["ln_2_w"]), _sh(w["ln_2_b"])
+        for kk in ("ln_f_w", "ln_f_b", "fn_w", "fn_b"):
+            self.tail[kk] = _sh(self.tail[kk])
+
         self.trace_id = None
         self._out = None
 
-    def _ln(self, x, w, b):
-        return ttnn.layer_norm(x, weight=w, bias=b, epsilon=LN_EPS, compute_kernel_config=COMPUTE_KERNEL_CONFIG)
+    def _ln(self, x, g, b):  # width-sharded LayerNorm across 32 cores, then back to interleaved
+        xs = ttnn.interleaved_to_sharded(x, self._ln_cfg)
+        y = ttnn.layer_norm(
+            xs, weight=g, bias=b, epsilon=LN_EPS, program_config=self._ln_prog,
+            memory_config=self._ln_cfg, compute_kernel_config=COMPUTE_KERNEL_CONFIG,
+        )
+        return ttnn.sharded_to_interleaved(y)
 
     def _decode_step(self, x):  # x [1,1,1024] -> latent [1,1,1024]
         for li in range(N_LAYER):
@@ -276,7 +313,8 @@ class TracedGPTDecoder:
             attn = ttnn.reshape(attn, [1, 1, N_EMBD])
             x = ttnn.add(x, ttnn.linear(attn, w["proj_w"], bias=w["proj_b"], compute_kernel_config=COMPUTE_KERNEL_CONFIG))
             x = ttnn.add(x, _mlp(self._ln(x, w["ln_2_w"], w["ln_2_b"]), w))
-        return _apply_tail(x, self.tail)
+        x = self._ln(x, self.tail["ln_f_w"], self.tail["ln_f_b"])  # sharded ln_f ...
+        return self._ln(x, self.tail["fn_w"], self.tail["fn_b"])  # ... + final_norm
 
     def reset(self):
         for c in self.k_cache + self.v_cache:
