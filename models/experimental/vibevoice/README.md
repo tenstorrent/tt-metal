@@ -36,10 +36,10 @@ vibevoice/
 ├── tests/
 │   ├── conftest.py            # pytest: reference/ on PYTHONPATH + shared fixtures
 │   └── pcc/
-│   ├── lm_pcc_helpers.py      # shared LM PCC helpers (HF ref, TT LM builder, PCC utils)
+│   ├── pcc_helpers.py      # shared LM PCC helpers (HF ref, TT LM builder, PCC utils)
 │   ├── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
-│   ├── test_full_prefill_pcc.py   # full prefill chain vs HF reference
-│   └── test_full_decode_pcc.py    # post-diffusion decode chain vs pinned ref conditions
+│   ├── test_prefill.py   # full prefill chain vs HF reference
+│   └── test_decode.py    # post-diffusion decode chain vs pinned ref conditions
 └── tt/                      # TTNN layers (empty initially)
 ```
 
@@ -130,17 +130,17 @@ threshold.
 
 The LM prefill and decode paths are validated as part of the **full prefill / decode chain** PCC
 tests (vs a bf16 HuggingFace Qwen2 reference), plus a standalone decoder-layer regression. Shared
-helpers live in `tests/pcc/lm_pcc_helpers.py`; fixtures (`vv_config`, `lm_state`) are in
+helpers live in `tests/pcc/pcc_helpers.py`; fixtures (`vv_config`, `lm_state`) are in
 `tests/conftest.py`.
 
 - **Decoder layer (regression):** `test_decoder_layer_pcc.py::test_decoder_layer_decode_pcc` —
   Devstral-style layer-0 decode; random hidden states `[1, 1, H]`, empty KV cache, positions 0–9,
   no prefill. Isolates decode SDPA at low cache depth (min PCC ~0.99997).
-- **Full prefill chain:** `test_full_prefill_pcc.py::test_full_prefill_chain_pcc` — the integrated
+- **Full prefill chain:** `test_prefill.py::test_full_prefill_chain_pcc` — the integrated
   prefill path (acoustic tokenizer → connector → scatter into embeddings → LM prefill →
   `last_hidden_state`) plus per-layer KV cache, vs the bf16 HF Qwen2 reference; synthetic-input ISL
   sweep 2k … 64k, gated at `PCC >= 0.99`.
-- **Full decode chain:** `test_full_decode_pcc.py::test_decode_ref_cond_frame_pcc` — the
+- **Full decode chain:** `test_decode.py::test_decode_ref_cond_frame_pcc` — the
   post-diffusion decode chain against pinned reference diffusion conditions.
 
 ```bash
@@ -148,8 +148,8 @@ helpers live in `tests/pcc/lm_pcc_helpers.py`; fixtures (`vv_config`, `lm_state`
 pytest models/experimental/vibevoice/tests/pcc/test_decoder_layer_pcc.py -v -s
 
 # Full prefill / decode chain
-pytest models/experimental/vibevoice/tests/pcc/test_full_prefill_pcc.py \
-       models/experimental/vibevoice/tests/pcc/test_full_decode_pcc.py -v -s
+pytest models/experimental/vibevoice/tests/pcc/test_prefill.py \
+       models/experimental/vibevoice/tests/pcc/test_decode.py -v -s
 ```
 
 Individual component PCC tests (acoustic/semantic tokenizers, connector, diffusion head, DPM
