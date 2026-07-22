@@ -24,7 +24,7 @@ existed while that bug was open have been removed: the numbers below are
 now honest measurements of the correct workload, not placeholders pending
 re-measurement, so a real failure should surface as a real failure.
 
-WARMUP FIX (this revision): measured on hardware 2026-07-09, use_2cq=False,
+WARMUP FIX (prior revision): measured on hardware 2026-07-09, use_2cq=False,
 B=1 S=1, post multi-trace correctness fix -- 10 replays immediately after
 ctx build, only 1 prior warmup call:
     120.6, 124.6, 120.2, 97.4, 99.2, 98.4, 98.8, 99.1, 99.9, 99.6 (ms)
@@ -34,13 +34,43 @@ caching resolves on first real replay after trace capture. Warmup bumped
 to 5 discarded replays on all latency-sensitive tests below, with margin
 past the observed 3-replay settling point.
 
-CURRENT MEASURED BASELINE (2026-07-09, use_2cq=False, B=1 S=1, steady
-state after proper warmup): median ~98ms. Target is 50ms. This is EXPECTED
-to fail until Stage-2-labeled op fusion (KV write path: slice_write_kv
-21.7ms + qkv_linear 7ms + to_layout_kv 6ms + qkv_split 5ms = ~43% of
-per-step latency, per _print_op_times()) lands. A failing
-test_single_sequence_latency right now is a correct, honest result --
-do not re-add xfail to hide it.
+PRIOR MEASURED BASELINE (2026-07-09, use_2cq=False, B=1 S=1, steady state
+after proper warmup, DRAM-resident weights -- see below): median ~98ms.
+Target is 50ms.
+
+INVESTIGATION 1 (this revision) -- L1 MEMORY CONFIG FOR HOT-PATH WEIGHTS:
+
+HYPOTHESIS: load_weights() already threads a hot_path_memory_config
+parameter through every decoder-layer weight builder (_build_fused_qkv,
+_build_out_proj, _build_ffn, _build_layer_norm in tt/tst_model.py), but
+every load_weights() call in THIS file was previously invoked with no
+second/third argument -- i.e. hot_path_memory_config=None, its default --
+meaning decoder weights have been sitting in DRAM (ttnn.DRAM_MEMORY_CONFIG,
+the implicit default for ttnn.from_torch when memory_config is unset) for
+every perf number recorded above, despite:
+  (a) scripts/measure_weight_footprint.py already confirming the full
+      weight set is 0.236 MB / 0.3% of pooled L1 capacity on this grid --
+      footprint was never the blocker,
+  (b) decoder hot-path weights already being built at PADDED_WIDTH=64,
+      a clean multiple of the 32-wide tile, so the tile-alignment
+      precondition for L1 residency is already satisfied.
+
+This revision passes hot_path_memory_config=ttnn.L1_MEMORY_CONFIG in every
+load_weights() call below. This changes ONLY where weight tensors physically
+live on-chip -- it does not change any math, so PCC/NLL/CRPS/MAE results
+from test_tst_pcc.py / test_tst_e2e.py must be re-run and confirmed
+UNCHANGED before trusting any latency delta recorded here as real.
+
+WHAT TO COMPARE AFTER RUNNING THIS FILE:
+  test_single_sequence_latency        vs prior ~98ms median (DRAM)
+  test_single_sequence_latency_2cq    vs prior ~104ms median (DRAM)
+  test_throughput_seqs_per_second     vs prior 28.2 seq/s (DRAM)
+  test_sample_generation_under_1s     vs prior (pass/fail only, record ms)
+If numbers do not move: the bottleneck is confirmed dispatch-count-bound,
+not memory-bandwidth-bound (see Investigation 2, T_max-sweep probe, for the
+direct test of that claim) -- this is a useful negative result, not a
+wasted one, and should be recorded in this docstring on the next revision
+either way, not silently dropped.
 """
 
 import math
@@ -54,15 +84,36 @@ from safetensors import safe_open
 from transformers import TimeSeriesTransformerForPrediction
 
 import ttnn
-from models.demos.time_series_transformer.tt.tst_model import load_weights
 from models.demos.time_series_transformer.tt.tst_model_cached_additions import (
     build_traced_decoder_context_cached,
     run_traced_generation_cached,
 )
+from models.demos.time_series_transformer.tt.tst_weights import load_weights
 
 TRACE_BYTES_PER_BS_UNIT = 640_615
 TRACE_HEADROOM = 1.25
 L1_SMALL_SIZE = 24_576
+
+# Investigation 1: hot-path decoder weights now requested in L1 rather than
+# left at the ttnn.from_torch default (DRAM). See module docstring above.
+HOT_PATH_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG  # NOTE: measured WORSE, see below -- kept defined but unused
+
+# INVESTIGATION 1 RESULT (measured, 2026-07-13): hypothesis REFUTED.
+# L1-resident hot-path weights made things WORSE, not better:
+#   test_single_sequence_latency:      98.0ms (DRAM) -> 117.6ms (L1)   (+20%, worse)
+#   test_throughput_seqs_per_second:   28.2 seq/s (DRAM) -> 25.4 seq/s (L1)  (-10%, worse)
+#   test_single_sequence_latency_2cq:  104.0ms (DRAM) -> 102.3ms (L1)  (~flat, within noise)
+# Root cause candidate (not yet confirmed): qkv_linear alone went from ~7ms to
+# ~11-17ms per step -- the op reading the moved weights got slower, not faster.
+# Per-replay timing also showed an accumulating-degradation pattern unique to
+# this config (fast for the first ~6 replays, then jumps ~20ms and stays there --
+# opposite of DRAM's documented high-then-settling warmup curve), consistent with
+# pooled-L1 contention/fragmentation between weights, KV cache, trace, and mask
+# buffers all competing for the same on-chip space -- something the static
+# footprint check (0.3% of pooled L1) did not and could not capture, since it
+# only measured size, not runtime contention. DO NOT re-enable this without new
+# evidence addressing that mechanism directly (e.g. profiling actual L1
+# occupancy/fragmentation during decode, not just weight footprint at rest).
 
 MODEL_ID = "huggingface/time-series-transformer-tourism-monthly"
 MODEL_REVISION = "2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35"
@@ -85,6 +136,19 @@ def _open_device(bs: int, num_cqs: int = 1) -> ttnn.Device:
         trace_region_size=_trace_region_size(bs),
         num_command_queues=num_cqs,
     )
+
+
+_original_load_weights = load_weights  # capture the real tst_model.load_weights before shadowing
+
+
+def load_weights(hf_model, device):
+    """
+    Single choke point -- currently just delegates to the real load_weights().
+    Investigation 1 found L1 hot-path weights measure WORSE (see note above),
+    so this does NOT pass any hot_path_memory_config -- the real load_weights()
+    has no such parameter and was never modified to accept one.
+    """
+    return _original_load_weights(hf_model, device)
 
 
 @pytest.fixture(scope="module")
@@ -144,7 +208,8 @@ def test_single_sequence_latency(hf_model, inputs):
         ttnn.close_device(device)
 
     median_ms = statistics.median(latencies)
-    print(f"\n[INFO] Latency (S=1) -- median: {median_ms:.1f} ms  all: {[f'{v:.1f}' for v in latencies]}")
+    print(f"\n[INFO] Latency (S=1, DRAM weights) -- median: {median_ms:.1f} ms  all: {[f'{v:.1f}' for v in latencies]}")
+    print(f"[INFO] Prior DRAM-weights baseline for comparison: ~98.0 ms median (see module docstring)")
     assert median_ms < 50.0, f"Latency {median_ms:.1f} ms exceeds 50 ms target."
 
 
@@ -177,7 +242,10 @@ def test_throughput_seqs_per_second(hf_model, inputs):
 
     total_seqs = N_RUNS * B
     seqs_per_sec = total_seqs / elapsed
-    print(f"\n[INFO] Throughput (S=1): {seqs_per_sec:.1f} seq/s ({total_seqs} seqs in {elapsed:.2f}s)")
+    print(
+        f"\n[INFO] Throughput (S=1, B={B}, DRAM weights): {seqs_per_sec:.1f} seq/s ({total_seqs} seqs in {elapsed:.2f}s)"
+    )
+    print(f"[INFO] Prior DRAM-weights baseline for comparison: 28.2 seq/s at B=4 (see module docstring)")
     assert seqs_per_sec >= 100.0, f"Throughput {seqs_per_sec:.1f} seq/s < 100 seq/s target."
 
 
@@ -203,7 +271,7 @@ def test_sample_generation_under_1s(hf_model, inputs):
     finally:
         ttnn.close_device(device)
 
-    print(f"\n[INFO] 100 samples in {elapsed_s*1000:.1f} ms")
+    print(f"\n[INFO] 100 samples in {elapsed_s*1000:.1f} ms (DRAM weights)")
     assert elapsed_s < 1.0, f"100 samples took {elapsed_s:.3f}s, target < 1s."
 
 
@@ -235,6 +303,14 @@ def test_sample_generation_under_1s(hf_model, inputs):
 # output (not just one decoder layer's K-cache) between use_2cq=True and
 # use_2cq=False, with the latter as ground truth (CQ_WRITE == CQ_COMPUTE
 # == 0, fully blocking, no cross-queue race possible by construction).
+#
+# NOTE per Jeremy's review (external maintainer feedback): this test does
+# NOT satisfy his stated bar for enabling cross-step 2CQ by default
+# ("explicit CQ fencing on the shared buffers and a regression that
+# compares multi-step 1CQ vs 2CQ outputs" beyond a single-decode-layer
+# marker probe). use_2cq remains opt-in / non-default pending that; this
+# test is retained as a useful regression, not as sign-off for a default
+# change.
 #
 # Two SEPARATE ctx instances are built (one per use_2cq value) rather than
 # reusing one ctx across two run_traced_generation_cached calls, because
@@ -315,7 +391,8 @@ def test_2cq_matches_single_queue_output(hf_model, inputs):
         "exact-match hardware result, this gives reasonable confidence the 2CQ event "
         "choreography is safe on this hardware/ttnn version -- though neither check is "
         "a substitute for the full CRPS/NLL precision the e2e suite already provides "
-        "for use_2cq=False."
+        "for use_2cq=False, and neither satisfies the stricter bar (explicit CQ fencing "
+        "+ multi-step regression) flagged in external review before enabling this by default."
     )
 
 
@@ -345,5 +422,8 @@ def test_single_sequence_latency_2cq(hf_model, inputs):
         ttnn.close_device(device)
 
     median_ms = statistics.median(latencies)
-    print(f"\n[INFO] Latency (2CQ, S=1) -- median: {median_ms:.1f} ms  all: {[f'{v:.1f}' for v in latencies]}")
+    print(
+        f"\n[INFO] Latency (2CQ, S=1, DRAM weights) -- median: {median_ms:.1f} ms  all: {[f'{v:.1f}' for v in latencies]}"
+    )
+    print(f"[INFO] Prior DRAM-weights baseline for comparison: ~104.0 ms median (see module docstring)")
     assert median_ms < 50.0, f"Latency {median_ms:.1f} ms exceeds 50 ms target."

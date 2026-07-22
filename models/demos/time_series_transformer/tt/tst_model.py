@@ -2,318 +2,44 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
+"""
+Forward-pass and generation entry points for the Time Series Transformer
+TTNN port: encoder/decoder layer stacks, and three generation paths --
+generate() (untraced reference), generate_traced() (single fused trace,
+no KV-cache; kept as a correctness gate, not a performance path), and
+teacher_forced_nll() (exact NLL under teacher forcing). Weight loading
+lives in tst_weights.py. Distribution dispatch lives in tst_distribution.py.
+The KV-cache + per-layer-trace inference path lives in
+tst_model_cached_additions.py, not here.
+"""
+
 import torch
 import torch.nn.functional as F
 
 import ttnn
 
-from .tst_attention import build_causal_mask, precompute_cross_attn_kv
+from .attention import build_causal_mask, precompute_cross_attn_kv
+from .tst_config import CONTEXT_LENGTH, D_MODEL, LAGS, NUM_PARALLEL_SAMPLES, PADDED_WIDTH, PREDICTION_LENGTH
 from .tst_decoder_layer import tst_decoder_layer
 from .tst_distribution import (
+    _distribution_head,
+    _sample_next_step,
     negative_binomial_params,
     nll_negative_binomial,
     nll_normal,
     nll_student_t,
     normal_params,
-    sample_negative_binomial,
-    sample_normal,
-    sample_student_t,
     student_t_params,
 )
 from .tst_embedding import prepare_decoder_input, prepare_encoder_input
 from .tst_encoder_layer import tst_encoder_layer
-
-D_MODEL = 26
-NUM_HEADS = 2
-HEAD_DIM_TRUE = 13
-HEAD_DIM_PADDED = 32
-PADDED_WIDTH = NUM_HEADS * HEAD_DIM_PADDED  # 64
-
-CONTEXT_LENGTH = 24
-PREDICTION_LENGTH = 24
-NUM_PARALLEL_SAMPLES = 100
-
-
-def _pad_weight_per_head(W_out_in):
-    W_in_out = W_out_in.T
-    head_cols = W_in_out.split(HEAD_DIM_TRUE, dim=1)
-    padded_heads = [F.pad(h, (0, HEAD_DIM_PADDED - HEAD_DIM_TRUE)) for h in head_cols]
-    return torch.cat(padded_heads, dim=1)
-
-
-def _pad_bias_per_head(b_out):
-    head_chunks = b_out.split(HEAD_DIM_TRUE, dim=0)
-    padded_heads = [F.pad(h, (0, HEAD_DIM_PADDED - HEAD_DIM_TRUE)) for h in head_chunks]
-    return torch.cat(padded_heads, dim=0)
-
-
-def _pad_input_per_head(W_in_out):
-    head_rows = W_in_out.split(HEAD_DIM_TRUE, dim=0)
-    padded_heads = [F.pad(h, (0, 0, 0, HEAD_DIM_PADDED - HEAD_DIM_TRUE)) for h in head_rows]
-    return torch.cat(padded_heads, dim=0)
-
-
-def _pad_input_dim(W_in_out, target_in=D_MODEL):
-    pad_rows = PADDED_WIDTH - target_in
-    if pad_rows <= 0:
-        return W_in_out
-    return F.pad(W_in_out, (0, 0, 0, pad_rows))
-
-
-def _to_ttnn(t, device, layout=ttnn.TILE_LAYOUT, memory_config=None):
-    return ttnn.from_torch(
-        t.contiguous().float(), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
-    )
-
-
-def _to_ttnn_int(t, device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=None):
-    return ttnn.from_torch(
-        t.contiguous().to(torch.int32), dtype=ttnn.uint32, layout=layout, device=device, memory_config=memory_config
-    )
-
-
-def _build_fused_qkv(state, prefix, device, memory_config=None):
-    def padded_in_out(name):
-        W = state[f"{prefix}.{name}.weight"].float()
-        b = state[f"{prefix}.{name}.bias"].float()
-        W_padded = _pad_weight_per_head(W)
-        W_padded = _pad_input_dim(W_padded)
-        b_padded = _pad_bias_per_head(b)
-        return W_padded, b_padded
-
-    Wq, bq = padded_in_out("q_proj")
-    Wk, bk = padded_in_out("k_proj")
-    Wv, bv = padded_in_out("v_proj")
-    fused_w = torch.cat([Wq, Wk, Wv], dim=1)
-    fused_b = torch.cat([bq, bk, bv], dim=0)
-    return _to_ttnn(fused_w, device, memory_config=memory_config), _to_ttnn(
-        fused_b, device, memory_config=memory_config
-    )
-
-
-def _build_cross_attn_weights(state, prefix, device, memory_config=None):
-    Wq = state[f"{prefix}.q_proj.weight"].float()
-    bq = state[f"{prefix}.q_proj.bias"].float()
-    Wq_padded = _pad_input_dim(_pad_weight_per_head(Wq))
-    bq_padded = _pad_bias_per_head(bq)
-
-    Wk = state[f"{prefix}.k_proj.weight"].float()
-    bk = state[f"{prefix}.k_proj.bias"].float()
-    Wv = state[f"{prefix}.v_proj.weight"].float()
-    bv = state[f"{prefix}.v_proj.bias"].float()
-    Wk_padded = _pad_input_dim(_pad_weight_per_head(Wk))
-    Wv_padded = _pad_input_dim(_pad_weight_per_head(Wv))
-    bk_padded = _pad_bias_per_head(bk)
-    bv_padded = _pad_bias_per_head(bv)
-
-    fused_kv_w = torch.cat([Wk_padded, Wv_padded], dim=1)
-    fused_kv_b = torch.cat([bk_padded, bv_padded], dim=0)
-    return (
-        _to_ttnn(Wq_padded, device, memory_config=memory_config),
-        _to_ttnn(bq_padded, device, memory_config=memory_config),
-        _to_ttnn(fused_kv_w, device, memory_config=memory_config),
-        _to_ttnn(fused_kv_b, device, memory_config=memory_config),
-    )
-
-
-def _build_out_proj(state, prefix, device, memory_config=None):
-    W = state[f"{prefix}.out_proj.weight"].float()
-    b = state[f"{prefix}.out_proj.bias"].float()
-    W_t = W.T
-    W_input_padded = _pad_input_per_head(W_t)
-    W_padded = F.pad(W_input_padded, (0, PADDED_WIDTH - D_MODEL))
-    b_padded = F.pad(b, (0, PADDED_WIDTH - D_MODEL))
-    return _to_ttnn(W_padded, device, memory_config=memory_config), _to_ttnn(
-        b_padded, device, memory_config=memory_config
-    )
-
-
-def _build_ffn(state, prefix, device, ffn_dim, memory_config=None):
-    W1 = state[f"{prefix}.fc1.weight"].float()
-    b1 = state[f"{prefix}.fc1.bias"].float()
-    W1_padded = F.pad(W1.T, (0, 0, 0, PADDED_WIDTH - D_MODEL))
-
-    W2 = state[f"{prefix}.fc2.weight"].float()
-    b2 = state[f"{prefix}.fc2.bias"].float()
-    W2_padded = F.pad(W2.T, (0, PADDED_WIDTH - D_MODEL))
-    b2_padded = F.pad(b2, (0, PADDED_WIDTH - D_MODEL))
-    return (
-        _to_ttnn(W1_padded, device, memory_config=memory_config),
-        _to_ttnn(b1, device, memory_config=memory_config),
-        _to_ttnn(W2_padded, device, memory_config=memory_config),
-        _to_ttnn(b2_padded, device, memory_config=memory_config),
-    )
-
-
-def _build_layer_norm(state, prefix, device, memory_config=None):
-    w = state[f"{prefix}.weight"].float()
-    b = state[f"{prefix}.bias"].float()
-    return _to_ttnn(w, device, memory_config=memory_config), _to_ttnn(b, device, memory_config=memory_config)
-
-
-def _build_layer_norm_dict(state, prefix, device):
-    w, b = _build_layer_norm(state, prefix, device)
-    return {"weight": w, "bias": b}
-
-
-def load_weights(hf_model, device, hot_path_memory_config=None):
-    state = hf_model.state_dict()
-    cfg = hf_model.config
-    weights = {}
-
-    for i in range(cfg.encoder_layers):
-        prefix = f"model.encoder.layers.{i}"
-        qkv_w, qkv_b = _build_fused_qkv(state, f"{prefix}.self_attn", device)
-        out_w, out_b = _build_out_proj(state, f"{prefix}.self_attn", device)
-        fc1_w, fc1_b, fc2_w, fc2_b = _build_ffn(state, prefix, device, cfg.encoder_ffn_dim)
-        ln1_w, ln1_b = _build_layer_norm(state, f"{prefix}.self_attn_layer_norm", device)
-        ln2_w, ln2_b = _build_layer_norm(state, f"{prefix}.final_layer_norm", device)
-        weights[f"encoder.layers.{i}"] = {
-            "qkv_weight": qkv_w,
-            "qkv_bias": qkv_b,
-            "out_proj_weight": out_w,
-            "out_proj_bias": out_b,
-            "fc1_weight": fc1_w,
-            "fc1_bias": fc1_b,
-            "fc2_weight": fc2_w,
-            "fc2_bias": fc2_b,
-            "self_attn_layer_norm_weight": ln1_w,
-            "self_attn_layer_norm_bias": ln1_b,
-            "final_layer_norm_weight": ln2_w,
-            "final_layer_norm_bias": ln2_b,
-        }
-
-    for i in range(cfg.decoder_layers):
-        prefix = f"model.decoder.layers.{i}"
-        self_qkv_w, self_qkv_b = _build_fused_qkv(
-            state, f"{prefix}.self_attn", device, memory_config=hot_path_memory_config
-        )
-        self_out_w, self_out_b = _build_out_proj(
-            state, f"{prefix}.self_attn", device, memory_config=hot_path_memory_config
-        )
-        cross_q_w, cross_q_b, cross_kv_w, cross_kv_b = _build_cross_attn_weights(
-            state, f"{prefix}.encoder_attn", device, memory_config=hot_path_memory_config
-        )
-        cross_out_w, cross_out_b = _build_out_proj(
-            state, f"{prefix}.encoder_attn", device, memory_config=hot_path_memory_config
-        )
-        fc1_w, fc1_b, fc2_w, fc2_b = _build_ffn(
-            state, prefix, device, cfg.decoder_ffn_dim, memory_config=hot_path_memory_config
-        )
-        ln1_w, ln1_b = _build_layer_norm(
-            state, f"{prefix}.self_attn_layer_norm", device, memory_config=hot_path_memory_config
-        )
-        ln2_w, ln2_b = _build_layer_norm(
-            state, f"{prefix}.encoder_attn_layer_norm", device, memory_config=hot_path_memory_config
-        )
-        ln3_w, ln3_b = _build_layer_norm(
-            state, f"{prefix}.final_layer_norm", device, memory_config=hot_path_memory_config
-        )
-        weights[f"decoder.layers.{i}"] = {
-            "self_attn": {
-                "qkv_weight": self_qkv_w,
-                "qkv_bias": self_qkv_b,
-                "out_proj_weight": self_out_w,
-                "out_proj_bias": self_out_b,
-            },
-            "encoder_attn": {
-                "q_proj_weight": cross_q_w,
-                "q_proj_bias": cross_q_b,
-                "kv_weight": cross_kv_w,
-                "kv_bias": cross_kv_b,
-                "out_proj_weight": cross_out_w,
-                "out_proj_bias": cross_out_b,
-            },
-            "fc1_weight": fc1_w,
-            "fc1_bias": fc1_b,
-            "fc2_weight": fc2_w,
-            "fc2_bias": fc2_b,
-            "self_attn_layer_norm_weight": ln1_w,
-            "self_attn_layer_norm_bias": ln1_b,
-            "encoder_attn_layer_norm_weight": ln2_w,
-            "encoder_attn_layer_norm_bias": ln2_b,
-            "final_layer_norm_weight": ln3_w,
-            "final_layer_norm_bias": ln3_b,
-        }
-
-    weights["encoder_layernorm"] = _build_layer_norm_dict(state, "model.encoder.layernorm_embedding", device)
-    weights["decoder_layernorm"] = _build_layer_norm_dict(state, "model.decoder.layernorm_embedding", device)
-
-    enc_value_proj_t = state["model.encoder.value_embedding.value_projection.weight"].float().T.contiguous()
-    dec_value_proj_t = state["model.decoder.value_embedding.value_projection.weight"].float().T.contiguous()
-    weights["encoder_value_proj"] = _to_ttnn(enc_value_proj_t, device)
-    weights["decoder_value_proj"] = _to_ttnn(dec_value_proj_t, device)
-    weights["encoder_pos_emb"] = _to_ttnn(state["model.encoder.embed_positions.weight"].float(), device)
-    weights["decoder_pos_emb"] = _to_ttnn(state["model.decoder.embed_positions.weight"].float(), device)
-    weights["cat_embedder"] = _to_ttnn(state["model.embedder.embedders.0.weight"].float(), device)
-
-    weights["dist_head"] = {
-        "w0": state["parameter_projection.proj.0.weight"].float(),
-        "b0": state["parameter_projection.proj.0.bias"].float(),
-        "w1": state["parameter_projection.proj.1.weight"].float(),
-        "b1": state["parameter_projection.proj.1.bias"].float(),
-        "w2": state["parameter_projection.proj.2.weight"].float(),
-        "b2": state["parameter_projection.proj.2.bias"].float(),
-    }
-    weights["dist_type"] = getattr(cfg, "distribution_output", "student_t")
-
-    weights["encoder_layernorm_f32"] = {
-        "weight": state["model.encoder.layernorm_embedding.weight"].float(),
-        "bias": state["model.encoder.layernorm_embedding.bias"].float(),
-    }
-    weights["decoder_layernorm_f32"] = {
-        "weight": state["model.decoder.layernorm_embedding.weight"].float(),
-        "bias": state["model.decoder.layernorm_embedding.bias"].float(),
-    }
-    weights["encoder_layernorm_ttnn"] = {
-        "weight": _to_ttnn(state["model.encoder.layernorm_embedding.weight"].float(), device),
-        "bias": _to_ttnn(state["model.encoder.layernorm_embedding.bias"].float(), device),
-    }
-    weights["decoder_layernorm_ttnn"] = {
-        "weight": _to_ttnn(state["model.decoder.layernorm_embedding.weight"].float(), device),
-        "bias": _to_ttnn(state["model.decoder.layernorm_embedding.bias"].float(), device),
-    }
-    return weights
-
-
-def _apply_layernorm_ttnn(x, ln_weights, orig_dim=D_MODEL):
-    return ttnn.layer_norm(x, weight=ln_weights["weight"], bias=ln_weights["bias"])
-
-
-def _distribution_head(hidden, weights):
-    """hidden: torch [B, T, D_MODEL] -> distribution params tuple."""
-    dh = weights["dist_head"]
-    dt = weights.get("dist_type", "student_t")
-    if dt == "normal":
-        return normal_params(hidden, dh["w0"], dh["b0"], dh["w1"], dh["b1"])
-    elif dt == "negative_binomial":
-        return negative_binomial_params(hidden, dh["w0"], dh["b0"], dh["w1"], dh["b1"])
-    else:
-        return student_t_params(hidden, dh["w0"], dh["b0"], dh["w1"], dh["b1"], dh["w2"], dh["b2"])
-
-
-def _sample_next_step(params, dist_type, _lc, _sc):
-    """
-    Shared sampling logic for generate() and generate_traced().
-    Applies the second squeeze needed to collapse the leftover seq-len-1
-    axis from slicing hidden as [:, -1:, :] before sampling.
-    """
-    if dist_type == "normal":
-        loc_d, scale_d = params
-        raw_loc = _lc + _sc * loc_d.squeeze(-1)
-        raw_scale = _sc * scale_d.squeeze(-1)
-        return sample_normal(raw_loc, raw_scale)
-    elif dist_type == "negative_binomial":
-        total_count, logits = params
-        total_count = total_count.squeeze(-1)
-        logits = logits.squeeze(-1)
-        logits_scaled = logits + _sc.log()
-        return sample_negative_binomial(total_count, logits_scaled)
-    else:  # student_t
-        df, loc_d, scale_d = params
-        raw_loc = _lc + _sc * loc_d.squeeze(-1)
-        raw_scale = _sc * scale_d.squeeze(-1)
-        return sample_student_t(df.squeeze(-1), raw_loc, raw_scale)
+from .tst_io import (
+    _apply_layernorm_ttnn,
+    _future_time_to_ttnn,
+    _future_vals_k_to_ttnn,
+    _inputs_to_ttnn,
+    _past_values_repeated_to_ttnn,
+)
 
 
 def run_encoder(device, encoder_input, weights, apply_layernorm=False):
@@ -344,33 +70,6 @@ def run_decoder_step(
             hidden, encoder_hidden, weights, layer_idx=i, causal_mask=causal_mask, precomputed_kv=precomputed_kv
         )
     return hidden
-
-
-def _inputs_to_ttnn(
-    device, past_values, past_time_features, past_observed_mask, static_categorical_features, static_real_features
-):
-    pv = ttnn.from_torch(past_values.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    pt = ttnn.from_torch(past_time_features.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    pm = ttnn.from_torch(past_observed_mask.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    sc = ttnn.from_torch(
-        static_categorical_features.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
-    sr = ttnn.from_torch(static_real_features.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    return pv, pt, pm, sc, sr
-
-
-def _future_time_to_ttnn(device, future_time_features):
-    return ttnn.from_torch(
-        future_time_features.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
-
-
-def _past_values_repeated_to_ttnn(device, past_values_raw):
-    return ttnn.from_torch(past_values_raw.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-
-def _future_vals_k_to_ttnn(device, future_vals_k):
-    return ttnn.from_torch(future_vals_k.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
 @torch.no_grad()
@@ -503,36 +202,22 @@ def _run_decoder_layers_fixed(hidden_ttnn, weights, causal_mask, precomputed_kv)
     return hidden
 
 
-# ---------------------------------------------------------------------------
-# Trace-once, replay-many decoder context.
-#
-# BUG THIS FIXES: the previous generate_traced() called begin_trace_capture()
-# / end_trace_capture() / release_trace() ANEW on every single invocation,
-# and also reallocated captured_dec_input, enc_hidden_rep, and
-# precomputed_kv from scratch each call. The first call worked because the
-# device started clean; the second call in the same process measurably
-# hung indefinitely (reproduced on a freshly tt-smi-reset device -- not an
-# environment artifact). The allocator's own warning
-# ("Allocating device buffers is unsafe due to the existence of an active
-# trace") is the proximate mechanism: release_trace() does not guarantee
-# the device has fully reclaimed the previous trace's resources before the
-# next begin_trace_capture()'s fresh allocations are issued.
-#
-# FIX: separate the one-time setup (encoder pass, KV precompute, buffer
-# allocation, single trace capture) from the per-call autoregressive
-# replay. A TracedDecoderContext is built once per (device, weights,
-# input batch, S) combination and can be reused across many generate
-# calls. generate_traced() keeps its original signature and behavior for
-# a single call (it builds and tears down its own context internally if
-# none is supplied), so existing call sites and tests are unaffected.
-# ---------------------------------------------------------------------------
 class TracedDecoderContext:
-    """Holds everything needed to replay the captured decoder trace.
+    """
+    Holds a decoder trace captured once and replayed many times across
+    autoregressive steps.
 
-    Build once via build_traced_decoder_context(); call
-    replay_traced_decoder(ctx, dec_emb_k, k) repeatedly; release via
-    ctx.release() when fully done (or rely on generate_traced() to do
-    this automatically when it owns the context).
+    Trace capture is separated from per-call replay because capturing and
+    releasing a trace on every generate_traced() call left the allocator in
+    an inconsistent state: release_trace() does not guarantee the device has
+    reclaimed the previous trace's resources before the next
+    begin_trace_capture()'s allocations run, and a second call in the same
+    process would hang.
+
+    Build once via build_traced_decoder_context(), replay via
+    run_traced_generation() (or generate_traced(traced_ctx=...)) as many
+    times as needed, and call release() (or use as a context manager) when
+    done.
     """
 
     def __init__(
@@ -604,11 +289,10 @@ def build_traced_decoder_context(
     """
     One-time setup for traced autoregressive decoding: runs the encoder,
     precomputes cross-attention KV, allocates the fixed-shape device buffer
-    the trace reads from, and captures the decoder trace ONCE.
+    the trace reads from, and captures the decoder trace once.
 
-    Returns a TracedDecoderContext that can be fed into
-    replay_traced_decoder() repeatedly (e.g. once per autoregressive step,
-    across many generate() calls) without recapturing the trace.
+    Returns a TracedDecoderContext for use with run_traced_generation() or
+    generate_traced(traced_ctx=...).
     """
     B = past_values.shape[0]
     S = num_parallel_samples
@@ -679,9 +363,8 @@ def build_traced_decoder_context(
 
     causal_mask_full = build_causal_mask(device, T_max, batch_size=BS)
 
-    # Pre-allocate device buffer that the trace reads from.
-    # Must be allocated BEFORE begin_trace_capture so it isn't captured
-    # as a trace-internal allocation.
+    # Must be allocated before begin_trace_capture so it isn't captured as
+    # a trace-internal allocation.
     captured_dec_input = ttnn.from_torch(
         torch.zeros(BS, T_max, PADDED_WIDTH, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -693,8 +376,6 @@ def build_traced_decoder_context(
     _ = _run_decoder_layers_fixed(captured_dec_input, weights, causal_mask_full, precomputed_kv)
     ttnn.synchronize_device(device)
 
-    # Capture the trace EXACTLY ONCE. This is the fix: previously this
-    # happened inside generate_traced() and therefore ran every call.
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     traced_out = _run_decoder_layers_fixed(captured_dec_input, weights, causal_mask_full, precomputed_kv)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
@@ -724,10 +405,11 @@ def build_traced_decoder_context(
 
 def _get_lagged_cpu(seq_2d, lags, subseq_len):
     """
-    Vectorized CPU lag extraction. seq_2d: [BS, full_len] float32.
-    Returns [BS, subseq_len, len(lags)] float32.
-    Replaces the Python double-for-loop with torch index ops -- O(len(lags))
-    Python iterations regardless of subseq_len or BS.
+    Vectorized CPU lag extraction using torch index ops instead of a Python
+    double-for-loop: O(len(lags)) Python-level iterations regardless of
+    subseq_len or BS.
+
+    seq_2d: [BS, full_len] float32. Returns [BS, subseq_len, len(lags)] float32.
     """
     BS, full_len = seq_2d.shape
     out = seq_2d.new_zeros(BS, subseq_len, len(lags))
@@ -772,21 +454,18 @@ def _prepare_dec_step_cpu(
     T_max,
 ):
     """
-    Full per-step decoder embedding on CPU.
-    Returns [BS, T_max, PADDED_WIDTH] bfloat16 CPU tensor.
+    Full per-step decoder embedding on CPU. Returns [BS, T_max, PADDED_WIDTH]
+    bfloat16 CPU tensor.
 
     Per tt-metal trace docs, no device ops may run between execute_trace
-    replays. This moves lag extraction, value projection, positional
-    embedding, and decoder input layernorm to CPU.
-    Ref: https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/
-         AdvancedPerformanceOptimizationsForModels/
-         AdvancedPerformanceOptimizationsForModels.md
+    replays, so lag extraction, value projection, positional embedding, and
+    decoder input layernorm all run here on CPU instead. See
+    tech_reports/AdvancedPerformanceOptimizationsForModels/
+    AdvancedPerformanceOptimizationsForModels.md.
 
     Core decoder compute (self-attn, cross-attn, FFN, internal layernorms)
     is unchanged inside the trace on-device.
     """
-    import torch.nn.functional as F
-
     BS = past_values_cpu.shape[0]
     pred_len_k = k + 1
 
@@ -799,8 +478,7 @@ def _prepare_dec_step_cpu(
     full_seq = torch.cat([past_values_cpu, future_vals_k], dim=1)
     full_seq_scaled = (full_seq - loc_cpu.squeeze(-1)) / scale_cpu.squeeze(-1)
 
-    _LAGS = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 23, 24, 25, 35, 36, 37]
-    lagged = _get_lagged_cpu(full_seq_scaled, _LAGS, pred_len_k)
+    lagged = _get_lagged_cpu(full_seq_scaled, LAGS, pred_len_k)
 
     time_feat_k = future_time_cpu[:, :pred_len_k, :]
     expanded_static = static_feat_cpu.unsqueeze(1).expand(BS, pred_len_k, static_feat_cpu.shape[-1])
@@ -828,21 +506,19 @@ def run_traced_generation(ctx, weights, context_length=CONTEXT_LENGTH, predictio
     """
     Autoregressive sampling loop against a pre-captured TracedDecoderContext.
 
-    Per-step device ops are ONLY:
-        copy_host_to_device_tensor -> execute_trace -> .cpu() readback
-    All embedding prep runs on CPU before copy_host_to_device_tensor,
-    per the tt-metal trace requirement that no other device ops run between
-    execute_trace replays.
+    Per-step device ops are only: copy_host_to_device_tensor -> execute_trace
+    -> .cpu() readback. All embedding prep runs on CPU before
+    copy_host_to_device_tensor, per the tt-metal trace requirement that no
+    other device ops run between execute_trace replays.
 
     Core decoder compute (self-attn, cross-attn, FFN, layernorm) stays
-    inside the trace on-device unchanged.
+    inside the trace on-device, unchanged.
     """
     device = ctx.device
     BS = ctx.BS
     T_max = ctx.T_max
     dt = ctx.dist_type
 
-    # Pull CPU copies once before the loop
     past_values_cpu = ttnn.to_torch(ctx.repeated_past_raw_tt).float()
     future_time_cpu = ttnn.to_torch(ctx.repeated_future_time_tt).float()
     loc_cpu = ttnn.to_torch(ctx.repeated_loc_tt).float()
@@ -862,7 +538,6 @@ def run_traced_generation(ctx, weights, context_length=CONTEXT_LENGTH, predictio
     future_samples = []
 
     for k in range(prediction_length):
-        # 1. CPU: full embedding prep for step k
         step_input = _prepare_dec_step_cpu(
             k,
             future_samples,
@@ -879,13 +554,11 @@ def run_traced_generation(ctx, weights, context_length=CONTEXT_LENGTH, predictio
             T_max,
         )  # [BS, T_max, PADDED_WIDTH] bfloat16 CPU
 
-        # 2. Device: write -> trace -> read  (ONLY device ops per step)
         step_host_tt = ttnn.from_torch(step_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None)
         ttnn.copy_host_to_device_tensor(step_host_tt, ctx.captured_dec_input)
         ttnn.execute_trace(device, ctx.trace_id, cq_id=0, blocking=True)
         dec_out_torch = ttnn.to_torch(ctx.traced_out).float()[..., :D_MODEL]
 
-        # 3. Host: distribution head + sample
         params = _distribution_head(dec_out_torch[:, k : k + 1, :], weights)
         next_sample = _sample_next_step(params, dt, ctx._lc, ctx._sc)
         future_samples.append(next_sample)
@@ -909,17 +582,19 @@ def generate_traced(
     traced_ctx=None,
 ):
     """
-    generate() with a TTNN trace over the decoder stack.
+    generate() with a TTNN trace over the decoder stack, no KV-cache.
 
-    Signature and single-call behavior are unchanged from before: call it
-    exactly as before and it builds, uses, and releases its own trace
-    context internally.
+    DEPRECATION STATUS: this is a correctness gate for test_tst_e2e_traced.py
+    only -- never benchmarked against Stage 1 targets. See
+    ../CHANGELOG.md "Decode path retirement plan" for the removal condition.
+    Do not add new features here; add them to generate_traced_cached() in
+    tst_model_cached_additions.py instead.
 
-    NEW: pass a pre-built TracedDecoderContext via `traced_ctx` (from
-    build_traced_decoder_context()) to reuse an already-captured trace
-    across multiple calls -- this is the fix for the hang that occurred
-    when calling generate_traced() repeatedly in the same process, since
-    the trace is no longer captured and released on every call.
+    Called without traced_ctx, builds and releases its own
+    TracedDecoderContext internally — signature and behavior match
+    generate() for a single call. Pass a pre-built TracedDecoderContext via
+    traced_ctx to reuse an already-captured trace across multiple calls
+    (see TracedDecoderContext).
     """
     B = past_values.shape[0]
     S = num_parallel_samples
@@ -997,7 +672,6 @@ def teacher_forced_nll(
         future_values.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     future_time_tt = _future_time_to_ttnn(device, future_time_features)
-
     dec_emb = prepare_decoder_input(
         device,
         future_values=future_values_tt,

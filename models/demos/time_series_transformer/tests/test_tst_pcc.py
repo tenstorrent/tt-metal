@@ -10,14 +10,18 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 from transformers import TimeSeriesTransformerForPrediction
-from tt.tst_attention import build_causal_mask
-from tt.tst_model import load_weights, run_decoder_step, run_encoder
+from tt.attention import build_causal_mask
+from tt.tst_model import run_decoder_step, run_encoder
+from tt.tst_weights import load_weights
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 
 REFERENCE_DIR = Path(__file__).resolve().parent.parent / "reference"
 MODEL_ID = "huggingface/time-series-transformer-tourism-monthly"
+# 0.99: full per-layer comparison (attention + layer norm + FFN chained),
+# so bfloat16 rounding accumulates across many ops. See ../CHANGELOG.md
+# "PCC threshold policy" for the 0.99 vs 0.999 rule.
 PCC_THRESHOLD = 0.99
 D_MODEL = 26
 

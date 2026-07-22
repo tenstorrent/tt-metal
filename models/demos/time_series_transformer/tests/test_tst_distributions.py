@@ -12,7 +12,9 @@ import pytest
 import torch
 from safetensors import safe_open
 from transformers import TimeSeriesTransformerForPrediction
-from tt.tst_model import _distribution_head, generate, load_weights
+from tt.tst_distribution import _distribution_head
+from tt.tst_model import generate
+from tt.tst_weights import load_weights
 
 import ttnn
 

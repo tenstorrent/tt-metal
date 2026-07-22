@@ -30,13 +30,16 @@ from loguru import logger
 from safetensors import safe_open
 from transformers import TimeSeriesTransformerForPrediction
 from tt.tst_embedding import prepare_decoder_input, prepare_encoder_input
-from tt.tst_model import load_weights
+from tt.tst_weights import load_weights
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 
 REFERENCE_DIR = Path(__file__).resolve().parent.parent / "reference"
 MODEL_ID = "huggingface/time-series-transformer-tourism-monthly"
+# 0.99: embedding path chains value proj + lag extraction + static/temporal
+# concat + positional embedding -- several ops deep. See ../CHANGELOG.md
+# "PCC threshold policy".
 PCC_THRESHOLD = 0.99
 D_MODEL = 26
 

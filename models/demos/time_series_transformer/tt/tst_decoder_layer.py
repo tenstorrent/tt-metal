@@ -4,16 +4,10 @@
 
 import ttnn
 
-from .tst_attention import tst_cross_attention, tst_cross_attention_with_kv, tst_self_attention
+from .attention import tst_cross_attention, tst_cross_attention_with_kv, tst_self_attention
+from .tst_config import D_MODEL
+from .tst_ffn import tst_ffn
 from .ttnn_utils import layer_norm_padded
-
-D_MODEL = 26
-
-
-def tst_ffn(hidden_states, w):
-    """hidden_states: ttnn tensor [B, T, padded_width]."""
-    ffn = ttnn.linear(hidden_states, w["fc1_weight"], bias=w["fc1_bias"], activation="gelu")
-    return ttnn.linear(ffn, w["fc2_weight"], bias=w["fc2_bias"])
 
 
 def tst_decoder_layer(hidden_states, encoder_hidden_states, weights, layer_idx, causal_mask, precomputed_kv=None):
@@ -21,7 +15,7 @@ def tst_decoder_layer(hidden_states, encoder_hidden_states, weights, layer_idx, 
     hidden_states: ttnn [B, T_dec, padded_width].
     encoder_hidden_states: ttnn [B, T_enc, padded_width], or None if precomputed_kv is provided.
     causal_mask: pre-built [1,1,T_dec,T_dec] ttnn tensor from
-                 tst_attention.build_causal_mask -- build ONCE per sequence
+                 attention.build_causal_mask -- build ONCE per sequence
                  length and reuse across layers/steps, don't rebuild per call.
     precomputed_kv: if provided, must be the (k, v) tuple for THIS layer
                     (already indexed by layer_idx by the caller -- e.g.

@@ -1,46 +1,32 @@
 # tt/tst_embedding.py
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-#
-# TTNN port of value/lag/temporal/static feature embedding.
-# Mirrors HuggingFace TimeSeriesTransformerModel.create_network_inputs.
-#
-# FIX (this revision): ttnn.concat in this tt-metal build requires ALL
-# input tensors to be in TILE_LAYOUT -- it does not auto-promote ROW_MAJOR
-# inputs. The first version of this port built static_real_features /
-# static_cat_features lookups in ROW_MAJOR (matching ttnn.embedding's
-# input-index requirement) and fed them into ttnn.concat alongside
-# TILE-layout tensors, which fails hard:
-#   TT_FATAL: ttnn.concat: expected all input tensors to be in tile layout
-# Fix: every tensor is forced to TILE_LAYOUT immediately before any
-# ttnn.concat call, via an explicit _ensure_tile() helper. ROW_MAJOR is
-# kept ONLY where required (ttnn.embedding's index input, ttnn.slice on
-# pre-tile-layout source tensors), and converted back to TILE right after.
+
+"""
+TTNN port of value/lag/temporal/static feature embedding. Mirrors
+HuggingFace TimeSeriesTransformerModel.create_network_inputs.
+
+Layout constraint: ttnn.concat in this tt-metal build requires every input
+tensor to be TILE_LAYOUT — it does not auto-promote ROW_MAJOR inputs, and
+silently passing a mixed-layout list raises
+"TT_FATAL: ttnn.concat: expected all input tensors to be in tile layout".
+Every tensor is forced to TILE_LAYOUT via _ensure_tile() immediately before
+any ttnn.concat call. ROW_MAJOR is kept only where required (ttnn.embedding's
+index input, ttnn.slice on pre-tile-layout source tensors) and converted
+back to TILE right after.
+"""
 
 import ttnn
 
-LAGS = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 23, 24, 25, 35, 36, 37]
-D_MODEL = 26
+from .tst_config import CONTEXT_LENGTH, D_MODEL, LAGS
 
 
 def _ensure_tile(x):
-    """Force a tensor to TILE_LAYOUT if it isn't already -- required before
+    """Force a tensor to TILE_LAYOUT if it isn't already — required before
     any ttnn.concat call, since this op does not accept mixed layouts."""
     if x.layout != ttnn.TILE_LAYOUT:
         return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     return x
-
-
-def _ttnn_abs(x):
-    return ttnn.abs(x)
-
-
-def _ttnn_log1p(x):
-    return ttnn.log1p(x)
-
-
-def _ttnn_log(x):
-    return ttnn.log(x)
 
 
 def _mean_scaler(device, context, observed_context):
@@ -57,7 +43,7 @@ def _mean_scaler(device, context, observed_context):
     context = _ensure_tile(context)
     observed_context = _ensure_tile(observed_context)
 
-    abs_context = _ttnn_abs(context)
+    abs_context = ttnn.abs(context)
     weighted = ttnn.multiply(abs_context, observed_context)
     num = ttnn.sum(weighted, dim=1, keepdim=True)
     den = ttnn.sum(observed_context, dim=1, keepdim=True)
@@ -74,11 +60,11 @@ def _get_lagged_subsequences(device, sequence, lags, subseq_len, shift=0):
     sequence: ttnn [B, full_len]. Returns ttnn [B, subseq_len, len(lags)],
     TILE_LAYOUT.
 
-    Lag offsets are static Python ints (compile-time constants from the
-    LAGS list), so this is expressed as repeated ttnn.slice + ttnn.concat,
-    NOT ttnn.embedding -- embedding is index->row lookup for data-dependent
-    indices; here the indices (start/end per lag) are fixed at trace time,
-    making slicing the correct primitive.
+    Lag offsets are static Python ints (compile-time constants from LAGS),
+    so this is expressed as repeated ttnn.slice + ttnn.concat, not
+    ttnn.embedding — embedding is index->row lookup for data-dependent
+    indices; here the indices are fixed at trace time, making slicing the
+    correct primitive.
     """
     B = sequence.shape[0]
     full_len = sequence.shape[1]
@@ -88,7 +74,6 @@ def _get_lagged_subsequences(device, sequence, lags, subseq_len, shift=0):
         start = full_len - idx - subseq_len
         end = full_len - idx if idx > 0 else full_len
         piece = ttnn.slice(sequence, slice_start=[0, start], slice_end=[B, end])
-        # [B, subseq_len] -> [B, subseq_len, 1] for concat along last dim
         piece = ttnn.reshape(piece, (B, subseq_len, 1))
         piece = _ensure_tile(piece)
         pieces.append(piece)
@@ -108,8 +93,8 @@ def _build_static_feat(device, loc, scale, static_real_features, static_cat_feat
     squeezed_loc = _ensure_tile(squeezed_loc)
     squeezed_scale = _ensure_tile(squeezed_scale)
 
-    log_abs_loc = _ttnn_log1p(_ttnn_abs(squeezed_loc))
-    log_scale = _ttnn_log(squeezed_scale)
+    log_abs_loc = ttnn.log1p(ttnn.abs(squeezed_loc))
+    log_scale = ttnn.log(squeezed_scale)
     log_abs_loc = _ensure_tile(log_abs_loc)
     log_scale = _ensure_tile(log_scale)
     static_feat = ttnn.concat([log_abs_loc, log_scale], dim=1)
@@ -119,16 +104,15 @@ def _build_static_feat(device, loc, scale, static_real_features, static_cat_feat
         static_feat = ttnn.concat([static_real_features, static_feat], dim=1)
 
     if static_cat_features is not None:
-        # static_cat_features[:, 0] -- first categorical column, matching
-        # the torch reference's static_cat_features[:, 0].long()
-        # ttnn.embedding requires ROW_MAJOR index input -- do NOT convert
-        # cat_col to tile before calling ttnn.embedding.
+        # First categorical column, matching the torch reference's
+        # static_cat_features[:, 0].long(). ttnn.embedding requires
+        # ROW_MAJOR index input — do NOT convert cat_col to tile first.
         cat_col = ttnn.slice(static_cat_features, slice_start=[0, 0], slice_end=[B, 1])
         cat_col = ttnn.reshape(cat_col, (B, 1))
         cat_col = ttnn.to_layout(cat_col, ttnn.ROW_MAJOR_LAYOUT)
         emb = ttnn.embedding(cat_col, cat_embedder_weight)  # [B, 1, embedding_dim]
         emb = ttnn.reshape(emb, (B, emb.shape[-1]))
-        emb = _ensure_tile(emb)  # convert back to TILE before concat
+        emb = _ensure_tile(emb)
         static_feat = ttnn.concat([emb, static_feat], dim=1)
 
     return static_feat
@@ -144,7 +128,7 @@ def prepare_encoder_input(
     cat_embedder_weight,
     value_proj_weight,
     pos_emb_weight,
-    context_length=24,
+    context_length=CONTEXT_LENGTH,
 ):
     """
     All tensor args are ttnn tensors. past_values: [B, past_len].
@@ -154,11 +138,11 @@ def prepare_encoder_input(
     static_real_features: [B, num_static_real] or None.
     cat_embedder_weight: [vocab, embedding_dim].
     value_proj_weight: [in_features, D_MODEL] (pre-transposed at load time
-        to ttnn.linear's [in,out] convention -- see tst_model.py's
+        to ttnn.linear's [in,out] convention — see tst_model.py's
         load_weights()).
     pos_emb_weight: [max_positions, D_MODEL].
 
-    Returns (emb, loc, scale) -- all ttnn tensors, TILE_LAYOUT.
+    Returns (emb, loc, scale) — all ttnn tensors, TILE_LAYOUT.
     """
     B = past_values.shape[0]
     past_len = past_values.shape[1]
@@ -196,7 +180,6 @@ def prepare_encoder_input(
 
     features = ttnn.concat([expanded_static, time_feat], dim=-1)
     transformer_inputs = ttnn.concat([reshaped_lagged, features], dim=-1)
-
     emb = ttnn.linear(transformer_inputs, value_proj_weight)
 
     positions = ttnn.slice(pos_emb_weight, slice_start=[0, 0], slice_end=[context_length, D_MODEL])
@@ -219,7 +202,7 @@ def prepare_decoder_input(
     cat_embedder_weight,
     value_proj_weight,
     pos_emb_weight,
-    context_length=24,
+    context_length=CONTEXT_LENGTH,
     shift=0,
 ):
     """
@@ -255,7 +238,6 @@ def prepare_decoder_input(
 
     features = ttnn.concat([expanded_static, time_feat], dim=-1)
     transformer_inputs = ttnn.concat([reshaped_lagged, features], dim=-1)
-
     emb = ttnn.linear(transformer_inputs, value_proj_weight)
 
     positions = ttnn.slice(

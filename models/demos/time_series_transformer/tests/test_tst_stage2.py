@@ -36,7 +36,7 @@ KV-cache scheme that avoids per-step host writes entirely).
 """
 
 import torch
-from tt.tst_attention import allocate_kv_cache
+from tt.attention import allocate_kv_cache
 
 import ttnn
 

@@ -18,18 +18,13 @@ import pytest
 import torch
 from safetensors import safe_open
 from transformers import TimeSeriesTransformerForPrediction
-from tt.tst_attention import build_causal_mask
+from tt.attention import build_causal_mask
+from tt.tst_config import D_MODEL
+from tt.tst_distribution import _distribution_head
 from tt.tst_embedding import prepare_decoder_input, prepare_encoder_input
-from tt.tst_model import (
-    D_MODEL,
-    _apply_layernorm_ttnn,
-    _distribution_head,
-    generate,
-    generate_traced,
-    load_weights,
-    run_decoder_step,
-    run_encoder,
-)
+from tt.tst_io import _apply_layernorm_ttnn
+from tt.tst_model import generate, generate_traced, run_decoder_step, run_encoder
+from tt.tst_weights import load_weights
 
 import ttnn
 

@@ -12,7 +12,8 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 from transformers import TimeSeriesTransformerForPrediction
-from tt.tst_model import generate, load_weights, teacher_forced_nll
+from tt.tst_model import generate, teacher_forced_nll
+from tt.tst_weights import load_weights
 
 import ttnn
 

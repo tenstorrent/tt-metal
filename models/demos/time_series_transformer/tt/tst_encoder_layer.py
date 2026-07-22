@@ -4,16 +4,10 @@
 
 import ttnn
 
-from .tst_attention import tst_self_attention
+from .attention import tst_self_attention
+from .tst_config import D_MODEL
+from .tst_ffn import tst_ffn
 from .ttnn_utils import layer_norm_padded
-
-D_MODEL = 26  # the TRUE, unpadded feature width -- this never changes
-
-
-def tst_ffn(hidden_states, w):
-    """hidden_states: ttnn tensor [B, T, padded_width]."""
-    ffn = ttnn.linear(hidden_states, w["fc1_weight"], bias=w["fc1_bias"], activation="gelu")
-    return ttnn.linear(ffn, w["fc2_weight"], bias=w["fc2_bias"])
 
 
 def tst_encoder_layer(hidden_states, weights, layer_idx):
