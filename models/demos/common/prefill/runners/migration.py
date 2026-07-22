@@ -109,9 +109,21 @@ def _deliver_local_device_map(device_map, timeout_s=120.0) -> None:
 
     def _discover():
         trios = []
+        skipped = []
         for side in ("a", "b"):
-            for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
+            candidates = glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")
+            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for c in candidates:
                 name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
+                if not os.access(c, os.R_OK | os.W_OK):
+                    st = os.stat(c)
+                    import pwd
+
+                    owner = pwd.getpwuid(st.st_uid).pw_name
+                    skipped.append(
+                        f"{name} (owner={owner}, mtime={time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))})"
+                    )
+                    continue
                 trios.append(
                     (
                         name,
@@ -119,25 +131,35 @@ def _deliver_local_device_map(device_map, timeout_s=120.0) -> None:
                         name.replace(f"_{side}_cmd", f"_{side}_resp"),
                     )
                 )
-        return trios
+        return trios, skipped
 
     deadline = time.monotonic() + timeout_s
-    trios = _discover()
+    trios, skipped = _discover()
     while not trios:
         if time.monotonic() >= deadline:
+            if skipped:
+                details = "\n  ".join(skipped)
+                raise RuntimeError(
+                    f"[migration] local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) are present "
+                    f"but none are accessible by this user. Skipped {len(skipped)}:\n  {details}\n"
+                    f"This is usually caused by stale shm files from another user's previous run."
+                )
             raise RuntimeError(
                 "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
                 "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
                 "master-only control channel, NOT the device-map queues.)"
             )
         time.sleep(0.25)
-        trios = _discover()
+        trios, skipped = _discover()
 
     for cmd, table, resp in trios:
         try:
             mod.MigrationLayerClient(cmd, table, resp).send_device_map(device_map)
             logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
         except RuntimeError as e:
+            if "Permission denied" in str(e):
+                logger.warning(f"[migration] skipping inaccessible worker queue {cmd}: {e}")
+                continue
             raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
 
 
