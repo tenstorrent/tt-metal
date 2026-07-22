@@ -1317,7 +1317,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
     # Sets tile shape = 8x32
-    tile = select_tile(ttnn.bfloat16)
+    tile = ttnn.Tile((8, 32))
     shard_config = ttnn.create_sharded_memory_config(
         shard_size,
         core_grid=core_range,
