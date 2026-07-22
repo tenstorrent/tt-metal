@@ -33,11 +33,11 @@ import ttnn
 # weight-only preset.
 LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "1") in ("1", "true", "True")
 
-# Forces the ring-SDPA input cast on top of whatever preset is selected. Same knob as
-# ``all_bf8_lofi_sdpa_bf8``, reachable without changing the preset name — which matters because the
-# pipeline's tensorbin cache is keyed on that name, so the preset form cannot be measured on the
-# pipeline without re-materialising the 22B checkpoint it shares weights with.
-LTX_QUANT_SDPA_BF8 = os.environ.get("LTX_QUANT_SDPA_BF8", "0") in ("1", "true", "True")
+# Cast the ring-SDPA inputs (Q/K/V) to bf8 on top of the selected preset. On by default: SDPA stays
+# HiFi2 (only the inputs narrow), it holds baseline VBench across seeds, and it shrinks the SP-gathered
+# K/V collective for ~3% end-to-end. Rides the base preset's weight cache — no separate tensorbin dir,
+# since the cast is a runtime compute config, not a weight change. Set to 0 for bf16 SDPA inputs.
+LTX_QUANT_SDPA_BF8 = os.environ.get("LTX_QUANT_SDPA_BF8", "1") in ("1", "true", "True")
 
 # ---------------------------------------------------------------------------
 # Config dataclasses (identical to the Wan template)
