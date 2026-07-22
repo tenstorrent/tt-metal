@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 // correctness modes — output is intentionally unchecked.
 //
 // The explicit `1u << N` values are STABLE (harness / program-cache compatibility): removed diagnostics leave
-// their bits permanently unused rather than renumbering the survivors. Currently FREE bits: 0, 1, 2, 7, 8, 9,
+// their bits permanently unused rather than renumbering the survivors. Currently FREE bits: 0, 1, 2, 9,
 // 13, 15, 17, 20, 23, 24, and >=26. (Bits 0/1/2 were skip-in1/in0-read + skip-in0-forward ablations;
 // 4 was a reserved local-feed; 5 was in0-scatter; 6/7 were in0-replicated-ring; 8/9 were in0-direct-exchange
 // — all removed after the in0-delivery study concluded the ring is optimal. Bits 13/15/17 were dominated ring
@@ -66,6 +66,12 @@ enum RegimeADiag : uint32_t {
     // only (v1); the ring order is an optimized cyclic Hamiltonian over the Pk cores' physical coords. Falls
     // back to the chain when the block cannot be row-partitioned (M_block != Pk or N_bpc != 1).
     DIAG_RSCATTER = 1u << 7,
+    // Force the LINEAR reduction CHAIN even when the internal production reduction-strategy gate would select
+    // reduce-scatter (see regime_a_matmul_program_factory: rs_gate). The gate makes mask-0 use reduce-scatter
+    // for the measured exposed-reduction win regime (shallow-K, Pk>=4, adequate per-core width); this bit
+    // restores the chain so A/B tooling and the bit-identity diagnostics can obtain the pure-chain baseline.
+    // No effect on shapes the gate would not select (already chain).
+    DIAG_FORCE_CHAIN = 1u << 8,
     // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
     // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only

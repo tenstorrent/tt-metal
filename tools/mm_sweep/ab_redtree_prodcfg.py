@@ -10,7 +10,7 @@ import regime_a_diag_suite as ds
 
 M, K, N = 32, 2048, 512
 CFG = (2, 4, 1, 2, 1)  # production picker's config for this shape (Pk=4)
-CHAIN, TREE = 0, 64
+CHAIN, TREE = 256, 64  # chain=FORCE_CHAIN (mask 0 may select reduce-scatter for gated shapes)
 N_RELAUNCH = 10
 ITERS = 8
 

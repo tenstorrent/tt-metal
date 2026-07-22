@@ -147,6 +147,7 @@ TEST_F(RegimeADiagFixture, Run) {
         mask == 524288 || mask == 2097152 || mask == 32 /*DIAG_RINGDRAIN: source-lifetime/ordering-preserving*/ ||
         mask == 64 /*DIAG_REDTREE: fan-in-2 tree; reassociates sum (NOT bit-exact) but constant-input == K*/ ||
         mask == 128 /*DIAG_RSCATTER: ring reduce-scatter; reassociates but constant-input sums to K exactly*/ ||
+        mask == 256 /*DIAG_FORCE_CHAIN: forces the chain (correctness-preserving) -> constant-input == K*/ ||
         (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
@@ -217,20 +218,19 @@ TEST_F(RegimeADiagFixture, Correctness) {
     (void)Kt;
     (void)Nt;
 
-    // default progressive path (0) + full-wait A/B (1024) + fan-in-2 reduction tree (DIAG_REDTREE, 64) +
-    // ring reduce-scatter (DIAG_RSCATTER, 128). This config is Pk=4/Sm=2, so every reduction group is a real
-    // depth-2 tree / 4-core reduce-scatter ring. The tree and reduce-scatter sum the SAME four k-slice partials
-    // in a DIFFERENT association order (and round bf16 per hop), so they are NOT bit-identical to the chain —
-    // PCC vs the f32 golden must stay >= 0.99, and we ALSO report the elementwise max|out - chain| vs the chain
-    // (mask 0) to quantify the reassociation (a mis-linked ring / dropped partial / slot aliasing collapses PCC).
-    std::vector<float> chain_ref;  // mask-0 pass-0 output, the bitwise reference
-    for (uint32_t mask : {0u, 1024u, 64u, 128u}) {
+    // Chain (256=FORCE_CHAIN) + production default (0; this Pk=4/Sm=2 gated config now selects reduce-scatter)
+    // + fan-in-2 tree (64) + explicit reduce-scatter (128). Tree/reduce-scatter reassociate the K-sum (bf16 per
+    // hop) so they are NOT bit-identical to the chain — PCC vs the f32 golden must stay >= 0.99; we ALSO report
+    // max|out - chain| vs the FORCE_CHAIN reference to quantify the reassociation. (The bare progressive-vs-
+    // full-wait bit-identity A/B lives in ProgressiveVsFullWait.)
+    std::vector<float> chain_ref;  // mask-256 (FORCE_CHAIN) pass-0 output = the true chain reference
+    for (uint32_t mask : {256u, 0u, 64u, 128u}) {
         for (int pass = 0; pass < 2; ++pass) {  // pass 0 = fresh/compile, pass 1 = cached-program replay
             Tensor out =
                 ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
             const std::vector<float> got = out.to_vector<float>();
             const double p = pcc(got, golden);
-            if (mask == 0u && pass == 0) {
+            if (mask == 256u && pass == 0) {
                 chain_ref = got;
             }
             double maxdiff = 0.0;
@@ -298,13 +298,15 @@ TEST_F(RegimeADiagFixture, RScatterGeneral) {
             Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
             Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
             std::vector<float> chain_ref;
-            for (uint32_t mask : {0u, 128u}) {
+            // 256 = FORCE_CHAIN (true chain reference; mask 0 would select reduce-scatter for gated configs);
+            // 128 = explicit reduce-scatter.
+            for (uint32_t mask : {256u, 128u}) {
                 for (int pass = 0; pass < 2; ++pass) {  // fresh (compile) then cached-program
                     Tensor out =
                         ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
                     const std::vector<float> got = out.to_vector<float>();
                     const double p = pcc(got, golden);
-                    if (mask == 0u && pass == 0) {
+                    if (mask == 256u && pass == 0) {
                         chain_ref = got;
                     }
                     const ErrMetrics e = err_metrics(got, chain_ref);
@@ -392,8 +394,10 @@ TEST_F(RegimeADiagFixture, ProgressiveVsFullWait) {
         };
 
         // mask 0 = progressive (default), mask 1024 = old full-slice startup wait.
-        const std::vector<float> prog = run(0u);
-        const std::vector<float> full = run(1024u);
+        // FORCE_CHAIN (256): pin the reduction to the chain so this progressive-vs-full-wait A/B is isolated
+        // even for configs the production reduce-scatter gate would otherwise select (which is not bit-identical).
+        const std::vector<float> prog = run(256u);
+        const std::vector<float> full = run(1024u | 256u);
         const double p_prog = pcc(prog, golden);
         const double p_full = pcc(full, golden);
         double ab_maxdiff = 0.0;
@@ -436,7 +440,9 @@ TEST_F(RegimeADiagFixture, PipelinedDrainCorrectness) {
         {"ktail_ntail_pk12", 256, 6080, 4640, 1, 12, 1, 2, 1},  // balanced K-tail (190) + N-tail (145)
     };
     // mask 0 = pipelined (production default); mask 1<<11 = DIAG_BARRIER_DRAIN (old per-block barrier).
-    const std::vector<std::pair<uint32_t, const char*>> masks = {{0u, "pipelined"}, {2048u, "barrier"}};
+    // |256 = FORCE_CHAIN: pin reduction to the chain so the drain A/B is bit-identity-isolated regardless of
+    // the production reduce-scatter gate.
+    const std::vector<std::pair<uint32_t, const char*>> masks = {{0u | 256u, "pipelined"}, {2048u | 256u, "barrier"}};
     auto* device = device_;
 
     for (const auto& c : cases) {
@@ -482,9 +488,11 @@ TEST_F(RegimeADiagFixture, PipelinedDrainCorrectness) {
                 const std::vector<float> got = out.to_vector<float>();
                 const double p = pcc(got, golden);
                 double ab = -1.0;
-                if (mask == 0u && pass == 0) {
+                // Baseline = the "pipelined" variant (mask 256 = FORCE_CHAIN only); the "barrier" variant is
+                // 2048|256. Use the pipelined mask as the sentinel (both now carry FORCE_CHAIN).
+                if (mask == (0u | 256u) && pass == 0) {
                     baseline_out = got;  // capture pipelined default (reference) for the A/B bit-identity check
-                } else if (mask != 0u) {
+                } else if (mask != (0u | 256u)) {
                     ab = 0.0;
                     for (size_t i = 0; i < got.size(); ++i) {
                         ab = std::max(ab, std::abs(static_cast<double>(got[i]) - baseline_out[i]));
@@ -493,7 +501,7 @@ TEST_F(RegimeADiagFixture, PipelinedDrainCorrectness) {
                 fmt::print("DIAGPD case={} {} pass={} pcc={:.5f} ab_maxdiff={:.6f}\n", c.label, tag, pass, p, ab);
                 EXPECT_GT(p, 0.999) << "pipelined-drain case=" << c.label << " " << tag << " pass=" << pass
                                     << " PCC too low (" << p << ")";
-                if (mask != 0u) {
+                if (mask != (0u | 256u)) {
                     // Only write-sync differs -> barrier must match the pipelined default bit-for-bit.
                     EXPECT_EQ(ab, 0.0) << "barrier != pipelined default (case=" << c.label << " pass=" << pass << ")";
                 }
@@ -525,8 +533,14 @@ TEST_F(RegimeADiagFixture, RingOrderCorrectness) {
     // mask 0 = opt (production default); 1<<12 = DIAG_RING_BANK (old bank order); 1<<13 = DIAG_RING_GREEDY.
     // mask 0 = pareto (default); 1<<12 bank; 1<<14 mm0; 1<<16 total; 1<<18 maxedge. All must be bit-identical
     // (only the ring order differs, never the math). (greedy/maxring objectives were removed post-decision.)
+    // |256 = FORCE_CHAIN: pin reduction to the chain so the ring-order A/B is bit-identity-isolated regardless
+    // of the production reduce-scatter gate.
     const std::vector<std::pair<uint32_t, const char*>> masks = {
-        {4096u, "bank"}, {16384u, "mm0"}, {0u, "pareto"}, {65536u, "total"}, {262144u, "maxedge"}};
+        {4096u | 256u, "bank"},
+        {16384u | 256u, "mm0"},
+        {0u | 256u, "pareto"},
+        {65536u | 256u, "total"},
+        {262144u | 256u, "maxedge"}};
     auto* device = device_;
 
     for (const auto& c : cases) {
@@ -612,8 +626,10 @@ TEST_F(RegimeADiagFixture, PlacementCorrectness) {
         {"sm1_noop", 256, 6144, 768, 1, 12, 1, 2, 1},  // Sm=1: placement is a no-op
     };
     // mask 0 = in1_near (default); 1<<21 = current (baseline); 1<<19 = readers_first. Reference = current.
+    // |256 = FORCE_CHAIN: pin reduction to the chain so the placement A/B is bit-identity-isolated regardless
+    // of the production reduce-scatter gate.
     const std::vector<std::pair<uint32_t, const char*>> masks = {
-        {2097152u, "current"}, {0u, "in1_near"}, {524288u, "readers_first"}};
+        {2097152u | 256u, "current"}, {0u | 256u, "in1_near"}, {524288u | 256u, "readers_first"}};
     auto* device = device_;
 
     for (const auto& c : cases) {

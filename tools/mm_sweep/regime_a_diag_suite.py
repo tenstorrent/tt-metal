@@ -133,8 +133,10 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
     # placement / in1 A/B) are correctness-checked by the gtest -> require the PASS; the pure ablations (e.g.
     # no-reduce) produce garbage and are NOT checked. Must match the gtest's constant-input check set.
     _in1preserve = (1 << 22) | (1 << 25)  # in1-delivery A/B diagnostics (correctness-preserving)
-    checked = mask in (0, 64, 128, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 2097152) or (
-        mask != 0 and (mask & ~_in1preserve) == 0
+    _fc = 256  # DIAG_FORCE_CHAIN (chain; correctness-preserving). Strip it before the correctness-set check.
+    m = mask & ~_fc
+    checked = m in (0, 64, 128, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 2097152) or (
+        m != 0 and (m & ~_in1preserve) == 0
     )  # 64 = DIAG_REDTREE, 128 = DIAG_RSCATTER (both reassociate; constant-input still sums to K)
     return {
         "cfg": list(cfg),

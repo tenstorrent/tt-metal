@@ -12,7 +12,7 @@ import regime_a_diag_suite as ds
 
 M, K, N = 256, 2048, 1024
 CFG = (1, 4, 2, 2, 4)  # Ns,Pk,Sm,kb,nsb -> M_block=4=Pk, N_bpc=1 (reduce-scatter feasible)
-VARIANTS = [("chain", 0), ("tree", 64), ("rscatter", 128)]
+VARIANTS = [("chain", 256), ("tree", 64), ("rscatter", 128)]  # chain=FORCE_CHAIN (mask 0 may select reduce-scatter)
 N_RELAUNCH = 10
 ITERS = 8
 

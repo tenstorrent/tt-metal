@@ -11,7 +11,7 @@ import regime_a_diag_suite as ds
 
 N_RELAUNCH = 6
 ITERS = 8
-CHAIN, RS = 0, 128
+CHAIN, RS = 256, 128  # chain baseline uses DIAG_FORCE_CHAIN (mask 0 now selects reduce-scatter for gated shapes)
 
 
 def cdiv(a, b):
