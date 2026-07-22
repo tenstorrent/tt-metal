@@ -37,10 +37,12 @@ inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
 // sum individually.
 inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
 
-// Host-side estimate of whether a legacy (non-Welford) ROW_MAJOR interleaved input fits in L1 with the whole
-// per-core group tilized resident in c_17; when it does not, group_norm() takes the TILE composite path.
-// Mirrors the program factory's CB-footprint accounting, deliberately conservative (mask CB over-estimated as
-// bf16) so a "fits" answer is always safe to allocate.
+// Host-side estimate of whether a legacy (non-Welford) group_norm program fits in L1, mirroring the program
+// factory's CB-footprint accounting; when it does not, group_norm() takes a composite path (tilize the input
+// and/or untilize the output as separate ops). Deliberately conservative (mask CB over-estimated as bf16) so a
+// "fits" answer is always safe to allocate.
+// `tilize_in` selects whether the ROW_MAJOR input is tilized on-core (resident group in c_17); pass false for a
+// TILE input so the c_17 term drops out. `untilize_out` adds the c_30/c_20 row-major-output scratch.
 // `per_batch_hw` is padded_shape[1] * padded_shape[2]; `available_l1` is usable per-core L1 (l1_size_per_core
 // minus the base-allocated region); `single_tile_size` is bytes; `num_out_blocks_arg` uses -1 == auto.
 bool groupnorm_legacy_rm_input_fits_l1(
@@ -57,23 +59,8 @@ bool groupnorm_legacy_rm_input_fits_l1(
     bool has_gamma,
     bool has_beta,
     bool has_mask,
+    bool tilize_in,
     bool untilize_out,
     uint64_t available_l1);
-
-// Perf heuristic, separate from the L1-fit check: even when a legacy ROW_MAJOR input fits L1 on-core, the host
-// composite (tilize + TILE path) can be faster when the on-core gather is not amortized. Returns true (prefer
-// composite) for an uneven batch load, a severely under-parallelized op, or a small grid that still carries
-// enough per-core work; tiny small-grid shapes stay fused.
-// num_cores = num_virtual_cols * num_virtual_rows; per_core_work_tiles = block_ht * per_core_Nt.
-bool groupnorm_legacy_rm_prefer_composite_for_perf(
-    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches, uint32_t per_core_work_tiles);
-
-// Thresholds for the heuristic above
-// Above this many active cores there is enough parallelism to keep the gather on-core (stay fused).
-inline constexpr uint32_t kGroupnormLegacyRmMinCoresForOnChip = 32;
-// At or below this many active cores the op is severely under-parallelized: always composite.
-inline constexpr uint32_t kGroupnormLegacyRmSevereUnderutilCores = 4;
-// Minimum per-core work (in tiles) for a small grid (<= kGroupnormLegacyRmMinCoresForOnChip) to composite.
-inline constexpr uint32_t kGroupnormLegacyRmMinWorkTiles = 48;
 
 }  // namespace ttnn::prim

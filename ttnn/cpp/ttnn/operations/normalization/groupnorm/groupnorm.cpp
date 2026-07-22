@@ -374,24 +374,24 @@ Tensor group_norm(
             reciprocals);
     }
 
-    // Only reroute when per-batch H*W is tile-aligned. Otherwise tilizing would zero-pad the spatial dim
-    // (corrupting mean/variance), so leave it ROW_MAJOR for the device op to reject.
+    // The composite fallbacks below apply only to the legacy (non-Welford) path; Welford ROW_MAJOR is rejected
+    // upstream. We reroute only when per-batch H*W is tile-aligned: otherwise tilizing/untilizing would
+    // zero-pad the spatial dim (corrupting mean/variance), so a misaligned ROW_MAJOR tensor is left for the
+    // device op to reject.
     const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
     const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
     const bool per_batch_hw_tile_aligned = per_batch_hw % tile_h == 0;
+    const Layout requested_out_layout = output_layout.value_or(input_tensor.layout());
 
-    // Legacy (non-Welford) ROW_MAJOR interleaved input whose per-core group would not fit in L1 as a resident
-    // tilized block: convert it once with ttnn::tilize_with_zero_padding and run the TILE-input path
-    // (composite), rather than re-gathering and re-tilizing on-core on every one of the three passes.
-    // Welford ROW_MAJOR is rejected upstream, so this only applies to the legacy path.
-    Tensor gn_input = input_tensor;
-    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
-        const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
-        const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
-        const uint64_t base_l1 =
-            input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
-        const bool fits = ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
+    // Host-side L1-fit estimate shared by the input and output composite decisions. Mirrors the program
+    // factory's per-core CB footprint and is only accurate to within the kGroupnormTilizedL1UsagePercent
+    // margin, so borderline shapes rely on that slack to still route to the composite path.
+    const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
+    const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+    const uint64_t base_l1 = input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
+    const auto legacy_rm_fits_l1 = [&](bool tilize_in, bool untilize_out) {
+        return ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
             Ht,
             input_padded_shape[3],
             per_batch_hw,
@@ -405,30 +405,41 @@ Tensor group_norm(
             gamma.has_value(),
             beta.has_value(),
             /*has_mask=*/true,  // a mask CB is always allocated (get_mask_tensor creates one if absent)
-            output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR,
+            tilize_in,
+            untilize_out,
             available_l1);
-        // Perf heuristic: prefer the composite for some grids/batches even when the group fits L1 (see predicate).
-        const uint32_t num_virtual_cols =
-            compute_num_virtual_cols(core_grid->x, static_cast<int>(num_groups), input_padded_shape[3]);
-        const uint32_t num_virtual_rows = num_virtual_cols == 0 ? 0 : (core_grid->x / num_virtual_cols) * core_grid->y;
-        const uint32_t num_cores = num_virtual_cols * num_virtual_rows;
-        const uint32_t per_core_Nt = num_virtual_cols == 0 ? 0 : (input_padded_shape[3] / num_virtual_cols) / tile_w;
-        const uint32_t block_ht =
-            num_virtual_rows == 0
-                ? 0
-                : (input_padded_shape[0] >= num_virtual_rows ? Ht / input_padded_shape[0] : Ht / num_virtual_rows);
-        const uint32_t per_core_work_tiles = block_ht * per_core_Nt;
-        const bool prefer_composite = ttnn::prim::groupnorm_legacy_rm_prefer_composite_for_perf(
-            num_cores, num_virtual_rows, input_padded_shape[0], per_core_work_tiles);
-        if (!fits || prefer_composite) {
+    };
+
+    // Legacy ROW_MAJOR input whose per-core group would not fit in L1 as a resident tilized block: convert it
+    // once with ttnn::tilize_with_zero_padding and run the TILE-input path (composite), rather than
+    // re-gathering and re-tilizing on-core on every one of the three passes.
+    Tensor gn_input = input_tensor;
+    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+        if (!legacy_rm_fits_l1(/*tilize_in=*/true, /*untilize_out=*/requested_out_layout == Layout::ROW_MAJOR)) {
             log_debug(
                 tt::LogOp,
                 "group_norm: tilizing ROW_MAJOR input on host and running the TILE path (composite) -- "
-                "reason: {}.",
-                !fits ? "resident tilized group does not fit L1" : "small core grid / uneven batch (perf)");
+                "resident tilized group does not fit L1.");
             // Keep the intermediate in the input's memory config (typically DRAM interleaved). Tilizing into
             // output_mem_config would be wrong if the caller requested a different output config.
             gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+        }
+    }
+
+    // Legacy ROW_MAJOR output: the fused on-core untilize allocates extra CBs (c_30 + c_20) that may push a
+    // large shape past L1 even when the TILE-output program fits. When it does not fit, produce TILE output and
+    // untilize on host (composite output), mirroring the input fallback. tilize_in reflects gn_input's actual
+    // layout after any input compositing above.
+    Layout device_out_layout = requested_out_layout;
+    bool untilize_out_on_host = false;
+    if (!use_welford && requested_out_layout == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+        if (!legacy_rm_fits_l1(/*tilize_in=*/gn_input.layout() == Layout::ROW_MAJOR, /*untilize_out=*/true)) {
+            log_debug(
+                tt::LogOp,
+                "group_norm: running the TILE-output path and untilizing on host (composite output) -- "
+                "the fused ROW_MAJOR-output CBs do not fit L1.");
+            device_out_layout = Layout::TILE;
+            untilize_out_on_host = true;
         }
     }
 
@@ -440,9 +451,9 @@ Tensor group_norm(
         .im_data_format = DataType::BFLOAT16,
         .out_data_format = DataType::BFLOAT16,
         .inplace = inplace.value_or(false),
-        .output_layout = output_layout.value_or(input_tensor.layout()),
+        .output_layout = device_out_layout,
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
-    return ttnn::prim::group_norm(
+    Tensor output = ttnn::prim::group_norm(
         gn_input,
         epsilon,
         static_cast<uint32_t>(num_groups),
@@ -455,6 +466,10 @@ Tensor group_norm(
         mask,
         negative_mask,
         reciprocals);
+    if (untilize_out_on_host) {
+        output = ttnn::to_layout(output, Layout::ROW_MAJOR);
+    }
+    return output;
 }
 
 }  // namespace ttnn

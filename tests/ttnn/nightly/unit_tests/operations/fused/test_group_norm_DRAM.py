@@ -194,10 +194,10 @@ def test_group_norm_DRAM_oft_unit_shapes(
     base.test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid)
 
 
-# Legacy ROW_MAJOR interleaved DRAM path: layout combinations across GROUP_NORM_DRAM_SHAPES
+# Legacy ROW_MAJOR interleaved DRAM path: layout combinations across GROUP_NORM_ROW_MAJOR_SHAPES
 # (covers the L1-resident on-core tilize path; oversized cases fall back to host tilize + TILE GN).
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_ROW_MAJOR_SHAPES)
 @pytest.mark.parametrize("welford_mode", ["legacy"])
 @pytest.mark.parametrize(
     "input_layout, output_layout",
@@ -205,8 +205,9 @@ def test_group_norm_DRAM_oft_unit_shapes(
         (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
     ],
-    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT", "TILE_IN_TILE_OUT"],
 )
 def test_group_norm_DRAM_row_major_layouts(
     device,

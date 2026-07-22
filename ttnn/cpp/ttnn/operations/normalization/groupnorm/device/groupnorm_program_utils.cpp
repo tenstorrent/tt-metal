@@ -36,6 +36,7 @@ bool groupnorm_legacy_rm_input_fits_l1(
     bool has_gamma,
     bool has_beta,
     bool has_mask,
+    bool tilize_in,
     bool untilize_out,
     uint64_t available_l1) {
     // Grid geometry, replicating the program factory (identical formulas in the mcast and no-mcast factories).
@@ -89,8 +90,12 @@ bool groupnorm_legacy_rm_input_fits_l1(
     // gamma/beta/mask and the c_30/c_20 scratch when the output is ROW_MAJOR.
     const uint64_t in0_block_tiles = static_cast<uint64_t>(block_ht / num_out_blocks) * block_wt;
     const uint64_t per_out_block_cb = in0_block_tiles * single_tile_size;
+    // c_17 resident tilized group exists only when the ROW_MAJOR input is tilized on-core; a TILE input
+    // (tilize_in == false, e.g. an already-composited input) never allocates it.
     const uint64_t resident_cb =
-        static_cast<uint64_t>(groupnorm_tilized_group_tiles(block_ht, num_out_blocks, block_wt)) * single_tile_size;
+        tilize_in ? static_cast<uint64_t>(groupnorm_tilized_group_tiles(block_ht, num_out_blocks, block_wt)) *
+                        single_tile_size
+                  : 0;
 
     uint64_t est =
         resident_cb + 7 * per_out_block_cb + static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
@@ -109,16 +114,6 @@ bool groupnorm_legacy_rm_input_fits_l1(
     }
 
     return est * 100 <= available_l1 * kGroupnormTilizedL1UsagePercent;
-}
-
-bool groupnorm_legacy_rm_prefer_composite_for_perf(
-    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches, uint32_t per_core_work_tiles) {
-    const bool imbalanced =
-        num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
-    const bool severe_underutil = num_cores <= kGroupnormLegacyRmSevereUnderutilCores;
-    const bool small_grid_with_work =
-        num_cores <= kGroupnormLegacyRmMinCoresForOnChip && per_core_work_tiles >= kGroupnormLegacyRmMinWorkTiles;
-    return imbalanced || severe_underutil || small_grid_with_work;
 }
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {

@@ -59,6 +59,48 @@ GROUP_NORM_DRAM_SHAPES = [
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
 
+# 28 shapes contributed by Izajasz (iwrosz) on PR #49501 to exercise the legacy ROW_MAJOR layout path
+# across the cases that matter: model shapes that benefit from on-core tilize, shapes that must not
+# regress (fall back to the host tilize + TILE composite), grid-utilization and batch-imbalance sweeps,
+# and shapes that stay on the fused path.
+GROUP_NORM_ROW_MAJOR_SHAPES = [
+    # Model shapes that should benefit
+    # (N,    C,    H,    W,     g, nob, cy, cx)
+    (1, 512, 128, 128, 32, 1, 8, 8),
+    (1, 512, 64, 64, 32, 1, 8, 8),
+    (1, 256, 256, 256, 32, 8, 8, 8),
+    (1, 128, 1, 512, 32, 1, 8, 8),
+    # Model shapes that should avoid regression due to fallback
+    (1, 1152, 128, 128, 32, 2, 8, 4),
+    (1, 1920, 16, 16, 32, 1, 4, 4),
+    (1, 1536, 8, 8, 32, 1, 2, 8),
+    (1, 480, 1, 64, 8, 1, 1, 1),
+    # Model shapes that should stay unaffected
+    (1, 256, 256, 256, 32, 4, 8, 8),
+    (1, 512, 256, 256, 32, 4, 8, 8),
+    (1, 256, 1024, 1024, 32, 48, 8, 8),
+    (1, 128, 1, 262144, 32, 64, 8, 4),
+    # Synthetic grid-utilization
+    (1, 512, 1, 1024, 32, 2, 1, 8),
+    (1, 512, 1, 2048, 32, 2, 2, 8),
+    (1, 512, 1, 3072, 32, 2, 3, 8),
+    (1, 512, 1, 4096, 32, 2, 4, 8),
+    (1, 512, 1, 5120, 32, 2, 5, 8),
+    (1, 512, 1, 6144, 32, 2, 6, 8),
+    (1, 512, 1, 7168, 32, 2, 7, 8),
+    (1, 512, 1, 8192, 32, 2, 8, 8),
+    # Synthetic batch-imbalance
+    (8, 768, 1, 512, 32, 2, 8, 8),
+    (9, 768, 1, 512, 32, 2, 8, 8),
+    (10, 768, 1, 512, 32, 2, 8, 8),
+    (16, 768, 1, 512, 32, 2, 8, 8),
+    (17, 768, 1, 512, 32, 2, 8, 8),
+    # Synthetic that should take fused path
+    (1, 768, 1, 512, 32, 2, 8, 8),
+    (2, 768, 1, 512, 32, 2, 8, 8),
+    (8, 768, 1, 512, 32, 2, 8, 8),
+]
+
 GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
     (8, 768, 1, 512, 32, 2, 8, 8),  # base case
     (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
