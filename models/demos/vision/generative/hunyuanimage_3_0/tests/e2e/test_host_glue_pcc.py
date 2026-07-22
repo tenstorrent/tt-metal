@@ -33,7 +33,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.vision.generative.hunyuanimage_3_0.tt import gen_image as gi
-from models.demos.vision.generative.hunyuanimage_3_0.tt.host_glue_tt import _repl, build_final_layer
+from models.demos.vision.generative.hunyuanimage_3_0.tt.host_glue_tt import _repl, build_final_layer, build_patch_embed
 from models.demos.vision.generative.hunyuanimage_3_0.tt.pipeline import _mesh_to_torch
 
 _MESH = tuple(int(x) for x in os.environ.get("HUNYUAN_HG_MESH", "1,1").split(","))
@@ -80,3 +80,37 @@ def test_final_layer_pcc(device_params, mesh_device):
     ok, pcc = comp_pcc(vel_host, vel_tt, PCC_TARGET)
     print(f"HOST_GLUE_FINAL_LAYER_PCC={pcc} target={PCC_TARGET} ok={ok}", flush=True)
     assert ok, f"final_layer TT-vs-host velocity PCC {pcc} < {PCC_TARGET}"
+
+
+@pytest.mark.parametrize("device_params", [_DEV], indirect=True)
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=True)
+def test_patch_embed_pcc(device_params, mesh_device):
+    """Stage-2: patch_embed (UNetDown) TT vs host. VAE latent [1,32,64,64] + time_embed(t)
+    -> image tokens [1, H*W, 4096]; PCC(host, TT) >= 0.99."""
+    torch.manual_seed(0)
+    model = gi.load_model(num_layers=N_LAYERS)
+    pe = model.patch_embed.float()
+    in_ch = int(pe.model[0].weight.shape[1])  # VAE latent channels (32)
+
+    latent = torch.randn(1, in_ch, TOKEN_H, TOKEN_W, dtype=torch.float32)  # NCHW VAE latent
+    try:
+        emb = model.time_embed(torch.tensor([TIMESTEP], dtype=torch.float32)).float()
+        emb_src = "time_embed"
+    except Exception as e:  # noqa: BLE001
+        emb = torch.randn(1, int(pe.model[1].in_layers[2].weight.shape[0]), dtype=torch.float32)
+        emb_src = f"random(fallback: {type(e).__name__}: {e})"
+    print(f"[hg] patch_embed emb_src={emb_src} emb={tuple(emb.shape)} latent={tuple(latent.shape)}", flush=True)
+
+    with torch.no_grad():
+        tok_host, th, tw = pe(latent, emb)  # [1, H*W, 4096]
+    print(f"[hg] host tokens={tuple(tok_host.shape)} token_hw=({th},{tw})", flush=True)
+
+    pe_tt = build_patch_embed(mesh_device, model, TOKEN_H, TOKEN_W)
+    emb_tt = _repl(mesh_device, emb)
+    out = pe_tt(latent, emb_tt)  # [1, H*W, 4096]
+    tok_tt = _mesh_to_torch(out, mesh_device).to(torch.float32).reshape(tok_host.shape)
+    print(f"[hg] tt tokens={tuple(tok_tt.shape)}", flush=True)
+
+    ok, pcc = comp_pcc(tok_host, tok_tt, PCC_TARGET)
+    print(f"HOST_GLUE_PATCH_EMBED_PCC={pcc} target={PCC_TARGET} ok={ok}", flush=True)
+    assert ok, f"patch_embed TT-vs-host tokens PCC {pcc} < {PCC_TARGET}"

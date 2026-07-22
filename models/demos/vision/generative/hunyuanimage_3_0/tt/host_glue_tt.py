@@ -168,3 +168,32 @@ class FinalLayerTT:
 
 def build_final_layer(device, model, token_h=64, token_w=64):
     return FinalLayerTT(device, model, token_h, token_w)
+
+
+class PatchEmbedTT:
+    """patch_embed (UNetDown) on TT (stage 2/3, upload-side): VAE latent [1,32,H,W] NCHW +
+    emb [1,4096] -> image tokens [1, H*W, 4096]. Lets the image tokens be built ON-DEVICE from
+    the small uploaded latent (~0.5 MB) instead of host convs + uploading [1,4116,4096] embeds.
+
+    torch patch_embed = UNetDown(patch_size=1, in=32, hidden=1024, out=4096, emb=4096):
+      model[0] = Conv2d(32->1024,k3,p1) ; model[1] = ResBlock(1024->4096) ; rearrange b c h w -> b (h w) c
+    emb comes from time_embed(t) (NOT time_embed_2, which feeds final_layer)."""
+
+    def __init__(self, device, model, token_h=64, token_w=64):
+        self.device, self.H, self.W = device, token_h, token_w
+        pe = model.patch_embed.float()
+        self.in_ch = int(pe.model[0].weight.shape[1])  # VAE latent channels (32)
+        self.conv0 = _Conv(device, pe.model[0], token_h, token_w)  # conv(32->1024)
+        self.res = _ResBlockTT(device, pe.model[1], token_h, token_w)  # ResBlock(1024->4096)
+
+    def __call__(self, latent, emb):  # latent: torch [1,32,H,W] NCHW ; emb: ttnn [1,4096]
+        # ONLY place a NCHW->NHWC permute is needed (the initial latent); tokens come out NHWC-flat.
+        x = latent.permute(0, 2, 3, 1).reshape(1, 1, self.H * self.W, self.in_ch).contiguous()
+        x = _repl(self.device, x)
+        x = self.conv0(x)  # [1,1,H*W,1024]
+        x = self.res(x, emb)  # [1,1,H*W,4096]
+        return ttnn.reshape(x, [1, self.H * self.W, x.shape[-1]])  # tokens [1,H*W,4096]
+
+
+def build_patch_embed(device, model, token_h=64, token_w=64):
+    return PatchEmbedTT(device, model, token_h, token_w)
