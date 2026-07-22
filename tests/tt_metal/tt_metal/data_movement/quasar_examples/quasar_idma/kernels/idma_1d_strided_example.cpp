@@ -18,7 +18,7 @@
 //   4. Wait for IDMA ack
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
@@ -61,7 +61,8 @@ void kernel_main() {
     }
 
     /* wait on IDMA to finish */
-    while (!idma_acked_cmdbuf_0());
+    while (!idma_acked_cmdbuf_0()) {
+    }
 
-    DPRINT << "IDMA 1D strided done: " << DEC() << num_elements << " elements, src_stride=" << src_stride << ENDL();
+    DEVICE_PRINT("IDMA 1D strided done: {} elements, src_stride: {} \n", num_elements, src_stride);
 }

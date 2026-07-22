@@ -124,39 +124,18 @@ thread_local uint8_t __processor_id = 0;
 thread_local uint8_t __emule_neo_id = 0;
 thread_local uint8_t __emule_trisc_id = 0;
 
-// Sanitizer thread-local state (ASAN feature). Exported via -rdynamic so the jit_hw ASAN headers
-// resolve them; all null/zero and inert when TT_METAL_EMULE_ASAN is off. Mirrored from
-// tt-emule/src/kernel_runner.cpp — the two libs are never linked into the same binary, so the
-// duplicate definitions are benign.
-thread_local uint32_t __emule_sem_l1_range_start = 0;
-thread_local uint32_t __emule_sem_l1_range_end = 0;
+// The sanitizer per-launch range/counter state (semaphore region, L1/DRAM OOB +
+// padding + host-poke extents, CB window counters + Dirty-CB flags/sites, the
+// NoC-read counter, and the Object-Intent resolved-log pointer) now lives in the
+// per-fiber context (__emule_self->san, EmuleSanitizerState) — moved out of these
+// worker-thread-locals so a kernel that yields under the fiber engine can't have
+// it clobbered by a co-scheduled fiber (the all_reduce/global-sem OOB false
+// positive). It is armed per launch by set_sanitizer_thread_locals and consumed
+// by the kernel-side checks + the two host resolvers below. See docs/ASAN.md
+// "Per-fiber sanitizer state". __emule_kernel_name stays a -rdynamic global (the
+// launch path owns the backing string); the ASAN trace reads kernel identity
+// from __emule_self->san (armed alongside the ranges).
 thread_local const char* __emule_kernel_name = nullptr;
-thread_local uint32_t __emule_pending_noc_reads = 0;
-thread_local uint32_t __emule_l1_unreserved_base = 0;
-thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
-thread_local uint32_t __emule_l1_tensor_ranges_count = 0;
-thread_local const uint64_t* __emule_l1_padding_ranges = nullptr;
-thread_local uint32_t __emule_l1_padding_ranges_count = 0;
-thread_local const uint64_t* __emule_l1_host_ranges = nullptr;
-thread_local uint32_t __emule_l1_host_ranges_count = 0;
-// Object-Intent resolved-range log now lives in the fiber ctx (ThreadCommonCtx::
-// san_resolved_*), reached via __emule_self — no thread-local. See tt-emule #241.
-thread_local uint32_t __emule_cb_reserved_pages[32] = {};
-thread_local uint32_t __emule_cb_waited_pages[32] = {};
-// Dirty-CB leak flags: set by reserve/wait, cleared by push/pop; still-set at
-// kernel exit is the leak. Decoupled from the window counters. See SANITIZER_CHECKS.md §11.
-thread_local bool __emule_cb_reserve_dangling[32] = {};
-thread_local bool __emule_cb_wait_dangling[32] = {};
-thread_local const char* __emule_cb_reserve_file[32] = {};
-thread_local uint32_t __emule_cb_reserve_line[32] = {};
-thread_local const char* __emule_cb_wait_file[32] = {};
-thread_local uint32_t __emule_cb_wait_line[32] = {};
-thread_local bool __emule_cb_boundary_strict = false;
-
-// DRAM equivalent of __emule_l1_tensor_ranges; consumed only by __emule_dram_ptr below.
-thread_local uint32_t __emule_dram_unreserved_base = 0;
-thread_local const uint64_t* __emule_dram_tensor_ranges = nullptr;
-thread_local uint32_t __emule_dram_tensor_ranges_count = 0;
 
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
@@ -205,12 +184,12 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
     // ASAN out-of-bounds DRAM check (inert when TT_METAL_EMULE_ASAN off — ranges stay null). Range-test
     // in 32 bits to match the live-range registry (uint32_t start/end); the 64-bit offset is used only
     // for the backing-store address. Assumes DRAM addresses fit in 32 bits (true for every WH/BH config).
-    if (__emule_dram_tensor_ranges != nullptr &&
-        static_cast<uint32_t>(offset) >= __emule_dram_unreserved_base) {
+    if (__emule_self->san.dram_tensor_ranges != nullptr &&
+        static_cast<uint32_t>(offset) >= __emule_self->san.dram_unreserved_base) {
         uint32_t addr = static_cast<uint32_t>(offset);
         bool in_tensor = false;
-        for (uint32_t i = 0; i < __emule_dram_tensor_ranges_count; ++i) {
-            uint64_t packed = __emule_dram_tensor_ranges[i];
+        for (uint32_t i = 0; i < __emule_self->san.dram_tensor_ranges_count; ++i) {
+            uint64_t packed = __emule_self->san.dram_tensor_ranges[i];
             uint32_t r_start = static_cast<uint32_t>(packed >> 32);
             uint32_t r_end = static_cast<uint32_t>(packed);
             if (addr >= r_start && addr < r_end) {
@@ -231,13 +210,13 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     emule_require_self(__func__);
     // ASAN illegal-semaphore-region check (inert when ASAN off — range end stays 0).
-    if (__emule_sem_l1_range_end > 0 &&
-        offset >= __emule_sem_l1_range_start && offset < __emule_sem_l1_range_end) {
+    if (__emule_self->san.sem_l1_range_end > 0 && offset >= __emule_self->san.sem_l1_range_start &&
+        offset < __emule_self->san.sem_l1_range_end) {
         __emule_asan_panic(
             "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
             offset,
-            __emule_sem_l1_range_start,
-            __emule_sem_l1_range_end);
+            __emule_self->san.sem_l1_range_start,
+            __emule_self->san.sem_l1_range_end);
     }
     return __emule_self->bridge_l1 ? __emule_self->bridge_l1 + offset : nullptr;
 }
@@ -3023,6 +3002,14 @@ struct EmuleSigfpeGuard {
 static bool g_emule_mesh_defer = false;
 static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>>
     g_mesh_dfb_keep;
+// [MESH] ASAN snapshot keepalive. In defer mode the deferred fibers read the per-launch
+// live-range snapshot (via oob.state's pointers) only later, in run_mesh_dispatch — long
+// after dispatch_to_device's local OobStateOwner would have been destroyed. Without this
+// the range pointers dangle and the checks read freed/reused heap (the all_reduce global-
+// semaphore OOB false positive). Holds each device's OobStateOwner alive until the run
+// completes; cleared alongside g_mesh_dfb_keep. std::move preserves the heap buffers the
+// pointers reference, so the captured views stay valid across the vector's own growth.
+static std::vector<tt::tt_metal::emule::OobStateOwner> g_mesh_oob_keep;
 
 // Resolved-program cache — emule's analogue of silicon's is_compiled(): collect + JIT compile + resolve
 // run ONCE per program (keyed by ProgramId); every device dispatches against the shared read-only result.
@@ -3059,12 +3046,12 @@ static void launch_cores(
     std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>> dfb_keepalive;
     dfb_keepalive.reserve(core_setups.size());
 
-    // Object-Intent (ASAN §12): one tracker per core, owned here so it outlives the fiber
-    // run (run_until_idle below, for the non-deferred single-device path). The deferred
-    // mesh path skips OI — per-fiber ASAN state is single-device-scoped (see the ASAN note
-    // in the spawn lambda) and the trackers must not outlive this frame across a deferred
-    // run_mesh_dispatch. Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241.
-    std::vector<std::unique_ptr<ObjectIntentTracker>> intent_trackers;
+    // Object-Intent (ASAN §12): one tracker per core, owned here so it outlives the
+    // fiber run (run_until_idle below, non-deferred single-device path only). The
+    // deferred mesh path skips OI — per-fiber ASAN state is single-device-scoped and
+    // the trackers must not outlive this frame across a deferred run_mesh_dispatch.
+    // Empty (no snapshot/verify cost) when ASAN is off. See tt-emule #241 / docs/ASAN.md.
+    std::vector<std::unique_ptr<tt::tt_metal::emule::ObjectIntentTracker>> intent_trackers;
     const bool object_intent_active = !defer_run && oob_state.object_intent_strict;
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
@@ -3088,13 +3075,13 @@ static void launch_cores(
             per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
         }
 
-        // Object-Intent: snapshot this core's non-I/O live buffers BEFORE its kernel runs
-        // (on the dispatch thread, so L1 still holds the pre-kernel bytes). Self-gates to a
-        // no-op unless ASAN is on and this is a single-kernel core; the fiber(s) below then
-        // record resolved extents and verify at exit. See tt-emule #241 and ObjectIntentTracker.
-        ObjectIntentTracker* intent_tracker = nullptr;
+        // Object-Intent: snapshot this core's non-I/O live buffers BEFORE its kernel
+        // runs (on the dispatch thread, so L1 still holds the pre-kernel bytes). The
+        // fiber(s) below record resolved extents, then verify at exit. Self-gates to a
+        // no-op unless single-kernel (the attribution rule). See tt-emule #241.
+        tt::tt_metal::emule::ObjectIntentTracker* intent_tracker = nullptr;
         if (object_intent_active) {
-            intent_trackers.push_back(std::make_unique<ObjectIntentTracker>());
+            intent_trackers.push_back(std::make_unique<tt::tt_metal::emule::ObjectIntentTracker>());
             intent_tracker = intent_trackers.back().get();
             static const std::vector<uint32_t> kEmptyRtArgs;
             intent_tracker->pre_launch_snapshot(
@@ -3154,28 +3141,39 @@ static void launch_cores(
             // blocked fiber parks rather than spins, so start order is irrelevant).
             //
             // ASAN sanitizer (#44848) is armed per-kernel here: set_sanitizer_thread_locals /
-            // sweep_per_kernel_dirty_cbs / clear (+ the identity globals the sanitizer .cpp reads,
-            // mirroring the ctx). All inert when TT_METAL_EMULE_ASAN is off — set_sanitizer_thread_locals
-            // early-returns, so the by-value oob_state view (owned by dispatch_to_device's OobStateOwner)
-            // is never dereferenced. The range thread-locals are program-uniform, so a peer fiber
-            // re-arming them on a shared worker is harmless. The Object-Intent resolved-range log is
-            // per-fiber, so it lives in the fiber ctx (__emule_self->san_resolved_*) and needs no
-            // thread-local / swap-in restore. Object-Intent snapshot/verify run per single-kernel core
-            // on the non-deferred (single-device) path; deferred mesh runs skip OI. See tt-emule #241.
+            // sweep_per_kernel_dirty_cbs / clear all write/read __emule_self->san (the per-fiber
+            // sanitizer state), so a kernel that yields mid-body can't have its ranges clobbered by
+            // a co-scheduled fiber — the fix for the fiber-engine false positives (the all_reduce /
+            // global-semaphore OOB). All inert when TT_METAL_EMULE_ASAN is off — set_sanitizer_thread_locals
+            // arms null/zero and the chokepoint early-outs. The by-value oob_state view's snapshot
+            // vectors (owned by dispatch_to_device's OobStateOwner) are kept alive past this deferred
+            // spawn by g_mesh_oob_keep so the armed range pointers don't dangle before the mesh run.
             sched.spawn(
-                [ki_ptr, lx, ly, cb_array, l1_data, intent_tracker, oob_state, sem_base = cs.sem_base,
+                [ki_ptr,
+                 lx,
+                 ly,
+                 cb_array,
+                 l1_data,
+                 intent_tracker,
+                 oob_state,
+                 sem_base = cs.sem_base,
                  sem_size = cs.sem_size]() {
                     auto& ki = *ki_ptr;
                     __processor_id = ki.processor_id;
                     __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                     __emule_trisc_id = 0;
                     __emule_kernel_name = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
-                    __emule_pending_noc_reads = 0;
+                    // ASAN identity on the fiber's OWN ctx (read by the [ASAN ERROR] trace) —
+                    // per-fiber so a co-scheduled fiber can't overwrite it across a yield. lx/ly
+                    // also fix the previously-always-zero logical-coord report.
+                    __emule_self->san.kernel_name = __emule_kernel_name;
+                    __emule_self->san.logical_x = lx;
+                    __emule_self->san.logical_y = ly;
+                    __emule_self->san.processor_id = ki.processor_id;
                     set_sanitizer_thread_locals(oob_state, sem_base, sem_size);
-
-                    // Arm the Object-Intent resolved-range log in this fiber's ctx (reset count,
-                    // enable recording). The kernel-side OOB check appends resolved extents to
-                    // __emule_self->san_resolved_log; teardown accumulates and verify diffs them.
+                    // Arm the Object-Intent resolved-range log in THIS fiber's ctx (reset
+                    // count, enable recording). The kernel-side OOB check appends resolved
+                    // extents to __emule_self->san_resolved_log; accumulate/verify below.
                     if (intent_tracker != nullptr) {
                         __emule_self->san_resolved_active = true;
                         __emule_self->san_resolved_count = 0;
@@ -3201,16 +3199,19 @@ static void launch_cores(
                             ") failed"));
                     }
                     if (intent_tracker != nullptr) {
-                        // Accumulate this kernel's resolved extents, then verify: any non-I/O
-                        // buffer whose bytes changed but was never resolved is an Object-Intent
-                        // violation (aborts). No-op for multi-kernel cores (nothing snapshotted).
+                        // Fold this kernel's resolved extents into the core's resolved set, then
+                        // verify: any non-I/O live buffer whose bytes changed but was never
+                        // resolved is an Object-Intent violation (aborts). No-op on multi-kernel
+                        // cores (nothing snapshotted). Runs in-fiber, after the kernel wrote L1.
                         intent_tracker->accumulate_resolved(
                             oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
                         __emule_self->san_resolved_active = false;
-                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_kernel_name);
+                        // Use the per-fiber kernel name (survives a mid-kernel yield) rather than
+                        // the worker-thread_local __emule_kernel_name, which a co-scheduled fiber
+                        // could have overwritten — otherwise an OI violation can misattribute.
+                        intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_self->san.kernel_name);
                     }
                     __emule_kernel_name = nullptr;
-                    __emule_pending_noc_reads = 0;
                     clear_sanitizer_thread_locals();
                 },
                 std::move(ctx),
@@ -3341,6 +3342,11 @@ static void dispatch_to_device(
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
     launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run, oob.state);
+    if (defer_run) {
+        // Deferred fibers run later (run_mesh_dispatch); keep the snapshot vectors that
+        // oob.state's ASAN range pointers reference alive until then. See g_mesh_oob_keep.
+        g_mesh_oob_keep.push_back(std::move(oob));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3374,6 +3380,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
 void begin_mesh_dispatch() {
     g_emule_mesh_defer = true;
     g_mesh_dfb_keep.clear();
+    g_mesh_oob_keep.clear();
 }
 
 void run_mesh_dispatch() {
@@ -3385,6 +3392,7 @@ void run_mesh_dispatch() {
         ~Cleanup() {
             g_emule_mesh_defer = false;
             g_mesh_dfb_keep.clear();
+            g_mesh_oob_keep.clear();
         }
     } cleanup;
     // All devices' fibers were registered (spawned) during the per-device register phase;

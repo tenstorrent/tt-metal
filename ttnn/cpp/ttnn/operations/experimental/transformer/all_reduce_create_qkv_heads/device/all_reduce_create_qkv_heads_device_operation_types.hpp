@@ -111,10 +111,10 @@ struct AllReduceCreateQkvHeadsInputs {
 // Return types using named structs for Q, K, V heads
 // all_reduce is included as an internal implementation detail
 struct AllReduceCreateQkvHeadsResultSpec {
-    TensorSpec all_reduce;  // Internal: needed for circular buffer setup
-    TensorSpec q;
-    TensorSpec k;
-    TensorSpec v;
+    tt::tt_metal::TensorSpec all_reduce;  // Internal: needed for circular buffer setup
+    tt::tt_metal::TensorSpec q;
+    tt::tt_metal::TensorSpec k;
+    tt::tt_metal::TensorSpec v;
 };
 
 struct AllReduceCreateQkvHeadsResult {

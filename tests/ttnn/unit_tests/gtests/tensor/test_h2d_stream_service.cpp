@@ -46,11 +46,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
+using ttnn::Tensor;
 
 // The Bytes path runs the service's internal mapper on the borrowed input; the
 // Tensor path expects the caller to have already distributed via an equivalent mapper.
@@ -75,12 +74,12 @@ struct H2DServiceCase {
 tt::tt_metal::distributed::MeshWorkload build_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::H2DStreamService& service,
-    const tt::tt_metal::Tensor& output_tensor,
+    const ttnn::Tensor& output_tensor,
     const CoreRange& worker_cores,
     uint32_t metadata_size_bytes,
     uint32_t metadata_input_addr,
     uint32_t metadata_output_addr) {
-    const tt::tt_metal::Tensor& input_tensor = service.get_backing_tensor();
+    const ttnn::Tensor& input_tensor = service.get_backing_tensor();
     auto* input_buf = input_tensor.buffer();
     auto* output_buf = output_tensor.buffer();
     TT_FATAL(input_buf != nullptr, "build_worker_workload: input tensor has no buffer");
@@ -201,7 +200,7 @@ void run_h2d_stream_service_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     tt::tt_metal::H2DStreamService::Config cfg{
         .global_spec = global_spec,
@@ -219,14 +218,14 @@ void run_h2d_stream_service_case(
     ASSERT_NE(service.get_backing_tensor().buffer(), nullptr);
     ASSERT_EQ(service.get_sockets().size(), mesh_device->num_devices());
 
-    std::optional<tt::tt_metal::Tensor> output_tensor;
+    std::optional<ttnn::Tensor> output_tensor;
     tt::tt_metal::distributed::MeshWorkload worker_workload;
     std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> metadata_output_buffer;
     tt::tt_metal::DeviceAddr metadata_output_addr = 0;
     if (worker_cores.has_value()) {
         const auto& backing = service.get_backing_tensor();
-        output_tensor.emplace(tt::tt_metal::create_device_tensor(
-            backing.tensor_spec(), mesh_device.get(), backing.tensor_topology()));
+        output_tensor.emplace(
+            ttnn::create_device_tensor(backing.tensor_spec(), mesh_device.get(), backing.tensor_topology()));
 
         if (cs.metadata_size_bytes > 0) {
             const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
@@ -861,7 +860,7 @@ TEST_F(H2DStreamServiceTest, Preprocessor_RingSDPAReshuffle) {
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(global_shape, tensor_layout);
 
     uint32_t current_chunk_P_aligned = 0;
     auto preprocessor = [N_C, &current_chunk_P_aligned](
