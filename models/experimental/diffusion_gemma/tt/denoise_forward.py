@@ -832,6 +832,24 @@ class MutablePrefixKVReader:
             raise ValueError(f"committed prompt_len {prompt_len} exceeds reveal read span {self.read_span}")
         self.prompt_len = prompt_len
 
+    def reset_prompt_len(self, prompt_len: int) -> None:
+        """Reset the committed prefix at a request boundary on a fixed-span reader.
+
+        Unlike :meth:`set_prompt_len`, this permits shrinking because a new request has
+        overwritten the model-owned cache head. It is intentionally unavailable without a
+        reveal-mask ``read_span``: shrinking a shape-baked prefix would replay stale prompt KV.
+        """
+        prompt_len = int(prompt_len)
+        if self.read_span is None:
+            raise RuntimeError("request-boundary prefix reset requires a fixed reveal-mask read span")
+        if prompt_len < 0:
+            raise ValueError(f"frozen prefix length must be non-negative, got {prompt_len}")
+        if prompt_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"frozen prefix length must be tile aligned, got {prompt_len}")
+        if prompt_len > self.read_span:
+            raise ValueError(f"committed prompt_len {prompt_len} exceeds reveal read span {self.read_span}")
+        self.prompt_len = prompt_len
+
 
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
@@ -1358,6 +1376,35 @@ class DenoiseLogitsAdapter:
     def owns_logits(self, logits) -> bool:
         """Return True when ``logits`` is retained for next-step self-conditioning."""
         return self.prev_logits is logits
+
+    def rebind_prompt(self, prompt_len: int) -> None:
+        """Bind a startup-captured reveal-mask trace to a newly prefetched request.
+
+        The model-owned KV cache head has already been overwritten by the request prefill.
+        Only persistent buffer contents and scalar position state change here; every address
+        baked into the trace remains stable. Rebinding a prefix-shape-baked adapter is rejected
+        because it would silently replay another request's prompt.
+        """
+        if not getattr(self, "use_reveal_mask", False):
+            raise RuntimeError("prompt rebind requires a captured DG_DENOISE_REVEAL_MASK adapter")
+        resetter = getattr(self.prompt_hidden_by_layer, "reset_prompt_len", None)
+        if not callable(resetter):
+            raise RuntimeError("prompt rebind requires a MutablePrefixKVReader prefix source")
+
+        prompt_len = int(prompt_len)
+        canvas_len = int(getattr(self, "_canvas_rope_len", 0) or 0)
+        p_max = int(getattr(self, "_reveal_p_max", 0) or 0)
+        if canvas_len and p_max and prompt_len + canvas_len > p_max:
+            raise ValueError(
+                "request exceeds the up-front capture context: "
+                f"{prompt_len} + {canvas_len} = {prompt_len + canvas_len} > {p_max}"
+            )
+
+        resetter(prompt_len)
+        self.prompt_len = prompt_len
+        self.q_rope_offset = prompt_len
+        self.update_reveal_mask_buffer(prompt_len)
+        self.update_canvas_rope_buffers(prompt_len)
 
     def advance_prefix_after_commit(self, next_pos: int) -> bool:
         """Expose newly committed KV to later denoise blocks.

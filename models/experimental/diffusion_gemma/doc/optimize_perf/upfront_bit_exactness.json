@@ -1,0 +1,17 @@
+{
+  "committed_sha256": {
+    "eager": "924ae03b6111734d8ab1d2d4c88ec6a7da5ba6612c50b2f0e3c27d0511980e0f",
+    "per_request_reveal_trace": "924ae03b6111734d8ab1d2d4c88ec6a7da5ba6612c50b2f0e3c27d0511980e0f",
+    "upfront": "924ae03b6111734d8ab1d2d4c88ec6a7da5ba6612c50b2f0e3c27d0511980e0f"
+  },
+  "config": {
+    "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+    "gumbel_mode": "chunked",
+    "max_denoise_steps": 2,
+    "mesh": "P150x4",
+    "num_layers": 30,
+    "reveal_pmax": 1024,
+    "trace_region_size": 1073741824
+  },
+  "status": "passed"
+}

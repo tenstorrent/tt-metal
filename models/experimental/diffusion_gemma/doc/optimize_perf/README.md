@@ -23,6 +23,35 @@ Current guardrails:
 - The July-15 fidelity control shows coherent TT output at the intrinsic bf16 floor. Persistent
   serving garbage is not an accepted performance tradeoff.
 
+## Up-front denoise capture (2026-07-22)
+
+`DG_UPFRONT_CAPTURE=1` now captures the reveal-mask denoise trace during
+`warmup_model_prefill` and retains its adapter/controller for the model lifetime. Each request
+prefills the model-owned KV cache, rebinds the fixed-span adapter in place, replays the startup
+trace, and detaches without releasing it. The default-OFF path retains per-request construction
+and teardown. The wrapper destructor invokes the idempotent persistent-release path before inherited
+model/mesh teardown.
+
+The mode fails at startup unless reveal masking and tracing are enabled, `DG_TRACE_REGION_SIZE`
+is positive, and `DG_DENOISE_REVEAL_PMAX` is explicit, positive, and tile aligned. Lazy capture is
+rejected because it could capture a previously unreached early-halt window during a later request.
+The fixed `p_max` is also enforced as the served `prompt + generated` cap before denoise/commit.
+
+Full 30-layer QB2 evidence:
+
+- `upfront_reuse_across_prompts.json`: 32→320→32 aligned prompt spans, A/B outputs differ, A is
+  exact on repeat, and `capture_events` remains 1. The 320-token prefill also overwrites the mock
+  commit span `[32:288]` (2-step deterministic mechanics gate).
+- `upfront_bit_exactness.json`: production chunked-Gumbel up-front, existing per-request reveal
+  trace, and eager committed SHA256 are identical (2-step deterministic decision gate).
+- `upfront_multi_request_smoke.json`: full K=48 tuned trace, A→B→A, one capture / 192 trace
+  executions, exact A roundtrip, prompt-distinct output, coherent decoded text for both prompts,
+  checkpoint chat-template metadata, and exact prompt-B equality to a fresh-process per-request
+  reveal-trace control.
+
+These are direct wrapper/session runs on 4× Blackhole p300c; no Tracy or live-server profiling was
+used. Commands and the initial untuned timeout control are recorded in `work_log.md`.
+
 > **Historical dg-08 snapshot.** The 4175.7 ms/step, 137.55 ms/layer, and
 > sequential-commit numbers below predate true-sparse MoE, OPT-004, batched
 > commit, traced denoise, and the L1-residency pass. Do not quote them as the

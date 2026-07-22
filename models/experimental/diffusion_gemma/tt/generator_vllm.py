@@ -76,7 +76,11 @@ from models.experimental.diffusion_gemma.tt.generate import (
 )
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
-from models.experimental.diffusion_gemma.tt.traced_denoise import traced_denoise_block
+from models.experimental.diffusion_gemma.tt.traced_denoise import (
+    reveal_mask_enabled,
+    traced_denoise_block,
+    upfront_capture_enabled,
+)
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 MAX_DENOISE_STEPS = 48
@@ -106,6 +110,46 @@ def _with_vllm_max_denoise_steps(config: DiffusionConfig) -> DiffusionConfig:
     if not 1 <= steps <= MAX_DENOISE_STEPS:
         raise ValueError("DG_VLLM_MAX_DENOISE_STEPS must be in [1, 48]")
     return replace(config, max_denoise_steps=steps)
+
+
+def _validate_upfront_capture_configuration(*, trace_enabled: bool, canvas_length: int) -> int:
+    """Validate the fail-loud startup contract and return the explicit fixed prefix span."""
+    if not reveal_mask_enabled():
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_DENOISE_REVEAL_MASK=1")
+    if not trace_enabled:
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_VLLM_TRACE=1 or an explicit DG_DENOISE_* trace")
+    if os.environ.get("DG_DENOISE_LAZY_CAPTURE", "0").lower() in ("1", "true", "yes", "on"):
+        raise RuntimeError(
+            "DG_UPFRONT_CAPTURE requires DG_DENOISE_LAZY_CAPTURE=0; all trace windows must be captured at startup"
+        )
+
+    raw_trace_region = os.environ.get("DG_TRACE_REGION_SIZE", "").strip()
+    try:
+        trace_region_size = int(raw_trace_region)
+    except ValueError as exc:
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires an integer DG_TRACE_REGION_SIZE > 0") from exc
+    if trace_region_size <= 0:
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_TRACE_REGION_SIZE > 0")
+
+    raw_pmax = os.environ.get("DG_DENOISE_REVEAL_PMAX", "").strip()
+    if not raw_pmax:
+        raise RuntimeError(
+            "DG_UPFRONT_CAPTURE requires an explicit bounded DG_DENOISE_REVEAL_PMAX; "
+            "the full allocated KV span is not an acceptable fallback"
+        )
+    try:
+        p_max = int(raw_pmax)
+    except ValueError as exc:
+        raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be an integer") from exc
+    if p_max <= 0 or p_max % ttnn.TILE_SIZE != 0:
+        raise RuntimeError(f"DG_DENOISE_REVEAL_PMAX must be a positive {ttnn.TILE_SIZE}-token multiple, got {p_max}")
+    minimum = ttnn.TILE_SIZE + int(canvas_length)
+    if p_max < minimum:
+        raise RuntimeError(
+            "DG_DENOISE_REVEAL_PMAX cannot fit the startup prompt and one canvas: "
+            f"{p_max} < {ttnn.TILE_SIZE} + {canvas_length} = {minimum}"
+        )
+    return p_max
 
 
 def _metric(event: str, **fields) -> None:
@@ -183,6 +227,16 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # unchanged; ``DG_VLLM_TRACE=1`` opts this path into trace without the internal flag and
         # ``DG_VLLM_TRACE=0`` forces eager. See doc/vllm_integration/README.md (traced serving).
         self._trace_enabled = self._resolve_trace_pref()
+        self._upfront = upfront_capture_enabled()
+        self._persistent_adapter = None
+        self._upfront_pmax = (
+            _validate_upfront_capture_configuration(
+                trace_enabled=self._trace_enabled,
+                canvas_length=self.canvas_length,
+            )
+            if self._upfront
+            else None
+        )
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
         # resident contiguous-cache prompt can skip its prefill. Inert unless
@@ -376,11 +430,78 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
 
     # ── warmup ──────────────────────────────────────────────────────────
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
-        # The block-diffusion path builds its per-request denoise logits fn lazily
-        # in prefill_forward and does not use gemma4's AR prefill trace warmup.
-        # Program-cache warm-up happens naturally on the first prefill/decode.
         del kv_cache, enable_trace, can_sample_on_device, greedy_only
-        logger.info("[DiffusionGemma vLLM] warmup is a no-op; block-diffusion warms on first prefill/decode")
+        if not self._upfront:
+            # The default path remains lazy and per-request exactly as before.
+            logger.info("[DiffusionGemma vLLM] warmup is a no-op; block-diffusion warms on first prefill/decode")
+            return
+        if self._persistent_adapter is not None:
+            logger.info("[DiffusionGemma vLLM] up-front denoise capture already initialized")
+            return
+
+        p_max = _validate_upfront_capture_configuration(
+            trace_enabled=self._trace_enabled,
+            canvas_length=self.canvas_length,
+        )
+        cache_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
+        if p_max > cache_span:
+            raise RuntimeError(
+                f"DG_DENOISE_REVEAL_PMAX={p_max} exceeds the smallest allocated model KV span {cache_span}"
+            )
+        self._upfront_pmax = p_max
+
+        mock_token_id = getattr(self._tokenizer, "bos_token_id", None)
+        if mock_token_id is None:
+            mock_token_id = getattr(self._tokenizer, "eos_token_id", None)
+        if mock_token_id is None:
+            mock_token_id = 0
+        mock_tokens = torch.tensor([[int(mock_token_id)]], dtype=torch.long)
+
+        session = self._make_session()
+        try:
+            cache_len = session.prefill(mock_tokens)
+            emission = session.decode_block()
+            adapter = session._logits_fn
+            controllers = [
+                getattr(adapter, attr, None)
+                for attr in (
+                    "_traced_denoise_controller",
+                    "_traced_denoise_multistep_controller",
+                    "_traced_early_halt_controller",
+                )
+            ]
+            controllers = [controller for controller in controllers if controller is not None]
+            if not controllers or not all(getattr(controller, "captured", False) for controller in controllers):
+                raise RuntimeError("startup denoise did not leave a fully captured traced controller")
+            if not getattr(adapter, "use_reveal_mask", False):
+                raise RuntimeError("startup denoise trace was not captured with a persistent reveal mask")
+
+            trace_stats = session.trace_stats()
+            # Detach before resetting the throwaway shell: the wrapper now owns the adapter.
+            session._logits_fn = None
+            session.reset()
+            self._persistent_adapter = adapter
+        except BaseException:
+            session.reset()
+            logger.error(
+                "[DiffusionGemma vLLM] up-front denoise capture failed; startup is aborted. "
+                "A trace-region overflow may require `tt-smi -r` before retrying."
+            )
+            raise
+
+        _metric(
+            "upfront_capture",
+            cache_len=cache_len,
+            committed_tokens=int(emission.tokens.numel()),
+            next_pos=emission.next_pos,
+            reveal_pmax=p_max,
+            trace_stats=trace_stats,
+            dram=_dram_snapshot(self.model[0].mesh_device),
+        )
+        logger.info(
+            f"[DiffusionGemma vLLM] captured persistent denoise trace at startup "
+            f"(mock_cache_len={cache_len}, p_max={p_max})"
+        )
 
     # ── block-granular forward ──────────────────────────────────────────
     def _prompt_tokens_for_row(self, tokens, prompt_lens, row):
@@ -488,6 +609,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 # callback before reusing the single active row.
                 self.release_request(row)
             session = self._make_session()
+            if getattr(self, "_upfront", False):
+                if self._persistent_adapter is None:
+                    raise RuntimeError(
+                        "DG_UPFRONT_CAPTURE is enabled but warmup_model_prefill has not completed successfully"
+                    )
+                session.attach_persistent_adapter(self._persistent_adapter)
             prompt_tokens = self._prompt_tokens_for_row(tokens, prompt_lens, row)
             ttft_t0 = time.perf_counter()
             try:
@@ -611,7 +738,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         return torch.cat(blocks, dim=0)
 
     def release_request(self, row: int) -> None:
-        """Drop a finished request and release its Metal traces and logits state."""
+        """Drop a finished request, preserving any model-lifetime up-front capture."""
         session = self._sessions.pop(row, None)
         if session is not None:
             trace_stats = session.trace_stats()
@@ -628,3 +755,51 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 trace_stats=trace_stats,
                 dram=_dram_snapshot(self.model[0].mesh_device),
             )
+
+    def release_persistent_capture(self) -> None:
+        """Best-effort terminal shutdown of the model-lifetime adapter and trace buffers.
+
+        Call immediately before mesh close; continuing inference after this terminal release is
+        unsupported because the startup capture is intentionally not rebuilt mid-process.
+        """
+        for row in list(getattr(self, "_sessions", {})):
+            try:
+                self.release_request(row)
+            except BaseException as cleanup_error:
+                logger.error(f"failed to detach active request {row} during persistent release: {cleanup_error}")
+
+        adapter = getattr(self, "_persistent_adapter", None)
+        self._persistent_adapter = None
+        if adapter is None:
+            return
+
+        for attr in (
+            "_traced_denoise_controller",
+            "_traced_denoise_multistep_controller",
+            "_traced_early_halt_controller",
+        ):
+            controller = getattr(adapter, attr, None)
+            if controller is not None:
+                try:
+                    controller.release()
+                except BaseException as cleanup_error:
+                    logger.error(f"failed to release persistent serving controller {attr}: {cleanup_error}")
+                finally:
+                    delattr(adapter, attr)
+        if hasattr(adapter, "reset"):
+            try:
+                adapter.reset()
+            except BaseException as cleanup_error:
+                logger.error(f"failed to release persistent serving adapter: {cleanup_error}")
+
+    def __del__(self):
+        """Release DiffusionGemma-owned traces before inherited model/mesh teardown."""
+        try:
+            self.release_persistent_capture()
+        except BaseException:
+            # Interpreter shutdown may already have torn down logging/TTNN modules.
+            pass
+        try:
+            super().__del__()
+        except BaseException:
+            pass

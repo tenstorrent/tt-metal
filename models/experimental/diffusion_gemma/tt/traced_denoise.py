@@ -124,6 +124,18 @@ def reveal_mask_enabled() -> bool:
     return os.environ.get("DG_DENOISE_REVEAL_MASK", "0").lower() in ("1", "true", "yes", "on")
 
 
+def upfront_capture_enabled() -> bool:
+    """Capture the serving denoise trace once at model startup (``DG_UPFRONT_CAPTURE``, OFF).
+
+    This mode is only sound with ``DG_DENOISE_REVEAL_MASK``: the trace must read a fixed-shape
+    prefix while each request refreshes the persistent reveal mask and model-owned KV contents.
+    Callers must also require an explicit, tile-aligned ``DG_DENOISE_REVEAL_PMAX`` that bounds
+    the served ``prompt + generated`` context; using the full unbounded KV allocation would make
+    every denoise step perform an accidental O(max-KV) prefix read.
+    """
+    return os.environ.get("DG_UPFRONT_CAPTURE", "0").lower() in ("1", "true", "yes", "on")
+
+
 def lazy_capture_enabled() -> bool:
     """Capture denoise-window traces ON DEMAND instead of the full budget up front
     (``DG_DENOISE_LAZY_CAPTURE``, default OFF).

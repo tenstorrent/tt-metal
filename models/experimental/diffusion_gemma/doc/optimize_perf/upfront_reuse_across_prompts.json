@@ -1,0 +1,34 @@
+{
+  "aligned_prompt_lengths": [
+    32,
+    320,
+    32
+  ],
+  "committed_sha256": [
+    "924ae03b6111734d8ab1d2d4c88ec6a7da5ba6612c50b2f0e3c27d0511980e0f",
+    "a2b7798184f1316c4ee5b890840efae16b7820a981b69d092efb6c1d6488ae96",
+    "924ae03b6111734d8ab1d2d4c88ec6a7da5ba6612c50b2f0e3c27d0511980e0f"
+  ],
+  "config": {
+    "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+    "gumbel_mode": "argmax",
+    "max_denoise_steps": 2,
+    "mesh": "P150x4",
+    "num_layers": 30,
+    "reveal_pmax": 1024,
+    "trace_region_size": 1073741824
+  },
+  "status": "passed",
+  "trace_stats": {
+    "capture_events": 1,
+    "controller": "TracedDenoiseController",
+    "execute_trace_calls": 8,
+    "gumbel_mode": "argmax",
+    "replay_blocks": 4,
+    "trace_ids": [
+      "MeshTraceId(0)",
+      "MeshTraceId(1)"
+    ],
+    "traces_captured": 2
+  }
+}

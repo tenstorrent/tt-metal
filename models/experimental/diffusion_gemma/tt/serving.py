@@ -76,9 +76,15 @@ from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache, p
 GUMBEL_MODES = ("chunked", "argmax", "host", "device")
 
 
-def _validate_next_block_capacity(tt_model, *, start_pos: int, canvas_length: int) -> None:
+def _validate_next_block_capacity(
+    tt_model, *, start_pos: int, canvas_length: int, served_context_limit: int | None = None
+) -> None:
     """Reject a whole-canvas commit before any denoise/device execution."""
     context_limit = _infer_context_limit(tt_model)
+    if served_context_limit is not None:
+        context_limit = (
+            int(served_context_limit) if context_limit is None else min(int(context_limit), int(served_context_limit))
+        )
     if context_limit is None:
         return
     end_pos = start_pos + canvas_length
@@ -204,6 +210,9 @@ class BlockDiffusionServingSession:
         self._logits_fn_builder = logits_fn_builder_factory(dg_state_dict, **adapter_kwargs)
 
         self._logits_fn = None
+        # Optional model-lifetime adapter injected by the vLLM wrapper after startup capture.
+        # A session only borrows this object; reset must detach it without releasing its traces.
+        self._persistent_adapter = None
         self.prompt_len = None
         self.cache_len = None
         self.next_pos = None
@@ -239,6 +248,14 @@ class BlockDiffusionServingSession:
             and self.page_tables_per_layer is None
             and prefix_cache_enabled()
         )
+
+    def attach_persistent_adapter(self, adapter) -> None:
+        """Borrow a startup-captured adapter for this request's prefill/decode lifetime."""
+        if adapter is None:
+            raise ValueError("persistent adapter must not be None")
+        if self._logits_fn is not None or self.next_pos is not None:
+            raise RuntimeError("persistent adapter must be attached before session prefill")
+        self._persistent_adapter = adapter
 
     def prefill(self, prompt_tokens: torch.Tensor) -> int:
         """Write prompt K/V into the frozen cache and build the denoise logits fn.
@@ -318,13 +335,17 @@ class BlockDiffusionServingSession:
         self.block_idx = 0
         self.finished = False
         self.prefill_reused = bool(plan is not None and plan.reuse)
-        self._logits_fn = self._logits_fn_builder(
-            self.tt_model,
-            prompt_tokens=prompt_tokens,
-            prompt_len=cache_len,
-            page_table=self.page_table,
-            page_tables_per_layer=self.page_tables_per_layer,
-        )
+        if self._persistent_adapter is not None:
+            self._persistent_adapter.rebind_prompt(cache_len)
+            self._logits_fn = self._persistent_adapter
+        else:
+            self._logits_fn = self._logits_fn_builder(
+                self.tt_model,
+                prompt_tokens=prompt_tokens,
+                prompt_len=cache_len,
+                page_table=self.page_table,
+                page_tables_per_layer=self.page_tables_per_layer,
+            )
         return cache_len
 
     def decode_block(self) -> BlockEmission:
@@ -339,7 +360,18 @@ class BlockDiffusionServingSession:
             raise RuntimeError("decode_block called after the sequence already emitted a stop token")
 
         start_pos = self.next_pos
-        _validate_next_block_capacity(self.tt_model, start_pos=start_pos, canvas_length=self.canvas_length)
+        served_context_limit = (
+            getattr(self._logits_fn, "_reveal_p_max", None)
+            if self._logits_fn is getattr(self, "_persistent_adapter", None)
+            and getattr(self._logits_fn, "use_reveal_mask", False)
+            else None
+        )
+        _validate_next_block_capacity(
+            self.tt_model,
+            start_pos=start_pos,
+            canvas_length=self.canvas_length,
+            served_context_limit=served_context_limit,
+        )
         block_idx = self.block_idx
         gumbel_for_block = self._gumbel_noise_fn(block_idx) if self._gumbel_noise_fn else None
         noise_for_block = self._noise_tokens_fn(block_idx) if self._noise_tokens_fn else None
@@ -399,8 +431,9 @@ class BlockDiffusionServingSession:
     def reset(self) -> None:
         """Release per-request Metal traces, buffers, and logits state."""
         logits_fn = self._logits_fn
+        persistent = logits_fn is not None and logits_fn is getattr(self, "_persistent_adapter", None)
         try:
-            if logits_fn is not None:
+            if logits_fn is not None and not persistent:
                 for attr in (
                     "_traced_denoise_controller",
                     "_traced_denoise_multistep_controller",
@@ -421,6 +454,7 @@ class BlockDiffusionServingSession:
                         logger.error(f"failed to reset serving logits state: {cleanup_error}")
         finally:
             self._logits_fn = None
+            self._persistent_adapter = None
             self.next_pos = None
             self.finished = False
             self.block_idx = 0

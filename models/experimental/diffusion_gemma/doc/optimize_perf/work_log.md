@@ -372,3 +372,104 @@ is substituted by synchronized per-op device times (§2a/§2b) + the per-layer s
 ### 5c. gemma4 isolation gate
 `git diff <baseline aff8f2105d3>..HEAD -- models/demos/gemma4/` is empty (only
 `models/experimental/diffusion_gemma/` changed). The four decode-footprint files remain clean vs main.
+
+## 6. Reusable up-front denoise capture (2026-07-22)
+
+Implemented the default-OFF `DG_UPFRONT_CAPTURE` path entirely under DiffusionGemma:
+
+- model startup runs a one-token mock prefill + one block decode and retains the captured adapter;
+- request prefill overwrites cache `[0:cache_len]`, resets the mutable fixed-span reader even when
+  the new prompt shrinks, and refreshes reveal-mask + canvas-RoPE contents in place;
+- request reset detaches a borrowed persistent adapter without releasing traces or trace-baked
+  buffers; the wrapper destructor calls the idempotent best-effort release method before inherited
+  model/mesh teardown;
+- startup rejects missing reveal mask, missing traced serving, zero/invalid trace region, missing or
+  unaligned explicit `p_max`, and lazy capture;
+- block-capacity validation enforces `prompt + generated <= p_max` before device execution.
+
+CPU:
+
+```text
+pytest -q tests/test_upfront_capture.py tests/test_serving_block_contract.py -k 'not test_device'
+23 passed, 1 skipped, 4 deselected
+```
+
+Device mechanics/decision gate, full 30 layers, K=2, argmax, `p_max=1024`, 1 GiB trace region:
+
+```text
+DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_DEDUP_ARGMAX=1 \
+DG_RUN_DEVICE=1 DG_TRACE_REGION_SIZE=1073741824 \
+DG_DENOISE_REVEAL_PMAX=1024 DG_UPFRONT_NUM_LAYERS=full DG_UPFRONT_STEPS=2 \
+pytest --timeout=600 -q \
+  tests/test_upfront_capture.py::test_device_upfront_trace_reuses_one_capture_across_different_prompt_lengths
+1 passed in 29.48s
+```
+
+Results: aligned prompt spans 32→320→32 reused `MeshTraceId(0..1)` with
+`capture_events=1`; A repeated exactly and differed from B. The 320-token real prefill is longer
+than the mock's `32 + 256` span and therefore directly proves it overwrites the committed mock KV.
+Up-front, per-request reveal trace, and eager all committed SHA256
+`924ae03b6111734d8ab1d2d4c88ec6a7da5ba6612c50b2f0e3c27d0511980e0f`.
+The bit-exact test was then rerun at the same full-depth K=2 configuration with
+`DG_UPFRONT_GUMBEL_MODE=chunked`; it passed in 50.39 s with the same three-way digest. The persisted
+`upfront_bit_exactness.json` is this production-Gumbel run; the reuse artifact remains the argmax
+stale-input control. Both runs construct the real `DiffusionGemmaForCausalLM` wrapper (including its
+startup guard resolution) rather than a method-only shell. Eager and per-request controls run first;
+the model-lifetime capture runs last so its release remains terminal.
+
+Full qualitative stale-state gate, 30 layers, K=48, tuned argmax, `p_max=1024`, 10 GiB trace region:
+
+```text
+DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_DEDUP_ARGMAX=1 \
+DG_RUN_DEVICE=1 DG_TRACE_REGION_SIZE=10737418240 \
+DG_DENOISE_REVEAL_PMAX=1024 DG_UPFRONT_NUM_LAYERS=full DG_UPFRONT_STEPS=48 \
+pytest --timeout=900 -q \
+  tests/test_upfront_capture.py::test_device_upfront_multi_request_smoke_has_no_stale_cross_request_state
+1 passed in 154.02s
+```
+
+The persistent controller captured 48 traces once, replayed four blocks (startup + A + B + A),
+and executed 192 traces without recapture. A round-tripped exactly; B differed. Decoded outputs were
+coherent (`"你好！ How can I help you today?"` and a prompt-correct black-hole explanation).
+The artifact records the checkpoint chat template, rendered token ids, and output hashes.
+
+The prompt-B output was then compared against the existing per-request reveal-mask trace in a
+fresh process (the release API is terminal shutdown, so the control deliberately reopens the mesh):
+
+```text
+DG_UPFRONT_BASELINE_CONTROL=1 DG_RUN_DEVICE=1 DG_TRACE_REGION_SIZE=10737418240 \
+DG_DENOISE_REVEAL_PMAX=1024 DG_UPFRONT_NUM_LAYERS=full DG_UPFRONT_STEPS=48 \
+pytest --timeout=900 -q \
+  tests/test_upfront_capture.py::test_device_per_request_prompt_b_matches_upfront_qualitative_artifact
+1 passed in 90.68s
+```
+
+The baseline committed SHA256 exactly matched the up-front prompt-B digest
+`82dac3229b72134447b6ad8f1571a6520215c9e0642b07c8a5a715d3706075b4`.
+
+An initial full-depth K=48 run without sparse-MoE tuning hit pytest's 300 s timeout while
+synchronizing the first 48-trace replay after a successful capture. Cleanup released all traces and
+closed the mesh; `tt-smi -ls --local` then showed all four p300c devices healthy. The tuned rerun
+above passed. This was a workload-timeout control, not a trace correctness failure.
+
+An attempted *test-only* same-process sequence of terminal
+`release_persistent_capture()` followed by a new per-request K=48 capture stalled in
+`AllBroadcastDeviceOperation` during the post-release control prefill. Live triage showed all four
+devices in the broadcast, with the broadcast writer waiting on its semaphore; ARC, Ethernet, L1,
+watcher, and lightweight-assert checks passed. Evidence:
+`triage/upfront_control_hang_{tt-triage,summary}.txt`. The process group was stopped, devices were
+reset, and a `(1,4)` mesh open/close smoke passed. This does not affect serving: the release method is
+now explicitly documented as terminal shutdown immediately before mesh close. The fresh-process
+baseline above passed and exactly matched prompt B.
+
+The compact triage summary reports script execution status, not an idle-device integrity verdict.
+The raw capture's binary-integrity/NoC mismatch rows were sampled while the broadcast was actively
+running; they are not being claimed as post-recovery checks. Reset + mesh open/close is the
+post-recovery health evidence.
+
+### Independent review
+
+A fresh stage-review pass after wiring destructor cleanup returned `clean-pass` with no required
+work. It rechecked the live diff, production shutdown call site, request detachment, long-prompt
+mock-span overwrite, three-way chunked-Gumbel exactness, K=48 A→B→A evidence, prompt-B baseline
+control, triage anomaly, and the DiffusionGemma-local isolation gate.
