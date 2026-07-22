@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -542,11 +543,35 @@ class Qwen36Model:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 
-        logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
-        state_dict = args.load_state_dict()
-
+        # Warm ttnn cache => skip the HF from_pretrained load for the (text) weights; they build
+        # from .tensorbin. Pure placeholder is safe: the vision tower uses a SEPARATE live HF
+        # reference model (tt/vision/model.py), so it never sees this state_dict. Partial win.
+        # Only for a full build (layer truncation => partial cache). This is the DEMO path;
+        # tt/common.py::create_tt_model (vLLM) has the same wiring. (#45400)
         cache_path = args.weight_cache_path()
-        return cls(device, args, state_dict, tensor_cache_path=cache_path)
+        full_build = n_layers is None and layer_indices is None
+        cache_identity = dict(
+            model_name=args.model_name,
+            n_layers=args.n_layers,
+            mesh_shape=tuple(args.mesh_device.shape),
+        )
+        loaded_real_weights = False
+        if (
+            full_build
+            and not getattr(args, "dummy_weights", False)
+            and weight_cache_is_complete(cache_path, **cache_identity)
+        ):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (text weights).")
+            state_dict = build_cached_state_dict(cache_path)
+        else:
+            logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
+            state_dict = args.load_state_dict()
+            loaded_real_weights = bool(state_dict) and not getattr(args, "dummy_weights", False)
+
+        model = cls(device, args, state_dict, tensor_cache_path=cache_path)
+        if loaded_real_weights and full_build:
+            mark_weight_cache_complete(cache_path, state_dict, **cache_identity)
+        return model
 
     def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None):
         """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the
