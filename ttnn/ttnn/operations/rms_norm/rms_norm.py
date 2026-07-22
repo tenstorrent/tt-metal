@@ -79,29 +79,32 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 # 2. SUPPORTED  (phase-1: narrow, but one entry per TARGET axis)
 # ---------------------------------------------------------------------------
-# Phase-1 supports only what the kernels build. Every axis the golden
-# feature_spec TARGET enumerates gets an entry so out-of-rectangle cells xfail
-# cleanly instead of over-claiming.
+# Every axis the golden feature_spec TARGET enumerates gets an entry so
+# out-of-rectangle cells xfail cleanly instead of over-claiming.
 #
-#   * dtype            — bf16/f32 native (bf8b is a later refinement).
-#   * fp32_dest_acc_en — Phase-0 maxed corner only ([True]); {bf16,False} and
-#                        {f32,False} are later refinements → out of rectangle.
+#   * dtype            — bf16/f32/bf8b native. bf8b is a block-float format with
+#                        no RM representation and is only exercised tile-aligned
+#                        (bf8b+RM and bf8b+non_aligned are INVALID in
+#                        feature_spec, so no EXCLUSION is needed for those).
+#   * fp32_dest_acc_en — True (maxed corner, HiFi4) OR False (bf16 DEST accum,
+#                        the perf-loose config). {f32,False} is lossy → EXCLUSION.
 #   * layout           — TILE and ROW_MAJOR, both native.
 #   * alignment        — tile / W-nonaligned / H-nonaligned, all native.
 #   * rank             — 2/3/4.
 #   * gamma_mode       — optional scale (present / absent).
-#   * gamma_dtype      — real dtype when present (bf16/f32), "none" when absent.
+#   * gamma_dtype      — real dtype when present (bf16/f32/bf8b), "none" absent.
 #   * gamma_layout     — RM gamma is the phase-1 contract; "none" when absent.
+#                        (bf8b gamma implies TILE gamma — unlocked in Refinement 2.)
 #   * memory_layout    — INTERLEAVED (the sharded schemes are §1 lamps).
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
@@ -110,13 +113,15 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
-# None in phase-1: the only precision refusal named in the design
-# ({float32, fp32_dest_acc_en=False}) is already outside the SUPPORTED
-# rectangle (fp32_dest_acc_en supports only [True]), so it is refused by the
-# per-axis gate below. It becomes an explicit EXCLUSIONS entry only once
-# fp32_dest_acc_en=False is added to SUPPORTED (a later refinement).
+# {float32, fp32_dest_acc_en=False} is the design's legal-but-refused precision
+# corner (references/precision_convention.md): fp32 activations with non-fp32
+# DEST accumulation is lossy/nonsensical. Now that fp32_dest_acc_en=False is in
+# SUPPORTED (for the bf16 perf-loose config), this cell is inside the SUPPORTED
+# rectangle and must be refused cell-level so {f32,False} stays xfail-strict.
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+]
 
 
 # ---------------------------------------------------------------------------

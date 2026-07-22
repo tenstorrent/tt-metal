@@ -49,3 +49,46 @@
 - **Tests added**: `test_rms_norm_precision_baseline.py` (PCC + abs/RMS error +
   got/true ratio spread across 4 shapes × 2 dtypes × gamma/no-gamma). Existing
   `test_rms_norm.py` (70/70) and `test_rms_norm_debug.py` (9/9) pass.
+
+## Refinement 1 — Numerical configurability expansion
+- **Date**: 2026-07-22
+- **What was done**: widened the precision surface to the full TARGET. Pure
+  knob-turn — **no compute-kernel change**; the descriptor was already fully
+  dtype-derived and the compute config already flowed through to the kernel.
+  - Op file (`rms_norm.py`): `SUPPORTED["dtype"] += bfloat8_b`,
+    `SUPPORTED["gamma_dtype"] += bfloat8_b`, `SUPPORTED["fp32_dest_acc_en"] += False`;
+    `EXCLUSIONS = [{dtype: float32, fp32_dest_acc_en: False}]` (the design's
+    legal-but-refused lossy corner, now inside the SUPPORTED rectangle so it must
+    be refused cell-level to stay xfail-strict).
+  - Program descriptor (`rms_norm_program_descriptor.py`): added `_elem_size()`
+    defensive helper. `element_size()` raises `ValueError` for block-float
+    (bfloat8_b has no fixed per-element size). That value feeds ONLY the RM
+    stick-byte math (`cols * elem`), and bf8b is TILE-only (bf8b+RM is INVALID),
+    so the RM regime never runs for it → return 0 placeholder instead of raising.
+    Page-size math uses `buffer_aligned_page_size()`, which is correct for
+    block-float (returns the 1088-byte tile page) and was left unchanged.
+    Caught by the risky-axis cheap-first probe before the full suite.
+  - Intermediate-CB precision / UnpackToDestFp32: audited, **no change needed**.
+    The only fp32 accumulator CB (`cb_rstd`) is already `Float32` (correct per
+    /numeric-formats-metal §4) and feeds an FPU op (`mul<Col>`), so per §1.5 it
+    **cannot** be `UnpackToDestFp32`-tagged — no tag applies to this op.
+- **Accuracy achieved** (device probe + precision matrix, tile-aligned TILE):
+  - bfloat8_b: PCC ≥ 0.9999, rel-RMS ≤ 0.057 (gate PCC ≥ 0.99 / RMS ≤ 0.10).
+  - bf16 @ fp32_dest_acc_en=False (incl. HiFi2 perf config): PCC ≥ 0.99998,
+    rel-RMS ≤ 0.056 (uniform corner; ≤ 0.007 on randn).
+  - float32: rel-RMS ≤ 0.008. See `precision_matrix_results.md`.
+- **Golden test progress**: green — **750 passed, 33900 skipped, 5689 xfailed,
+  0 failed** (Phase-0: 472 passed). No `supported_fail`, no `xpass_drift`, no
+  `xfail_wrong_mode`. Verified routing: `{f32,False}` EXCLUSION fires via
+  `ExcludedCell` (560 f32+False+no_gamma cells xfail where the exclusion is the
+  only possible refusal, 0 pass); bf8b passes only on `layout=TILE` +
+  `tile_aligned` (0 RM-input, 0 non-aligned). gamma_dtype=bf8b / gamma_layout=TILE
+  cells correctly still xfail — they are blocked on the gamma_layout=TILE axis,
+  which Refinement 2 unlocks (this + R2 = the perf-1 anchor).
+- **Issues encountered**: `element_size()` ValueError for bf8b (fixed via
+  `_elem_size()`, above). No other defects.
+- **Tests added**: `test_rms_norm_precision_matrix.py` (skill-mandated precision
+  matrix: dtype × fp32_dest_acc_en × math_fidelity × gamma × distribution × 4
+  shapes — 160 passed, 32 `{f32,False}` cells skipped) + `precision_matrix_results.md`.
+  Regression net green: `test_rms_norm.py`, `test_rms_norm_debug.py`,
+  `test_rms_norm_precision_baseline.py` (95 passed together).

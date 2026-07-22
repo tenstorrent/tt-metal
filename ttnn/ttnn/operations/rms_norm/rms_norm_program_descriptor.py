@@ -53,6 +53,22 @@ def _f32_bits(value: float) -> int:
     return struct.unpack("I", struct.pack("f", float(value)))[0]
 
 
+def _elem_size(tensor: ttnn.Tensor) -> int:
+    """Bytes per element — used ONLY for RM stick-byte math (`cols * elem`).
+
+    Block-float dtypes (bfloat8_b) have no fixed per-element size (16 values
+    share one exponent), so `element_size()` raises for them. bf8b is TILE-only
+    (bf8b+RM is INVALID), so the RM regime — the only consumer of this value —
+    never runs for it; return 0 as an unused placeholder instead of raising.
+    Page-size math (below) uses `buffer_aligned_page_size()`, which is correct
+    for block-float (returns the tile page), so it is left as-is.
+    """
+    try:
+        return tensor.element_size()
+    except (ValueError, RuntimeError):
+        return 0
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
@@ -88,8 +104,8 @@ def create_program_descriptor(
 
     in_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
-    in_elem = input_tensor.element_size()
-    out_elem = output_tensor.element_size()
+    in_elem = _elem_size(input_tensor)  # RM-only; 0 placeholder for block-float
+    out_elem = _elem_size(output_tensor)
     in_page = input_tensor.buffer_aligned_page_size()
     out_page = output_tensor.buffer_aligned_page_size()
 
@@ -100,7 +116,7 @@ def create_program_descriptor(
 
     if has_gamma:
         gamma_dtype = gamma.dtype
-        gamma_elem = gamma.element_size()
+        gamma_elem = _elem_size(gamma)  # RM-only; 0 placeholder for block-float
         gamma_page = gamma.buffer_aligned_page_size()
         tile_gamma = ttnn.tile_size(gamma_dtype)
     else:

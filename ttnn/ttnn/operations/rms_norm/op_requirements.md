@@ -48,7 +48,7 @@
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability expansion
+### [x] Refinement 1 — Numerical configurability expansion
 
 **Goal**: widen the precision surface to the full TARGET:
 - add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`
