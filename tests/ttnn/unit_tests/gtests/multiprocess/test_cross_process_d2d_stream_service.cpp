@@ -123,7 +123,6 @@ using ::tt::tt_metal::SetRuntimeArgs;
 using ::tt::tt_metal::TensorAccessorArgs;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;

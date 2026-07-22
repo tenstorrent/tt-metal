@@ -44,8 +44,8 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
 
     // If no device is provided, the tensor is kept on host.
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::HOST);
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == ttnn::StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != ttnn::StorageType::HOST);
 
     // Tensor topology is a single device
     const auto& tensor_topology = input_tensor.tensor_topology();

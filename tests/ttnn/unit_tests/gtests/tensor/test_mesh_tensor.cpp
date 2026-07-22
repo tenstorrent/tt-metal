@@ -62,7 +62,7 @@ TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     const tt::tt_metal::TensorSpec tensor_spec =
         tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor.storage_type() == ttnn::StorageType::HOST);
 
     EXPECT_NO_THROW(cpu(input_host_tensor));
 }
@@ -144,7 +144,7 @@ TEST(MeshTensorHostTest, FromHostShards) {
         MeshShape(1, 2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
-    EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
+    EXPECT_EQ(tensor.storage_type(), ttnn::StorageType::HOST);
     EXPECT_EQ(tensor.tensor_topology(), tt::tt_metal::TensorTopology::create_sharded_tensor_topology(MeshShape(1, 2)));
 
     auto tensors = get_device_tensors(tensor);
@@ -157,7 +157,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
-    Tensor input_tensor = create_device_tensor(tensor_spec, mesh_device_.get());
+    Tensor input_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(input_tensor.is_allocated());
 
@@ -190,7 +190,7 @@ TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
     std::iota(host_data.begin(), host_data.end(), 0);
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(input_host_tensor.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
     Tensor device_tensor_default = tt::tt_metal::to_device(input_host_tensor, mesh_device_.get());
@@ -211,7 +211,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
     // Prepare host tensor to offload on device.
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(input_host_tensor.tensor_spec().logical_shape(), shape);
 
     // Write host tensor to device.
@@ -227,7 +227,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
     // Read the tensor back, and compare it with input data.
     Tensor output_host_tensor = cpu(device_tensor);
-    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(output_host_tensor.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
     for (const auto& tensor : get_device_tensors(output_host_tensor)) {
@@ -472,14 +472,15 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
-    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
+    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == ttnn::StorageType::HOST);
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
     std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
 
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
-            Tensor device_tensor = create_device_tensor(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
+            Tensor device_tensor =
+                ttnn::create_device_tensor(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
             copy_to_device(input_host_tensor_sharded, device_tensor);
             return device_tensor;
         }
@@ -627,7 +628,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_WritesOnlyFilteredCores) {
     std::vector<uint32_t> new_data(shape.volume(), kNew);
     Tensor host_sent = distribute_tensor(Tensor::from_vector(sent_data, spec), *mapper);
     Tensor host_new = distribute_tensor(Tensor::from_vector(new_data, spec), *mapper);
-    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
+    Tensor device_tensor = ttnn::create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, filter);
@@ -659,7 +660,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
     std::vector<uint32_t> new_data(shape.volume(), 0x66u);
     Tensor host_sent = distribute_tensor(Tensor::from_vector(sent_data, spec), *mapper);
     Tensor host_new = distribute_tensor(Tensor::from_vector(new_data, spec), *mapper);
-    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
+    Tensor device_tensor = ttnn::create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet empty_filter;
     ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, empty_filter);
@@ -680,7 +681,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_ThrowsOnInterleavedLayout) {
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor host_a = distribute_tensor(Tensor::from_vector(a, spec), *mapper);
     Tensor host_b = distribute_tensor(Tensor::from_vector(b, spec), *mapper);
-    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_a.tensor_topology());
+    Tensor device_tensor = ttnn::create_device_tensor(spec, mesh_device_.get(), host_a.tensor_topology());
     copy_to_device(host_a, device_tensor);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     EXPECT_ANY_THROW(ttnn::experimental::core_subset_write::copy_to_device_filtered(host_b, device_tensor, filter));

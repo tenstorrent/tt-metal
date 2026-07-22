@@ -29,7 +29,7 @@ TEST_F(TestGraphCaptureArgumentsUntilizeWithUnpadding, UntilizeWithUnpadding) {
     tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape({1, 10240, 32}),
         TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), DRAM_MEMORY_CONFIG));
-    auto input_tensor = create_device_tensor(tensor_spec, device_);
+    auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     ttnn::untilize_with_unpadding(

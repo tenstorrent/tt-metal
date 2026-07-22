@@ -38,7 +38,7 @@ TEST_F(AsOptionalMeshTensorTest, EmptyOptionalReturnsEmptyReference) {
 }
 
 TEST_F(AsOptionalMeshTensorTest, DeviceTensorReturnsReferenceToMeshTensor) {
-    std::optional<Tensor> opt = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    std::optional<Tensor> opt = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
 
     auto ref = as_optional_mesh_tensor(opt);
 
@@ -68,7 +68,7 @@ TEST(GetCbAddressHostTest, EmptyDescriptorZeroOffsetReturnsZero) {
 }
 
 TEST_F(GetCbAddressTest, BufferOnlyReturnsBufferAddressPlusOffset) {
-    Tensor input_tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor input_tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     Buffer* buf = input_tensor.buffer();
     ASSERT_NE(buf, nullptr);
 
@@ -80,7 +80,7 @@ TEST_F(GetCbAddressTest, BufferOnlyReturnsBufferAddressPlusOffset) {
 }
 
 TEST_F(GetCbAddressTest, TensorOnlyReturnsTensorAddressPlusOffset) {
-    Tensor input_tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor input_tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const MeshTensor* mt = &input_tensor.mesh_tensor();
 
     CBDescriptor desc{};
@@ -91,7 +91,7 @@ TEST_F(GetCbAddressTest, TensorOnlyReturnsTensorAddressPlusOffset) {
 }
 
 TEST_F(GetCbAddressTest, BufferTakesPrecedenceOverTensor) {
-    Tensor input_tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor input_tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     Buffer* buf = input_tensor.buffer();
     const MeshTensor* mt = &input_tensor.mesh_tensor();
     ASSERT_NE(buf, nullptr);

@@ -57,7 +57,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     unit_tensors.reserve(unit_meshes.size());
 
     for (const auto& unit_mesh : unit_meshes) {
-        auto tensor = create_device_tensor(
+        auto tensor = ttnn::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), tt::tt_metal::MemoryConfig())),
@@ -112,7 +112,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateNonUnitMeshes) {
     std::vector<Tensor> tensors;
     tensors.reserve(non_unit_meshes.size());
     for (const auto& non_unit_mesh : non_unit_meshes) {
-        tensors.push_back(create_device_tensor(
+        tensors.push_back(ttnn::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), tt::tt_metal::MemoryConfig())),
@@ -133,7 +133,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
     tensors.reserve(unit_meshes.size());
     for (int i = 0; i < unit_meshes.size(); i++) {
         if (i % 2 == 0) {
-            tensors.push_back(create_device_tensor(
+            tensors.push_back(ttnn::create_device_tensor(
                 tt::tt_metal::TensorSpec(
                     shape1,
                     tt::tt_metal::TensorLayout(
@@ -142,7 +142,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
                         tt::tt_metal::MemoryConfig())),
                 unit_meshes[i].get()));
         } else {
-            tensors.push_back(create_device_tensor(
+            tensors.push_back(ttnn::create_device_tensor(
                 tt::tt_metal::TensorSpec(
                     shape2,
                     tt::tt_metal::TensorLayout(
@@ -164,7 +164,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {
     auto shape = ttnn::Shape(std::array<uint32_t, 2>{64, 64});
 
     // Make an additional allocation on the first unit mesh to make the addresses mismatch.
-    auto tensor = create_device_tensor(
+    auto tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
@@ -176,7 +176,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {
     std::vector<Tensor> tensors;
     tensors.reserve(unit_meshes.size());
     for (const auto& unit_mesh : unit_meshes) {
-        tensors.push_back(create_device_tensor(
+        tensors.push_back(ttnn::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 shape,
                 tt::tt_metal::TensorLayout(
@@ -197,7 +197,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateWrongNumberOfTensors) {
 
     auto shape = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
 
-    auto tensor = create_device_tensor(
+    auto tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
@@ -216,7 +216,7 @@ TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
     // Create a tensor on the parent mesh directly (no submeshes created yet)
     auto shape = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
 
-    auto tensor = create_device_tensor(
+    auto tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(

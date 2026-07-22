@@ -93,7 +93,6 @@ using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::NOC;
 using ::tt::tt_metal::SetRuntimeArgs;
 using ::tt::tt_metal::TensorAccessorArgs;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
 using ::tt::tt_metal::distributed::MeshCoordinate;
@@ -351,7 +350,7 @@ void run_pipeline(
     // Output tensor on the last stage, same per-shard spec/topology as the last D2D
     // receiver backing (so the terminal relay's accessor matches 1:1).
     D2DStreamServiceReceiver& last_recv = *d2d.back().second;
-    Tensor output_tensor = create_device_tensor(
+    Tensor output_tensor = ttnn::create_device_tensor(
         last_recv.get_per_shard_spec(), stages[num_stages - 1].get(), last_recv.get_backing_tensor().tensor_topology());
 
     const uint32_t num_elems = static_cast<uint32_t>(global_shape.volume());

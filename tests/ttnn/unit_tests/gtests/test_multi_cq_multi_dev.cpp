@@ -67,7 +67,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 tt::tt_metal::TensorSpec tensor_spec(
                     shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
                 ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-                auto input_tensor = create_device_tensor(tensor_spec, device.get());
+                auto input_tensor = ttnn::create_device_tensor(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(0),
@@ -127,7 +127,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                     expected_data[j] = bfloat16(expected_val);
                 }
 
-                auto input_tensor = create_device_tensor(tensor_spec, device.get());
+                auto input_tensor = ttnn::create_device_tensor(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),
@@ -184,7 +184,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
 
                 tt::tt_metal::TensorSpec tensor_spec(
                     shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
-                auto input_tensor = create_device_tensor(tensor_spec, device.get());
+                auto input_tensor = ttnn::create_device_tensor(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),

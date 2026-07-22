@@ -29,7 +29,7 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, TileToRowMajorPreservesShapeAndDtyp
     ttnn::Shape shape({1, 1, 32, 32});
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor tile_tensor = create_device_tensor(spec, device_);
+    Tensor tile_tensor = ttnn::create_device_tensor(spec, device_);
     ASSERT_EQ(tile_tensor.layout(), Layout::TILE);
 
     Tensor rm_tensor = unchecked_reinterpret_layout(tile_tensor, Layout::ROW_MAJOR);
@@ -45,7 +45,7 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, RowMajorToTilePreservesShapeAndDtyp
     ttnn::Shape shape({1, 1, 32, 32});
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), mem_cfg));
 
-    Tensor rm_tensor = create_device_tensor(spec, device_);
+    Tensor rm_tensor = ttnn::create_device_tensor(spec, device_);
     ASSERT_EQ(rm_tensor.layout(), Layout::ROW_MAJOR);
 
     Tensor tile_tensor = unchecked_reinterpret_layout(rm_tensor, Layout::TILE);
@@ -61,7 +61,7 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, AliasesTheSameDeviceAddress) {
     ttnn::Shape shape({1, 1, 32, 32});
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    Tensor original = ttnn::create_device_tensor(spec, device_);
     Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
 
     EXPECT_EQ(
@@ -74,7 +74,7 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, SameLayoutIsIdentity) {
     ttnn::Shape shape({1, 1, 32, 32});
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    Tensor original = ttnn::create_device_tensor(spec, device_);
     Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::TILE);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::TILE);
@@ -89,7 +89,7 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, OriginalTensorStaysAliveAfterReinte
     ttnn::Shape shape({1, 1, 32, 32});
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    Tensor original = ttnn::create_device_tensor(spec, device_);
     {
         Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
         ASSERT_TRUE(reinterpreted.is_allocated());

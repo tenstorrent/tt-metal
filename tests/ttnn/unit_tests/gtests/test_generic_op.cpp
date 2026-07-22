@@ -55,7 +55,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     Tensor device_input_tensor = input_tensor.to_device(this->device_);
     Tensor golden = ttnn::argmax(device_input_tensor).cpu();
 
-    Tensor device_output_tensor = create_device_tensor(golden.tensor_spec(), this->device_);
+    Tensor device_output_tensor = ttnn::create_device_tensor(golden.tensor_spec(), this->device_);
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t unit_size = input_tensor.element_size();
@@ -169,7 +169,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
 
     auto input_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), shape, Layout::TILE);
     auto device_input_tensor = input_tensor.to_device(this->device_, mem_config);
-    auto device_output_tensor = create_device_tensor(device_input_tensor.tensor_spec(), this->device_);
+    auto device_output_tensor = ttnn::create_device_tensor(device_input_tensor.tensor_spec(), this->device_);
 
     auto shard_spec = device_input_tensor.shard_spec().value();
     TT_FATAL(shard_spec.grid == all_cores, "shard spec grid should be same as all_cores");
@@ -281,7 +281,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     log_info(tt::LogTest, "Running generic add interleaved");
 
     // Data movement kernel needs output tensor address to be passed as a runtime argument.
-    auto device_output_tensor = create_device_tensor(device_input_tensor_a.tensor_spec(), this->device_);
+    auto device_output_tensor = ttnn::create_device_tensor(device_input_tensor_a.tensor_spec(), this->device_);
 
     auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange all_cores_range = {
@@ -469,7 +469,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
 
     ttnn::Shape output_shape =
         ttnn::Shape{B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH};
-    auto output = create_device_tensor(
+    auto output = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
@@ -706,7 +706,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(this->device_, dram_memory_config);
-    Tensor device_output_tensor = create_device_tensor(
+    Tensor device_output_tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             device_input_tensor.logical_shape(),
             tt::tt_metal::TensorLayout(
@@ -813,7 +813,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     // Setup initial tensors
     Tensor input_tensor_1 = ttnn::random::random(shape, DataType::BFLOAT16);
     Tensor device_input_tensor_1 = input_tensor_1.to_layout(Layout::TILE).to_device(this->device_);
-    Tensor device_output_tensor_1 = create_device_tensor(device_input_tensor_1.tensor_spec(), this->device_);
+    Tensor device_output_tensor_1 = ttnn::create_device_tensor(device_input_tensor_1.tensor_spec(), this->device_);
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_1.dtype());
     uint32_t num_tiles = device_input_tensor_1.physical_volume() / tt::constants::TILE_HW;
@@ -897,7 +897,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
 
     Tensor input_tensor_2 = ttnn::random::random(shape, DataType::BFLOAT16);
     Tensor device_input_tensor_2 = input_tensor_2.to_layout(Layout::TILE).to_device(this->device_);
-    Tensor device_output_tensor_2 = create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
+    Tensor device_output_tensor_2 = ttnn::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
     program_descriptor.kernels[0].runtime_args[0].first = {0, 0};
     program_descriptor.kernels[0].runtime_args[0].second = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
@@ -928,7 +928,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
 
     Tensor input_tensor_1 = ttnn::random::random(shape, DataType::BFLOAT16);
     Tensor device_input_tensor_1 = input_tensor_1.to_layout(Layout::TILE).to_device(this->device_);
-    Tensor device_output_tensor_1 = create_device_tensor(device_input_tensor_1.tensor_spec(), this->device_);
+    Tensor device_output_tensor_1 = ttnn::create_device_tensor(device_input_tensor_1.tensor_spec(), this->device_);
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_1.dtype());
     uint32_t num_tiles = device_input_tensor_1.physical_volume() / tt::constants::TILE_HW;
@@ -1013,7 +1013,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
 
     Tensor input_tensor_2 = ttnn::random::random(shape, DataType::BFLOAT16);
     Tensor device_input_tensor_2 = input_tensor_2.to_layout(Layout::TILE).to_device(this->device_);
-    Tensor device_output_tensor_2 = create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
+    Tensor device_output_tensor_2 = ttnn::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
     // Update both per-core and common runtime args with new addresses
     program_descriptor.kernels[0].runtime_args[0].second = {

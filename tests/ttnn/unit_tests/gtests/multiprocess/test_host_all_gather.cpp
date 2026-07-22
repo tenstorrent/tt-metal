@@ -27,7 +27,6 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::TensorLayout;
-using ::tt::tt_metal::TensorSpec;
 using ttnn::Tensor;
 
 using BigMeshDualRankTest2x4 = tt::tt_metal::MeshDevice2x4Fixture;
