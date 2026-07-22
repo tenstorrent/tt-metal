@@ -34,6 +34,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profrelay)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profcons)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profsplit)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_realprof)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_perf_debug_zones)
 
 add_custom_target(
     profiler_examples
@@ -57,4 +58,5 @@ add_custom_target(
         test_x280_profcons
         test_x280_profsplit
         test_x280_realprof
+        test_perf_debug_zones
 )

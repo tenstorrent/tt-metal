@@ -29,6 +29,7 @@
 #include "tools/profiler/x280_profzone_decode.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
+#include "impl/profiler/profiler.hpp"  // generateZoneSourceLocationsHashes (zone hash -> name)
 #include "prof_packet.h"
 
 namespace tt::tt_metal {
@@ -60,9 +61,17 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 
     tracy_ = std::make_unique<PerfDebugTracyHandler>();
-    // Zone-name table: srcloc hash -> name (stable node storage; string_view into it is safe). TODO:
-    // wire in the build-log zone-name resolution (Yusuf's generateZoneSourceLocationsHashes is internal
-    // to profiler.cpp); for now unknown hashes fall back to "Zone_0x<hash>" in HandleWorkerZone.
+    // Zone-name table: srcloc hash -> name from the compile-time zone-source-location logs (stable node
+    // storage, so a string_view into it stays valid). Unknown hashes fall back to "Zone_0x<hash>" in
+    // HandleWorkerZone.
+    try {
+        for (auto& [h, md] : generateZoneSourceLocationsHashes()) {
+            zone_names_[h] = md.marker_name;
+        }
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal, "[perf-debug profiler] zone-name load failed ({}); zones fall back to Zone_0x*.", e.what());
+    }
     zone_names_[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID (producer back-pressure marker)
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
