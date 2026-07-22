@@ -130,13 +130,13 @@ MGD_BLITZ_16="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_p
 MGD_BLITZ_48="tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto"
 MGD_BLITZ_64="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
 MGD_BLITZ_80="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_supercluster_20.textproto"
-# Non-pod-aligned ring lengths (20/24/28/32/36 stages) for the long-running bh-ring-stress group.
-# Each is N x M0(4x2) meshes wired in a closed ring; used to stress the mapper's general-SAT fallback.
-MGD_BLITZ_20="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_20stage_mesh_graph_descriptor.textproto"
-MGD_BLITZ_24="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_24stage_mesh_graph_descriptor.textproto"
-MGD_BLITZ_28="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_28stage_mesh_graph_descriptor.textproto"
-MGD_BLITZ_32="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_32stage_mesh_graph_descriptor.textproto"
-MGD_BLITZ_36="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_36stage_mesh_graph_descriptor.textproto"
+# Full-host-count ring lengths for the bh-ring-stress group: N meshes = (N/4) hosts at 4 meshes/host, so these
+# rings must occupy 20/24/28/32/36 hosts of the 36-host SC36 mock -- exercising the mapper's host-minimization at
+# realistic host counts (not tiny sub-host rings). MGD_BLITZ_80 (supercluster_20) is the 20-host / 80-mesh ring.
+MGD_BLITZ_96="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_96stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_112="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_112stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_128="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_128stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_144="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_144stage_mesh_graph_descriptor.textproto"
 
 GTEST_GALAXY_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxyLayoutCheck"
 GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxy4x4SplitHostLayoutCheck"
@@ -650,11 +650,11 @@ fi # bh-blitz-decode
 
 ######################################
 # BH Galaxy: ring-mapping stress test (LONG RUNNING -- own group)
-# Non-pod-aligned Blitz-decode ring lengths (20/24/28/32/36 stages) mapped onto the full 36-host SC36 revC
-# subtorus aisleD mock. These lengths don't align to pod (4-host) / galaxy boundaries, so they exercise
-# the topology mapper's general-SAT host-minimization fallback -- erratic cost that scales with ring
-# length (36-stage ~42s local vs sub-second for 20/24/28/32). The subtorus wrap-around lets every length
-# close and map. Own shard; ~1.5 min end-to-end locally, ~6.5 min on the ~4x-slower cpu_medium CI runner.
+# Full-host-count Blitz-decode ring lengths (80/96/112/128/144 stages = 20/24/28/32/36 hosts at 4 meshes/host)
+# mapped onto the 36-host SC36 revC subtorus aisleD mock. These rings must occupy 20..36 of the 36 hosts, so
+# they exercise the topology mapper's host-minimization at realistic scale (the occupancy-cap SAT path) rather
+# than tiny sub-host rings. Cost scales with ring length and host-selection slack; the subtorus wrap-around lets
+# every length close and map. Own shard (LONG RUNNING).
 ######################################
 if run_group "bh-ring-stress"; then
 
@@ -663,7 +663,7 @@ if run_group "bh-ring-stress"; then
 # so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
 RING_STRESS_TIMEOUT=300
 for entry in \
-    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 32 36" ; do
+    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:80 96 112 128 144" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
     mgd_var="MGD_BLITZ_${stage}"
