@@ -266,6 +266,10 @@ class ttMLA:
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
+        # Trace controller for the per-layer migration-ack boundary (runner trace path). Set via
+        # set_trace_controller(); only acts when the controller carries an ack callback. None by default
+        # (single-shot / test paths), in which case the ack site falls back to the direct call.
+        self._trace_controller = None
         self.kv_only = kv_only
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
@@ -605,12 +609,32 @@ class ttMLA:
             exp_approx_mode=False,
         )
 
-    def _apply_rope_padded(self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: int) -> ttnn.Tensor:
+    def set_trace_controller(self, controller):
+        """Register the SubDeviceTraceController so the per-layer migration ack can be chopped out of the
+        captured trace (runner trace path). The ack only fires through the controller when the controller
+        carries an ack callback (has_layer_ack()); otherwise the ack site falls back to the direct call."""
+        self._trace_controller = controller
+
+    def _apply_rope_padded(
+        self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: int, metadata: Optional[ttnn.Tensor] = None
+    ) -> ttnn.Tensor:
         """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
         block-cyclic-sharded cos/sin (built once via RotarySetup.get_rope_tensors_indexed); the op
         derives this chunk's per-chip shard offset on-device from kv_actual_global -- the same
         update_idxt math the KV-cache writer uses, keeping rotation and cache write consistent.
+
+        Per-element-tensor path: `metadata` is a 3-tuple of 1-element uint32 tensors
+        (slot_id, actual_start, actual_end); rope reads kv_actual_global = actual_start = metadata[1].
         """
+        if metadata is not None:
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                t,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                metadata[1],  # actual_start = kv_actual_global (1-element tensor)
+                cluster_axis=self.sp_axis,
+            )
         return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             t,
             rope_tensors["cos_matrix"],
@@ -621,9 +645,14 @@ class ttMLA:
         )
 
     def _apply_rope_one_shot(
-        self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: Optional[int] = None
+        self,
+        t: ttnn.Tensor,
+        rope_tensors: dict,
+        kv_actual_isl: Optional[int] = None,
+        metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Single-shot RoPE: natural-order rope_tensors + rotary_embedding_llama."""
+        """Single-shot RoPE: natural-order rope_tensors + rotary_embedding_llama. (metadata unused --
+        single-shot has no chunked rotation; accepted so forward can pass it uniformly.)"""
         return ttnn.experimental.rotary_embedding_llama(
             t,
             rope_tensors["cos_matrix"],
@@ -643,6 +672,7 @@ class ttMLA:
         cache_layer_idx: int,
         cache_user_id: int,
         seq_len_local: int,
+        metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Chunked-prefill attention via update_padded_kv_cache + ring_mla.
 
@@ -661,29 +691,64 @@ class ttMLA:
             f"chunk_size_global ({chunk_size_global}) must be a multiple of "
             f"TILE_SIZE * sp_factor ({tile_size * self.sp_factor})"
         )
-        assert kv_actual_isl % tile_size == 0, f"kv_actual_isl ({kv_actual_isl}) must be tile-aligned"
+        # Metadata path: kv_actual_isl is read on-device from metadata[1] and may be omitted host-side.
+        assert (
+            metadata is not None or kv_actual_isl % tile_size == 0
+        ), f"kv_actual_isl ({kv_actual_isl}) must be tile-aligned"
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            kvpe_cache,
-            tt_kvpe,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self.layer_num,
-            kv_actual_global=kv_actual_isl,
-            cluster_axis=self.sp_axis,
-        )
+        # Per-element-tensor path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device,
+        # each its own 1-element tensor.
+        if metadata is not None:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kvpe_cache,
+                tt_kvpe,
+                metadata[0],  # slot_idx tensor
+                metadata[1],  # kv_actual_global tensor
+                layer_idx=cache_layer_idx,
+                num_layers=self.layer_num,
+                cluster_axis=self.sp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kvpe_cache,
+                tt_kvpe,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=self.layer_num,
+                kv_actual_global=kv_actual_isl,
+                cluster_axis=self.sp_axis,
+            )
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
         # user/layer's slot; kv_actual_isl drives the on-device rotation/causality offset.
+        #
+        # Trace-safe metadata path: when a metadata tensor is supplied, ring_mla reads its per-chunk
+        # scalars on-device: the all-gather + SDPA readers take the cache slot from metadata[0], and the
+        # SDPA reader derives logical_nt / q-mapping / ring masks from kv_actual_isl = metadata[1]. Every
+        # kernel derives logical_n on-device on this path, so the host logical_n is a placeholder = global
+        # cache capacity (safe upper bound). metadata[0] holds only the user slot, so pass the per-layer
+        # factor (kv_cache_num_layers/kv_cache_layer_idx) so the readers recompute the full (user,layer)
+        # slot on-device -- otherwise every layer would read layer 0's KV cache.
+        if metadata is not None:
+            meta_slot_kwargs = {
+                "slot_id": metadata[0],
+                "kv_actual_isl_tensor": metadata[1],
+                "kv_cache_num_layers": self.layer_num,
+                "kv_cache_layer_idx": cache_layer_idx,
+            }
+            ring_logical_n = kvpe_cache.shape[2] * self.sp_factor  # global cache capacity
+        else:
+            meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
+            ring_logical_n = kv_actual_isl + chunk_size_global
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
             kvpe_cache,
             persistent_output_buffer_kv=self._chunked_kv_buf,
             head_dim_v=self.kv_lora_rank,
-            logical_n=kv_actual_isl + chunk_size_global,
+            logical_n=ring_logical_n,
             program_config=self._get_sdpa_program_config(seq_len_local),
             scale=self.scale,
             compute_kernel_config=self.default_compute_kernel_config,
@@ -696,8 +761,7 @@ class ttMLA:
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
-            kv_cache_batch_idx=cache_batch_idx,
-            kv_actual_isl=kv_actual_isl,
+            **meta_slot_kwargs,
         )
 
         # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head. Unlike the
@@ -765,6 +829,7 @@ class ttMLA:
         rope_tensors: dict,
         kv_actual_isl: Optional[int],
         seq_len_local: int,
+        metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
         → concat. Consumes qr (the indexer, if any, has already read it by this point)."""
@@ -801,7 +866,7 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
-        tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl)
+        tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata)
 
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
@@ -817,6 +882,7 @@ class ttMLA:
         seq_len_local: int,
         return_kv_intermediates: bool,
         keep_kvpe_bf16: bool,
+        metadata: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor | None, ttnn.Tensor, ttnn.Tensor, dict | None]:
         """Shared KV stem.
 
@@ -865,7 +931,7 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
-        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
+        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl, metadata=metadata)
 
         if return_kv_intermediates:
             # post-RMSNorm latent ([.., 512]) and post-RoPE k_pe ([.., 64]); clone before concat.
@@ -933,7 +999,12 @@ class ttMLA:
         actual_start: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
+        metadata: Optional[ttnn.Tensor] = None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
+        # Trace-safe metadata path: a 3-tuple of 1-element uint32 DRAM tensors (slot_id, actual_start,
+        # actual_end) passed in from outside. When provided, the chunked-prefill ops (update_padded_kv_cache,
+        # rotary_embedding_indexed, ring_mla) read their per-chunk scalars on-device from it instead of from
+        # host actual_start/cache_user_id. Threaded through verbatim -- ttMLA never reads/reconstructs it.
         if self.kv_only:
             return self._forward_kv_only(
                 hidden_states,
@@ -942,12 +1013,14 @@ class ttMLA:
                 cache_layer_idx,
                 kv_actual_isl=actual_start,
                 cache_user_id=cache_user_id,
+                metadata=metadata,
             )
 
         # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
         # __init__ and the rope variant, and forward honors that flag -- it does not infer the mode from
-        # the arguments. actual_start is the chunk parameter, supplied iff chunked.
-        assert (actual_start is not None) == self.is_chunked, (
+        # the arguments. actual_start is the chunk parameter, supplied iff chunked. EXCEPT on the metadata
+        # path, where the per-chunk scalars are read on-device from the metadata tensor (no host actual_start).
+        assert metadata is not None or (actual_start is not None) == self.is_chunked, (
             f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
             f"(self.is_chunked={self.is_chunked}); pass actual_start iff built with is_chunked=True"
         )
@@ -973,7 +1046,7 @@ class ttMLA:
         # separate warm-up write is needed.
         indices = self._indexer.forward(hidden_states, qr, seq_len_local, start_pos=kv_actual_isl or 0)
 
-        tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
+        tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
         keep_kvpe_bf16 = self._has_indexer and not is_chunked
         tt_kvpe, tt_kvpe_b8, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
@@ -982,6 +1055,7 @@ class ttMLA:
             seq_len_local,
             return_kv_intermediates,
             keep_kvpe_bf16,
+            metadata=metadata,
         )
 
         attn_out = self._attention(
@@ -995,6 +1069,7 @@ class ttMLA:
             cache_user_id=cache_user_id,
             seq_len_local=seq_len_local,
             kv_actual_isl=kv_actual_isl,
+            metadata=metadata,
         )
 
         out = self._o_proj_epilogue(attn_out, seq_len_local)
@@ -1048,6 +1123,7 @@ class ttMLA:
         cache_layer_idx,
         cache_user_id,
         seq_len_local,
+        metadata=None,
         **_,
     ):
         # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
@@ -1063,6 +1139,7 @@ class ttMLA:
             cache_layer_idx=cache_layer_idx,
             cache_user_id=cache_user_id,
             seq_len_local=seq_len_local,
+            metadata=metadata,
         )
 
     def _sparse_single_attn(
@@ -1096,9 +1173,14 @@ class ttMLA:
         cache_layer_idx,
         cache_user_id,
         seq_len_local,
+        metadata=None,
         **_,
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
+        assert metadata is None, (
+            "sparse (DSA indexer) chunked prefill does not yet support the trace-safe per-element metadata "
+            "path (the gather/sparse_mla derive positions from host kv_actual_isl); use the dense path."
+        )
         start_pos = kv_actual_isl or 0
         end_pos = start_pos + seq_len_local * self.sp_factor
 
@@ -1129,6 +1211,7 @@ class ttMLA:
         cache_layer_idx: int,
         kv_actual_isl: int,
         cache_user_id: int,
+        metadata: Optional[ttnn.Tensor] = None,
     ) -> None:
         """Last-layer fast path: fill the KV cache (which migration consumes), then stop. Skips
         Q / SDPA / output projection entirely; the block also skips FFN/MoE/norm/LM head, so no
@@ -1176,7 +1259,7 @@ class ttMLA:
 
         # Same rope as the full chunked path (indexed/padded when chunked, single-shot otherwise) so
         # the KV written to the cache carries the correct per-chunk positional offset.
-        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
+        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl, metadata=metadata)
 
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
@@ -1185,15 +1268,27 @@ class ttMLA:
 
         # Write the chunk via the SAME chunked path as _chunked_attn (not a single-shot fill):
         # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            kvpe_cache,
-            tt_kvpe,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self.layer_num,
-            kv_actual_global=kv_actual_isl,
-            cluster_axis=self.sp_axis,
-        )
+        # Per-element-tensor path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) tensors.
+        if metadata is not None:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kvpe_cache,
+                tt_kvpe,
+                metadata[0],  # slot_idx tensor
+                metadata[1],  # kv_actual_global tensor
+                layer_idx=cache_layer_idx,
+                num_layers=self.layer_num,
+                cluster_axis=self.sp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kvpe_cache,
+                tt_kvpe,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=self.layer_num,
+                kv_actual_global=kv_actual_isl,
+                cluster_axis=self.sp_axis,
+            )
 
         signpost(header="MLA_END")
         return None

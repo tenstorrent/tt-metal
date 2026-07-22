@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
+#include "ring_joint_kv_pad_derivation.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
@@ -212,7 +213,16 @@ void kernel_main() {
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_joint_inputs = has_joint_q || has_joint_k;
 
-    constexpr auto q_args = TensorAccessorArgs<32>();
+    // Slot 32: trace-safe slot select. When set, kv_cache_batch_idx is read from the slot_id tensor[0]
+    // on-device (common runtime arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
+    // captured trace replays across cache slots. Tensor accessors therefore start at compile-arg slot 33.
+    constexpr bool slot_from_metadata = get_compile_time_arg_val(32) == 1;
+    // Slot 33: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
+    // kv_actual_isl tensor[0] (common runtime arg 3 = its DRAM addr), derives logical_nt / q-mapping /
+    // ring masks on-device, and hands the compute-needed values to the compute kernel via
+    // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(33) == 1;
+    constexpr auto q_args = TensorAccessorArgs<34>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -220,6 +230,23 @@ void kernel_main() {
     constexpr uint32_t joint_tensor_args_offset = gathered_v_args.next_compile_time_args_offset();
     constexpr uint32_t post_tensor_args_offset =
         get_post_tensor_args_offset<has_joint_inputs, joint_tensor_args_offset>();
+    // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
+    // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
+    // (unused) accessor offset (q_args' slot 34) so TensorAccessorArgs<> -- instantiated unconditionally
+    // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
+    // The chain/CB compile args then start after the metadata accessor when present.
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 34;
+    constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
+    // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
+    // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
+    // read silently returned 0). Appended right after slot's when kv_pad_from_metadata; otherwise fall back
+    // to a VALID accessor offset so the unconditional TensorAccessorArgs<> never names a non-accessor arg.
+    constexpr uint32_t kv_meta_args_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+    constexpr uint32_t chains_base_offset = kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset()
+                                            : slot_from_metadata ? meta_args.next_compile_time_args_offset()
+                                                                 : post_tensor_args_offset;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -237,7 +264,9 @@ void kernel_main() {
     }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
+    // Trace-safe slot select: kv_cache_batch_idx is read from metadata[0] on-device below (after the CB
+    // ids are known); the per-core arg here is a placeholder 0 on the metadata path.
+    uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -257,8 +286,9 @@ void kernel_main() {
         gqa_max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // Mutable: on the kv_pad_from_metadata path these are recomputed on-device below from metadata[1].
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -272,17 +302,16 @@ void kernel_main() {
     constexpr uint32_t chain_compile_arg_count = ring_joint::kChainCompileArgCount;
 
     uint32_t head_sender_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_sender_semaphore_arg_offset);
+        get_compile_time_arg_val(chains_base_offset + chain_sender_semaphore_arg_offset);
     uint32_t head_receiver_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_receiver_semaphore_arg_offset);
-    uint32_t head_valid_semaphore_id =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_valid_semaphore_arg_offset);
+        get_compile_time_arg_val(chains_base_offset + chain_receiver_semaphore_arg_offset);
+    uint32_t head_valid_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_valid_semaphore_arg_offset);
     constexpr bool head_mcast_enabled =
-        get_compile_time_arg_val(post_tensor_args_offset + chain_mcast_enabled_arg_offset) == 1;
+        get_compile_time_arg_val(chains_base_offset + chain_mcast_enabled_arg_offset) == 1;
     constexpr uint32_t head_chain_arg_count = chain_compile_arg_count;
     constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? chain_compile_arg_count : 0;
     constexpr uint32_t gqa_chain_arg_count = gqa_grouped_kv ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_ct_offset = post_tensor_args_offset + head_chain_arg_count;
+    constexpr uint32_t batch_chain_ct_offset = chains_base_offset + head_chain_arg_count;
     constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
 
     // Batch chain semaphores (only present for non-GQA shared-K modes).
@@ -322,10 +351,99 @@ void kernel_main() {
     }
 
     constexpr uint32_t cb_arg_offset =
-        post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
+        chains_base_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+
+    // Trace-safe slot select: read the cache slot from the slot_id tensor[0] on-device (the per-core
+    // kv_cache_batch_idx above is a placeholder 0 on the metadata path and would be frozen by a captured
+    // trace). The slot_id DRAM address is common runtime arg 0 and the kv_actual_isl DRAM address is
+    // common runtime arg 3; the shared accessor (meta_args) sits between the tensor accessors and the
+    // chain semaphores.
+    if constexpr (slot_from_metadata || kv_pad_from_metadata) {
+        // Two 1-element uint32 DRAM tensors: slot_id (common arg 0, was metadata[0]) and kv_actual_isl
+        // (common arg 3, was metadata[1]). They share one layout, so ONE accessor (meta_args) reads each
+        // tensor's page 0 (4B). Read into cb_q_in's L1 as scratch -- it is allocated but not yet filled
+        // here, and the main loop overwrites it before first use. (A NoC read into a kernel stack buffer
+        // hangs; the destination must be a real L1 CB address.)
+        Noc meta_noc;
+        CircularBuffer cb_q_scratch(cb_q_in);
+        const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
+        // slot_id and kv_actual_isl both read into the SAME CB base offset (0), sequentially: slot is read,
+        // barrier'd, and FULLY consumed into kv_cache_batch_idx before the kv read reuses the slot. These
+        // small DRAM reads only land correctly at the CB page base (offset 0) on this platform -- a read
+        // into ANY nonzero offset (+16, +32) of the same CB silently lands zero (verified: kv_actual_isl at
+        // +32 deterministically returned 0, breaking the rotation q-mapping; +0 fixes it). Mirrors the
+        // proven all-gather reader, which also reads both scalars into offset 0.
+        constexpr uint32_t kSlotDstOffset = 0;
+        constexpr uint32_t kKvDstOffset = 0;
+        if constexpr (slot_from_metadata) {
+            const uint32_t slot_id_addr = get_common_arg_val<uint32_t>(0);
+            const auto s_slot = TensorAccessor(meta_args, slot_id_addr);
+            meta_noc.async_read(s_slot, CoreLocalMem<uint32_t>(meta_l1 + kSlotDstOffset), 4, {.page_id = 0}, {});
+            meta_noc.async_read_barrier();
+            const uint32_t slot_id = CoreLocalMem<volatile uint32_t>(meta_l1 + kSlotDstOffset)[0];
+            // The KV-cache batch dim is (user, layer)-major:
+            //   cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx
+            // (matches update_padded_kv_cache's writer: batch_idx = slot_idx * num_layers + layer_idx).
+            // slot_id holds only the cache user id; the per-layer factor comes from common runtime args
+            // 1/2. Defaults (num_layers=1, layer_idx=0) reduce this to slot_id, keeping single-layer
+            // callers bit-identical to the original slot_id behavior.
+            const uint32_t kv_cache_num_layers = get_common_arg_val<uint32_t>(1);
+            const uint32_t kv_cache_layer_idx = get_common_arg_val<uint32_t>(2);
+            kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
+        }
+        if constexpr (kv_pad_from_metadata) {
+            // kv_actual_isl tensor (common arg 3) holds actual_start = kv_actual_isl (tile-aligned).
+            // Derive the per-chunk values the host would otherwise have computed from the kv_actual_isl
+            // scalar, and hand the compute-needed subset to the compute kernel via cb_kv_pad_derived
+            // (compute can't NoC-read DRAM). chunk_size_t == q_chunk_group_tile_count (ring_size *
+            // q_local_padded_Nt).
+            const uint32_t kv_actual_isl_addr = get_common_arg_val<uint32_t>(3);
+            const auto s_kv_actual = TensorAccessor(kv_meta_args, kv_actual_isl_addr);
+            meta_noc.async_read(s_kv_actual, CoreLocalMem<uint32_t>(meta_l1 + kKvDstOffset), 4, {.page_id = 0}, {});
+            meta_noc.async_read_barrier();
+            const uint32_t kv_actual_isl = CoreLocalMem<volatile uint32_t>(meta_l1 + kKvDstOffset)[0];
+            const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
+            const uint32_t chunk_global = chunk_size_t * 32;
+            logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_global, 32);
+            const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
+                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, fused_op_receiver.seq.ring_index);
+            const auto masks = ring_joint::build_ring_work_masks_device(
+                fused_op_receiver.seq.ring_index,
+                ring_size,
+                fused_op_receiver.seq.expected[0],  // backward_writes_expected
+                fused_op_receiver.seq.expected[1],  // forward_writes_expected
+                num_local_k_chunks,
+                Sk_chunk_t,
+                kv_local_padded_Nt,
+                chunked_enabled,
+                chunk_size_t,
+                q_local_padded_Nt,
+                logical_nt,
+                num_joint_k_chunks,
+                L,
+                kv_pad_rotation_enabled,
+                is_causal != 0,
+                is_balanced != 0);
+            active_ring_iter_mask = masks.active_ring_iter_mask;
+
+            // Hand [logical_nt, q_pre_wrap_start, q_pre_wrap_count, q_post_wrap_start, q_valid_count,
+            // active_ring_iter_mask] to compute via cb_kv_pad_derived (cb_arg_offset + 3).
+            constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 3);
+            CircularBuffer cb_derived(cb_kv_pad_derived);
+            cb_derived.reserve_back(1);
+            CoreLocalMem<volatile uint32_t> d(cb_derived.get_write_ptr());
+            d[0] = logical_nt;
+            d[1] = qmap.q_pre_wrap_start_tile;
+            d[2] = qmap.q_pre_wrap_tile_count;
+            d[3] = qmap.q_post_wrap_start_tile;
+            d[4] = qmap.q_valid_tile_count;
+            d[5] = active_ring_iter_mask;
+            cb_derived.push_back(1);
+        }
+    }
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);

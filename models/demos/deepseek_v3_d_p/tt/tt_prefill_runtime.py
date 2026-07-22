@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 
 @dataclass
@@ -58,6 +59,17 @@ class TtPrefillRuntimeConfig:
     first_layer_idx: int = 0
     is_first_rank: bool = True
     is_last_rank: bool = True
+    # Trace-safe metadata prefill: capture the per-chunk forward ONCE as a (segmented) ttnn trace during
+    # compile(), then replay it every chunk — advancing the per-chunk scalars (slot_id, actual_start,
+    # actual_end) on-device via an in-place host update of a persistent per-element metadata tensor, so the
+    # captured command stream carries no host transfers. Collapses the per-op host-dispatch (op2op) gaps.
+    # Requires the mesh opened with trace_region_size > 0. Off by default (eager per-op dispatch).
+    use_trace: bool = False
+    # MoE shared-expert ∥ dispatch overlap. Keeps the optimization ON by default, but it loads/clears a
+    # 2-sub-device manager around each MoE layer — which forces the segmented trace to split there, adding
+    # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
+    # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
+    overlap_shared_expert_with_dispatch: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -99,6 +111,23 @@ class TtPrefillRuntime:
 
         self.model_built = False
         self.compiled = False
+
+        # Trace-safe metadata prefill state (config.use_trace). compile() warm-compiles the programs AND
+        # records the segmented capture EAGERLY (before the chunk loop), so the capture cost is out of the
+        # timed loop. If a per-layer LayerAck is registered after compile() (request loop), the eager trace
+        # is RE-captured with the ack (set_layer_ack_channel -> _capture_now, using _kv_cache):
+        #   _controller       — SubDeviceTraceController driving the segmented capture/replay
+        #   _trace_input      — persistent per-chunk input buffer (captured address; updated in place)
+        #   _trace_metadata   — 3 persistent 1-element uint32 tensors (slot_id, actual_start, actual_end)
+        #   _trace_output     — persistent output activation (non-last rank only; read by the D2D send)
+        #   _trace_captured   — flips True once compile() records the segmented capture
+        #   _kv_cache         — the engine cache handle from compile(), kept for a post-compile re-capture
+        self._controller = None
+        self._trace_input = None
+        self._trace_metadata = None
+        self._trace_output = None
+        self._trace_captured = False
+        self._kv_cache = None
 
         self._build_model(state_dict)
 
@@ -159,6 +188,7 @@ class TtPrefillRuntime:
             first_layer_idx=self.config.first_layer_idx,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
         )
         self.model_built = True
 
@@ -200,19 +230,136 @@ class TtPrefillRuntime:
 
     def compile(self, kv_cache: ttnn.Tensor) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine
-        passes the cache it owns; the warm-up writes into it (slot 0) and is harmless."""
+        passes the cache it owns; the warm-up writes into it (slot 0) and is harmless.
+
+        use_trace: set up the persistent buffers + controller and warm-compile the metadata programs here,
+        but do NOT record the capture yet — the driver must call capture_trace() AFTER any pipeline D2D
+        endpoints are built (build_d2d_pipeline_endpoints allocates L1 for the receiver socket, which would
+        otherwise land on top of the captured trace buffers on the last rank and corrupt replay) and after
+        set_layer_ack_channel(). capture_trace() runs before the chunk loop, so the one-time capture is still
+        out of the timed loop; prefill_chunk() then only replays (with a lazy-capture safety net)."""
         assert self.model_built
         chunk = self.config.chunk_size
-        logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
-        tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
-        ttnn.synchronize_device(self.mesh_device)
+        if self.config.use_trace:
+            logger.info(
+                f"TtPrefillRuntime.compile() — warming traced {chunk}-token chunk (metadata path); capture deferred to capture_trace()"
+            )
+            self._kv_cache = kv_cache  # kept so capture_trace()/set_layer_ack_channel() can (re)capture
+            self._prepare_trace(kv_cache)
+        else:
+            logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
+            tt_input = self.make_chunk_input([0] * chunk)
+            self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
+            ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
-            f"[prefill timing] task_id=WARMUP num_tokens={chunk} runtime.prefill_chunk(chunk) = {warmup_ms:.2f} ms"
+            f"[prefill timing] task_id={'PREPARE' if self.config.use_trace else 'WARMUP'} num_tokens={chunk} "
+            f"runtime.compile() = {warmup_ms:.2f} ms"
         )
         self.compiled = True
+
+    def capture_trace(self, kv_cache: ttnn.Tensor) -> None:
+        """Record the segmented trace, ONCE, before the chunk loop. The driver must call this AFTER
+        building any D2D pipeline endpoints (their receiver-socket L1 must be allocated first, or it lands
+        on the captured trace buffers on the last rank and corrupts replay) and AFTER set_layer_ack_channel()
+        (so the ack segments the capture). No-op if not use_trace or already captured. See compile()."""
+        if not self.config.use_trace or self._trace_captured:
+            return
+        assert self._controller is not None, "capture_trace(): compile() must run first (prepares the trace)"
+        self._capture_now(kv_cache)
+
+    def _meta1_dev(self, val: int) -> ttnn.Tensor:
+        """One persistent 1-element uint32 replicated-DRAM metadata scalar (captured address)."""
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _meta1_host(self, val: int) -> ttnn.Tensor:
+        """Host-side 1-element uint32 tensor for the cheap in-place metadata update (copy_host_to_device)."""
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _forward_traced(self, kv_cache: ttnn.Tensor):
+        """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
+        tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
+        Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
+        over D2D), or the last/single rank's ignored KV-only tuple."""
+        return self.model.forward(
+            self._trace_input,
+            kv_cache,
+            actual_isl=self.config.chunk_size,
+            on_layer_complete=self._on_layer_complete,
+            actual_start=None,
+            actual_end=None,
+            cache_user_id=0,
+            metadata=self._trace_metadata,
+        )
+
+    def _prepare_trace(self, kv_cache: ttnn.Tensor) -> None:
+        """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
+        the metadata-variant programs (a full forward). Does NOT begin/end the capture — compile() calls
+        _capture_now() right after. Called once from compile()."""
+        chunk = self.config.chunk_size
+        # Persistent input at a stable (captured) address; seeded with zeros, overwritten per chunk. On a
+        # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
+        self._trace_input = self.make_chunk_input([0] * chunk)
+        # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
+        self._trace_metadata = (self._meta1_dev(0), self._meta1_dev(0), self._meta1_dev(chunk))
+
+        controller = SubDeviceTraceController(self.mesh_device)
+        self.model.set_trace_controller(controller)
+        self._controller = controller
+
+        self._forward_traced(kv_cache)  # warm/compile the metadata-variant programs
+        ttnn.synchronize_device(self.mesh_device)
+
+    def _capture_now(self, kv_cache: ttnn.Tensor) -> None:
+        """Record the segmented forward. Called eagerly from compile() (before the chunk loop), and again
+        from set_layer_ack_channel() to re-capture with a newly-registered ack. The SubDeviceTraceController
+        chops the capture at the MoE sub-device swaps (and, if a per-layer ack callback is registered, at
+        each migration ack). On a non-last rank the captured forward's output activation is kept at its
+        captured address in _trace_output so the driver can read it (and forward it over D2D) after every
+        replay."""
+        controller = self._controller
+        assert controller is not None, "_prepare_trace() must run (via compile()) before _capture_now()"
+        if self._trace_captured:
+            # Re-capture (ack registered after the initial eager capture): drop the old segments first so
+            # their trace buffers are freed before recording the new (ack-segmented) capture.
+            controller.release()
+            self._trace_captured = False
+        # Ack registered after compile (request loop, gap #3): the block runs the metadata
+        # zero_padded_kv_cache + ack routing ONLY when on_layer_complete is set (tt_prefill_block.forward),
+        # so those programs were NOT compiled by _prepare_trace's warm pass (which ran with
+        # on_layer_complete=None). Warm them now — with a NO-OP ack so this warm pass fires no real
+        # migration acks — then register the real ack so the capture splits the trace at each ack point (a
+        # host shm bump cannot live inside a trace). No ack (standalone) => nothing extra to warm.
+        if self._on_layer_complete is not None:
+            controller.set_layer_ack_callback(lambda _layer_idx: None)
+            self._forward_traced(kv_cache)  # compile zero_padded_kv_cache + ack path (no real ack fires)
+            ttnn.synchronize_device(self.mesh_device)
+            controller.set_layer_ack_callback(self._on_layer_complete)
+
+        controller.begin_capture()
+        out = self._forward_traced(kv_cache)
+        controller.end_capture()
+        ttnn.synchronize_device(self.mesh_device)
+        # Non-last rank: the persistent output activation the replay refreshes each chunk.
+        self._trace_output = out if not self.config.is_last_rank else None
+        self._trace_captured = True
+        logger.info(
+            f"[trace] captured {self.config.num_layers}-layer chunk forward = {controller.num_segments} segments, "
+            f"{controller.trace_bytes() / (1024 * 1024):.2f} MB"
+        )
 
     def prefill_chunk(
         self,
@@ -263,6 +410,23 @@ class TtPrefillRuntime:
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        if self.config.use_trace:
+            # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
+            # captured segmented forward. The metadata (slot_id, actual_start, actual_end) drives every
+            # per-chunk scalar on-device, so the single capture fills the correct KV for this chunk.
+            assert self._controller is not None, "use_trace: compile() must prepare the trace before prefill_chunk"
+            # compile() already captured (eagerly). Safety net only: if somehow not captured, capture now.
+            if not self._trace_captured:
+                self._capture_now(kv_cache)
+            ttnn.copy(input_tensor, self._trace_input)
+            for dst, val in zip(self._trace_metadata, (slot_id, actual_start, actual_end)):
+                ttnn.copy_host_to_device_tensor(self._meta1_host(val), dst)
+            self._controller.replay()
+            ttnn.deallocate(input_tensor)
+            # Non-last rank: return the persistent output activation (replay just refreshed it) for the
+            # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
+            return None if self.config.is_last_rank else self._trace_output
+
         out = self.model.forward(
             input_tensor,
             kv_cache,
@@ -289,13 +453,27 @@ class TtPrefillRuntime:
 
         Per-layer cadence means NUM_LAYERS acks per chunk, so the scheduler must
         be configured with layers_per_chunk == NUM_LAYERS.
+
+        use_trace: the capture splits the trace at each ack point (a host shm bump cannot live inside a
+        trace), so the ack callback must be known at CAPTURE time. compile() captures eagerly (without the
+        ack), so a post-compile call here RE-captures with the ack — a one-time cost before the chunk loop.
+        Call this before the first prefill_chunk() (the request loop does).
         """
-        assert self.compiled, "Call compile() before set_layer_ack_channel()"
+        assert self.compiled or self.config.use_trace, "Call compile() before set_layer_ack_channel()"
 
         def on_layer_complete(layer_idx: int) -> None:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+        if self.config.use_trace and self._controller is not None:
+            if self._trace_captured:
+                # compile()'s eager capture recorded the trace WITHOUT ack boundaries; re-capture now that
+                # the ack is known so the segments split at each per-layer migration ack. One-time, before
+                # the loop. _capture_now registers the ack on the controller (with a no-op warm pass first).
+                assert self._kv_cache is not None, "use_trace: compile() must run before set_layer_ack_channel()"
+                self._capture_now(self._kv_cache)
+            else:
+                self._controller.set_layer_ack_callback(on_layer_complete)
 
     def build_kv_chunk_table(self, kv_cache: ttnn.Tensor, path: str) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `kv_cache` to

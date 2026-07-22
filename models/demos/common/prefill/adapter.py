@@ -69,6 +69,12 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Capture the per-chunk forward as a (segmented) ttnn trace and replay it every chunk, instead of
+    # re-dispatching op-by-op. Requires the mesh opened with a trace_region_size > 0. See prefill_runner.
+    use_trace: bool = False
+    # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
+    # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
+    overlap_shared_expert_with_dispatch: bool = True
 
     @property
     def sp_factor(self) -> int:

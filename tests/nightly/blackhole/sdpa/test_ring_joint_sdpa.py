@@ -2979,6 +2979,295 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
     )
 
 
+# ============================================================================
+# TRACE-SAFE METADATA PATH: metadata-path == scalar-path (bit-exact)
+# ============================================================================
+# ring_mla gains an opt-in `metadata` tensor (the runner's canonical h2d_socket_sync payload
+# [slot_id, actual_start, actual_end], replicated uint32 DRAM). When set, the per-chunk scalars
+# (kv_cache_batch_idx = slot_id; kv_actual_isl = actual_start; logical_n = actual_start +
+# chunk_size_global) are read ON-DEVICE from this tensor instead of being baked into the program by
+# the host, so a single captured ttnn trace replays across chunks. These tests assert the metadata
+# path is BIT-IDENTICAL to the classic host-scalar path on every supported case (the op is the same
+# kernel math; only where the scalars come from differs).
+#
+# The migration is incremental (see TRACEABLE_METADATA_PATH.md): each scalar is moved on-device one
+# at a time. `META_PATH_HOST_SCALARS` lists the scalars whose on-device read has NOT landed yet -- a
+# listed scalar is still passed as a host arg on the metadata path so the comparison stays exact.
+# Drop an entry the moment its on-device read is implemented; the bit-exact assert then proves the
+# new on-device computation matches the host one.
+# kv_cache_batch_idx is now read on-device from metadata[0] (all-gather reader + SDPA reader), so the
+# metadata path no longer passes it as a host scalar -- dropping it makes the test discriminating.
+META_PATH_HOST_SCALARS = {"kv_actual_isl"}
+
+
+def _make_ring_mla_scalar_tensor(mesh_device, value):
+    """1-element uint32 replicated DRAM tensor ([1,1,1,1]) holding a single per-chunk scalar that the
+    trace-safe ring_mla reads on-device. Mirrors the update_padded_kv_cache / rotary metadata layout."""
+    payload = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _make_ring_mla_metadata(mesh_device, slot_id, actual_start, actual_end):
+    """Build the two 1-element uint32 DRAM tensors the trace-safe ring_mla reads on-device: slot_id
+    (was metadata[0]) and kv_actual_isl == actual_start (was metadata[1]). actual_end is unused by the
+    op (logical_n is still passed as a host arg). Returns (slot_id_tensor, kv_actual_isl_tensor)."""
+    return (
+        _make_ring_mla_scalar_tensor(mesh_device, slot_id),
+        _make_ring_mla_scalar_tensor(mesh_device, actual_start),
+    )
+
+
+@pytest.mark.parametrize("kv_cache_batch_idx", [0, 1], ids=["slot0", "slot1"])
+def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
+    """Indexed K/V cache (no rotation): the metadata path (slot read on-device from metadata[0])
+    must produce a bit-identical output to the scalar path (kv_cache_batch_idx host arg).
+
+    This is the first migration increment -- it exercises kv_cache_batch_idx, which the fused
+    all-gather reader will read from metadata[0]. While 'kv_cache_batch_idx' is still in
+    META_PATH_HOST_SCALARS the metadata path also passes the host scalar, so the only thing under
+    test today is the metadata plumbing (nanobind kwarg + tensor_args + program hash). Once the
+    on-device read lands, drop it from the set and this asserts the on-device slot select."""
+    mesh_config = MESH_CONFIG
+    if mesh_config.sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
+
+    b, local_heads, per_device_seq_len = 1, 4, 128
+    nhq = local_heads * mesh_config.tp_size
+    nhk = 1
+    sq = per_device_seq_len * mesh_config.sp_size
+    d_q, d_k, d_v = 64, 64, 32
+    cache_batch = 2
+    assert 0 <= kv_cache_batch_idx < cache_batch
+
+    torch.manual_seed(1234)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    try:
+        Q = fa_rand(b, nhq, sq, d_q)
+        KV = fa_rand(b, nhk, sq, d_k)
+        # Embed the real K/V at the requested cache slot; other slots are garbage that must not leak.
+        KV_input = fa_rand(cache_batch, nhk, sq, d_k) * 100
+        KV_input[kv_cache_batch_idx : kv_cache_batch_idx + 1] = KV
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2
+        persistent_shard_dims = [None, None]  # gathered KV replicated (single latent head)
+
+        tt_Q = ttnn.from_torch(
+            Q,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+        )
+        tt_KV = ttnn.from_torch(
+            KV_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+        )
+        persistent_output_buffer_kv = ttnn.from_torch(
+            torch.zeros(cache_batch, nhk, sq, d_k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+            ),
+        )
+
+        # No rotation here: the whole sq is valid, so actual_start=0, actual_end=logical_n=sq.
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(
+            mesh_device, slot_id=kv_cache_batch_idx, actual_start=0, actual_end=sq
+        )
+
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        def run(use_metadata):
+            # On the metadata path, a scalar still in META_PATH_HOST_SCALARS is also passed as a host
+            # arg (its on-device read has not landed yet) so the result stays bit-exact.
+            pass_kv_idx = (not use_metadata) or ("kv_cache_batch_idx" in META_PATH_HOST_SCALARS)
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_Q,
+                tt_KV,
+                persistent_output_buffer_kv=persistent_output_buffer_kv,
+                head_dim_v=d_v,
+                logical_n=sq,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                kv_cache_batch_idx=kv_cache_batch_idx if pass_kv_idx else None,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :d_v]
+
+        out_scalar = run(use_metadata=False)
+        out_meta = run(use_metadata=True)
+
+        assert torch.equal(out_scalar, out_meta), (
+            f"slot {kv_cache_batch_idx}: metadata-path ring_mla output differs from scalar-path "
+            f"(max abs diff {(out_scalar - out_meta).abs().max().item()})"
+        )
+        logger.success(f"ring_mla slot {kv_cache_batch_idx}: metadata path == scalar path (bit-exact)")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize("kv_actual_isl", [64, 256, 320], ids=["kv64", "kv256", "kv320"])
+def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
+    """KV-pad rotation: the metadata path (kv_actual_isl read on-device from metadata[1], with logical_nt
+    / q-mapping / ring masks derived in the reader and handed to compute via cb_kv_pad_derived) must be
+    bit-identical to the scalar path (host kv_actual_isl). This is the discriminating test for the task-4
+    on-device derivation: on the metadata path kv_actual_isl is dropped, so the host CANNOT compute the
+    q-mapping -- it comes solely from the reader's metadata-driven derivation. Both paths run indexed
+    (single-slot) mode at slot 0 so the only difference under test is where kv_actual_isl comes from."""
+    mesh_config = MESH_CONFIG
+    if mesh_config.sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
+    sp_size = mesh_config.sp_size
+    tile = 32
+    chunk_size_local = 64
+    chunk_size_global = chunk_size_local * sp_size
+    new_actual_isl = chunk_size_global  # one full new chunk
+    assert kv_actual_isl % tile == 0
+
+    b, local_heads = 1, 4
+    nhq = local_heads * mesh_config.tp_size
+    nhk = 1
+    d_q, d_k, d_v = 64, 64, 32
+    logical_n = kv_actual_isl + new_actual_isl
+
+    torch.manual_seed(1234)
+    old_cache_kv = fa_rand(b, nhk, kv_actual_isl, d_k)
+    new_tokens_q = fa_rand(b, nhq, new_actual_isl, d_q)
+    new_tokens_kv = fa_rand(b, nhk, new_actual_isl, d_k)
+    q_host, kv_host, valid_rows, _, num_cache_slabs = build_kv_pad_rotation_mla_inputs(
+        old_cache_kv, new_tokens_q, new_tokens_kv, kv_actual_isl, sp_size, chunk_size_local
+    )
+    cache_seq_per_dev = num_cache_slabs * chunk_size_local
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    try:
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2  # latent K/V sharded along seq across the ring
+        persistent_shard_dims = [None, None]  # gathered KV replicated
+
+        tt_q = ttnn.from_torch(
+            q_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+        )
+        tt_kv = ttnn.from_torch(
+            kv_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+        )
+        persistent_output_buffer_kv = ttnn.from_torch(
+            torch.zeros(b, nhk, sp_size * cache_seq_per_dev, d_k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+            ),
+        )
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+        # metadata tensors: slot_id=0, kv_actual_isl tensor = kv_actual_isl (actual_end=logical_n unused).
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(
+            mesh_device, slot_id=0, actual_start=kv_actual_isl, actual_end=logical_n
+        )
+
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        def run(use_metadata):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=persistent_output_buffer_kv,
+                head_dim_v=d_v,
+                logical_n=logical_n,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                # Both paths run indexed at slot 0; the metadata path additionally drops kv_actual_isl so
+                # the q-mapping must be derived on-device from metadata[1].
+                kv_cache_batch_idx=None if use_metadata else 0,
+                kv_actual_isl=None if use_metadata else kv_actual_isl,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, valid_rows, :d_v]
+
+        out_scalar = run(use_metadata=False)
+        out_meta = run(use_metadata=True)
+        assert torch.equal(out_scalar, out_meta), (
+            f"kv_actual_isl={kv_actual_isl}: metadata-path ring_mla output differs from scalar-path "
+            f"(max abs diff {(out_scalar - out_meta).abs().max().item()})"
+        )
+        logger.success(f"ring_mla rotation kv_actual_isl={kv_actual_isl}: metadata path == scalar path (bit-exact)")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 # Generate perf test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, RING_JOINT_PERF_MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())

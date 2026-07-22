@@ -37,23 +37,22 @@ constexpr auto kComputeKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
     "rotary_embedding_llama.cpp";
 
-// Structural + per-call checks shared by the cache-miss and cache-hit paths. kv_actual_global is now
-// a host-side scalar, so its tile-alignment can be enforced here again (it was unknown host-side when
-// it lived in a device tensor).
+// Metadata path only: L1-scratch CB the reader reads the metadata page into. Canonical payload is the
+// runner's h2d_socket_sync metadata [slot_id, actual_start, actual_end] (uint32); the reader reads
+// kv_actual_global (= actual_start) from index 1.
+constexpr uint8_t kMetaCbIndex = tt::CBIndex::c_4;
+constexpr uint32_t kMetadataBytes = 16;
+
+// Structural + per-call checks shared by the cache-miss and cache-hit paths. The structural checks
+// (cluster_axis, 2D mesh, chunk height) run on both paths; the kv_actual_global value checks run only
+// on the SCALAR path — on the METADATA path kv_actual_global lives in a device tensor (can't be read
+// host-side) and is the caller's responsibility (host-side, where the payload is packed).
 void validate_runtime_args(
     const RotaryEmbeddingIndexedDeviceOperation::operation_attributes_t& args,
     const RotaryEmbeddingIndexedDeviceOperation::tensor_args_t& tensor_args) {
     // cluster_axis selects which mesh dim is the SP axis (num_rows vs num_cols); any other value
     // would silently pick the wrong extent and corrupt the per-device sharding math.
     TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
-
-    // The reader divides kv_actual_global by TILE_HEIGHT to get its tile offset into the cos/sin
-    // shard, so it must be tile-aligned.
-    TT_FATAL(
-        args.kv_actual_global % TILE_HEIGHT == 0,
-        "kv_actual_global ({}) must be tile-aligned (a multiple of {})",
-        args.kv_actual_global,
-        TILE_HEIGHT);
 
     const auto& input = tensor_args.input;
     const auto& cos = tensor_args.cos;
@@ -63,6 +62,18 @@ void validate_runtime_args(
     // chunk_local_t is the per-chip chunk height in tiles and is used by the reader as a
     // divisor/modulus to derive the boundary chip; a zero-height input chunk would divide by zero.
     TT_FATAL(chunk_local_t > 0, "input chunk seq dim ({}) must be at least one tile", input.padded_shape()[-2]);
+
+    if (tensor_args.metadata.has_value()) {
+        return;  // metadata path: kv_actual_global is on-device; caller validated its value.
+    }
+
+    // The reader divides kv_actual_global by TILE_HEIGHT to get its tile offset into the cos/sin
+    // shard, so it must be tile-aligned.
+    TT_FATAL(
+        args.kv_actual_global % TILE_HEIGHT == 0,
+        "kv_actual_global ({}) must be tile-aligned (a multiple of {})",
+        args.kv_actual_global,
+        TILE_HEIGHT);
 
     // Bound the largest update_idxt any chip reads from by the per-device cos/sin shard height.
     // Mirror the reader kernel's per-chip update_idxt exactly: each chip reads chunk_local_t tiles
@@ -180,7 +191,11 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     // args.kv_actual_global (the per-call scalar) is intentionally NOT hashed -- it is a common
     // runtime arg patched on cache hits, so successive chunks with different KV lengths reuse one
     // cached program.
+    // The metadata-vs-scalar choice changes the program (compile args + which kernel branch compiles),
+    // so hash metadata.has_value() to keep the two variants distinct; kv_actual_global itself is never
+    // hashed on either path.
     return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
+        tensor_args.metadata.has_value(),
         args.cluster_axis,
         args.compute_kernel_config,
         input.dtype(),
@@ -205,6 +220,7 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
     const auto& cos = tensor_args.cos;
     const auto& sin = tensor_args.sin;
     const auto& trans_mat = tensor_args.trans_mat;
+    const bool has_metadata = tensor_args.metadata.has_value();
 
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -337,6 +353,15 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size}}},
     });
+    // Metadata path: L1-scratch CB the reader reads the metadata page into (one 16B page).
+    if (has_metadata) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = kMetadataBytes,
+            .core_ranges = CoreRangeSet(all_cores),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = kMetaCbIndex, .data_format = tt::DataFormat::UInt32, .page_size = kMetadataBytes}}},
+        });
+    }
 
     KernelDescriptor::Defines kernel_defines;
     kernel_defines.emplace_back("RELOAD_IMPL", use_reload_impl ? "1" : "0");
@@ -360,11 +385,19 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
         (uint32_t)sin_seq_len_t,
         (uint32_t)rotary_seq_len_t,
         (uint32_t)TILE_HEIGHT,  // reader divides kv_actual_global (tokens) into tiles
+        // [12] has_metadata, [13] metadata CB index (placeholder 0 on the scalar path). The metadata
+        // accessor (when present) is appended after the four operand accessors below, so the reader's
+        // operand-accessor offsets stay fixed at <14>.
+        (uint32_t)has_metadata,
+        (uint32_t)(has_metadata ? kMetaCbIndex : 0),
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*trans_mat_buffer).append_to(reader_compile_time_args);
+    if (has_metadata) {
+        TensorAccessorArgs(*tensor_args.metadata->buffer()).append_to(reader_compile_time_args);
+    }
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
         (uint32_t)output_cb_index,
@@ -379,11 +412,14 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
     // Per-chip cos/sin shard offset inputs. These are structural (per cached program / mesh coord):
     // sp_factor is the mesh extent along the cluster axis and my_sp_coord is this chip's index along
     // it, so they are constant across calls and safe to bake once even on the binding fast path.
-    // kv_actual_global is the only per-call value; it is a common runtime arg (index 2) that
-    // MeshWorkloadFactory::override_runtime_arguments patches on cache hits, so it is never stale.
+    // Reader common arg index 2 is the per-call value patched on cache hits by
+    // MeshWorkloadFactory::override_runtime_arguments: the metadata tensor's raw DRAM address (metadata
+    // path) or kv_actual_global (scalar path).
     const auto& mesh_view = device->get_view();
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cos, coord, args.cluster_axis);
+    const uint32_t reader_per_call_arg =
+        has_metadata ? static_cast<uint32_t>(tensor_args.metadata->buffer()->address()) : args.kv_actual_global;
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderKernelPath;
@@ -392,7 +428,7 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = kernel_defines;
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.emplace_common_runtime_args({my_sp_coord, sp_factor, args.kv_actual_global});
+    reader_desc.emplace_common_runtime_args({my_sp_coord, sp_factor, reader_per_call_arg});
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterKernelPath;
@@ -488,16 +524,20 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     tensor_return_value_t& output) {
     // Default adapter behaviour: patch operand buffer-binding addresses on cache hits.
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
-    // Reader common runtime arg 2 holds kv_actual_global -- the per-call value the buffer-binding fast
-    // path would otherwise leave stale. Patch it on every cached program (one per mesh coordinate).
+    // Reader common runtime arg 2 holds the per-call value the buffer-binding fast path would otherwise
+    // leave stale: the metadata tensor's raw DRAM address (metadata path) or kv_actual_global (scalar
+    // path). Patch it on every cached program (one per mesh coordinate).
     constexpr uint32_t kReaderKernelHandle = 0;  // reader is pushed first in create_descriptor
-    constexpr uint32_t kKvActualGlobalCommonArgIdx = 2;
+    constexpr uint32_t kPerCallCommonArgIdx = 2;
+    const uint32_t per_call_arg = tensor_args.metadata.has_value()
+                                      ? static_cast<uint32_t>(tensor_args.metadata->buffer()->address())
+                                      : args.kv_actual_global;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelHandle);
         TT_FATAL(
-            kKvActualGlobalCommonArgIdx < reader_common.size(),
-            "rotary_embedding_indexed reader is missing the kv_actual_global common runtime arg");
-        reader_common[kKvActualGlobalCommonArgIdx] = args.kv_actual_global;
+            kPerCallCommonArgIdx < reader_common.size(),
+            "rotary_embedding_indexed reader is missing its per-call common runtime arg");
+        reader_common[kPerCallCommonArgIdx] = per_call_arg;
     }
 }
 
@@ -510,6 +550,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
+    const std::optional<ttnn::Tensor>& metadata,
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,
@@ -535,7 +576,8 @@ ttnn::Tensor rotary_embedding_indexed(
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
     };
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .cos = cos, .sin = sin, .trans_mat = trans_mat};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input, .cos = cos, .sin = sin, .trans_mat = trans_mat, .metadata = metadata};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 

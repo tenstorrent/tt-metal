@@ -40,11 +40,19 @@ constexpr uint32_t kSrcCbIndex = 0;   // partial tile read from cache (cache dty
 constexpr uint32_t kMaskCbIndex = 1;  // row-mask tile built in the reader (bf16)
 constexpr uint32_t kOutCbIndex = 2;   // masked partial tile from compute (cache dtype)
 constexpr uint32_t kZeroCbIndex = 3;  // pre-zeroed scratch for full-tile writes (cache dtype)
+constexpr uint32_t kMetaCbIndex = 4;  // tensor path only: L1 scratch the reader/writer read each
+                                      // 1-element uint32 metadata tensor page into (reused for both
+                                      // the slot_idx and valid_global tensors -- identical layout)
+constexpr uint32_t kMetadataBytes = 16;
 
-// Common runtime arg layout shared by the reader and writer (the compute reads a subset). Index 3 is
-// valid_global and index 9 is slot_idx -- the per-call scalars patched by override_runtime_arguments.
+// Common runtime arg layout. Index 3 is valid_global and index 9 is slot_idx -- the per-call scalars
+// patched by override_runtime_arguments on the SCALAR path. On the TENSOR path index 10 is the
+// slot_idx tensor's raw DRAM address and index 11 is the valid_global tensor's, both patched there (the
+// reader/writer read element 0 of each).
 constexpr uint32_t kValidGlobalCommonArgIdx = 3;
 constexpr uint32_t kSlotIdxCommonArgIdx = 9;
+constexpr uint32_t kSlotIdxAddrCommonArgIdx = 10;
+constexpr uint32_t kValidGlobalAddrCommonArgIdx = 11;
 
 // Per-call scalar checks shared by the cache-miss and cache-hit paths.
 void validate_runtime_args(
@@ -52,8 +60,12 @@ void validate_runtime_args(
     const ZeroPaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
     TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
     const auto& cache = tensor_args.cache;
-    const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
-    TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
+    // slot_idx is a host value only on the scalar path; on the tensor path it lives in the device
+    // tensor (read on-device) and is the caller's responsibility.
+    if (!tensor_args.slot_idx.has_value()) {
+        const uint32_t num_slots = cache.padded_shape()[0] / args.num_layers;
+        TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
+    }
 
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "zero_padded_kv_cache requires a 2D mesh");
@@ -87,11 +99,14 @@ void validate_runtime_args(
         "global cache capacity ({}) must be a multiple of pad_align ({})",
         global_capacity,
         args.pad_align);
-    TT_FATAL(
-        args.valid_global <= global_capacity,
-        "valid_global ({}) exceeds cache capacity ({})",
-        args.valid_global,
-        global_capacity);
+    // valid_global is a host value only on the scalar path.
+    if (!tensor_args.valid_global.has_value()) {
+        TT_FATAL(
+            args.valid_global <= global_capacity,
+            "valid_global ({}) exceeds cache capacity ({})",
+            args.valid_global,
+            global_capacity);
+    }
 }
 
 }  // namespace
@@ -143,7 +158,11 @@ ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
     // slot_idx and valid_global are per-call scalars (patched, NOT hashed). layer_idx, num_layers,
     // cluster_axis, chunk_size_global and pad_align are structural (hashed). Hash the full cache shape.
     const auto& cache = tensor_args.cache;
+    // The tensor-vs-scalar choice changes the reader/writer programs (compile args + which kernel
+    // branch compiles), so hash slot_idx.has_value() to keep the two variants distinct; slot_idx and
+    // valid_global themselves are never hashed on either path.
     return tt::tt_metal::operation::hash_operation<ZeroPaddedKvCacheDeviceOperation>(
+        tensor_args.slot_idx.has_value(),
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
@@ -165,6 +184,10 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     const auto& cache = tensor_args.cache;
     auto* device = cache.device();
     const auto& cache_shape = cache.padded_shape();
+    const bool has_metadata = tensor_args.slot_idx.has_value();
+    const uint32_t slot_idx_addr = has_metadata ? static_cast<uint32_t>(tensor_args.slot_idx->buffer()->address()) : 0u;
+    const uint32_t valid_global_addr =
+        has_metadata ? static_cast<uint32_t>(tensor_args.valid_global->buffer()->address()) : 0u;
 
     const tt::DataFormat cache_format = datatype_to_dataformat_converter(cache.dtype());
     const uint32_t cache_tile_size = tt::tile_size(cache_format);
@@ -197,12 +220,19 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     add_cb(kMaskCbIndex, mask_format, mask_tile_size, 1);
     add_cb(kOutCbIndex, cache_format, cache_tile_size, Wt);
     add_cb(kZeroCbIndex, cache_format, cache_tile_size, 1);
+    if (has_metadata) {
+        // reader/writer metadata read: one CB page reused for both 1-element uint32 tensor reads
+        add_cb(kMetaCbIndex, tt::DataFormat::UInt32, kMetadataBytes, 1);
+    }
 
     // Common runtime args, shared layout across all three kernels (each recomputes its share of the
     // window from these). Index 3 = valid_global, 9 = slot_idx are the per-call scalars patched on
     // cache hits by override_runtime_arguments.
     // Layout: 0 my_sp_coord, 1 sp_factor, 2 chunk_local(tokens), 3 valid_global, 4 pad_align,
-    //         5 layer_idx, 6 num_layers, 7 Wt, 8 cache_CHtWt, 9 slot_idx.
+    //         5 layer_idx, 6 num_layers, 7 Wt, 8 cache_CHtWt, 9 slot_idx, 10 slot_idx_addr,
+    //         11 valid_global_addr.
+    // Index 3/9 are the scalar-path per-call values; indices 10/11 are the slot_idx / valid_global
+    // tensors' raw DRAM addresses (tensor path). override_runtime_arguments patches whichever applies.
 #define ZP_COMMON_ARGS  \
     {my_sp_coord,       \
      sp_factor,         \
@@ -213,15 +243,30 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
      args.num_layers,   \
      Wt,                \
      cache_CHtWt,       \
-     args.slot_idx}
+     args.slot_idx,     \
+     slot_idx_addr,     \
+     valid_global_addr}
 
     // Reader: reads cache (TensorAccessor) + builds mask.
     KernelDescriptor reader;
     reader.kernel_source = kReaderKernelPath;
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    reader.compile_time_args = {kSrcCbIndex, kMaskCbIndex, cache_tile_size};
+    // [3]=has_metadata, [4]=metadata CB index (placeholder 0 on the scalar path). Cache accessor at
+    // <5>; the metadata accessor (when present) is appended after it so the cache-accessor offset is
+    // fixed at <5> for both paths.
+    reader.compile_time_args = {
+        kSrcCbIndex,
+        kMaskCbIndex,
+        cache_tile_size,
+        static_cast<uint32_t>(has_metadata),
+        has_metadata ? kMetaCbIndex : 0u};
     TensorAccessorArgs(cache.buffer()).append_to(reader.compile_time_args);
+    if (has_metadata) {
+        // One metadata accessor, reused for both 1-element tensors (identical layout); the kernel reads
+        // each from its own DRAM address (common args 10/11).
+        TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(reader.compile_time_args);
+    }
     reader.config = ReaderConfigDescriptor{};
     reader.emplace_common_runtime_args(ZP_COMMON_ARGS);
     reader.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
@@ -241,8 +286,20 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     writer.kernel_source = kWriterKernelPath;
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kOutCbIndex, kZeroCbIndex, cache_tile_size};
+    // Same leading layout as the reader: [3]=has_metadata, [4]=metadata CB index, cache accessor at
+    // <5>, then the metadata accessor when present.
+    writer.compile_time_args = {
+        kOutCbIndex,
+        kZeroCbIndex,
+        cache_tile_size,
+        static_cast<uint32_t>(has_metadata),
+        has_metadata ? kMetaCbIndex : 0u};
     TensorAccessorArgs(cache.buffer()).append_to(writer.compile_time_args);
+    if (has_metadata) {
+        // One metadata accessor, reused for both 1-element tensors (identical layout); the kernel reads
+        // each from its own DRAM address (common args 10/11).
+        TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer.compile_time_args);
+    }
     writer.config = WriterConfigDescriptor{};
     writer.emplace_common_runtime_args(ZP_COMMON_ARGS);
     writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
@@ -269,14 +326,33 @@ void ZeroPaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_arg
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
-    // Patch the per-call valid_global/slot_idx scalars in the reader (kernel 0) and writer (kernel 2)
-    // common args; the compute (kernel 1) also reads them. Same value on every program (chip).
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        for (uint32_t kernel_handle : {0u, 1u, 2u}) {
-            auto& common = GetCommonRuntimeArgs(program, kernel_handle);
-            TT_FATAL(kSlotIdxCommonArgIdx < common.size(), "zero_padded_kv_cache kernel missing per-call common args");
-            common[kValidGlobalCommonArgIdx] = args.valid_global;
-            common[kSlotIdxCommonArgIdx] = args.slot_idx;
+    // Patch the per-call common args the buffer-binding fast path would otherwise leave stale.
+    //   - tensor path: the reader (0) and writer (2) read slot_idx/valid_global on-device from the two
+    //     1-element tensors, so only their raw DRAM addresses (indices 10/11) need patching there. The
+    //     compute (1) reads only structural args, so it needs no patch.
+    //   - scalar path: all three kernels read slot_idx (9) / valid_global (3) from common args.
+    if (tensor_args.slot_idx.has_value()) {
+        const uint32_t slot_idx_addr = static_cast<uint32_t>(tensor_args.slot_idx->buffer()->address());
+        const uint32_t valid_global_addr = static_cast<uint32_t>(tensor_args.valid_global->buffer()->address());
+        for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+            for (uint32_t kernel_handle : {0u, 2u}) {  // reader, writer
+                auto& common = GetCommonRuntimeArgs(program, kernel_handle);
+                TT_FATAL(
+                    kValidGlobalAddrCommonArgIdx < common.size(),
+                    "zero_padded_kv_cache kernel missing the metadata-tensor addr common args");
+                common[kSlotIdxAddrCommonArgIdx] = slot_idx_addr;
+                common[kValidGlobalAddrCommonArgIdx] = valid_global_addr;
+            }
+        }
+    } else {
+        for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+            for (uint32_t kernel_handle : {0u, 1u, 2u}) {
+                auto& common = GetCommonRuntimeArgs(program, kernel_handle);
+                TT_FATAL(
+                    kSlotIdxCommonArgIdx < common.size(), "zero_padded_kv_cache kernel missing per-call common args");
+                common[kValidGlobalCommonArgIdx] = args.valid_global;
+                common[kSlotIdxCommonArgIdx] = args.slot_idx;
+            }
         }
     }
 }
@@ -287,6 +363,8 @@ namespace ttnn::prim {
 
 ttnn::Tensor zero_padded_kv_cache(
     const ttnn::Tensor& cache,
+    const std::optional<ttnn::Tensor>& slot_idx_tensor,
+    const std::optional<ttnn::Tensor>& valid_global_tensor,
     uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,
@@ -305,7 +383,8 @@ ttnn::Tensor zero_padded_kv_cache(
         .num_layers = num_layers,
         .cluster_axis = cluster_axis,
     };
-    auto tensor_args = OperationType::tensor_args_t{.cache = cache};
+    auto tensor_args =
+        OperationType::tensor_args_t{.cache = cache, .slot_idx = slot_idx_tensor, .valid_global = valid_global_tensor};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 

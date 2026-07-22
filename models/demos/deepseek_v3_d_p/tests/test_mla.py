@@ -519,6 +519,7 @@ def _run_chunked_prefill(
     num_users=1,
     use_pretrained=False,
     topology=ttnn.Topology.Linear,
+    use_metadata_tensor=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -719,13 +720,35 @@ def _run_chunked_prefill(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
                 ),
             )
+            # Trace-safe metadata variant: build the runner's canonical [slot_id, actual_start, actual_end]
+            # uint32 DRAM tensor here (the "outside") and hand it to forward verbatim -- ttMLA threads it
+            # to all chunked ops (update/rope/zero_pad/ring_mla), which read their per-chunk scalars
+            # on-device. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
+            kv_pad_metadata = None
+            if use_metadata_tensor:
+                meta_payload = torch.tensor([u, kv_actual, valid_end, 0], dtype=torch.int64).reshape(1, 1, 1, 4)
+                kv_pad_metadata = ttnn.from_torch(
+                    meta_payload,
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
+            # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
+            # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
+            # (slot comes from metadata[0]).
             tt_out = mla_tt.forward(
                 hidden_states=tt_h,
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
-                actual_start=kv_actual,
+                actual_start=None if use_metadata_tensor else kv_actual,
                 cache_user_id=u,
+                metadata=kv_pad_metadata,
             )
+            if kv_pad_metadata is not None:
+                ttnn.deallocate(kv_pad_metadata)
             out_flat = ttnn.to_torch(
                 tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -842,8 +865,9 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["dsv3", "kimi"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.timeout(0)
-def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant):
+def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
     and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
@@ -870,4 +894,6 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
         if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
         else ttnn.Topology.Linear
     )
-    _run_chunked_prefill(request, mesh_device, reference=reference, topology=topology, **kwargs)
+    _run_chunked_prefill(
+        request, mesh_device, reference=reference, topology=topology, use_metadata_tensor=use_metadata_tensor, **kwargs
+    )

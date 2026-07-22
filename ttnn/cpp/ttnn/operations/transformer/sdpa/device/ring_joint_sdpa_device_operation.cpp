@@ -253,7 +253,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     validate_ring_joint_all_gather_on_program_cache_miss(
-        args.all_gather_operation_attributes, args.all_gather_tensor_args, args.has_indexed_kv_cache());
+        args.all_gather_operation_attributes,
+        args.all_gather_tensor_args,
+        args.has_indexed_kv_cache() || tensor_args.has_metadata());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -278,7 +280,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_q_shape = has_joint_tensors ? tensor_args.joint_q.value().logical_shape() : q_shape;
     const auto joint_k_shape = has_joint_tensors ? tensor_args.joint_k.value().logical_shape() : q_shape;
     const auto joint_v_shape = has_joint_tensors ? tensor_args.joint_v.value().logical_shape() : q_shape;
-    const bool has_indexed_kv_cache = args.has_indexed_kv_cache();
+    // Metadata path is indexed (single-slot) too -- the slot is read on-device from metadata[0] instead
+    // of the host kv_cache_batch_idx scalar -- so the same K/V-cache-batch shape exemptions apply.
+    const bool has_indexed_kv_cache = args.has_indexed_kv_cache() || tensor_args.has_metadata();
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
@@ -633,6 +637,60 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
+ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
+    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
+
+    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
+    if (tensor_args.input_v.has_value()) {
+        input_tensors.emplace_back(tensor_args.input_v.value());
+    }
+    if (tensor_args.joint_q.has_value()) {
+        input_tensors.emplace_back(tensor_args.joint_q.value());
+        input_tensors.emplace_back(tensor_args.joint_k.value());
+    }
+    if (tensor_args.joint_v.has_value()) {
+        input_tensors.emplace_back(tensor_args.joint_v.value());
+    }
+    input_tensors.emplace_back(tensor_args.gathered_k);
+    if (tensor_args.gathered_v.has_value()) {
+        input_tensors.emplace_back(tensor_args.gathered_v.value());
+    }
+    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
+        input_tensors,
+        args.joint_strategy,
+        args.scale,
+        args.is_causal,
+        args.is_balanced,
+        args.is_cross,
+        cache_key_logical_n,
+        args.ring_size,
+        args.compute_kernel_config,
+        args.program_config,
+        args.ccl_core_grid_offset,
+        args.kv_cache_batch_idx.has_value(),
+        kv_pad_rotation_enabled,
+        // Metadata presence (never the per-chunk VALUES) keeps the trace-safe metadata program from
+        // colliding with the scalar program; one cached program is reused across all chunks/users.
+        tensor_args.has_metadata(),
+        // (user, layer)-major KV-cache batch factor. Unlike kv_cache_batch_idx (re-patched per dispatch),
+        // these are baked into the readers' create-time args (common arg 1/2 on SDPA; reader rt-args on
+        // all-gather) and are NOT re-patched on the metadata path. So each (num_layers, layer_idx) must
+        // key a distinct cached program -- otherwise layer N would replay layer M's baked layer_idx. With
+        // the defaults (1, 0) the hash is unchanged from before, so single-layer callers reuse one program.
+        args.kv_cache_num_layers,
+        args.kv_cache_layer_idx,
+        tensor_args.has_latent_v(),
+        tensor_args.v_num_heads(),
+        tensor_args.v_head_dim(args.latent_v_head_dim),
+        // all_gather sub-op: hash its attributes + inputs by reflection (main removed the explicit
+        // RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash; its default hash crefs these two,
+        // exactly as RingJointSDPAParams::attribute_values does).
+        args.all_gather_operation_attributes,
+        args.all_gather_tensor_args);
+}
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k};
@@ -727,7 +785,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
-    const std::optional<uint32_t> latent_v_head_dim) {
+    const std::optional<uint32_t> latent_v_head_dim,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    const uint32_t kv_cache_num_layers,
+    const uint32_t kv_cache_layer_idx) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -808,7 +870,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         ccl_core_grid_offset,
         kv_cache_batch_idx,
         kv_actual_isl,
-        latent_v_head_dim.value_or(0));
+        latent_v_head_dim.value_or(0),
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -818,7 +882,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .slot_id = slot_id,
+        .kv_actual_isl = kv_actual_isl_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

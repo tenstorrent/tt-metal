@@ -172,6 +172,11 @@ SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
+# Capture each rank's per-chunk forward as a (segmented) ttnn trace and replay it every chunk instead of
+# re-dispatching op-by-op. Needs the mesh opened with a trace region; the segmented capture (sub-device
+# swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
+USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+_TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -334,10 +339,14 @@ def _d2d_recv(inbound) -> tuple:
     return act, meta
 
 
-def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
+def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deallocate: bool = True) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
-    TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
+    TT_FATALs on any spec mismatch, so no host-side relayout is needed.
+
+    deallocate=False when the activation is the traced path's persistent _trace_output buffer: the socket
+    sync copies it into the sender backing on the CQ (before the next replay, which reuses the same buffer,
+    is enqueued), so it must NOT be freed — the next chunk's replay writes into it in place."""
     t0 = time.perf_counter()
     backing = outbound.get_backing_tensor()
     import torch
@@ -356,7 +365,8 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
         ),
     )
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
-    ttnn.deallocate(activation)
+    if deallocate:
+        ttnn.deallocate(activation)
     logger.info(
         f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
         f"[xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms"
@@ -416,7 +426,9 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         ttnn.synchronize_device(runtime.mesh_device)
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
-        _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
+        # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
+        # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
+        _d2d_send(d2d_out, out, rank, meta, deallocate=not runtime.config.use_trace)  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f}")
@@ -442,8 +454,12 @@ def run_request_loop(
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
-    as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input, no PCC — see
-    run_standalone_loop for those."""
+    as a hard fallback, until SIGTERM/SIGKILL. No fixed NUM_CHUNKS bound, no trace input — see
+    run_standalone_loop for the bounded/trace variant.
+
+    PREFILL_REQUEST_LOOP_PCC=1 (single-rank, bring-up only) PCC-checks the populated KV against the golden
+    trace once the stream closes — the production analogue of standalone's per-rank KV check, driven by the
+    real H2D producer path (and, under use_trace, the replayed forward + post-compile LayerAck)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -454,6 +470,7 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    slot_id = 0  # last chunk's slot — the PCC check below reads the slice this rank populated
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -468,11 +485,31 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
+        slot_id = meta["slot_id"]
         t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
         c += 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+
+    if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1" and c > 0:
+        # Bring-up validation of the production path (golden-trace input): the same optional runtime hook
+        # standalone uses. n_chunks = the count the producer actually pushed. Single-rank only (a pipeline
+        # rank owns a layer slice; kv_cache_pcc_check offsets by first_layer_idx, but multi-rank KV PCC is
+        # driven via the standalone loop).
+        pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
+        if pcc_check is None:
+            raise RuntimeError(
+                f"PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
+                "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
+            )
+        pcc_check(
+            kv_cache,
+            slot_id=slot_id,
+            n_chunks=c,
+            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
+            first_layer_idx=cfg.first_layer_idx,
+        )
 
 
 def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
@@ -562,6 +599,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -581,6 +619,7 @@ def _print_config() -> None:
             os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0"),
         ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
@@ -618,7 +657,9 @@ def main() -> None:
         f"chunk_size={CHUNK_SIZE} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
     )
 
-    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
+    mesh_device = open_mesh_device(
+        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
+    )
 
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -640,6 +681,8 @@ def main() -> None:
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        use_trace=USE_TRACE,
+        overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
@@ -679,6 +722,12 @@ def _serve_standalone(
         # rank 0 enters its produce loop first, fills the socket, and stalls ~6s waiting for the
         # downstream ranks to enter their consume loops — moving that skew out of the timed chunk loop.
         ttnn.distributed_context_barrier()
+
+    # Capture the trace (use_trace) HERE — after D2D endpoints are built (their receiver-socket L1 must be
+    # allocated before the trace records, or it corrupts replay on the last rank) and before the chunk loop,
+    # so the one-time capture stays out of the timed loop.
+    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+        runtime.capture_trace(kv_cache)
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
     run_standalone_loop(runtime, kv_cache, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
@@ -774,6 +823,11 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+
+    # Capture the trace (use_trace) after D2D endpoints + LayerAck are set up, before the request loop
+    # (one-time, out of the loop; correct memory + ack ordering). See _serve_standalone / capture_trace().
+    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+        runtime.capture_trace(kv_cache)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(

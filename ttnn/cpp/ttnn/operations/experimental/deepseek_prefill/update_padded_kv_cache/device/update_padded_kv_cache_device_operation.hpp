@@ -23,11 +23,16 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // Cache slot is linearized as users-outer, layers-inner:
         //   batch_idx = slot_idx * num_layers + layer_idx
         // layer_idx is hashed (structural): it takes only num_layers distinct values, so one cached
-        // program per layer is reused across users and chunks. slot_idx and kv_actual_global are
-        // per-call scalars held in common runtime args and patched on cache hits by
-        // MeshWorkloadFactory::override_runtime_arguments, so they stay out of the program hash.
-        uint32_t slot_idx;          // TODO: move to metadata
-        uint32_t kv_actual_global;  // TODO: move to metadata
+        // program per layer is reused across users and chunks.
+        //
+        // `slot_idx` and `kv_actual_global` are the per-call values for the SCALAR path (used only
+        // when `tensor_args.slot_idx`/`kv_actual_global` are empty). They are common runtime args
+        // patched on cache hits, so they stay out of the program hash. On the METADATA path they are
+        // unused (left 0) and the writer kernel reads them on-device from the per-element metadata
+        // tensors instead — keeping the per-request values off the host dispatch path so the op is
+        // traceable.
+        uint32_t slot_idx;          // scalar path only
+        uint32_t kv_actual_global;  // scalar path only
         uint32_t layer_idx;
         uint32_t num_layers;
         uint32_t cluster_axis;
@@ -36,6 +41,13 @@ struct UpdatePaddedKvCacheDeviceOperation {
     struct tensor_args_t {
         const Tensor& cache;
         const Tensor& input;
+        // Optional, present together on the METADATA path: two 1-element uint32 DRAM tensors,
+        // replicated across the mesh ([1,1,1,1], ROW_MAJOR). `slot_idx` holds the user slot;
+        // `kv_actual_global` holds the prior valid global KV length in tokens (tile-aligned). The
+        // writer kernel reads element [0] of each on-device (traceable path). When both are empty, the
+        // op uses the scalar `slot_idx`/`kv_actual_global` attributes instead.
+        std::optional<Tensor> slot_idx;
+        std::optional<Tensor> kv_actual_global;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -58,8 +70,9 @@ struct UpdatePaddedKvCacheDeviceOperation {
     };
 
     // Wraps the ProgramDescriptor factory so the default adapter patches buffer bindings on cache
-    // hits, and override_runtime_arguments additionally patches the per-call slot_idx/kv_actual_global
-    // scalars (common runtime args) -- the values the buffer-binding fast path would leave stale.
+    // hits, and override_runtime_arguments additionally patches the per-call common runtime args the
+    // buffer-binding fast path would leave stale: the slot_idx/kv_actual_global tensors' raw DRAM
+    // addresses (metadata path) or slot_idx/kv_actual_global scalars (scalar path).
     struct MeshWorkloadFactory {
         using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
             DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
@@ -92,13 +105,18 @@ struct UpdatePaddedKvCacheDeviceOperation {
 
 namespace ttnn::prim {
 
+// Unified primitive. The tensor operands select the path: both set -> traceable on-device read
+// (slot_idx/kv_actual_global scalars ignored, pass 0); both empty -> scalar path using the
+// slot_idx/kv_actual_global scalars.
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
+    const std::optional<ttnn::Tensor>& slot_idx_tensor,
+    const std::optional<ttnn::Tensor>& kv_actual_global_tensor,
     uint32_t slot_idx,
+    uint32_t kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
 }  // namespace ttnn::prim
