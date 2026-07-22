@@ -258,12 +258,13 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     uint64_t ts_base = 0;
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
     uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0;
-    // Per-lane zone-hash stack for stream-order validation (the workload NEVER nests real zones; the only
-    // legal nesting is an X280-STALL 0x7FFF inside a real zone). Flags: real_nest = a real zone opened while
-    // another real zone is already open (the "consecutive STARTs -> Tracy staircase" bug); mispair = an END
-    // whose hash != the START it closes; orphan = an END with an empty stack.
-    std::vector<std::vector<uint32_t>> lane_stack(ctx.nl);
-    uint64_t real_nest = 0, mispair = 0, orphan_dec = 0;
+    // Near-zero-cost stream-order validation: one counter per lane = # of currently-open REAL zones (an
+    // X280-STALL 0x7FFF may legally nest inside a real zone, so stalls are ignored). A real zone opening
+    // while another real zone is already open is the "consecutive STARTs -> Tracy staircase" bug. Logged
+    // inline the moment it happens (survives a timeout-kill), plus a max-depth summary at drain exit.
+    std::vector<int32_t> real_open(ctx.nl, 0);
+    uint64_t real_nest = 0;
+    int32_t max_real_open = 0;
 
     while (!stop_.load(std::memory_order_acquire)) {
         uint32_t np = sock->pages_available();
@@ -313,46 +314,24 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 }
                 // Stream-order validation (see lane_stack decl). Detects the improper-nesting/mispair bug
                 // in the DECODED stream (i.e. before Tracy), isolating producer/decoder from the Tracy sink.
-                {
-                    const bool is_st = (type == kernel_profiler::ZONE_START);
-                    const uint16_t h16 = static_cast<uint16_t>(hash);
-                    auto& stk = lane_stack[lane];
-                    if (is_st) {
-                        if (h16 != 0x7FFFu) {
-                            bool parent_real = false;
-                            for (uint32_t ph : stk) {
-                                if (static_cast<uint16_t>(ph) != 0x7FFFu) {
-                                    parent_real = true;
-                                    break;
-                                }
-                            }
-                            if (parent_real && real_nest++ < 25) {
-                                log_warning(
-                                    tt::LogMetal,
-                                    "[order] REAL-NEST ci={} risc={} hash=0x{:x} depth={} ts={}",
-                                    ci,
-                                    risc,
-                                    h16,
-                                    stk.size(),
-                                    ts);
-                            }
-                        }
-                        stk.push_back(hash);
-                    } else if (stk.empty()) {
-                        orphan_dec++;
-                    } else {
-                        const uint16_t top = static_cast<uint16_t>(stk.back());
-                        stk.pop_back();
-                        if (top != h16 && mispair++ < 25) {
+                if (static_cast<uint16_t>(hash) != 0x7FFFu) {  // ignore X280-STALL (legal nesting)
+                    if (type == kernel_profiler::ZONE_START) {
+                        if (real_open[lane] > 0 && real_nest++ < 40) {
                             log_warning(
                                 tt::LogMetal,
-                                "[order] MISPAIR ci={} risc={} end_hash=0x{:x} top=0x{:x} ts={}",
+                                "[order] REAL-NEST ci={} risc={} lane={} hash=0x{:x} open={} ts={}",
                                 ci,
                                 risc,
-                                h16,
-                                top,
+                                lane,
+                                static_cast<uint16_t>(hash),
+                                real_open[lane],
                                 ts);
                         }
+                        if (++real_open[lane] > max_real_open) {
+                            max_real_open = real_open[lane];
+                        }
+                    } else if (real_open[lane] > 0) {
+                        --real_open[lane];
                     }
                 }
                 // DIAG (TT_PERF_DEBUG_ZONE_DUMP=1): dump the first decoded markers' per-lane timestamp split
@@ -409,15 +388,14 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
             dbg_pages,
             dbg_emit);
     }
-    if (real_nest || mispair || orphan_dec) {
+    if (real_nest || max_real_open > 1) {
         log_warning(
             tt::LogMetal,
-            "[order sock={} SUMMARY] real_nest={} mispair={} orphan_end={} (decoded-stream order violations; "
-            "real_nest>0 == the Tracy zone-staircase bug)",
+            "[order sock={} SUMMARY] real_nest={} max_real_open={} (real_nest>0 == the Tracy zone-staircase "
+            "bug in the DECODED stream -> producer/decoder, not the Tracy handler)",
             sock_idx,
             real_nest,
-            mispair,
-            orphan_dec);
+            max_real_open);
     }
 }
 
