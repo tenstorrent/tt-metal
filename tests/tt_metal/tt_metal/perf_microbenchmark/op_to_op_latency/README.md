@@ -124,8 +124,10 @@ each run into one summary table. It is a **characterization** tool for exploring
 and picking which config to promote to a gated golden next — it does **not** gate, and
 CI does not run it (CI gates only the single pinned config above).
 
-Every config is the pinned base plus per-config overrides that *replace* the base value
-in place (the binary's arg parser takes the first occurrence of a flag), so a sweep only
+Each config is the pinned base plus a hardcoded per-config override map that *replaces*
+the base value in place (the binary's arg parser takes the first occurrence of a flag).
+The command handed to the binary is built entirely from in-repo constants (`BASE` +
+`PRESETS`) — no free-form string is passed on the command line — so the sweep only
 exercises knobs the binary already supports.
 
 ```bash
@@ -135,14 +137,14 @@ S=tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_sweep.py
 python3 $S --list                              # show the built-in preset axes
 python3 $S --preset reader-mode --dry-run      # print the commands without touching HW
 python3 $S --preset compute-nops --accumulate  # run the sweep (device profiler + accumulate)
-python3 $S --config "nops0:--compute-nops 0" \
-          --config "batch:--reader-batch-push" # ad-hoc named configs
 ```
 
 Presets cover compute load, program/page counts, reader modes (0/1/2), writer end-barrier
-modes, NoC assignment, active-core count, read-only, and page size. Additional research
-axes that need new binary modes (e.g. `--kernel-unroll`, `--reader-read-bytes`, per-core
-placement) can be added to `PRESETS` once those knobs land in the binary.
+modes, NoC assignment, active-core count, read-only, and page size. To add an axis, add an
+entry to the `PRESETS` dict (a one-line, reviewed change); for a one-off run, invoke the
+binary directly (see "Run locally"). Research axes that need new binary modes (e.g.
+`--kernel-unroll`, `--reader-read-bytes`, per-core placement) can be added to `PRESETS`
+once those knobs land in the binary.
 
 ## Populating / updating the golden
 
