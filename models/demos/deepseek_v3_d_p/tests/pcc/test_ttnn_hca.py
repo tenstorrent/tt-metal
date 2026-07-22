@@ -48,6 +48,7 @@ _SHAPES = [
     (1, 130),
     (1, 260),
     (1, 4097),
+    (1, 5120),  # realistic prefill Q length (5K)
 ]
 _SHAPE_IDS = [
     "b1-seq128",
@@ -62,6 +63,7 @@ _SHAPE_IDS = [
     "b1-seq130-unaligned",
     "b1-seq260-unaligned",
     "b1-seq4097-unaligned",
+    "b1-seq5120-realistic",
 ]
 
 
@@ -145,7 +147,7 @@ def test_hca_compressor(device, batch, seq_len):
     pcc_passed, pcc_message = assert_with_pcc(
         compressed_kv_ref.to(torch.float32),
         compressed_kv_out.to(torch.float32),
-        pcc=0.99,
+        pcc=0.999,
     )
     logger.debug(f"compressed_kv PCC: {pcc_message}")
     assert pcc_passed, f"HCA compressor PCC test failed: {pcc_message}"
@@ -335,8 +337,116 @@ def test_hca_attention(device, batch, seq_len):
 
     assert out.shape == attn_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(attn_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(attn_ref.to(torch.float32), out.to(torch.float32), pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(attn_ref.to(torch.float32), out.to(torch.float32), pcc=0.999)
     logger.debug(f"attention core PCC: {pcc_message}")
     assert pcc_passed, f"HCA attention core PCC test failed: {pcc_message}"
+
+    logger.debug("PCC test passed!")
+
+
+@pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
+def test_hca_output(device, batch, seq_len):
+    """
+    Test TtHCA._o_proj PCC against the DeepseekV4Attention output path (lines 871-873):
+    grouped o_a_proj (block-diagonal, o_groups) -> o_b_proj -> [B, S, hidden].
+
+    Random attn output [B, num_heads, S, head_dim] (the _attention output layout) fed to
+    both sides.
+
+    NOTE: development scaffolding — exercises a TtHCA method in isolation (not the folder's
+    class+forward idiom). Remove once the full TtHCA block forward is PCC-tested.
+    """
+    torch.manual_seed(42)
+    config = _flash_config()
+    nh, hd = config.num_attention_heads, config.head_dim
+    logger.debug(f"batch={batch}, seq_len={seq_len}, o_groups={config.o_groups}")
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    attn = torch.randn(batch, nh, seq_len, hd)  # TtHCA._attention output layout [B, H, S, D]
+
+    logger.debug("Running torch reference output path")
+    with torch.no_grad():
+        grouped = attn.transpose(1, 2).reshape(batch, seq_len, config.o_groups, -1)  # [B, S, o_groups, -1]
+        grouped = ref.o_a_proj(grouped).flatten(2)  # [B, S, o_groups * o_lora_rank]
+        out_ref = ref.o_b_proj(grouped)  # [B, S, hidden]
+    logger.debug(f"Reference output shape: {tuple(out_ref.shape)}")
+
+    tt_model = TtHCA.from_reference(device, ref, config)
+    attn_tt = ttnn.from_torch(attn, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    logger.debug("Running ttnn output path")
+    signpost("HCA_START")
+    out_tt = tt_model._o_proj(attn_tt)
+    signpost("HCA_END")
+    out = ttnn.to_torch(out_tt).squeeze(1)  # [B, 1, S, hidden] -> [B, S, hidden]
+    logger.debug(f"TTNN output shape: {tuple(out.shape)}")
+
+    assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.99)
+    logger.debug(f"output proj PCC: {pcc_message}")
+    assert pcc_passed, f"HCA output proj PCC test failed: {pcc_message}"
+
+    logger.debug("PCC test passed!")
+
+
+@pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
+def test_hca_forward(device, batch, seq_len):
+    """
+    Full TtHCA block (prefill, single-shot) PCC against DeepseekV4Attention.forward:
+    hidden -> query/kv stems + compressor + attention core + grouped output projection
+    -> [B, S, hidden].
+
+    This is the idiomatic class+forward test; the _q_stem / _kv_stem / _attention / _o_proj
+    method-level tests above are development scaffolding and can be removed now this passes.
+    """
+    torch.manual_seed(42)
+    config = _flash_config()
+    config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
+    nh, hd, sw = config.num_attention_heads, config.head_dim, config.sliding_window
+    logger.debug(f"batch={batch}, seq_len={seq_len}, heads={nh}, head_dim={hd}, sw={sw}")
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    assert ref.compressor is not None, "layer_idx=0 must be a heavily_compressed_attention layer"
+    with torch.no_grad():
+        ref.q_a_norm.weight.uniform_(0.5, 1.5)
+        ref.kv_norm.weight.uniform_(0.5, 1.5)
+        ref.sinks.normal_(0.0, 1.0)
+        ref.compressor.position_bias.normal_(0.0, 0.02)
+        ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+
+    hidden = torch.randn(batch, seq_len, config.hidden_size)
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
+
+    logger.debug("Running torch reference DeepseekV4Attention.forward")
+    with torch.no_grad():
+        cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
+        i = torch.arange(seq_len).view(seq_len, 1)
+        j = torch.arange(seq_len).view(1, seq_len)
+        attn_mask = torch.zeros(seq_len, seq_len).masked_fill(~((j <= i) & (i - j < sw)), float("-inf"))
+        attn_mask = attn_mask.view(1, 1, seq_len, seq_len).expand(batch, 1, seq_len, seq_len)
+        out_ref, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, attn_mask, past_key_values=None)
+    logger.debug(f"Reference output shape: {tuple(out_ref.shape)}")
+
+    tt_model = TtHCA.from_reference(device, ref, config)
+    tt_input = ttnn.from_torch(
+        hidden.unsqueeze(1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    logger.debug("Running ttnn TtHCA forward")
+    signpost("HCA_START")
+    out_tt = tt_model(tt_input, position_ids)
+    signpost("HCA_END")
+    out = ttnn.to_torch(out_tt).squeeze(1)  # [B, 1, S, hidden] -> [B, S, hidden]
+    logger.debug(f"TTNN output shape: {tuple(out.shape)}")
+
+    assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.998)
+    logger.debug(f"HCA block PCC: {pcc_message}")
+    assert pcc_passed, f"HCA block PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
