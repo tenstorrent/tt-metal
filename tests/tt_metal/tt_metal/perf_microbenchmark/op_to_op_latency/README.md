@@ -19,9 +19,13 @@ NoC-direction metric with its own golden).
 
 By default the kernels run **lean**: they emit only the profiler markers the CI metrics
 actually consume (the firmware `{BRISC,NCRISC,TRISC}-KERNEL` zones for the gated metric,
-plus compute `PROG_ID` / tile-0 `TILE_IDX` / `FINISH_LAST_PUSH` for `pack_to_unpack`). The
-extra reader/writer `GO`/`DONE`/`BARRIER` markers and the per-tile compute `TILE_IDX` +
-`MATH` zone used by the research BW/gap-decomposition analysis are gated behind
+plus compute `PROG_ID` / tile-0 first-math / pack-finish for `pack_to_unpack`). The two
+lean compute markers are emitted with `DeviceRecordEvent` (event id only, no data payload)
+rather than `DeviceTimestampedData`, so they write fewer words to the L1 profiler buffer and
+perturb the op2op gap less; `op_to_op_postprocess.py` maps the event ids back to the
+`TILE_IDX` / `FINISH_LAST_PUSH` names (`EVENT_NAMES`, kept in sync with the kernel `EV_*`
+constants). The extra reader/writer `GO`/`DONE`/`BARRIER` markers and the per-tile compute
+`TILE_IDX` + `MATH` zone used by the research BW/gap-decomposition analysis are gated behind
 `--profile-detail` (off by default) so they don't add device cycles that perturb the gated
 op2op number.
 

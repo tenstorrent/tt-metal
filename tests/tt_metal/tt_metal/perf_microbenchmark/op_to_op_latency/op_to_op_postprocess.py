@@ -59,6 +59,16 @@ PACK_RISC = "TRISC_2"
 KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL")
 DM_KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL")
 
+# DeviceRecordEvent ids -> marker names, kept in sync with the EV_* constants in the compute
+# kernel (kernels/compute_copy_with_nops.cpp). recordEvent is lighter than DeviceTimestampedData
+# (event id only, no data payload = less L1 buffer pressure, so less op2op perturbation). The event
+# id is the low 16 bits of the marker's timer id, and events carry no payload (data == 0); we
+# backfill the name so the name-keyed metric walks below work unchanged.
+EVENT_NAMES = {
+    12: "TILE_IDX",  # lean-mode first-math (tile 0)
+    13: "FINISH_LAST_PUSH",  # pack finish
+}
+
 
 # --------------------------------------------------------------------------- #
 # Device log loading via the official parser (owns the CSV schema for us)
@@ -99,16 +109,25 @@ def load_device_events(log_path: Path) -> tuple[pd.DataFrame, float]:
             core_x, core_y = core
             for risc, rdata in cdata["riscs"].items():
                 for timer_id, t, data in rdata["timeseries"]:
+                    zone = timer_id["zone_name"]
+                    dval = _to_int(data)
+                    # DeviceRecordEvent markers land as TS_EVENT rows with an empty zone name; recover
+                    # the marker name from the event id (low 16 bits of the timer id). Events carry no
+                    # payload, so data is 0 (the TILE_IDX event is tile 0 by construction).
+                    if timer_id["type"] == "TS_EVENT":
+                        ev = _to_int(timer_id.get("id", 0)) & 0xFFFF
+                        zone = EVENT_NAMES.get(ev, zone)
+                        dval = 0
                     rows.append(
                         {
                             "chip": chip,
                             "core_x": core_x,
                             "core_y": core_y,
                             "risc": risc,
-                            "zone": timer_id["zone_name"],
+                            "zone": zone,
                             "type": timer_id["type"],
                             "t": int(t),
-                            "data": _to_int(data),
+                            "data": dval,
                             "trace_id_count": _to_int(timer_id.get("trace_id_count", -1)),
                         }
                     )
