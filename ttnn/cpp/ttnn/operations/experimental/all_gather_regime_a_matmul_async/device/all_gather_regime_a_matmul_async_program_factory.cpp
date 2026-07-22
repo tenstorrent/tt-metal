@@ -367,7 +367,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     const uint32_t Kt_local = Kt_global / D;
     const uint32_t k_tile_global_base = device_index * Kt_local;
     // gather_progress GlobalSemaphore (remote shards landed here). address() is uniform across the mesh.
-    const uint32_t progress_addr = op.d > 1 ? tensor_args.multi_device_global_semaphore.at(0).address() : 0u;
+    const uint32_t progress_addr = op.d > 1 ? op.multi_device_global_semaphore.at(0).address() : 0u;
     // neighbour's injector core == our injector core (symmetric programs, uniform harvesting on the galaxy).
     const CoreCoord inj_virtual = mesh_device->worker_core_from_logical_core(inj_logical);
 

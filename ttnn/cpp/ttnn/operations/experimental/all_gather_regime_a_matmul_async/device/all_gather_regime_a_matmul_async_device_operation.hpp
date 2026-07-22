@@ -29,6 +29,11 @@ struct AllGatherRegimeAMatmulAsyncDeviceOperation {
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
+    // Custom program-cache hash over stable scalar/shape fields only. The default reflection hash visits
+    // fabric/semaphore/width-shard members that carry a CoreRangeSet the hasher cannot serialize.
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

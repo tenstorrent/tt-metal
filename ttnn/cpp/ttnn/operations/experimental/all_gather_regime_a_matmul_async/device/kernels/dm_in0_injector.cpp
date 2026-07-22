@@ -38,7 +38,7 @@
 // tile, CB c_1 = fabric packet header.
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
@@ -109,7 +109,7 @@ void kernel_main() {
     tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
         &sender,
         pkt_hdr,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nbr_progress, /*inc=*/1u, /*wrap=*/32u},
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nbr_progress, /*val=*/1u, /*flush=*/true},
         (uint8_t)num_hops);
 
     noc_async_write_barrier();

@@ -44,6 +44,33 @@ void AllGatherRegimeAMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
         "all_gather_regime_a_matmul_async weight must be DRAM WIDTH_SHARDED (regime_a layout)");
 }
 
+tt::stl::hash::hash_t AllGatherRegimeAMatmulAsyncDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op, const tensor_args_t& tensor_args) {
+    const auto& a = tensor_args.input_tensor.logical_shape();
+    const auto& w = tensor_args.weight_tensor.logical_shape();
+    const auto& cfg = op.regime_a_config;
+    return tt::tt_metal::operation::hash_operation<AllGatherRegimeAMatmulAsyncDeviceOperation>(
+        op.d,
+        op.cluster_axis.has_value(),
+        op.cluster_axis.value_or(0),
+        static_cast<uint32_t>(op.topology),
+        op.num_links,
+        op.num_workers_per_link,
+        op.num_buffers_per_channel,
+        cfg.has_value(),
+        cfg.has_value() ? cfg->k_slices : 0u,
+        cfg.has_value() ? cfg->n_slices : 0u,
+        cfg.has_value() ? cfg->m_slices : 0u,
+        cfg.has_value() ? cfg->k_block_tiles : 0u,
+        cfg.has_value() ? cfg->n_subblock_tiles : 0u,
+        static_cast<uint32_t>(op.output_dtype.value_or(DataType::BFLOAT16)),
+        static_cast<uint32_t>(tensor_args.input_tensor.dtype()),
+        a[-2],
+        a[-1],
+        w[-2],
+        w[-1]);
+}
+
 AllGatherRegimeAMatmulAsyncDeviceOperation::spec_return_value_t
 AllGatherRegimeAMatmulAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -113,12 +140,12 @@ AllGatherRegimeAMatmulAsyncDeviceOperation::invoke(
             .num_buffers_per_channel = num_buffers_per_channel,
             .output_mem_config = memory_config,
             .output_dtype = dtype,
-            .compute_kernel_config = ckc},
+            .compute_kernel_config = ckc,
+            .multi_device_global_semaphore = std::move(multi_device_global_semaphore),
+            .barrier_semaphore = std::move(barrier_semaphore)},
         tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
-            .multi_device_global_semaphore = std::move(multi_device_global_semaphore),
-            .barrier_semaphore = std::move(barrier_semaphore),
             .persistent_output_buffer = std::move(persistent_output_buffer)}};
 }
 

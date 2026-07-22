@@ -99,64 +99,76 @@ def test_d1_matches_regime_a(device):
 # Task 3 milestone #17: fuse the fabric all-gather of the in0 K-shards with regime_a_matmul in ONE program.
 # Uses ring topology so BOTH devices have a forward neighbour (device 1 wraps to device 0).
 @pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_d2_full_gather_correctness(mesh_device):
+def test_d2_full_gather_correctness():
     D = 2
-    M, K, N = 32, 6144, 3072  # K == K_global; each device owns K_local = K/D = 3072
-    torch.manual_seed(0)
-    t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)  # global in0 [M, K_global], sharded on K
-    t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)  # in1 [K_global, N], replicated
-    ref = (t0.float() @ t1.float())[0, 0]
+    # Fabric only initializes on the full galaxy torus (a 2-chip mesh can't complete the ethernet router
+    # handshake). We open the full mesh with a bare FABRIC_1D config (the conftest fixture's STRICT_INIT config
+    # overflows the ACTIVE_ETH kernel-config buffer on this build), carve a (1,2) submesh, and run the fused
+    # D=2 op on it. dim -1 (K) is sharded across the 2 submesh devices; in1 is replicated.
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    full = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+    try:
+        md = full.create_submesh(ttnn.MeshShape(1, D))
 
-    # Sub-device + stall group covering the full compute grid (CCL cores), and the gather_progress semaphore.
-    grid = mesh_device.compute_with_storage_grid_size()
-    ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-    worker_sub_device = ttnn.SubDevice([ccl_crs])
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
-    gather_progress_sem = ttnn.create_global_semaphore(mesh_device, ccl_crs, 0)
+        M, K, N = 32, 6144, 3072  # K == K_global; each device owns K_local = K/D = 3072
+        torch.manual_seed(0)
+        t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)  # global in0 [M, K_global], sharded on K
+        t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)  # in1 [K_global, N], replicated
+        ref = (t0.float() @ t1.float())[0, 0]
 
-    # in0: replicate over mesh axis 0, shard over axis 1 (the D axis) on the last (K) dim.
-    a = ttnn.from_torch(
-        t0,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            mesh_device,
-            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, D)),
-        ),
-    )
-    # in1: full [K, N] replicated to every device, regime_a DRAM width-shard layout.
-    wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, mesh_device)
-    b = ttnn.from_torch(
-        t1,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=wcfg,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            mesh_device,
-            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, D)),
-        ),
-    )
-    cfg = ttnn.RegimeAMatmulConfig(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
+        # Sub-device + stall group covering the full compute grid (CCL cores), and the gather_progress semaphore.
+        grid = md.compute_with_storage_grid_size()
+        ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        worker_sub_device = ttnn.SubDevice([ccl_crs])
+        sub_device_manager = md.create_sub_device_manager([worker_sub_device], 0)
+        md.load_sub_device_manager(sub_device_manager)
+        md.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+        gather_progress_sem = ttnn.create_global_semaphore(md, ccl_crs, 0)
 
-    out = ttnn.experimental.all_gather_regime_a_matmul_async(
-        a,
-        b,
-        config=cfg,
-        cluster_axis=1,
-        topology=ttnn.Topology.Ring,
-        num_links=1,
-        num_workers_per_link=1,
-        multi_device_global_semaphore=[gather_progress_sem],
-    )
-    ttnn.synchronize_device(mesh_device)
+        # in0: replicate over submesh axis 0, shard over axis 1 (the D axis) on the last (K) dim.
+        a = ttnn.from_torch(
+            t0,
+            layout=ttnn.TILE_LAYOUT,
+            device=md,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                md,
+                ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, D)),
+            ),
+        )
+        # in1: full [K, N] replicated to every device, regime_a DRAM width-shard layout.
+        wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, md)
+        b = ttnn.from_torch(
+            t1,
+            layout=ttnn.TILE_LAYOUT,
+            device=md,
+            dtype=ttnn.bfloat16,
+            memory_config=wcfg,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                md,
+                ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, D)),
+            ),
+        )
+        cfg = ttnn.RegimeAMatmulConfig(k_slices=3, n_slices=1, m_slices=1, k_block_tiles=4, n_subblock_tiles=6)
 
-    # Output [M, N] is computed (replicated) on every device — each must match the full matmul.
-    per_dev = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    for d in range(D):
-        assert_with_pcc(ref, per_dev[d].float(), 0.999)
+        out = ttnn.experimental.all_gather_regime_a_matmul_async(
+            a,
+            b,
+            config=cfg,
+            cluster_axis=1,
+            topology=ttnn.Topology.Linear,
+            num_links=1,
+            num_workers_per_link=1,
+            multi_device_global_semaphore=[gather_progress_sem],
+        )
+        ttnn.synchronize_device(md)
+
+        # Output [M, N] is computed (replicated) on every device — each must match the full matmul.
+        # ConcatMeshToTensor(dim=0) stacks the D per-device [1, M, N] outputs into [D, M, N].
+        per_dev = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
+        for d in range(D):
+            got = per_dev[d].float().reshape(ref.shape)
+            assert_with_pcc(ref, got, 0.999)
+    finally:
+        ttnn.close_mesh_device(full)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
