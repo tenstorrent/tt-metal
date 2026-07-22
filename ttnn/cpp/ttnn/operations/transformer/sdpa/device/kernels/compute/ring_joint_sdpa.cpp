@@ -9,6 +9,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/cb_api.h"  // ckernel::read_tile_value (UNPACK-mailbox CB scalar read; no cb_interface)
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -113,12 +114,14 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    // Mutable: on the kv_pad_from_metadata path these are overridden below from cb_kv_pad_derived
+    // (produced by the reader from metadata[1]), since compute cannot NoC-read the metadata DRAM tensor.
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -129,7 +132,9 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 49;
+    // Compute fixed slot 49: trace-safe KV-pad derivation flag (cb_arg_offset bumped 49 -> 50).
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(49) == 1;
+    constexpr uint32_t cb_arg_offset = 50;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -156,6 +161,26 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
+    constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
+
+    // Trace-safe KV-pad derivation: the reader computed logical_nt / q-mapping / active_ring_iter_mask
+    // from metadata[1] and handed them over via cb_kv_pad_derived (compute can't NoC-read DRAM). Override
+    // the (trace-frozen) runtime args with the reader's values before the ring loop uses them.
+    if constexpr (kv_pad_from_metadata) {
+        // Read the reader-produced scalars via ckernel::read_tile_value (UNPACK-mailbox CB read) -- the
+        // TRISC-safe way to pull a scalar out of a CB, mirroring sparse_sdpa_compute's cb_ctrl. The
+        // CircularBuffer::get_read_ptr() path references the cb_interface global which does not link on
+        // this compute kernel. wait_front/pop_front are LLK intrinsics and link fine.
+        CircularBuffer cb_derived(cb_kv_pad_derived);
+        cb_derived.wait_front(1);
+        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, /*tile=*/0, /*element_offset=*/0);
+        kv_pad_q_pre_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 1);
+        kv_pad_q_pre_wrap_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 2);
+        kv_pad_q_post_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 3);
+        kv_pad_q_valid_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 4);
+        active_ring_iter_mask = ckernel::read_tile_value(cb_kv_pad_derived, 0, 5);
+        cb_derived.pop_front(1);
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
