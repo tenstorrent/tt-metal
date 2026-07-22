@@ -126,6 +126,7 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 - `10` - ARC timeout
 - `11` - AICLK timeout
 - `12` - Network errors (MPI/SSH)
+- `13` - Device init error (PCIe hang / ARC firmware startup failure)
 - `50` - Inconclusive (manual review required)
 - `66` - Input error (file/directory not found)
 

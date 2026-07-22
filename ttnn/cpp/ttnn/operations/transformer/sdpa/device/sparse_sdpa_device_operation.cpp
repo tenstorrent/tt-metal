@@ -176,7 +176,7 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
 }
 
@@ -208,17 +208,16 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
         // interleaved one, so they must be distinct programs.
         t.kv.memory_config(),
-        // kv.logical_shape() when sharded (see above) OR block-cyclic: the block-cyclic remap bakes BC_SHARD_STRIDE_GAP
-        // (= T/sp - chunk_local) as a compile-time define, so the cache length T must be in the hash (a
+        // kv.logical_shape() when sharded (see above) OR block-cyclic: the block-cyclic remap bakes its
+        // T-dependent stride gap as a compile-time argument, so the cache length T must be in the hash (a
         // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash (sentinel
         // shape) so changing T does not recompile.
         (t.kv.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.kv.logical_shape() : tt::tt_metal::Shape{},
         // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
         // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
         attrs.has_indexed_kv_cache(),
-        // Block-cyclic remap: enable gates a compile-time #ifdef; sp, chunk_local and the two T-derived stride
-        // gaps are ALL compile-time defines (so distinct sp/chunk_local/cache-size are distinct programs — T is
-        // hashed above). No runtime remap arg.
+        // Block-cyclic remap configuration is compile-time; distinct sp/chunk_local/cache-size values produce
+        // distinct programs (T is hashed above). No runtime remap arg.
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
@@ -234,8 +233,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     // kv_batch_page_offset = cache_batch_idx*T depends on the runtime SLOT (and T, which is NOT hashed for an
     // interleaved kv), so the same program is reused across slots/T — create_descriptor bakes it at build time
     // and on a program-cache HIT it would be STALE, so re-apply it from the current slot/T every dispatch. The
-    // block-cyclic remap needs NOTHING here: all its constants are compile-time defines (T is hashed for that
-    // path, so a different cache size is a different program). Non-indexed programs have nothing to re-apply.
+    // Block-cyclic remap configuration is compile-time, so only indexed programs need dynamic patching.
     const bool indexed = attrs.has_indexed_kv_cache();
     if (!indexed) {
         return {};

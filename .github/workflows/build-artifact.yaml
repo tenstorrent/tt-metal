@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      build-ttnn-import-artifact:
+        required: false
+        type: boolean
+        default: false
+        description: "Upload a lean artifact (build/lib *.so + runtime) so consumers can import ttnn in-place via TT_FROM_PRECOMPILED_DIR"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
         #        Fow now enabling an opt-out. But this should get removed.
@@ -83,6 +88,13 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       ref:
         required: false
         type: string
@@ -176,6 +188,11 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
+      ttnn-import-artifact-id:
+        description: "ID of the lean artifact (build/lib *.so + runtime) for importing ttnn in-place without a wheel"
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.ttnn_import_artifact_id || '' }}
   workflow_dispatch:
     inputs:
       tracy:
@@ -246,6 +263,13 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       wheel-ref:
         required: false
         type: string
@@ -272,7 +296,7 @@ jobs:
 
   # Parse platform dropdown to extract distro/version/toolchain
   parse-platform:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
@@ -390,6 +414,7 @@ jobs:
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      ttnn_import_artifact_id: ${{ steps.upload_ttnn_import.outputs.artifact-id }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
@@ -397,8 +422,10 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
+      CPM_S3_BUCKET: cpm
+      CPM_S3_PREFIX: cpm/tt-metal
       CCACHE_S3_READONLY: "false"
-      CCACHE_S3_DEBUG: "true"
+      CCACHE_S3_DEBUG: "false"
     container:
       # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
       # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
@@ -533,6 +560,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: Create ccache tmpdir
         run: |
@@ -551,17 +579,38 @@ jobs:
           # ownership mismatch (host uid vs container root). Add /work to safe.directory.
           git config --global --add safe.directory /work
 
-      - name: 📦 Restore CPM source cache
+      - name: 📦 Compute CPM cache key
+        id: cpm-key
+        run: |
+          echo "key=cpm-z22-${{ hashFiles(
+            'third_party/CMakeLists.txt',
+            'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+            'tt-train/cmake/dependencies.cmake') }}" >> "$GITHUB_OUTPUT"
+
+      - name: 📦 Restore CPM source cache (Garage S3)
         id: cpm-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .cpmcache.tar.zst
-          key: >-
-            cpm-z22-${{ hashFiles(
-              'third_party/CMakeLists.txt',
-              'tt_metal/third_party/umd/third_party/CMakeLists.txt',
-              'tt-train/cmake/dependencies.cmake') }}
-          restore-keys: cpm-z22-
+        # Same fork guard as the ccache S3 steps: forks have no secrets, so skip S3
+        # and let CMake configure fetch CPM sources from scratch.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        env:
+          CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
+        run: |
+          set -u
+          SIGV4="aws:amz:garage:s3"
+          CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
+          URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
+          echo "Restoring CPM cache from: ${URL}"
+          # -f => non-2xx (incl. 404 miss) exits non-zero; --retry rides out transient blips.
+          if curl -fsS --retry 3 --retry-delay 2 --max-time 120 \
+               --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+               "${URL}" -o .cpmcache.tar.zst; then
+            echo "CPM cache HIT (key=${CACHE_KEY})"
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "CPM cache MISS or restore error (key=${CACHE_KEY}); continuing without cache"
+            rm -f .cpmcache.tar.zst   # remove any partial/empty download
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 📦 Unpack CPM cache
         run: |
@@ -609,16 +658,42 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        # Only pack when we can actually save. For fork PRs the restore step is
+        # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
+        # pointless ultra-zstd compression that never gets uploaded.
+        if: >-
+          steps.cpm-cache.outputs.hit != 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
 
-      - name: 📦 Save CPM source cache
-        if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .cpmcache.tar.zst
-          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
+      - name: 📦 Save CPM source cache (Garage S3)
+        # Only upload on a miss, and only where we have S3 creds (same fork guard).
+        if: >-
+          steps.cpm-cache.outputs.hit != 'true' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        env:
+          CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
+        run: |
+          set -u
+          if [ ! -f .cpmcache.tar.zst ]; then
+            echo "No .cpmcache.tar.zst to upload (CPM tree empty?); skipping save."
+            exit 0
+          fi
+          SIGV4="aws:amz:garage:s3"
+          CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
+          URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
+          echo "Saving CPM cache to: ${URL} ($(du -h .cpmcache.tar.zst | cut -f1))"
+          # Use --upload-file instead of --data-binary so curl streams the tarball
+          # from disk. A 1.2 GB CPM archive caused OOM with --data-binary @file.
+          if curl -fsS --retry 3 --retry-delay 2 --max-time 300 \
+               --upload-file .cpmcache.tar.zst \
+               --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+               "${URL}" -o /dev/null; then
+            echo "CPM cache saved."
+          else
+            echo "::warning::CPM cache upload to Garage failed; build succeeds, next run rebuilds cache."
+          fi
 
       - name: 🛠️ Compile
         timeout-minutes: 90
@@ -692,6 +767,28 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      - name: Stage ttnn-import libs
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        run: |
+          # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime). strip --strip-unneeded
+          # drops the symbol table + debug, keeping the dynamic symbols needed to import ttnn.
+          mkdir -p /work/ttnn-import/build/lib
+          cp -a /work/build/lib/*.so* /work/ttnn-import/build/lib/
+          find /work/ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-unneeded {} +
+          cp -a /work/runtime /work/ttnn-import/runtime
+          echo "Lean ttnn-import tree size:"; du -sh /work/ttnn-import /work/ttnn-import/build/lib
+
+      - name: ☁️ Upload ttnn-import artifact
+        id: upload_ttnn_import
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        timeout-minutes: 10
+        with:
+          name: ttnn-import-${{ inputs.build-type }}
+          path: /work/ttnn-import
+          compression-level: 1
+          if-no-files-found: error
+
       - name: "Tar files"
         if: ${{ inputs.publish-artifact }}
         run: |
@@ -762,3 +859,4 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
       runs-on: ${{ inputs['runs-on'] }}
+      checkout-filter: ${{ inputs.checkout-filter }}

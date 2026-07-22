@@ -793,7 +793,7 @@ def run(
                     device,
                 )
 
-            # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
+            # Setup SubDevice and semaphores (match test_all_gather.py pattern)
             compute_grid_size = device.compute_with_storage_grid_size()
             full_grid_crs = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}

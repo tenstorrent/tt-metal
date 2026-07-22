@@ -13,6 +13,7 @@
 
 #include <algorithm>
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -82,7 +83,9 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 }
 
 std::optional<AllShardSpecs> get_shard_specs(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -361,7 +364,9 @@ bool is_llk_bcast(
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
 
     if (not shard_specs.has_value()) {
@@ -401,7 +406,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();
@@ -894,7 +899,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
         const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-            a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+            a.tensor_spec(),
+            b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+            c.tensor_spec());
         const bool rt_has_sharding = shard_specs.has_value();
         auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -1138,10 +1145,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
                     }
                 }
-                std::vector<uint32_t> writer_runtime_args;
+                std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
                 if (row_major_inputs) {
                     writer_runtime_args = {
-                        c.buffer()->address(),
+                        c.buffer(),
                         common_row_width_elements,
                         c_num_tiles_core,
                         cD,
@@ -1157,20 +1164,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         writer_stride_size_bytes};
                 } else {
                     writer_runtime_args = {
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                        c.buffer(), c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
                 }
-                writer_desc.runtime_args.emplace_back(
-                    core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
                 auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                     operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
@@ -1205,10 +1201,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
-                std::vector<uint32_t> writer_runtime_args;
+                std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
                 if (row_major_inputs) {
                     writer_runtime_args = {
-                        c.buffer()->address(),
+                        c.buffer(),
                         common_row_width_elements,
                         c_num_tiles_core,
                         cD,
@@ -1225,7 +1221,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 } else {
                     writer_runtime_args = {
                         packed_scalar,
-                        c.buffer()->address(),
+                        c.buffer(),
                         c_start_id,
                         c_num_tiles_core,
                         c_current_shard_width,
@@ -1237,17 +1233,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         cND,
                         0u};
                 }
-                writer_desc.runtime_args.emplace_back(
-                    core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
                 std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             }
-            std::vector<uint32_t> reader_runtime_args;
+            std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args;
 
             if (row_major_inputs) {
-                const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
+                const std::variant<uint32_t, Buffer*> b_addr =
+                    b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u};
                 const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
                                                            : static_cast<uint32_t>(a.buffer()->aligned_page_size());
                 const uint32_t bD_arg = b.has_value() ? bD : 1u;
@@ -1255,7 +1251,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const uint32_t bC_arg = b.has_value() ? bC : 1u;
                 const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
                 reader_runtime_args = {
-                    a.buffer()->address(),
+                    a.buffer(),
                     c_num_tiles_core,
                     aD,
                     aN,
@@ -1283,7 +1279,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     packed_scalar_for_reader};
             } else {
                 reader_runtime_args = {
-                    a.buffer()->address(),
+                    a.buffer(),
                     c_start_id,
                     a_num_tiles,
                     c_num_tiles_core,
@@ -1298,7 +1294,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     cHt,
                     cWt,
                     cND,
-                    b.has_value() ? b->buffer()->address() : 0u,
+                    b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u},
                     bHt * bWt * bC * bN * bD * (bND > 1),
                     bHt * bWt * bC * bN * (bD > 1),
                     bHt * bWt * bC * (bN > 1),
@@ -1307,8 +1303,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 };
             }
 
-            reader_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
             start_tile_id += c_num_tiles_core;
             if (row_major_inputs) {

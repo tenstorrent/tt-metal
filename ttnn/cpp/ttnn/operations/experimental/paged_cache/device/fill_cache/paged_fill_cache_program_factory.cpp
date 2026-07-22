@@ -66,6 +66,7 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& page_table_tensor = tensor_args.page_table;
     const auto& batch_idx_tensor = tensor_args.batch_idx_tensor_opt;
+    const auto& valid_seq_len_tensor = tensor_args.valid_seq_len_tensor_opt;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -135,6 +136,15 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
             input_batch);
     }
 
+    // valid_seq_len tensor: optional 1-element int giving the block-aligned real
+    // fill length (in tokens). When present, the writer restricts the bounded ring
+    // window to end at valid_seq_len instead of the padded input end (see kernel).
+    const bool use_valid_seq_len = valid_seq_len_tensor.has_value();
+    uint32_t valid_seq_len_stick_size_B = 4;
+    if (use_valid_seq_len) {
+        valid_seq_len_stick_size_B = valid_seq_len_tensor->element_size();
+    }
+
     tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -152,7 +162,8 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
 
     tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
     tt::CBIndex page_table_cb_index = tt::CBIndex::c_1;
-    tt::CBIndex cb_batch_idx_id = tt::CBIndex::c_2;  // New CB for batch_idx_tensor
+    tt::CBIndex cb_batch_idx_id = tt::CBIndex::c_2;      // New CB for batch_idx_tensor
+    tt::CBIndex cb_valid_seq_len_id = tt::CBIndex::c_3;  // CB for valid_seq_len_tensor
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * single_tile_size,
@@ -182,6 +193,17 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
                 .buffer_index = static_cast<uint8_t>(cb_batch_idx_id),
                 .data_format = batch_idx_data_format,
                 .page_size = batch_idx_stick_size_B,
+            }}},
+        });
+    }
+    if (use_valid_seq_len) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = valid_seq_len_stick_size_B,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_valid_seq_len_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = valid_seq_len_stick_size_B,
             }}},
         });
     }
@@ -215,10 +237,17 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
         batch_idx_num_elements,        // 1 = legacy single-batch, N = batched
         num_blocks_of_work_per_batch,  // num_heads * input_seq_len_t, for row_id -> batch decode
         capacity_t,
+        // valid_seq_len_tensor compile-time args (positions 14..16). Position 15..16
+        // are only meaningful when use_valid_seq_len is true.
+        (uint32_t)use_valid_seq_len,
+        cb_valid_seq_len_id,
+        valid_seq_len_stick_size_B,
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(batch_idx_tensor.has_value() ? batch_idx_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(valid_seq_len_tensor.has_value() ? valid_seq_len_tensor->buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -276,6 +305,13 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
             writer_args.push_back(operation_attributes.batch_idx_fallback);  // batch_idx_fallback
         }
         writer_args.push_back(static_cast<uint32_t>(noop));  // noop flag
+        // Arg 6: valid_seq_len tensor address (Buffer*, framework re-patches on cache
+        // hit / trace replay) or 0 scalar when unused.
+        if (use_valid_seq_len) {
+            writer_args.push_back(valid_seq_len_tensor->buffer());
+        } else {
+            writer_args.push_back(static_cast<uint32_t>(0));
+        }
         writer_desc.emplace_runtime_args(core, writer_args);
         num_blocks_written += num_blocks_per_core;
     }

@@ -21,8 +21,7 @@ autograd::TensorPtr sample_op(
         logits->get_value(),
         temperature,
         seed,
-        logits_padding_mask == nullptr ? std::nullopt
-                                       : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()),
+        logits_padding_mask == nullptr ? std::nullopt : std::optional<ttnn::Tensor>(logits_padding_mask->get_value()),
         std::move(seed_axes));
 
     auto out = autograd::create_tensor(sampled_tensor);

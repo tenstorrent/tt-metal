@@ -7,6 +7,7 @@
 #include <optional>
 #include <tuple>
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
@@ -25,7 +26,7 @@ struct IndexerScoreDeviceOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // Custom hash: runtime values (cache_batch_idx / kv_len / chunk_start_idx) are excluded so they reuse
-    // one program; cluster_axis IS hashed.
+    // one program; the seq_shard_axes (SP/TP) ARE hashed.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -53,7 +54,7 @@ struct IndexerScoreDeviceOperation {
         const DeviceComputeKernelConfig& compute_kernel_config,
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
-        std::optional<uint32_t> cluster_axis,
+        std::vector<uint32_t> seq_shard_axes,
         std::optional<BlockCyclicLayout> block_cyclic);
 };
 
@@ -71,10 +72,14 @@ namespace ttnn::experimental {
 // (block_cyclic_sp_axis) and passes the per-shard chunk length (block_cyclic_chunk_local); `sp` is DERIVED
 // from the mesh shape on that axis, so a caller cannot pass an sp that disagrees with the device.
 // block_cyclic_chunk_local must be q_isl (seq sharded only on the SP axis) or tp*q_isl (tp = mesh/sp). Both
-// set together, or neither = contiguous K (no remap); sp==1 is the identity. Seq sharded across BOTH axes
-// (chunk_local == tp*q_isl, tp>1) is allowed ONLY with cluster_axis=None (flat row-major linearization over
-// all devices == a row-major nested 2D seq shard); with a NAMED cluster_axis it is rejected (chunk_start
-// would miss the second axis's seq offset).
+// set together, or neither = contiguous K (no remap); sp==1 is the identity.
+//
+// SEQ SHARD AXES: seq_shard_axes names the mesh axes the query seq is sharded over, outermost (SP ring)
+// first: [] = linear device order, [sp] = 1D SP ring, [sp, tp] = 2D SP + TP sub-shard. Seq sharded across
+// BOTH axes (chunk_local == tp*q_isl, tp>1) has two forms: seq_shard_axes=[] (flat row-major linearization
+// over all devices, exact only for a slab-aligned start), or [sp, tp] (the EXACT block-cyclic geometry that
+// adds the TP sub-offset; rotation-safe). A lone SP axis ([sp]) with tp*q_isl is rejected (would miss the
+// second axis's seq offset). The two axis roles map internally to (cluster_axis, seq_subshard_axis).
 
 // DeepSeek-V3.2 DSA / GLM-5 (ttnn.experimental.indexer_score_dsa):
 //   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
@@ -90,7 +95,7 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
@@ -100,7 +105,9 @@ ttnn::Tensor indexer_score_dsa(
 // tensor). q [B,Hi,Sq,D], k [B,1,T,D] -> score [B,num_groups,Sq,T_out].
 // num_groups: G output planes (no cross-group sum); G==1 = TP=4 group-aligned (Hi=1/device), G>1 needs all
 //   heads resident + k_chunk>=64. block_size: 0 = full [B,G,Sq,T]; >0 = block-max-pool -> [B,G,Sq,T/bs].
-// chunk_start_idx / cluster_axis: same SP-ring semantics as indexer_score_dsa.
+// chunk_start_idx / seq_shard_axes / cache_batch_idx / kv_len: same semantics as indexer_score_dsa (the last
+// two are runtime, hash-excluded pass-throughs -- no recompile when the slot or valid length changes). MSA
+// has no TP sub-shard, so seq_shard_axes takes at most one axis ([sp]).
 // num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
 // the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
 ttnn::Tensor indexer_score_msa(
@@ -112,7 +119,9 @@ ttnn::Tensor indexer_score_msa(
     uint32_t block_size = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_len = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 

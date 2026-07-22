@@ -27,7 +27,8 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
 )
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -36,17 +37,24 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99
-SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1"]
+# Indexer key cache is stored bf8 on device vs the bf16 CPU reference, so it carries block-float
+# quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
+# bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
+SPARSE_INDEX_PCC = 0.999
+SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1", "glm_5_2"]
 
 # ---------------------------------------------------------------------------
 # TEST MATRIX — single source of truth (see _sparse_cases for how it expands)
 # ---------------------------------------------------------------------------
 # Box-adaptive candidate meshes (sp, tp), keyed by physical device count. Each box lists ONLY shapes
 # that fit it, so off-box shapes are never generated (no "needs N devices" skips). Shapes must be
-# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Coverage rationale:
-#   QuietBox (4):  (2,2) TP=2 for GLM + DeepSeek; (1,4) gives DeepSeek a TP=4 point (GLM caps at TP=2).
-#   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 (the full-box GLM shape).
-#   Galaxy   (32): (8,4) production TP=4 + (8,2) TP=2 plane so GLM is exercised.
+# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). BOTH variants run every listed mesh: GLM's
+# thin per-chip head shard at tp=4 (64/4=16 < 32) is handled by the head→sequence reshard in
+# ttMLA._sparse_mla (#48727) + the head-replicated seq-sharded indexer, so GLM is no longer TP-capped.
+# Coverage rationale:
+#   QuietBox (4):  (2,2) TP=2 and (1,4) TP=4 — both variants at both TP.
+#   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — both variants at both TP.
+#   Galaxy   (32): (8,4) production TP=4 + (8,2) TP=2 plane.
 # Mesh shape is NOT correctness-invariant, so accuracy sweeps the whole box set; determinism and
 # chunked pin to each variant's anchor (highest supported TP) — see _sparse_cases(anchor_only=True).
 SPARSE_MESH_BY_DEVICES = {
@@ -146,17 +154,48 @@ def _topology_from_device_params(device_params):
 
 def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1):
     """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
-    ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory)."""
+    ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory).
+
+    Layer-slot count mirrors the serving adapter (glm_5_2.py allocate_kv_cache): the indexer strides the
+    folded user-major cache by num_full_indexer_layers (only ``full`` layers own an index slot), so the
+    cache must carry that many layer slots for update_padded_kv_cache's cache_batch % num_layers check to
+    hold. Falls back to 1 when the config has no ``indexer_types`` (deepseek_v32 / glm_5_1: every layer full,
+    single-layer standalone MLA -> stride 1)."""
     return init_kvpe_cache(
         kvpe_cache_head_dim=getattr(config, "index_head_dim", 128),
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
+        num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=slot_num,
         dtype=ttnn.bfloat8_b,
     )
+
+
+def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk):
+    """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
+    CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
+
+    Same SP-shard concat + block-cyclic un-rotation as the KVPE cache (blockcyclic_positions). The device
+    stores the RoPE half INTERLEAVED for both variants (the indexed RoPE op is interleaved-only; the DS
+    path permutes half-split->interleaved before it). The CPU reference stores it interleaved for GLM
+    (index_rope_interleave=True) but HALF-SPLIT for DS, so for DS we reindex the device's RoPE dims back
+    to half-split (interleaved_to_halfsplit_perm) before comparing; the non-RoPE dims match directly."""
+    sp = mesh_device.shape[0]
+    cache_sr = ttnn.to_torch(
+        tt_index_kv_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)[:, :1]
+    p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
+    nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    nat[p] = cache_sr[0, 0]
+    if not getattr(config, "index_rope_interleave", False):  # DS: device interleaved -> reference half-split
+        rope_dim = config.qk_rope_head_dim
+        perm = interleaved_to_halfsplit_perm(rope_dim)
+        nat = nat.clone()
+        nat[:, :rope_dim] = nat[:, :rope_dim][:, perm]
+    return nat
 
 
 def run_sparse_mla_accuracy_case(
@@ -204,7 +243,9 @@ def run_sparse_mla_accuracy_case(
 
     cache_dir = cpu_ref_cache_dir(variant)
     logger.info(f"[{variant.name}] sparse MLA accuracy: running CPU reference")
-    ref_output, ref_kvpe = run_cpu_reference(
+    # accuracy runs the indexer's natural single-shot path (no block-cyclic index_kv_cache to read
+    # back), so the index-cache reference is unused here — chunked/rotated cover the block-cyclic cache.
+    ref_output, ref_kvpe, _ = run_cpu_reference(
         config, weights, hidden_states, seq_len, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
 
@@ -375,7 +416,7 @@ def run_sparse_mla_chunked_case(
 
     cache_dir = cpu_ref_cache_dir(variant)
     logger.info(f"[{variant.name}] sparse MLA chunked: running CPU reference")
-    ref_output, ref_kvpe = run_cpu_reference_chunked(
+    ref_output, ref_kvpe, ref_index = run_cpu_reference_chunked(
         config, weights, hidden, seq_len, chunk, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
 
@@ -393,6 +434,11 @@ def run_sparse_mla_chunked_case(
     nat[p] = cache_sr[0, 0]
     _, m = comp_pcc(ref_kvpe, nat[:seq_len].unsqueeze(0), 0)
     logger.info(f"[{variant.name}] kvpe prefix: {m}")
+
+    logger.debug(f"[{variant.name}] sparse MLA chunked: collecting indexer key cache")
+    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+    _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
 
     _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, SPARSE_OUTPUT_PCC)
     logger.info(f"[{variant.name}] Chunked output PCC: {pcc_message}")
@@ -432,12 +478,13 @@ def run_sparse_mla_rotated_case(
 
     hidden = make_hidden(total_len, config.hidden_size, seed)[0]  # [total_len, H]
     cache_dir = cpu_ref_cache_dir(variant)
-    ref_output, ref_kvpe = run_cpu_reference(
+    ref_output, ref_kvpe, ref_index = run_cpu_reference(
         config, weights, hidden.unsqueeze(0), total_len, cache_dir, cache_tag=f"{src_tag}_rot{total_len}_funcidx"
     )
     ref_output = ref_output[0]  # [total_len, out_dim]
     out_dim = ref_output.shape[-1]
     ref_kvpe = ref_kvpe.reshape(-1, ref_kvpe.shape[-1])  # [total_len, kvpe_dim]
+    ref_index = ref_index[0]  # [total_len, index_head_dim]
 
     tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len_cache, mesh_shape, sp_axis, slot_num=1)
     mla_tt = ttMLA(
@@ -514,6 +561,17 @@ def run_sparse_mla_rotated_case(
     _, mk = comp_pcc(ref_kvpe[:total_len], nat[:total_len], 0)
     logger.info(f"[{variant.name}] KVPE cache full PCC: {mk}")
 
+    # Same isolation for the block-cyclic INDEXER key cache — the untested-on-main tensor. Per-iter region
+    # PCCs are logged for diagnosis (they localize a rotated-write bug to the offending iter); the full-cache
+    # PCC is the gate, so a silent indexer-cache write regression fails here, not just via the output.
+    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk_size_global)
+    for i, isl in enumerate(iters_isl):
+        s = sum(iters_isl[:i])
+        _, m = comp_pcc(ref_index[s : s + isl], idx_nat[s : s + isl], 0)
+        logger.info(f"[{variant.name}] indexer cache region iter {i} [{s}:{s + isl}]: {m}")
+    _, imsg = assert_with_pcc(ref_index[:total_len], idx_nat[:total_len], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] indexer cache full PCC: {imsg}")
+
     _, msg = assert_with_pcc(
         ref_output.reshape(1, 1, total_len, out_dim), out_accum.reshape(1, 1, total_len, out_dim), SPARSE_OUTPUT_PCC
     )
@@ -543,6 +601,67 @@ def test_sparse_mla_accuracy(
 ):
     topology = _topology_from_device_params(device_params)
     run_sparse_mla_accuracy_case(variant, config_only, mesh_device, seq_len, topology, ds_layer, ds_checkpoint, ds_repo)
+
+
+# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
+SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+
+
+@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_REUSE_CASES, indirect=["variant", "mesh_device"])
+@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_indexer_reuse(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
+    produce the SAME output as computing them itself — validates the MLA return + accept path. Same
+    weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit."""
+    config = config_only
+    config.max_seq_len = seq_len
+    weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    topology = _topology_from_device_params(device_params)
+
+    def _kvpe():
+        # sparse_sdpa reads the KVPE cache natively and requires it uncompressed (bf16 ROW_MAJOR), not
+        # the bfloat8_b/TILE default — mla.py asserts this. Mirror the accuracy case's cache.
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    common = dict(
+        config=config,
+        weights=weights,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=topology,
+    )
+    # A: compute the indexer, capture its top-k selection + output.
+    out_a, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
+    # B: a fresh MLA (same weights + input) fed A's indices -> skips its own indexer.
+    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, **common)
+
+    def _to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    _, pcc_message = assert_with_pcc(_to_torch(out_a), _to_torch(out_b), 0.9999)
+    logger.info(f"[{variant.name}] indexer-reuse compute-vs-inject PCC: {pcc_message}")
+    ttnn.synchronize_device(mesh_device)
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.

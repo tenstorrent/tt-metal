@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -28,23 +28,23 @@ void kernel_main() {
     const auto coef_addrg = TensorAccessor(coef_args, clip_coef_clamped_addr);
 
     Noc noc;
-    CircularBuffer cb_input(cb_id_input);
-    CircularBuffer cb_clip_coef(cb_id_clip_coef_clamped);
+    DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_clip_coef(cb_id_clip_coef_clamped);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
     const auto clip_coef_tile_bytes = get_tile_size(cb_id_clip_coef_clamped);
 
     // clip_coef_clamped
-    cb_clip_coef.reserve_back(onetile);
-    noc.async_read(coef_addrg, cb_clip_coef, clip_coef_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    dfb_clip_coef.reserve_back(onetile);
+    noc.async_read(coef_addrg, dfb_clip_coef, clip_coef_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    cb_clip_coef.push_back(onetile);
+    dfb_clip_coef.push_back(onetile);
 
     // input
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-        cb_input.reserve_back(onetile);
-        noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+        dfb_input.reserve_back(onetile);
+        noc.async_read(input_addrg, dfb_input, input_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_input.push_back(onetile);
+        dfb_input.push_back(onetile);
     }
 
 }  // void kernel_main()

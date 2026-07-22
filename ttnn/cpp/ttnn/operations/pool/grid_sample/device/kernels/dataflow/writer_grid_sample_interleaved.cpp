@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -19,7 +20,7 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
-    experimental::CB out_cb(cb_id_out0);
+    DataflowBuffer out_dfb(cb_id_out0);
     Noc noc;
 
     uint32_t end_stick_id = start_stick_id + num_sticks_to_write;
@@ -29,15 +30,15 @@ void kernel_main() {
     for (uint32_t stick_id = start_stick_id; stick_id < end_stick_id; stick_id++) {
         {
             // Wait for ntiles_c pages in output CB (one full stick)
-            out_cb.wait_front(ntiles_c);
+            out_dfb.wait_front(ntiles_c);
 
             // Write the complete stick
-            noc.async_write(out_cb, s0, output_stick_size, {}, {.page_id = stick_id});
+            noc.async_write(out_dfb, s0, output_stick_size, {}, {.page_id = stick_id});
 
             noc.async_write_barrier();
 
             // Pop the ntiles_c pages we just consumed
-            out_cb.pop_front(ntiles_c);
+            out_dfb.pop_front(ntiles_c);
         }
     }
 }

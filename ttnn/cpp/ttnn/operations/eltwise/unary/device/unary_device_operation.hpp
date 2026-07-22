@@ -19,7 +19,7 @@
 namespace ttnn::operations::unary {
 
 struct UnaryDeviceOperation {
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
@@ -55,14 +55,13 @@ struct UnaryDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
-    // unary's compute_program_hash excludes the tensor volume, so one cached program is shared across
-    // shapes. The Buffer* rt-arg bindings trip the cache-hit fast path (patch addresses, skip rebuild),
-    // which would freeze the per-core work-split (tile counts, start ids) at the first-miss volume.
-    // Re-apply every per-core runtime arg for the current tensors on each hit.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),
+    // since the hash excludes volume. See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 

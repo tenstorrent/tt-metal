@@ -17,7 +17,7 @@ namespace ttnn::prim {
 struct ProdNcDeviceOperation {
     using operation_attributes_t = ProdNcParams;
     using tensor_args_t = ProdNcInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct ProdNcProgramFactory {

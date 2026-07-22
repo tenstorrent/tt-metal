@@ -7,12 +7,11 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
-tt::tt_metal::Tensor all_gather(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
-tt::tt_metal::Tensor all_reduce(
-    const tt::tt_metal::Tensor& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
-tt::tt_metal::Tensor reduce_scatter(
-    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
+ttnn::Tensor all_gather(
+    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
+ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
+ttnn::Tensor reduce_scatter(
+    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 
 // Local, communication-free per-device shard extraction along `dim` on `cluster_axis`.
 // Each device slices out its own `size(dim) / axis_size` partition based on its mesh
@@ -44,8 +43,8 @@ enum class RingShiftDirection {
  * @param direction Direction to shift: Forward (i -> i+1) or Backward (i -> i-1)
  * @return The tensor received from the neighbor device
  */
-tt::tt_metal::Tensor ring_shift(
-    const tt::tt_metal::Tensor& tensor,
+ttnn::Tensor ring_shift(
+    const ttnn::Tensor& tensor,
     const std::optional<uint32_t> cluster_axis = std::nullopt,
     const RingShiftDirection direction = RingShiftDirection::Forward);
 

@@ -2,30 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Universal I/O coverage for ttnn.split.
-
-Tests the composite layer's transparent conversion of:
-  * interleaved inputs in L1 and DRAM
-  * mixed buffer locations (L1 in, DRAM out)
-  * ROW_MAJOR inputs/outputs
-  * sharded inputs (HEIGHT/WIDTH/BLOCK) with interleaved output
-  * interleaved input with sharded output (equal splits)
-  * program-cache reuse: same shape → no rebuild, different shape → rebuild
-  * supported dtype combinations
-  * various ranks and dimensions
-"""
+"""Universal I/O coverage for ttnn.split: interleaved/sharded/DRAM MC combos, dtype/rank/dim matrices, program cache, no-spec synthesis, L1 CB-clash regression."""
 
 import pytest
 import torch
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+
 pytestmark = pytest.mark.use_module_device
 
 TILE = 32
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# Helpers.
 
 L1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 DRAM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
@@ -39,10 +28,12 @@ def _from_torch(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mc=None
 def _check(tt_outputs, torch_outputs):
     assert len(tt_outputs) == len(torch_outputs), f"chunk count {len(tt_outputs)} != {len(torch_outputs)}"
     for i, (tt_t, ref) in enumerate(zip(tt_outputs, torch_outputs)):
-        out = ttnn.to_torch(tt_t).float()
-        ref_f = ref.float()
+        out = ttnn.to_torch(tt_t)
         assert list(tt_t.shape) == list(ref.shape), f"chunk {i}: shape {list(tt_t.shape)} != {list(ref.shape)}"
-        assert torch.allclose(out, ref_f, rtol=1e-2, atol=1e-2), f"chunk {i}: max_diff={(out - ref_f).abs().max():.4f}"
+        try:
+            assert_equal(ref, out)
+        except AssertionError as e:
+            raise AssertionError(f"chunk {i}: {e}") from e
 
 
 def _make_height_sharded_cfg(num_shards, shard_h, shard_w, buffer=ttnn.BufferType.L1):
@@ -63,9 +54,7 @@ def _make_block_sharded_cfg(grid_y, grid_x, shard_h, shard_w, buffer=ttnn.Buffer
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer, spec)
 
 
-# ---------------------------------------------------------------------------
-# 1. Interleaved baseline — L1 and DRAM
-# ---------------------------------------------------------------------------
+# 1. Interleaved baseline — L1 and DRAM.
 
 
 @pytest.mark.parametrize(
@@ -114,9 +103,7 @@ def test_interleaved_l1_input_dram_output(device):
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 2. ROW_MAJOR layout — interleaved
-# ---------------------------------------------------------------------------
+# 2. ROW_MAJOR layout — interleaved.
 
 
 @pytest.mark.parametrize(
@@ -140,9 +127,7 @@ def test_row_major_interleaved(device, shape, split_size, dim):
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 3. Sharded inputs → interleaved output (de-sharding path)
-# ---------------------------------------------------------------------------
+# 3. Sharded inputs → interleaved output (de-sharding path).
 
 
 @pytest.mark.parametrize(
@@ -216,9 +201,7 @@ def test_block_sharded_input_interleaved_output(device, shape, grid_y, grid_x, s
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 4. ROW_MAJOR sharded inputs → interleaved output
-# ---------------------------------------------------------------------------
+# 4. ROW_MAJOR sharded inputs → interleaved output.
 
 
 @pytest.mark.parametrize(
@@ -294,9 +277,7 @@ def test_row_major_block_sharded_input(device, shape, grid_y, grid_x, split_size
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 5. Interleaved input → sharded output (equal splits)
-# ---------------------------------------------------------------------------
+# 5. Interleaved input → sharded output (equal splits).
 
 
 @pytest.mark.parametrize(
@@ -337,17 +318,11 @@ def test_interleaved_input_sharded_output(device, sharding_type, shape, split_si
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 6. Sharded input → sharded output (split along non-sharded dim)
-# ---------------------------------------------------------------------------
+# 6. Sharded input → sharded output (split along non-sharded dim).
 
 
 def test_height_sharded_roundtrip(device):
-    """HEIGHT_SHARDED input, split along last dim → HEIGHT_SHARDED output.
-
-    The shard spec for the output is explicitly constructed for the output shape
-    (each chunk has half the last-dim width of the input).
-    """
+    """HEIGHT_SHARDED input, split along last dim → HEIGHT_SHARDED output; output spec built for chunk shape."""
     torch.manual_seed(9)
     shape = [4 * TILE, 2 * TILE]
     split_size = TILE
@@ -368,9 +343,7 @@ def test_height_sharded_roundtrip(device):
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 7. Dtype coverage: bfloat16 and float32
-# ---------------------------------------------------------------------------
+# 7. Dtype coverage: bfloat16 and float32.
 
 
 @pytest.mark.parametrize(
@@ -391,14 +364,13 @@ def test_dtype_coverage(device, torch_dtype, ttnn_dtype, layout):
     tt_out = ttnn.split(tt_in, TILE, dim=-1)
     out = [ttnn.to_torch(tt_t).to(torch_dtype) for tt_t in tt_out]
     for i, (o, r) in enumerate(zip(out, ref)):
-        assert torch.allclose(
-            o.float(), r.float(), rtol=1e-2, atol=1e-2
-        ), f"chunk {i}: dtype={ttnn_dtype} layout={layout} mismatch"
+        try:
+            assert_equal(r, o)
+        except AssertionError as e:
+            raise AssertionError(f"chunk {i}: dtype={ttnn_dtype} layout={layout}: {e}") from e
 
 
-# ---------------------------------------------------------------------------
-# 8. Program-cache: same shape → reuse; different shape → rebuild
-# ---------------------------------------------------------------------------
+# 8. Program-cache: same shape → reuse; different shape → rebuild.
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -435,13 +407,11 @@ def test_program_cache_shape_change(device):
     _check(tt_out_b, ref_b)
 
 
-# ---------------------------------------------------------------------------
-# 9. Sharded input with no explicit output config → DRAM interleaved default
-# ---------------------------------------------------------------------------
+# 9. Sharded input, default MC → sharded output with rescaled shard_spec.
 
 
-def test_sharded_input_default_output_is_dram(device):
-    """Sharded input with no memory_config arg must produce DRAM interleaved output."""
+def test_sharded_input_default_preserves_sharding(device):
+    """HEIGHT_SHARDED input + no memory_config → HEIGHT_SHARDED output with adjusted spec."""
     torch.manual_seed(13)
     shape = [4 * TILE, 2 * TILE]
     t = torch.randn(shape, dtype=torch.bfloat16)
@@ -449,17 +419,163 @@ def test_sharded_input_default_output_is_dram(device):
 
     in_cfg = _make_height_sharded_cfg(shape[0] // TILE, TILE, shape[-1])
     tt_in = _from_torch(t, device, mc=in_cfg)
-    # No memory_config provided → should default to DRAM interleaved
     tt_out = ttnn.split(tt_in, TILE, dim=-1)
     for tt_t in tt_out:
-        assert not tt_t.memory_config().is_sharded(), "Default output for sharded input should be interleaved"
-        assert tt_t.memory_config().buffer_type == ttnn.BufferType.DRAM
+        mc = tt_t.memory_config()
+        assert mc.is_sharded(), "Default output for sharded input should preserve sharding"
+        assert mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        assert mc.buffer_type == ttnn.BufferType.L1
+        assert mc.shard_spec is not None
+        assert list(mc.shard_spec.shape) == [TILE, TILE], f"expected shard [32,32], got {list(mc.shard_spec.shape)}"
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 10. Various ranks and dimensions
-# ---------------------------------------------------------------------------
+# 9b. Sharded input → sharded output with no shard_spec (synthesize_spec path).
+
+
+@pytest.mark.parametrize(
+    "input_layout, shape, split_size",
+    [
+        # HEIGHT: [128, 64] halved on last dim → adjusted shard [32, 32] (tile-aligned).
+        pytest.param(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [4 * TILE, 2 * TILE], TILE, id="height_in"),
+        # BLOCK: [128, 128] on 2x2 grid, halved on last dim → adjusted shard [64, 32] (tile-aligned).
+        pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [4 * TILE, 4 * TILE], 2 * TILE, id="block_in"),
+    ],
+)
+def test_sharded_input_to_sharded_no_spec(device, input_layout, shape, split_size):
+    """User passes sharded output MC without shard_spec → split must synthesize (not FATAL)."""
+    torch.manual_seed(21)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=-1)
+
+    if input_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        in_cfg = _make_height_sharded_cfg(shape[0] // TILE, TILE, shape[-1])
+    else:
+        in_cfg = _make_block_sharded_cfg(2, 2, shape[0] // 2, shape[-1] // 2)
+
+    out_no_spec = ttnn.MemoryConfig(input_layout, ttnn.BufferType.L1)
+    tt_in = _from_torch(t, device, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=out_no_spec)
+    for tt_t in tt_out:
+        mc = tt_t.memory_config()
+        assert mc.is_sharded() and mc.shard_spec is not None, "shard_spec must be synthesized"
+        assert mc.memory_layout == input_layout
+    _check(tt_out, ref)
+
+
+# 9c. Interleaved input → sharded output with no shard_spec (synthesize_spec path).
+
+
+@pytest.mark.parametrize(
+    "memory_layout, shape, split_size",
+    [
+        pytest.param(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [4 * TILE, 2 * TILE], TILE, id="H_out"),
+        pytest.param(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [2 * TILE, 4 * TILE], 2 * TILE, id="W_out"),
+        pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [2 * TILE, 4 * TILE], 2 * TILE, id="B_out"),
+    ],
+)
+def test_interleaved_to_sharded_no_spec(device, memory_layout, shape, split_size):
+    """Interleaved input, sharded output MC without shard_spec → split must generate a valid spec."""
+    torch.manual_seed(22)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=-1)
+    tt_in = _from_torch(t, device, mc=L1)
+    out_no_spec = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=out_no_spec)
+    for tt_t in tt_out:
+        mc = tt_t.memory_config()
+        assert mc.is_sharded() and mc.shard_spec is not None
+        assert mc.memory_layout == memory_layout
+    _check(tt_out, ref)
+
+
+# 9d. Sub-tile rescale → graceful DRAM downgrade (tile-alignment guard on rescaled shard_w=16 < TILE).
+
+
+def test_sub_tile_rescale_downgrade_to_dram(device):
+    """Rescaled shard would be sub-tile → must fall back to DRAM (no crash, correct values)."""
+    torch.manual_seed(23)
+    shape = [2 * TILE, 2 * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, TILE, dim=-1)
+
+    in_cfg = _make_block_sharded_cfg(2, 2, TILE, TILE)
+    tt_in = _from_torch(t, device, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, TILE, dim=-1)
+    for tt_t in tt_out:
+        mc = tt_t.memory_config()
+        assert not mc.is_sharded(), "Sub-tile rescaled shard must trigger DRAM downgrade"
+        assert mc.buffer_type == ttnn.BufferType.DRAM
+    _check(tt_out, ref)
+
+
+# 9e. L1 CB-clash regression: large N-way L1 split must not crash; DRAM or L1 output both acceptable.
+
+
+def test_l1_ci_regression_many_chunks_no_crash(device):
+    """Large L1-interleaved input, 32-way split, no MC. L1 CB-clash regression."""
+    torch.manual_seed(24)
+    num_chunks = 32
+    shape = [1, 1, TILE, num_chunks * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, TILE, dim=-1)
+    tt_in = _from_torch(t, device, mc=L1)
+    tt_out = ttnn.split(tt_in, TILE, dim=-1)
+    assert len(tt_out) == num_chunks
+    _check(tt_out, ref)
+
+
+# 9f. DRAM-sharded input → rescaled DRAM-sharded output.
+
+
+def test_dram_sharded_input_rescale(device):
+    """DRAM-sharded input, no MC → DRAM-sharded output with rescaled spec."""
+    torch.manual_seed(25)
+    shape = [4 * TILE, 2 * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, TILE, dim=-1)
+
+    num_cores = 4
+    compute_grid = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
+    shard_shape = [shape[0] // num_cores, shape[-1]]
+    spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, spec)
+
+    tt_in = _from_torch(t, device, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, TILE, dim=-1)
+    for tt_t in tt_out:
+        mc = tt_t.memory_config()
+        assert mc.is_sharded()
+        assert mc.buffer_type == ttnn.BufferType.DRAM
+        assert list(mc.shard_spec.shape) == [TILE, TILE]
+    _check(tt_out, ref)
+
+
+# 9g. COL_MAJOR shard orientation propagation.
+
+
+def test_col_major_shard_orientation_preserved(device):
+    """COL_MAJOR HEIGHT_SHARDED input → default output preserves COL_MAJOR orientation."""
+    torch.manual_seed(26)
+    shape = [4 * TILE, 2 * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, TILE, dim=-1)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, shape[0] // TILE - 1))})
+    spec = ttnn.ShardSpec(grid, [TILE, shape[-1]], ttnn.ShardOrientation.COL_MAJOR)
+    in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+
+    tt_in = _from_torch(t, device, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, TILE, dim=-1)
+    for tt_t in tt_out:
+        mc = tt_t.memory_config()
+        assert mc.is_sharded()
+        assert mc.shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR
+    _check(tt_out, ref)
+
+
+# 10. Various ranks and dimensions.
 
 
 @pytest.mark.parametrize(
@@ -483,9 +599,7 @@ def test_various_ranks_and_dims(device, shape, split_size, dim):
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 11. Unequal splits (split_sizes list)
-# ---------------------------------------------------------------------------
+# 11. Unequal splits (split_sizes list).
 
 
 @pytest.mark.parametrize(
@@ -525,9 +639,7 @@ def test_unequal_splits_sharded_input(device, shape, split_sizes, dim):
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 12. N-way equal TILE splits via native kernel (no slice fallback)
-# ---------------------------------------------------------------------------
+# 12. N-way equal TILE splits via native kernel (no fallback path).
 
 
 @pytest.mark.parametrize(
@@ -539,7 +651,7 @@ def test_unequal_splits_sharded_input(device, shape, split_sizes, dim):
     ],
 )
 def test_tile_n_way_equal_split(device, shape, num_chunks, dim):
-    """Equal N-way TILE split uses the native N-chunk kernel, not N slice calls."""
+    """Equal N-way TILE split uses the native N-chunk kernel."""
     torch.manual_seed(19)
     t = torch.randn(shape, dtype=torch.bfloat16)
     split_size = shape[dim if dim >= 0 else len(shape) + dim] // num_chunks
@@ -550,16 +662,11 @@ def test_tile_n_way_equal_split(device, shape, num_chunks, dim):
     _check(tt_out, ref)
 
 
-# ---------------------------------------------------------------------------
-# 13. Slice-fallback 2-level batching boundary (num_chunks just above
-#     SPLIT_BATCH_SIZE=64 triggers the sqrt-N batching path in
-#     split_with_slice_impl). num_chunks > grid_dim_y also forces the slice
-#     fallback rather than the native TILE kernel.
-# ---------------------------------------------------------------------------
+# 13. Fallback batching boundary: num_chunks > SPLIT_BATCH_SIZE=64 triggers the sqrt-N batching path.
 
 
 @pytest.mark.parametrize("num_chunks", [64, 65, 130])
-def test_slice_fallback_batching_boundary(device, num_chunks):
+def test_fallback_batching_boundary(device, num_chunks):
     """Large equal-chunk splits across the SPLIT_BATCH_SIZE=64 boundary."""
     torch.manual_seed(20)
     split_size = TILE
@@ -569,4 +676,199 @@ def test_slice_fallback_batching_boundary(device, num_chunks):
     tt_in = _from_torch(t, device, mc=L1)
     tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=L1)
     assert len(tt_out) == num_chunks
+    _check(tt_out, ref)
+
+
+# 14. Rank-5 input — verifies split's dim-normalization on higher ranks.
+
+
+@pytest.mark.parametrize(
+    "shape, split_size, dim",
+    [
+        ([1, 2, 3, 32, 64], TILE, -1),
+        ([2, 1, 3, 64, 32], TILE, -2),
+    ],
+)
+def test_rank5_interleaved(device, shape, split_size, dim):
+    """Rank-5 TILE + interleaved input, split on tile-aligned dim."""
+    torch.manual_seed(27)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=dim)
+    tt_in = _from_torch(t, device, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=dim, memory_config=L1)
+    _check(tt_out, ref)
+
+
+# 15. N=1 single-chunk split (trivial identity) — must not crash and must return input unchanged.
+
+
+def test_single_chunk_identity(device):
+    """split_sizes=[dim_size] on dim yields one output identical to the input."""
+    torch.manual_seed(28)
+    shape = [2 * TILE, 2 * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, 2 * TILE, dim=-1)
+    assert len(ref) == 1
+    tt_in = _from_torch(t, device, mc=L1)
+    tt_out = ttnn.split(tt_in, 2 * TILE, dim=-1, memory_config=L1)
+    _check(tt_out, ref)
+
+
+# 16. Multi-batch / multi-channel sharded inputs (N>1 or C>1) — verify rank-4 sharding is preserved through split.
+
+
+@pytest.mark.parametrize(
+    "shape, sharding, split_size",
+    [
+        pytest.param([2, 1, 64, 64], "height", TILE, id="N2_H_shard"),
+        pytest.param([1, 2, 64, 64], "block", TILE, id="C2_B_shard"),
+        pytest.param([2, 2, 32, 64], "height", TILE, id="N2C2_H_shard"),
+    ],
+)
+def test_multi_batch_channel_sharded(device, shape, sharding, split_size):
+    """N>1 and/or C>1 sharded input, split on last dim; validates rank-4 padded-shape flattening."""
+    torch.manual_seed(29)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=-1)
+
+    compute_grid = device.compute_with_storage_grid_size()
+    flat_h = shape[0] * shape[1] * shape[2]
+    if sharding == "height":
+        ncores = flat_h // TILE
+        shard_grid = ttnn.num_cores_to_corerangeset(ncores, compute_grid, True)
+        spec = ttnn.ShardSpec(shard_grid, [TILE, shape[-1]], ttnn.ShardOrientation.ROW_MAJOR)
+        in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    else:
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        spec = ttnn.ShardSpec(shard_grid, [flat_h // 2, shape[-1] // 2], ttnn.ShardOrientation.ROW_MAJOR)
+        in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+    tt_in = _from_torch(t, device, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1)
+    _check(tt_out, ref)
+
+
+# 17. ROW_MAJOR sharded → sharded output no-spec (composite roundtrip through synthesize_spec).
+
+
+def test_row_major_sharded_to_sharded_no_spec(device):
+    """RM BLOCK_SHARDED input → BLOCK_SHARDED output no-spec; exercises RM composite path."""
+    torch.manual_seed(30)
+    shape = [1, 1, 64, 128]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, 64, dim=-1)
+
+    in_cfg = _make_block_sharded_cfg(2, 2, 32, 64)
+    out_no_spec = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+
+    tt_in = _from_torch(t, device, layout=ttnn.ROW_MAJOR_LAYOUT, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, 64, dim=-1, memory_config=out_no_spec)
+    for tt_t in tt_out:
+        mc = tt_t.memory_config()
+        assert mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        assert mc.shard_spec is not None
+    _check(tt_out, ref)
+
+
+# 18. bfloat8_b dtype coverage (TILE only; block-quantized dtype requires TILE + PCC-based check).
+
+
+def test_bfloat8_b_dtype_tile(device):
+    """bfloat8_b split — must go through TILE path; PCC-based check (bf8_b is block-quantized)."""
+    torch.manual_seed(31)
+    shape = [2 * TILE, 2 * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+
+    tt_in = ttnn.from_torch(t, dtype=ttnn.bfloat8_b, device=device, memory_config=L1, layout=ttnn.TILE_LAYOUT)
+    tt_out = ttnn.split(tt_in, TILE, dim=-1, memory_config=L1)
+    got = torch.cat([ttnn.to_torch(c) for c in tt_out], dim=-1).float()
+    assert list(got.shape) == list(t.shape)
+    assert_with_pcc(t.float(), got, 0.9999)
+
+
+# 19. Native single-core sharded input — 1-core HEIGHT_SHARDED edge case.
+
+
+def test_native_single_core_sharded_input(device):
+    """1-core HEIGHT_SHARDED input, split on last dim; verifies degenerate shard grid."""
+    torch.manual_seed(32)
+    shape = [TILE, 2 * TILE]
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, TILE, dim=-1)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    spec = ttnn.ShardSpec(grid, [TILE, 2 * TILE], ttnn.ShardOrientation.ROW_MAJOR)
+    in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+
+    tt_in = _from_torch(t, device, mc=in_cfg)
+    tt_out = ttnn.split(tt_in, TILE, dim=-1)
+    _check(tt_out, ref)
+
+
+# 20. Single-chunk parity — split_size >= dim size returns the whole tensor as one chunk; exercises num_splits=1 device path.
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("split_size", [64, 100])  # == dim size, and > dim size
+def test_split_single_chunk(device, layout, torch_dtype, ttnn_dtype, split_size):
+    """split_size >= dim size returns exactly one chunk equal to the input."""
+    torch.manual_seed(21)
+    t = torch.randn([64, 64]).to(torch_dtype)
+    ref = torch.split(t, split_size, dim=-1)
+    assert len(ref) == 1, f"Expected torch reference to produce 1 chunk, got {len(ref)} (split_size={split_size})"
+
+    tt_in = _from_torch(t, device, dtype=ttnn_dtype, layout=layout, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=L1)
+    assert len(tt_out) == 1, f"Expected a single chunk, got {len(tt_out)}"
+    _check(tt_out, ref)
+
+
+# 21. Strict list-size validation — under- and over-covering lists must raise; negative dims exercised.
+
+
+@pytest.mark.parametrize(
+    "shape, split_sizes, dim",
+    [
+        ([64, 64], [32], -1),  # under-covers: 32 < 64
+        ([64, 64], [32, 64], -1),  # over-covers: 32 + 64 > 64
+        ([64, 64], [16, 16], 0),  # under-covers on dim 0: 32 < 64
+        ([2, 64, 64], [32, 40], -2),  # over-covers via negative dim: 72 > 64
+    ],
+)
+def test_split_list_size_must_cover_dim(device, expect_error, shape, split_sizes, dim):
+    """A split_sizes list that does not sum exactly to the split dim must raise."""
+    torch.manual_seed(22)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = _from_torch(t, device, mc=L1)
+    with expect_error(RuntimeError, "split_sizes must sum exactly to the size of dimension"):
+        ttnn.split(tt_in, split_sizes, dim=dim, memory_config=L1)
+
+
+# 22. Integer-overload remainder path — non-divisible dim produces [split_size, remainder] chunks with correct shapes/values.
+
+
+@pytest.mark.parametrize(
+    "shape, split_size, dim",
+    [
+        ([2 * TILE, 3 * TILE // 2], TILE, -1),  # 48 / 32 = 1 rem 16 → chunks [32, 16]
+        ([3 * TILE // 2, 2 * TILE], TILE, 0),  # 48 / 32 = 1 rem 16 → chunks [32, 16]
+    ],
+)
+def test_split_int_remainder(device, shape, split_size, dim):
+    """Non-divisible dim size produces ceil(dim/split_size) chunks; last chunk is the remainder."""
+    torch.manual_seed(23)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    ref = torch.split(t, split_size, dim=dim)
+    assert len(ref) == 2, f"Expected 2 reference chunks, got {len(ref)}"
+
+    tt_in = _from_torch(t, device, layout=ttnn.ROW_MAJOR_LAYOUT, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=dim, memory_config=L1)
+    assert len(tt_out) == 2, f"Expected 2 output chunks, got {len(tt_out)}"
     _check(tt_out, ref)
