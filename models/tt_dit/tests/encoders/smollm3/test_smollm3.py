@@ -229,6 +229,61 @@ def test_fibo_wrapper_encode(*, mesh_device):
     assert_quality(ref_embeds, embeds.float(), pcc=0.99, relative_rmse=0.2)
 
 
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 200000000}],
+    indirect=["device_params"],
+)
+def test_fibo_wrapper_encode_replay_stable(*, mesh_device):
+    """The traced encoder must stay bit-exact across MANY sequential encodes (the reverted bug was
+    'noise after the first run'). Capture on the first encode, replay on the rest; every readback
+    must match HF at PCC 0.99 -- not just the first."""
+    from pathlib import Path
+
+    from huggingface_hub import snapshot_download
+
+    from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
+
+    sp_axis, tp_axis = 1, 0
+    pc = EncoderParallelConfig.from_tuples(
+        tp=(mesh_device.shape[tp_axis], tp_axis), sp=(mesh_device.shape[sp_axis], sp_axis)
+    )
+    try:
+        ckpt = snapshot_download(FIBO_PATH, local_files_only=True)
+    except Exception as e:
+        pytest.skip(f"FIBO unavailable: {e}")
+
+    json_path = Path(__file__).resolve().parents[2] / "models" / "bria_fibo" / "fibo_vlm_prompt.json"
+    if not json_path.is_file():
+        pytest.skip(f"JSON prompt fixture missing: {json_path}")
+    json_prompt = json_path.read_text().strip()
+
+    ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
+    wrapper = SmolLM3TextEncoderWrapper(
+        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=pc, pad_buckets=(1024,), use_trace=True
+    )
+
+    hf = _load_hf_smollm3()
+
+    def hf_embeds(p):
+        ids = wrapper.tokenizer([p if p else " "], add_special_tokens=True, return_tensors="pt").input_ids
+        if not p:
+            ids = torch.tensor([[128000]])  # empty -> BOT, matches the wrapper
+        with torch.no_grad():
+            ref = hf.model(input_ids=ids, output_hidden_states=True)
+        return torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
+
+    # Alternate pos/neg across several "generations": capture on run 1, replay on 2..N.
+    prompts = [json_prompt, "", json_prompt, "", json_prompt]
+    for i, p in enumerate(prompts):
+        embeds, _ = wrapper.encode_prompt(p)
+        ref = hf_embeds(p)
+        assert list(embeds.shape) == list(ref.shape), f"run {i}: {embeds.shape} != {ref.shape}"
+        assert_quality(ref, embeds.float(), pcc=0.99, relative_rmse=0.2)
+
+
 def test_smollm3_state_conversion():
     import torch as _torch
 

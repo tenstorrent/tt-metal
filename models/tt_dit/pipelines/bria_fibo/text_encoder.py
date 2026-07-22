@@ -24,6 +24,7 @@ import ttnn
 
 from ...encoders.smollm3.model_smollm3 import SmolLm3Checkpoint
 from ...utils import tensor as tt_tensor
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from ...parallel.config import EncoderParallelConfig
@@ -80,6 +81,7 @@ class SmolLM3TextEncoderWrapper:
         ccl_manager: "CCLManager | None",
         parallel_config: "EncoderParallelConfig",
         pad_buckets=(1024,),
+        use_trace: bool = False,
     ) -> None:
         self._device = device
         self._pad_buckets = tuple(pad_buckets)
@@ -91,6 +93,12 @@ class SmolLM3TextEncoderWrapper:
         self._encoder = SmolLm3Checkpoint(checkpoint).build(
             device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
         )
+
+        # Trace the device forward (one trace per padding bucket): it is host-dispatch-bound and the
+        # fixed bucket gives it a static shape. Pos+neg (both bucket 1024) share the trace: first encode
+        # captures, later encodes replay.
+        self._use_trace = use_trace
+        self._tracers: dict[int, Tracer] = {}
 
     def _tokenize(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         """Tokenize at true length (no fixed-length padding); special-case empty prompts."""
@@ -114,13 +122,17 @@ class SmolLM3TextEncoderWrapper:
         input_ids, _attention_mask = self._tokenize(prompt)
         seq_len = input_ids.shape[1]
 
+        bucket = pick_bucket(seq_len, self._pad_buckets, self._sp_factor)
         tt_ids, tt_cos, tt_sin = self._prep_inputs(input_ids, seq_len)
-        stacked = self._forward(tt_ids, tt_cos, tt_sin)
+        if self._use_trace:
+            tracer = self._tracers.get(bucket)
+            if tracer is None:
+                tracer = Tracer(self._forward, device=self._device, prep_run=True, clone_prep_inputs=False)
+                self._tracers[bucket] = tracer
+            stacked = tracer(tt_ids, tt_cos, tt_sin)
+        else:
+            stacked = self._forward(tt_ids, tt_cos, tt_sin)
 
-        # ONE readback, fast path: read only the SP-axis shards from one index of the (TP-replicated)
-        # other axis and concat on host. tt_tensor.to_torch's mesh composer pulls all mesh devices --
-        # including the redundant TP replicas -- and is ~17x slower for this tensor (measured ~10.5 s
-        # vs ~0.6 s), which dominated the encode. See _read_seq_sharded.
         stacked_host = self._read_seq_sharded(stacked)[:, :seq_len, :]  # [N, seq_len, hidden]
         host_hidden_states = [stacked_host[i : i + 1] for i in range(stacked_host.shape[0])]
         # prompt_embeds = cat(last, second-last) -- diffusers pipeline_bria_fibo.py contract.
