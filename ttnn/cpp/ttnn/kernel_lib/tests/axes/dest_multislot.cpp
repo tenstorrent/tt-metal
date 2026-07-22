@@ -10,7 +10,7 @@
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_a = tt::CBIndex::c_0;
@@ -25,24 +25,8 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        BinaryFpu<
-            cb_a,
-            cb_b,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
-            Dst::D0>{},
-        BinaryFpu<
-            cb_c,
-            cb_e,
-            BinaryFpuOp::Add,
-            BroadcastDim::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            BinaryDataFormatReconfig::Input,
-            Dst::D1>{},
+        BinaryFpu<input(cb_a), input(cb_b)>{},
+        BinaryFpu<input(cb_c), input(cb_e), BinaryFpuOp::Add, BroadcastDim::None, Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
+        PackTile<output(cb_out)>{});
 }
