@@ -1628,6 +1628,19 @@ bool MeshDeviceImpl::is_mmio_capable() const {
 }
 
 void MeshDeviceImpl::quiesce_internal() {
+    // A multi-host parent may contain submeshes that have no devices local to
+    // this rank.  Those remote-only views own no local command queues or
+    // sub-device-manager state, so there is nothing to drain here.  Parent
+    // quiesce recursively visits every submesh on every rank; treating this as
+    // a no-op keeps the collective traversal symmetric while avoiding access
+    // to an intentionally absent SubDeviceManagerTracker.
+    // A closed child can also remain weakly reachable from its parent while a
+    // Python binding or another transient owner still holds the wrapper.  Its
+    // queues and manager have already been torn down, so recursive parent
+    // quiesce must skip it for the same reason.
+    if (!is_initialized() || is_remote_only()) {
+        return;
+    }
     TT_FATAL(
         get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
         "Cannot quiesce when non-default sub-device manager is active");

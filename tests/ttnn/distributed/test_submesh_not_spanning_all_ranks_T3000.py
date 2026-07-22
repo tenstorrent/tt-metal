@@ -29,3 +29,25 @@ def test_submesh_not_spanning_all_ranks_T3000():
     # ranks, but it needs to return a result that can be used by following operations (they'll also be a nop on the
     # inactive ranks).
     ttnn.experimental.minimal_matmul(res, res)
+
+    # PreparedGenericOp must follow the same inactive-rank contract: the active rank dispatches the program while the
+    # rank without local devices retains the tensors and treats construction, dispatch, and synchronization as no-ops.
+    output = ttnn.allocate_tensor_on_device(a_0.spec, mesh_device)
+    core = ttnn.CoreCoord(0, 0)
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    kernel = ttnn.KernelDescriptor(
+        kernel_source="void kernel_main() {}",
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=core_set,
+        runtime_args=[],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[])
+    mesh_range = ttnn.MeshCoordinateRange(mesh_shape)
+    mesh_program = ttnn.MeshProgramDescriptor({mesh_range: program})
+
+    prepared = ttnn.prepare_generic_op([a_0, output], mesh_program, cq_id=0)
+    assert prepared.output_tensor.buffer_address() == output.buffer_address()
+    prepared.dispatch()
+    prepared.dispatch()
+    prepared.synchronize()

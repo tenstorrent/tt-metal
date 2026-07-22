@@ -224,6 +224,29 @@ TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
     }
 }
 
+TEST_F(BigMeshDualRankTest2x4, ParentQuiesceWithClosedAndRemoteOnlySubmeshes) {
+    auto closed_submesh = mesh_device_->create_submesh(MeshShape(2, 2));
+    ASSERT_NE(closed_submesh, nullptr);
+    ASSERT_TRUE(closed_submesh->close());
+    EXPECT_FALSE(closed_submesh->is_initialized());
+
+    auto live_submesh = mesh_device_->create_submesh(MeshShape(2, 2));
+    ASSERT_NE(live_submesh, nullptr);
+
+    const auto& global_context = MetalContext::instance().global_distributed_context();
+    if (global_context.rank() == multihost::Rank(0)) {
+        EXPECT_FALSE(live_submesh->is_remote_only());
+    } else {
+        EXPECT_TRUE(live_submesh->is_remote_only());
+    }
+
+    // Keep the closed wrapper alive so parent recursion visits both it and the
+    // live child. The live child is remote-only on rank 1, where it has a dummy
+    // command queue but no SubDeviceManagerTracker.
+    EXPECT_NO_THROW(mesh_device_->quiesce_devices());
+    EXPECT_NO_THROW(live_submesh->close());
+}
+
 TEST_F(BigMeshDualRankTest2x4, SubmeshCreationMultipleSubmeshes) {
     auto submeshes = mesh_device_->create_submeshes(MeshShape(2, 2));
     EXPECT_EQ(submeshes.size(), 2);

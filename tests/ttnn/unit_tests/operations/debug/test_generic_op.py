@@ -6,10 +6,78 @@ import torch
 import pytest
 import ttnn
 import numpy as np
+import gc
+import weakref
 from math import prod
 from loguru import logger
 
 from models.common.utility_functions import skip_for_blackhole
+
+
+def _prepared_noop_fixture(device):
+    """Minimal architecture-independent fixed-address GenericOp fixture."""
+    shape = [1, 1, 32, 32]
+    input_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, device)
+    core = ttnn.CoreCoord(0, 0)
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    kernel = ttnn.KernelDescriptor(
+        kernel_source="void kernel_main() {}",
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=core_set,
+        runtime_args=[],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[])
+    mesh_range = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))
+    mesh_program = ttnn.MeshProgramDescriptor({mesh_range: program})
+    return [input_tensor, output_tensor], program, mesh_range, mesh_program
+
+
+def test_prepared_generic_op_repeated_async_enqueue_and_owner_lifetime(device):
+    io_tensors, _program, _mesh_range, mesh_program = _prepared_noop_fixture(device)
+
+    class Owner:
+        pass
+
+    owner = Owner()
+    owner_ref = weakref.ref(owner)
+    prepared = ttnn.prepare_generic_op(
+        io_tensors, mesh_program, resource_owners=(owner,), cq_id=0)
+    del owner
+    gc.collect()
+    assert owner_ref() is not None
+    assert prepared.cq_id == 0
+    assert prepared.output_tensor.buffer_address() == io_tensors[-1].buffer_address()
+
+    # Reuse is CQ ordered and remains asynchronous; one final fence covers both.
+    prepared.dispatch()
+    prepared.dispatch()
+    prepared.synchronize()
+
+    del prepared
+    gc.collect()
+    assert owner_ref() is None
+
+
+def test_prepared_generic_op_rejects_missing_and_overlapping_mesh_ranges(device):
+    io_tensors, program, mesh_range, _mesh_program = _prepared_noop_fixture(device)
+
+    missing_range = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(0, 1))
+    with pytest.raises(RuntimeError, match="does not cover tensor coordinate"):
+        ttnn.prepare_generic_op(io_tensors, ttnn.MeshProgramDescriptor({missing_range: program}))
+
+    overlapping = ttnn.MeshProgramDescriptor()
+    overlapping[mesh_range] = program
+    overlapping[mesh_range] = program
+    with pytest.raises(RuntimeError, match="overlapping ranges"):
+        ttnn.prepare_generic_op(io_tensors, overlapping)
 
 
 @skip_for_blackhole("Not tested / built for Blackhole")

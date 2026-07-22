@@ -184,6 +184,11 @@ from ttnn._ttnn.fabric import (
     get_fabric_kernel_defines,
     fabric_connection_rt_args,
     compute_fabric_connection_rt_args,
+    FabricMuxConfig,
+    FabricMuxChannelType,
+    get_tt_fabric_channel_buffer_size_bytes,
+    fabric_mux_worker_ct_args,
+    fabric_mux_worker_rt_args,
 )
 
 # Import cluster functions and types
@@ -310,6 +315,8 @@ from ttnn.types import (
     UnpackToDestMode,
     FaceGeometry,
     compute_program_descriptor_hash,
+    PreparedGenericOp,
+    prepare_generic_op,
     TensorAccessorArgs,
 )
 

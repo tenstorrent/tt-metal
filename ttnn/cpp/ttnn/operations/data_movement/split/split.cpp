@@ -310,6 +310,14 @@ std::vector<ttnn::Tensor> split(
     uint32_t padded_tiles_in_split_dim = working_input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     bool tiles_divisible_by_chunks = (padded_tiles_in_split_dim % num_chunks == 0);
 
+    // The native TILE kernel partitions the padded width, so it is only
+    // equivalent to the requested logical split when every logical chunk
+    // boundary is also tile-aligned. For example, logical W=3696 is padded to
+    // 3712: the kernel would produce 1856/928-wide chunks for N=2/4 instead of
+    // the requested 1848/924-wide chunks. Route those cases through the
+    // existing slice fallback, which honors logical coordinates.
+    bool logical_chunk_width_tile_aligned = split_sizes[0] % static_cast<int64_t>(tt::constants::TILE_WIDTH) == 0;
+
     // prim::split hard-requires shape4d[0]==1 for N>2 (N==2 handles batch>1 via reshape).
     bool batch_ok_for_n_gt2 = (num_chunks == detail::TWO_CHUNKS) || (shape4d[0] == 1);
 
@@ -319,8 +327,8 @@ std::vector<ttnn::Tensor> split(
     bool can_use_tile_kernel = is_equal_n_way_split && normalized_dim == static_cast<int64_t>(input_shape.rank()) - 1 &&
                                working_input.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
                                input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 &&
-                               input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && tiles_divisible_by_chunks &&
-                               batch_ok_for_n_gt2 && chunks_fit_in_y_grid;
+                               input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && logical_chunk_width_tile_aligned &&
+                               tiles_divisible_by_chunks && batch_ok_for_n_gt2 && chunks_fit_in_y_grid;
 
     if (can_use_tile_kernel) {
         ttnn::Tensor input_tensor_4d;

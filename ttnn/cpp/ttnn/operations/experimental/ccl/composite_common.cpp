@@ -111,17 +111,19 @@ ttnn::Tensor composite_reduce_scatter(
         native_rs_output_memory_config = input_tensor.memory_config();
     }
 
-    // BFLOAT8_B + TILE inputs are unsafe through the composite split→pad→concat below: intermediate ops
-    // can leave per-chunk tensors with inconsistent dtypes, tripping ttnn::concat's dtype-equality check.
-    // Mirror composite_all_to_all: typecast BF8 → BF16 here, run in BF16, typecast back at the end.
+    // Block-float + TILE inputs are unsafe through the composite split→pad→concat below: intermediate ops
+    // can require row-major subtensors, which are unsupported for BFLOAT8_B and BFLOAT4_B.
+    // Typecast block-float → BF16 here, run in BF16, then typecast back at the end.
     // Placed AFTER the sharded→interleaved conversion above so the typecast always runs on an interleaved
     // tensor (sharded-typecast is more expensive and less battle-tested). Guard on layout+dtype only —
-    // use_composite_reduce_scatter dispatches on per-device output, so every BF8 + TILE input reaching
-    // here is unsafe. Temporarily doubles tensor footprint for the composite path.
+    // use_composite_reduce_scatter dispatches on per-device output, so every block-float + TILE input reaching
+    // here is unsafe. Temporarily increases tensor footprint (2x for BF8, 4x for BF4) for the composite path.
     const ttnn::DataType original_input_dtype = input_tensor.dtype();
-    const bool convert_to_bfloat16_for_composite =
-        input_tensor.layout() == ttnn::Layout::TILE && original_input_dtype == ttnn::DataType::BFLOAT8_B;
-    if (convert_to_bfloat16_for_composite) {
+    const bool convert_block_float_to_bfloat16_for_composite =
+        input_tensor.layout() == ttnn::Layout::TILE &&
+        (original_input_dtype == ttnn::DataType::BFLOAT8_B ||
+         original_input_dtype == ttnn::DataType::BFLOAT4_B);
+    if (convert_block_float_to_bfloat16_for_composite) {
         input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
@@ -187,10 +189,10 @@ ttnn::Tensor composite_reduce_scatter(
     // Restore the original dtype before any (optional) sharded reshard: typecast on an interleaved
     // BFLOAT16 tensor is cheaper than typecast on a sharded one, and the sharded-typecast path is less
     // battle-tested.
-    if (convert_to_bfloat16_for_composite) {
-        ttnn::Tensor bfloat8_output = ttnn::typecast(rs_output_tensor, original_input_dtype);
+    if (convert_block_float_to_bfloat16_for_composite) {
+        ttnn::Tensor block_float_output = ttnn::typecast(rs_output_tensor, original_input_dtype);
         rs_output_tensor.deallocate();
-        rs_output_tensor = bfloat8_output;
+        rs_output_tensor = block_float_output;
     }
 
     // if the output is sharded, do the conversion

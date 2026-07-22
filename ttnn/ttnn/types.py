@@ -117,5 +117,7 @@ get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
 UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
 FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
+PreparedGenericOp = ttnn._ttnn.operations.generic.PreparedGenericOp
+prepare_generic_op = ttnn._ttnn.operations.generic.prepare_generic_op
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

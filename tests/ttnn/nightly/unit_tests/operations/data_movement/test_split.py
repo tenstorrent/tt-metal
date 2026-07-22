@@ -105,6 +105,39 @@ def test_split_odd_padded_tiles(device, dtype, shape, chunksize):
         assert_with_pcc(torch_result, output, 0.9999)
 
 
+@pytest.mark.parametrize("num_chunks", [2, 4])
+def test_split_tiled_non_tile_aligned_logical_chunks(device, num_chunks):
+    """TILE fast path must not split padded width at shifted logical boundaries."""
+    shape = (1, 1, 512, 3696)
+    dim = len(shape) - 1
+    chunksize = shape[dim] // num_chunks
+    assert chunksize % 32 != 0
+
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_results = torch.split(torch_input_tensor, chunksize, dim=dim)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    outputs = ttnn.split(
+        input_tensor,
+        chunksize,
+        dim=dim,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert output.shape == torch_result.shape
+        assert_with_pcc(torch_result, output, 0.9999)
+
+
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", dtypes)
 @pytest.mark.parametrize("shape", [(1, 256, 512, 512)])

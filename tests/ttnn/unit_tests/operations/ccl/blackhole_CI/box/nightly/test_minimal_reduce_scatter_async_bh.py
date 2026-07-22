@@ -269,6 +269,9 @@ def run_reduce_scatter_impl(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        # BFLOAT4_B needs the same promotion because split creates unsupported row-major subtensors.
+        # This is tile-aligned on input, but its per-device output is sub-tile (32 / 4 = 8).
+        (4, [1, 1, 32, 32], 3, ttnn.TILE_LAYOUT, ttnn.bfloat4_b),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -283,6 +286,7 @@ def run_reduce_scatter_impl(
         "composite_rs_test_two",
         "composite_rs_test_three",
         "composite_rs_test_four",
+        "composite_rs_test_five",
     ],
 )
 @pytest.mark.parametrize(
@@ -385,6 +389,9 @@ def test_reduce_scatter_async_4dev_ring(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        # BFLOAT4_B needs the same promotion because split creates unsupported row-major subtensors.
+        # This is tile-aligned on input, but its per-device output is sub-tile (32 / 4 = 8).
+        (4, [1, 1, 32, 32], 3, ttnn.TILE_LAYOUT, ttnn.bfloat4_b, True),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -399,6 +406,7 @@ def test_reduce_scatter_async_4dev_ring(
         "composite_rs_test_two",
         # "composite_rs_test_three",
         "composite_rs_test_four",
+        "composite_rs_test_five",
     ],
 )
 @pytest.mark.parametrize(

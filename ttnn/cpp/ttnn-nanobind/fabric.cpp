@@ -19,6 +19,11 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
+// For ttnn::ccl::fabric_mux_connection_ct_args + the ProgramDescriptor (Contract-2) variant of
+// ttnn::ccl::fabric_mux_connection_rt_args. FabricMuxConfig / FabricMuxChannelType /
+// get_tt_fabric_channel_buffer_size_bytes arrive via experimental/fabric/fabric.hpp above.
+#include "ttnn/operations/ccl/ccl_common.hpp"
+
 namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
@@ -379,6 +384,135 @@ void bind_fabric_api(nb::module_& mod) {
 
             Unlike get_user_physical_mesh_ids (which is scoped to the local rank's meshes),
             this enumerates peer meshes as well, enabling multi-mesh topology discovery.
+        )");
+
+    // ---------------------------------- Fabric Mux ----------------------------------
+    // Exposes the tt_fabric mux (multi-worker-per-link) so tt-ccl-codegen can build
+    // ProgramDescriptors that fan several worker cores onto a single fabric link and run
+    // them via ttnn.generic_op. Binds the CURRENT (Fabric Mux V2, #48675) C++ API; the
+    // run-time args forward to the native ProgramDescriptor (Contract-2) helper added in
+    // #45066 rather than reimplementing the wire layout in Python.
+
+    nb::enum_<tt::tt_fabric::FabricMuxChannelType>(mod, "FabricMuxChannelType", R"(
+        Fabric mux channel type.
+        Values:
+            FULL_SIZE_CHANNEL: transfers packet header + payload (sending payloads to a remote endpoint).
+            HEADER_ONLY_CHANNEL: transfers packet header only (flow control / returning credits to the sender).
+        )")
+        .value("FULL_SIZE_CHANNEL", tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL)
+        .value("HEADER_ONLY_CHANNEL", tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL);
+
+    nb::class_<tt::tt_fabric::FabricMuxConfig>(mod, "FabricMuxConfig", R"(
+        Configuration for a fabric mux kernel. Owns the L1 memory map for the mux's channels and
+        produces the compile-time and run-time args needed to launch the mux kernel.
+        )")
+        .def(
+            nb::init<uint8_t, uint8_t, uint8_t, uint8_t, size_t, size_t, tt::CoreType>(),
+            nb::arg("num_full_size_channels"),
+            nb::arg("num_header_only_channels"),
+            nb::arg("num_buffers_full_size_channel"),
+            nb::arg("num_buffers_header_only_channel"),
+            nb::arg("buffer_size_bytes_full_size_channel"),
+            nb::arg("base_l1_address"),
+            nb::arg("core_type") = nb::cast(tt::CoreType::WORKER))
+        .def(
+            "get_fabric_mux_compile_time_args",
+            &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_compile_time_args,
+            R"(Returns the compile-time args to be passed to the mux kernel.)")
+        .def(
+            "get_fabric_mux_run_time_args",
+            [](const tt::tt_fabric::FabricMuxConfig& self,
+               const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+               const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+               uint32_t link_idx,
+               tt::tt_metal::ProgramDescriptor& program_descriptor,
+               const tt::tt_metal::CoreCoord& mux_logical_core) {
+                return self.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+                    src_fabric_node_id, dst_fabric_node_id, link_idx, program_descriptor, mux_logical_core);
+            },
+            nb::arg("src_fabric_node_id"),
+            nb::arg("dst_fabric_node_id"),
+            nb::arg("link_idx"),
+            nb::arg("program_descriptor"),
+            nb::arg("mux_logical_core"),
+            R"(Returns the run-time args for the mux kernel and appends SemaphoreDescriptors to the given ProgramDescriptor.)")
+        .def(
+            "get_status_address",
+            &tt::tt_fabric::FabricMuxConfig::get_status_address,
+            R"(Returns the L1 address of the mux status region.)")
+        .def(
+            "get_termination_signal_address",
+            &tt::tt_fabric::FabricMuxConfig::get_termination_signal_address,
+            R"(Returns the L1 address of the mux termination signal region.)");
+
+    mod.def(
+        "get_tt_fabric_channel_buffer_size_bytes",
+        &tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes,
+        R"(Returns the default fabric channel buffer size in bytes.)");
+
+    mod.def(
+        "fabric_mux_worker_ct_args",
+        [](uint32_t num_workers_per_direction,
+           tt::tt_fabric::FabricMuxChannelType channel_type,
+           const tt::tt_fabric::FabricMuxConfig& mux_kernel_config) {
+            std::vector<uint32_t> worker_ct_args;
+            ttnn::ccl::fabric_mux_connection_ct_args(
+                num_workers_per_direction, channel_type, mux_kernel_config, worker_ct_args);
+            return worker_ct_args;
+        },
+        nb::arg("num_workers_per_direction"),
+        nb::arg("channel_type"),
+        nb::arg("mux_kernel_config"),
+        R"(
+            Returns the compile-time args a worker needs to connect to a fabric mux channel.
+            Thin wrapper over ttnn::ccl::fabric_mux_connection_ct_args.
+        )");
+
+    mod.def(
+        "fabric_mux_worker_rt_args",
+        [](bool mux_connection_valid,
+           bool is_termination_master,
+           tt::tt_fabric::FabricMuxChannelType channel_type,
+           const tt::tt_metal::CoreCoord& mux_virtual_core,
+           uint32_t worker_id,
+           const tt::tt_metal::CoreCoord& worker_logical_core,
+           const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+           tt::tt_metal::ProgramDescriptor& program_descriptor,
+           const tt::tt_metal::CoreCoord& termination_master_virtual_core,
+           std::optional<uint32_t> termination_master_semaphore_id) {
+            // Forward to the native ProgramDescriptor (Contract-2) helper (ccl_common.hpp, #45066):
+            // it allocates the five worker-side semaphores onto program_descriptor.semaphores and
+            // fills worker_rt_args with the 17-arg wire layout the mux kernel expects. No hand-rolled
+            // arg ordering in Python -> stays correct if the layout evolves upstream.
+            std::vector<uint32_t> worker_rt_args;
+            ttnn::ccl::fabric_mux_connection_rt_args(
+                mux_connection_valid,
+                is_termination_master,
+                channel_type,
+                mux_virtual_core,
+                worker_id,
+                worker_logical_core,
+                mux_kernel_config,
+                program_descriptor,
+                termination_master_virtual_core,
+                worker_rt_args,
+                termination_master_semaphore_id);
+            return worker_rt_args;
+        },
+        nb::arg("mux_connection_valid"),
+        nb::arg("is_termination_master"),
+        nb::arg("channel_type"),
+        nb::arg("mux_virtual_core"),
+        nb::arg("worker_id"),
+        nb::arg("worker_logical_core"),
+        nb::arg("mux_kernel_config"),
+        nb::arg("program_descriptor"),
+        nb::arg("termination_master_virtual_core"),
+        nb::arg("termination_master_semaphore_id") = nb::none(),
+        R"(
+            Returns the run-time args a worker needs to connect to a fabric mux channel and appends the
+            required SemaphoreDescriptors to the given ProgramDescriptor. Forwards to the native
+            ProgramDescriptor (Contract-2) variant of ttnn::ccl::fabric_mux_connection_rt_args.
         )");
 }
 
