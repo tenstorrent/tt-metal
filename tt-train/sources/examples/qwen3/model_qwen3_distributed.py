@@ -58,7 +58,6 @@ from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 from ttml.models.qwen3 import (
     Qwen3Config,
     Qwen3RMSNorm,
-    ConcatLastDim,
 )
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
@@ -189,15 +188,17 @@ class DistributedQwen3Attention(AbstractModuleBase):
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
         )
-        self.k_proj = ColumnParallelLinear(
+        # Fused KV projection (Llama-style), width 2*kv_out. Column-parallel shards
+        # the output rows contiguously across TP, and grouped_heads_creation splits
+        # each device's LOCAL kv width at its midpoint into [K_local | V_local]. For
+        # that to be correct the fused weight rows must be grouped PER SHARD as
+        # [K_shard0 | V_shard0 | K_shard1 | V_shard1 | ...], NOT the naive
+        # [all-K | all-V] (whose global midpoint would not line up with the local
+        # per-device midpoints for tp>1). The distributed loader builds that
+        # per-shard-interleaved layout; see build_weight_mapping_distributed.
+        self.kv_proj = ColumnParallelLinear(
             self.hidden_size,
-            kv_out,
-            has_bias=config.attention_bias,
-            shard_dim=shard_dim,
-        )
-        self.v_proj = ColumnParallelLinear(
-            self.hidden_size,
-            kv_out,
+            2 * kv_out,
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
         )
@@ -235,10 +236,9 @@ class DistributedQwen3Attention(AbstractModuleBase):
         position_offset=0,
     ):
         q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
-
-        kvs = ConcatLastDim.apply(k, v)
+        # Single fused KV matmul; already produces the per-device [K_local | V_local]
+        # feature layout that grouped_heads_creation consumes, so no ConcatLastDim.
+        kvs = self.kv_proj(hidden_states)
         (
             query_heads,
             key_heads,
@@ -506,6 +506,34 @@ def load_weights_from_hf_distributed(
                 weight = unpermute_proj_rows(weight, num_heads=tr[1])
             elif tr[0] == "unpermute_norm":
                 weight = unpermute_norm_weights(weight)
+            elif tr[0] == "combine_kv_tp":
+                # tr = ("combine_kv_tp", num_kv_heads, v_hf_name). Build the fused
+                # kv_proj weight (or bias) for ColumnParallel TP. ColumnParallel
+                # shards the output rows CONTIGUOUSLY across tp devices, and the
+                # on-device head split reads each device's LOCAL kv slice as
+                # [K_local | V_local]. So the global fused rows must be grouped
+                # PER SHARD -- [K_s0, V_s0, K_s1, V_s1, ...] -- NOT [all-K, all-V]:
+                # then contiguous chunk s = [K_shard_s | V_shard_s] lands on device
+                # s as exactly [K_local | V_local]. K carries the RoPE row-permute
+                # (like q_proj/k_proj); V is used as-is. At tp=1 this reduces to the
+                # plain [K | V] concat.
+                num_kv_heads, v_hf_name = tr[1], tr[2]
+                if v_hf_name not in hf_state_dict:
+                    return None
+                k_w = unpermute_proj_rows(weight, num_heads=num_kv_heads)
+                v_w = hf_state_dict[v_hf_name].float()
+                kv_out = k_w.shape[0]
+                assert kv_out % tp_size == 0, f"kv_out {kv_out} not divisible by tp {tp_size}"
+                per = kv_out // tp_size
+                if k_w.dim() == 2:  # weight [kv_out, hidden]
+                    k_blk = k_w.reshape(tp_size, per, k_w.shape[1])
+                    v_blk = v_w.reshape(tp_size, per, v_w.shape[1])
+                    # [tp, 2, per, hidden] -> row-major flatten -> K_s0,V_s0,K_s1,V_s1,...
+                    weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out, k_w.shape[1])
+                else:  # bias [kv_out]
+                    k_blk = k_w.reshape(tp_size, per)
+                    v_blk = v_w.reshape(tp_size, per)
+                    weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out)
 
         ttml_shape = ttml_shapes[ttml_name]
 

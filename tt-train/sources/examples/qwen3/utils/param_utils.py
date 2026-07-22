@@ -49,15 +49,18 @@ def build_weight_mapping_distributed(config, root_prefix, tie_word_embeddings):
             config.num_attention_heads,
         )
 
-        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/k_proj/weight"
+        # Fused KV: the HF k_proj maps to the single ttml kv_proj param; the
+        # combine_kv_tp transform pulls v_proj and builds the per-shard-interleaved
+        # [K_s0,V_s0,K_s1,V_s1,...] layout so a contiguous col_w shard lands
+        # [K_local|V_local] on each device (see load_weights_from_hf_distributed).
+        # v_proj is consumed by that transform, so it is NOT mapped separately.
+        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
         shard_types[f"{hp}.self_attn.k_proj.weight"] = "col_w"
         transforms[f"{hp}.self_attn.k_proj.weight"] = (
-            "unpermute_proj",
+            "combine_kv_tp",
             config.num_key_value_heads,
+            f"{hp}.self_attn.v_proj.weight",
         )
-
-        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/v_proj/weight"
-        shard_types[f"{hp}.self_attn.v_proj.weight"] = "col_w"
 
         mapping[f"{hp}.self_attn.o_proj.weight"] = f"{tp}/self_attn/o_proj/weight"
         shard_types[f"{hp}.self_attn.o_proj.weight"] = "row_w"
@@ -70,15 +73,13 @@ def build_weight_mapping_distributed(config, root_prefix, tie_word_embeddings):
                 config.num_attention_heads,
             )
 
-            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/k_proj/col_bias"
+            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/kv_proj/col_bias"
             shard_types[f"{hp}.self_attn.k_proj.bias"] = "col_b"
             transforms[f"{hp}.self_attn.k_proj.bias"] = (
-                "unpermute_proj",
+                "combine_kv_tp",
                 config.num_key_value_heads,
+                f"{hp}.self_attn.v_proj.bias",
             )
-
-            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/v_proj/col_bias"
-            shard_types[f"{hp}.self_attn.v_proj.bias"] = "col_b"
 
             mapping[f"{hp}.self_attn.o_proj.bias"] = f"{tp}/self_attn/o_proj/row_bias"
             shard_types[f"{hp}.self_attn.o_proj.bias"] = None  # replicated
@@ -224,14 +225,24 @@ def _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings):
         )
         gs[f"{hp}.self_attn.q_proj.weight"] = "concat_2"
 
-        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/k_proj/weight"
+        # Fused KV: both HF k_proj and v_proj map to the single ttml kv_proj grad.
+        # concat_2 reassembles it to the global per-shard-interleaved layout
+        # [K_s0,V_s0,K_s1,V_s1,...]; split_kv_tp de-interleaves it back to the HF
+        # K (then re-permuted) or V half. The tp size is threaded in at compare time.
+        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
         inv_transforms[f"{hp}.self_attn.k_proj.weight"] = (
-            "repermute_proj",
+            "split_kv_tp",
+            "k",
             config.num_key_value_heads,
         )
         gs[f"{hp}.self_attn.k_proj.weight"] = "concat_2"
 
-        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/v_proj/weight"
+        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
+        inv_transforms[f"{hp}.self_attn.v_proj.weight"] = (
+            "split_kv_tp",
+            "v",
+            config.num_key_value_heads,
+        )
         gs[f"{hp}.self_attn.v_proj.weight"] = "concat_2"
 
         mapping[f"{hp}.self_attn.o_proj.weight"] = f"{tp}/self_attn/o_proj/weight"
@@ -245,14 +256,20 @@ def _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings):
             )
             gs[f"{hp}.self_attn.q_proj.bias"] = "concat_3"
 
-            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/k_proj/col_bias"
+            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/kv_proj/col_bias"
             inv_transforms[f"{hp}.self_attn.k_proj.bias"] = (
-                "repermute_proj",
+                "split_kv_tp",
+                "k",
                 config.num_key_value_heads,
             )
             gs[f"{hp}.self_attn.k_proj.bias"] = "concat_3"
 
-            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/v_proj/col_bias"
+            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/kv_proj/col_bias"
+            inv_transforms[f"{hp}.self_attn.v_proj.bias"] = (
+                "split_kv_tp",
+                "v",
+                config.num_key_value_heads,
+            )
             gs[f"{hp}.self_attn.v_proj.bias"] = "concat_3"
 
             mapping[f"{hp}.self_attn.o_proj.bias"] = f"{tp}/self_attn/o_proj/row_bias"

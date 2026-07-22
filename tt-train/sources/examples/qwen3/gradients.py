@@ -58,7 +58,7 @@ from utils.param_utils import (
 )
 
 
-def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
+def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms, tp_size=1):
     """Compare per-parameter gradients between HF and TTML.
 
     Metrics (a = HF ground truth, b = TTML, eps = 1e-4):
@@ -93,14 +93,31 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
         ttml_grad_raw = ttml_grads[ttml_name].float()
         ttml_grad = ttml_grad_raw.squeeze()
 
-        # Fused KV: the ttml kv_proj grad is [2*kv_out, hidden] (K rows then V
-        # rows). Both the HF k_proj and v_proj entries map to this same ttml grad,
-        # so select the matching half BEFORE shape-matching/repermute. K then goes
-        # through the normal repermute_proj below; V is used as-is.
+        # Fused KV: the ttml kv_proj grad packs K and V. Both the HF k_proj and
+        # v_proj entries map to this same ttml grad, so select the matching half
+        # BEFORE shape-matching/repermute. K then goes through repermute below; V
+        # is used as-is.
+        #   split_kv    (single-device/FSDP): layout is [all-K ; all-V], a plain
+        #               contiguous midpoint split.
+        #   split_kv_tp (ColumnParallel TP): layout is the per-shard interleave
+        #               [K_s0,V_s0,K_s1,V_s1,...], so de-interleave via a
+        #               [tp, 2, per, ...] reshape and take the K (0) or V (1) plane.
         if hf_name in inv_transforms and inv_transforms[hf_name][0] == "split_kv":
             _, which, kv_out, _num_kv_heads = inv_transforms[hf_name]
             if ttml_grad.shape[0] >= 2 * kv_out:
                 ttml_grad = ttml_grad[:kv_out] if which == "k" else ttml_grad[kv_out : 2 * kv_out]
+        elif hf_name in inv_transforms and inv_transforms[hf_name][0] == "split_kv_tp":
+            _, which, num_kv_heads = inv_transforms[hf_name]
+            total = ttml_grad.shape[0]  # 2*kv_out (global, after concat_2 reassembly)
+            kv_out = total // 2
+            per = kv_out // tp_size
+            plane = 0 if which == "k" else 1
+            if ttml_grad.dim() == 2:
+                dei = ttml_grad.reshape(tp_size, 2, per, ttml_grad.shape[1])
+                ttml_grad = dei[:, plane].reshape(kv_out, ttml_grad.shape[1])
+            else:  # bias
+                dei = ttml_grad.reshape(tp_size, 2, per)
+                ttml_grad = dei[:, plane].reshape(kv_out)
 
         if hf_grad.shape != ttml_grad.shape:
             if hf_grad.dim() == 2 and ttml_grad.dim() == 2:
@@ -132,6 +149,13 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
                 # row-permute (like q_proj/k_proj), so repermute it back to HF
                 # layout. The V half is used as-is (never permuted).
                 _, which, _kv_out, num_kv_heads = tr
+                if which == "k":
+                    ttml_grad = repermute_proj_rows(ttml_grad, num_heads=num_kv_heads)
+            elif tr[0] == "split_kv_tp":
+                # Same as split_kv: the de-interleaved K half still carries the
+                # RoPE row-permute and must be repermuted back to HF layout; V is
+                # used as-is.
+                _, which, num_kv_heads = tr
                 if which == "k":
                     ttml_grad = repermute_proj_rows(ttml_grad, num_heads=num_kv_heads)
 
@@ -485,7 +509,7 @@ def run_backward_comparison(
     # 4. Compare per-parameter gradients
     # ------------------------------------------------------------------
     print("\nPer-parameter gradient diff (a=HF, b=TTML, eps=1e-4):")
-    _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms)
+    _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms, tp_size=tp_size)
 
     ctx.reset_graph()
 
