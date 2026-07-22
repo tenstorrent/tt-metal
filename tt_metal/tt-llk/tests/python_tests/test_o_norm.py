@@ -60,25 +60,27 @@ def test_o_norm(dest_acc, num_reduce_tiles):
     torch_format = format_dict[formats.input_format]
 
     # [rows, cols] = [head_dim, heads].
-    input_dimensions = [num_reduce_tiles * TILE_DIM, TILE_DIM]
-    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+    rows = num_reduce_tiles * TILE_DIM
+    cols = TILE_DIM
+    input_dimensions = [rows, cols]
+    tile_cnt = rows * cols // ELEMENTS_PER_TILE
 
     stimuli_size = (tile_cnt * ELEMENTS_PER_TILE,)
     o = torch.empty(stimuli_size, dtype=torch_format).uniform_(-4.0, 4.0)
     g_out = torch.empty(stimuli_size, dtype=torch_format).uniform_(-4.0, 4.0)
     # gamma2 is per head-dim (per row), broadcast across heads (columns).
-    gamma2_vec = torch.empty(
-        (input_dimensions[0], 1), dtype=torch_format
-    ).uniform_(-2.0, 2.0)
-    gamma2 = gamma2_vec.expand(input_dimensions[0], input_dimensions[1]).contiguous()
+    gamma2_vec = torch.empty((rows, 1), dtype=torch_format).uniform_(-2.0, 2.0)
+    gamma2 = gamma2_vec.expand(rows, cols).contiguous()
 
     # Untilized 2D views for the golden (row = head-dim, col = head).
-    o_2d = o.view(input_dimensions[0], input_dimensions[1])
-    g_out_2d = g_out.view(input_dimensions[0], input_dimensions[1])
+    o_2d = o.view(rows, cols)
+    g_out_2d = g_out.view(rows, cols)
     golden_tensor = _o_norm_golden(o_2d, gamma2, g_out_2d, EPS)
 
     # Tilize each operand the way the device consumes it.
-    o_tilized = tilize_block(o, input_dimensions, stimuli_format=formats.input_format).flatten()
+    o_tilized = tilize_block(
+        o, input_dimensions, stimuli_format=formats.input_format
+    ).flatten()
     gamma2_tilized = tilize_block(
         gamma2.flatten(), input_dimensions, stimuli_format=formats.input_format
     ).flatten()
