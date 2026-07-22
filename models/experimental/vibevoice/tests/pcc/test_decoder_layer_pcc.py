@@ -16,7 +16,7 @@ Run: ``pytest …/test_decoder_layer_pcc.py -v -s``
 
 import pytest
 
-from models.experimental.vibevoice.tests.pcc.decoder_layer_pcc_common import (
+from models.experimental.vibevoice.tests.pcc.lm_pcc_helpers import (
     run_decoder_layer_decode_pcc_sweep,
 )
 
