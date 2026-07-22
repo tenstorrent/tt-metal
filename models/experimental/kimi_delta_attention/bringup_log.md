@@ -399,6 +399,23 @@ bottleneck) is no longer dominant; the layer's remaining "other" is the non-chun
 gate, l2norm, gated-RMSNorm). **C++ fused kernel arc COMPLETE** — implemented, Kt=2-fixed, wired, validated,
 measured end-to-end. Remaining open: SP sequence-sharding (Galaxy); further layer-elementwise trimming.
 
+### Phase 10 — elementwise-fusion loop, #1: native ttnn.conv1d for the short-conv
+
+The perf report (per-op, realtime profiler) showed the composed FIR short-conv (s2) was the #1 cost:
+**2.15 ms / 57 programs at TP=4**, of which **55% is layout thrash** (Tilize/Untilize/Slice/Concat from
+the per-tap causal shift), only 42% the actual FIR MAC. Survey found `ttnn.conv1d` supports depthwise
+(groups=C) and qwen36's GDN `_conv1d_prefill` is a working template. Replaced the FIR with native
+`ttnn.conv1d` on the **prefill path** (T%chunk==0); kept composed FIR for decode/ragged. SiLU stays
+separate (folding it drops PCC), conv weight is channel-sharded (dim0) like the projections, needs
+`l1_small_size` on the device. **Result (T=640, per chip):**
+| | before (FIR) | after (native conv1d) |
+|---|---|---|
+| TP=4 layer | 6.33 ms | **4.73 ms** (−1.6 ms, 1.34×) |
+| TP=1 layer | 15.99 ms | 11.21 ms (−4.8 ms) |
+Conv op alone 4.1–4.4× fewer programs / faster. PCC held: native conv 0.99999 (bf16), full layer
+0.99993 (T=64, TP=4). Op-level regression: `test_kda_conv_native.py` (D=1024/4096, native vs FIR vs
+torch). Next backlog items: #2 head-layout reshapes (23.7%), #3 batch q/k/v matmuls.
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).

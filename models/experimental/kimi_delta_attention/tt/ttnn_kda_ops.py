@@ -77,6 +77,56 @@ def causal_conv1d_silu_ttnn(x, weight_taps, kernel_size, device):
     return ttnn.silu(out)
 
 
+def _conv1d_compute_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+
+
+_CONV1D_CFG = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+
+
+def prepare_conv1d_weight(w_bf16_oihw, C, kernel_size, T, device):
+    """Prepare a depthwise conv1d weight once (host reprocess) for reuse across forwards. w_bf16_oihw is a
+    ttnn ROW_MAJOR bf16 tensor [C,1,1,K] (channel-sharded on a mesh). Lin = (K-1)+T is the padded length."""
+    Lin = (kernel_size - 1) + T
+    return ttnn.prepare_conv_weights(
+        weight_tensor=w_bf16_oihw, input_memory_config=ttnn.DRAM_MEMORY_CONFIG, input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        weights_format="OIHW", in_channels=C, out_channels=C, batch_size=1, input_height=1, input_width=Lin,
+        kernel_size=(1, kernel_size), stride=(1, 1), padding=(0, 0), dilation=(1, 1), has_bias=False, groups=C,
+        device=device, input_dtype=ttnn.bfloat16, conv_config=_CONV1D_CFG, compute_config=_conv1d_compute_config(device),
+    )
+
+
+def causal_conv1d_silu_native(x, w_prep, kernel_size, C, device):
+    """Depthwise causal conv1d + SiLU via native ttnn.conv1d (prefill path). Mirrors qwen36 gdn/tp.py.
+
+    x: [1,T,C] (TILE, fp32). w_prep: prepared depthwise weight (see prepare_conv1d_weight). Returns [1,T,C]
+    TILE fp32. Zero left-pad (K-1) => causal, single chunk (no cross-chunk carry). SiLU stays SEPARATE
+    (folding into conv activation drops PCC on depthwise). ~4x faster / far fewer programs than the FIR.
+    """
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    T = x.shape[1]
+    Lin = (kernel_size - 1) + T
+    pad = ttnn.zeros([1, kernel_size - 1, C], device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram)
+    xin = ttnn.concat([pad, ttnn.typecast(x, ttnn.bfloat16)], dim=1, memory_config=_dram)
+    ttnn.deallocate(pad)
+    xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+    xin = ttnn.reshape(xin, (1, Lin, 1, C))
+    out = ttnn.conv1d(
+        input_tensor=xin, weight_tensor=w_prep, device=device, in_channels=C, out_channels=C, batch_size=1,
+        input_length=Lin, kernel_size=kernel_size, stride=1, padding=0, dilation=1, groups=C, dtype=ttnn.bfloat16,
+        conv_config=_CONV1D_CFG, compute_config=_conv1d_compute_config(device), slice_config=ttnn.Conv2dL1FullSliceConfig,
+        return_output_dim=False, return_weights_and_bias=False,
+    )
+    ttnn.deallocate(xin)
+    out = ttnn.sharded_to_interleaved(out, _dram)
+    out = ttnn.reshape(out, (1, T, C))
+    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
+    out = ttnn.silu(out, memory_config=_dram)
+    return ttnn.typecast(out, ttnn.float32)  # back to fp32 for the downstream (l2norm / chunk_kda) path
+
+
 def recurrent_kda_ttnn(q, k, v, g, beta, scale=None, initial_state=None, device=None):
     """Token-by-token KDA recurrence on device — mirrors torch naive_recurrent_kda.
 

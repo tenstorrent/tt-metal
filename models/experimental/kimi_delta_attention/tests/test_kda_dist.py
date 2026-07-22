@@ -19,12 +19,13 @@ _FABRIC_2D = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D,
     "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "l1_small_size": 24576,  # native conv1d (prefill short-conv) needs L1 scratch
 }
 
 
 @pytest.mark.parametrize("device_params", [_FABRIC_2D], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("T,use_conv", [(16, True), (16, False)])
+@pytest.mark.parametrize("T,use_conv", [(16, True), (16, False), (64, True)])  # T=64 hits the native-conv prefill path
 def test_kda_dist_tp(mesh_device, T, use_conv):
     """TP=4 head-sharded KDA layer vs torch reference on LoudBox (2,4); sequence replicated over SP."""
     hidden, head_dim, nh = 256, 64, 4  # 4 heads / TP4 = 1 head/chip

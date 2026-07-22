@@ -98,6 +98,7 @@ def test_conv1d_op(device, T):
     assert ok, f"PCC too low: {pcc}"
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)  # native conv1d needs L1 scratch
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("T,use_conv", [(1, True), (8, True), (16, True), (8, False), (128, True), (128, False)])
 def test_kda_layer(mesh_device, T, use_conv):

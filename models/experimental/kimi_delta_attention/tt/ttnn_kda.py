@@ -21,9 +21,11 @@ from einops import rearrange
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import create_global_semaphores
 
 from .ttnn_kda_ops import (
+    causal_conv1d_silu_native,
     causal_conv1d_silu_ttnn,
     kda_gate_ttnn,
     l2norm_ttnn,
+    prepare_conv1d_weight,
     recurrent_kda_ttnn,
 )
 
@@ -108,13 +110,39 @@ class TtKimiDeltaAttention:
         self.o_norm_w = up(sd["o_norm_weight"].reshape(1, 1, 1, self.V), repl)
         # depthwise conv taps: per-channel -> shard channel dim
         if self.use_short_conv:
+            # composed-FIR taps (decode / ragged fallback): per-channel [1,1,D], channel-sharded
             self.taps = {
                 nm: [up(sd[nm][:, k].reshape(1, 1, -1), shard(2), layout=ttnn.TILE_LAYOUT) for k in range(self.conv_size)]
                 for nm in ("q_conv", "k_conv", "v_conv")
             }
+            # native-conv1d weights (prefill path): depthwise [C,1,1,K] OIHW bf16, channel-sharded (dim0)
+            # like the projections, so each chip's conv weight matches its head-shard. Prepared lazily.
+            # host multi-device tensor (NO device=): prepare_conv_weights requires a host weight and does
+            # the per-chip placement itself; the shard(0) mapping puts each chip's channel slice on it.
+            self.conv_w = {
+                nm: ttnn.from_torch(
+                    sd[nm].reshape(-1, 1, 1, self.conv_size).contiguous().to(torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=shard(0),
+                )
+                for nm in ("q_conv", "k_conv", "v_conv")
+            }
+            self._conv_wprep = {}  # (name, T) -> prepared weight, built once per T and reused
 
     def _lin(self, x, w):
         return ttnn.linear(x, w, compute_kernel_config=_MM)
+
+    def _short_conv(self, x, name, T):
+        """Depthwise causal short-conv + SiLU. Prefill (T%_CHUNK==0): native ttnn.conv1d (~4x fewer/faster
+        programs). Decode/ragged: composed FIR (native pad only zeros; T=1 native conv1d is unstable)."""
+        if not self.use_short_conv:
+            return ttnn.silu(x)
+        if T % _CHUNK == 0:
+            C = x.shape[-1]
+            key = (name, T)
+            if key not in self._conv_wprep:
+                self._conv_wprep[key] = prepare_conv1d_weight(self.conv_w[name], C, self.conv_size, T, self.md)
+            return causal_conv1d_silu_native(x, self._conv_wprep[key], self.conv_size, C, self.md)
+        return causal_conv1d_silu_ttnn(x, self.taps[name], self.conv_size, self.md)
 
     def _tp_all_reduce(self, x):
         """Sum per-TP-chip o_proj partials across the TP axis: reduce_scatter + all_gather (production
@@ -141,12 +169,9 @@ class TtKimiDeltaAttention:
             device=self.md, mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
         )
         q, k, v = self._lin(x, self.w_q), self._lin(x, self.w_k), self._lin(x, self.w_v)  # [B,T,Hloc*K] per chip
-        if self.use_short_conv:
-            q = causal_conv1d_silu_ttnn(q, self.taps["q_conv"], self.conv_size, self.md)
-            k = causal_conv1d_silu_ttnn(k, self.taps["k_conv"], self.conv_size, self.md)
-            v = causal_conv1d_silu_ttnn(v, self.taps["v_conv"], self.conv_size, self.md)
-        else:
-            q, k, v = ttnn.silu(q), ttnn.silu(k), ttnn.silu(v)
+        q = self._short_conv(q, "q_conv", T)
+        k = self._short_conv(k, "k_conv", T)
+        v = self._short_conv(v, "v_conv", T)
 
         g = self._lin(self._lin(x, self.w_f0), self.w_f1)
         beta = ttnn.sigmoid(self._lin(x, self.w_b))

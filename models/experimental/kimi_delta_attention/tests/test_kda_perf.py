@@ -21,6 +21,7 @@ _F2D = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D,
     "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "l1_small_size": 24576,  # native conv1d (prefill short-conv) needs L1 scratch
 }
 
 
