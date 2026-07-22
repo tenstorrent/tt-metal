@@ -13,7 +13,14 @@
 // of tt-rdma-bh-bf3-impl-plan.md.
 #pragma once
 
+// dev_mem_map.h is a FW-side header (MEM_* symbols). Pull it in only for FW/kernel builds that
+// have it on the include path; host tools that only need the address constants below skip it.
+#if defined(__has_include)
+#if __has_include("dev_mem_map.h")
 #include "dev_mem_map.h"  // MEM_ETH_SIZE, MEM_SYSENG_RESERVED_BASE, MEM_AERISC_*, MEM_ERISC_*
+#define TT_RDMA_HAVE_DEV_MEM_MAP 1
+#endif
+#endif
 #include "tt_rdma_wire.h"
 
 // RISC0 reset save-area: active_erisc.cc enter_reset() copies RISC0 GPRs + 8 KB local mem here
@@ -80,9 +87,12 @@
 #define TT_RDMA_SASSERT _Static_assert
 #endif
 // 1. Must not run into the top base-FW/mailbox reserved region -> would brick the link.
+//    Only checkable where dev_mem_map.h is present (FW/kernel builds); host tools skip it.
+#if defined(TT_RDMA_HAVE_DEV_MEM_MAP)
 TT_RDMA_SASSERT(
     TT_RDMA_L1_END <= MEM_SYSENG_RESERVED_BASE,
     "TT-RDMA L1 region overruns MEM_SYSENG_RESERVED_BASE (0x70000) - bricks the link");
+#endif
 // 2. Must not overlap the RISC0 reset save at 0x40000..0x42000.
 TT_RDMA_SASSERT(
     TT_RDMA_L1_BASE >= (TT_RDMA_RISC0_RESET_SAVE_BASE + TT_RDMA_RISC0_RESET_SAVE_SIZE) ||

@@ -5,68 +5,81 @@
 // coexistence gate can be observed. See docs/tt-rdma-v1/tt-rdma-bh-bf3-impl-plan.md.
 //
 // GATE: with this running, `port_status` on the chosen eth core stays UP for
-// 10 min (read via bh-erisc-fpga/scripts/erisc_ports.sh) AND the heartbeat word
-// at TT_RDMA_RCB_ADDR advances (read via tt-exalens brxy). See README.md.
+// 10 min (bh-erisc-fpga/scripts/erisc_ports.sh) AND the heartbeat word at
+// TT_RDMA_RCB_ADDR advances (tt-exalens brxy). See README.md.
 //
-// NOTE: this is a SKELETON. The tt-metal host API churns across versions
-// (IDevice vs MeshDevice, command_queue() vs mesh CQ). Before building, copy the
-// exact device-open + program-launch boilerplate from a shipped eth test on this
-// checkout — tests/tt_metal/tt_metal/deployment/eth/test_eth_data_integrity_dram.cpp
-// (CreateDevice / get_active_ethernet_cores(true) / CreateProgram / CreateKernel /
-// SetRuntimeArgs / EnqueueProgram) — and reconcile the calls below to it.
+// Reconciled to this checkout's API: distributed::MeshDevice + MeshWorkload
+// (pattern from tt_metal/programming_examples/hello_world_datamovement_kernel).
+// Kernel is resolved relative to TT_METAL_HOME, so run with TT_METAL_HOME set to
+// this repo root (see README). Build: self-contained CMake (find_package TT-Metalium).
 
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"  // TT_RDMA_RCB_ADDR (heartbeat slot)
 
-using namespace tt::tt_metal;
+int main(int argc, char** argv) {
+    using namespace tt;
+    using namespace tt::tt_metal;
 
-int main() {
-    constexpr int kDeviceId = 0;
-    constexpr uint32_t kSpinPerBeat = 200000u;  // pace; tune so brxy can see the counter move
-    constexpr auto kHoldFor = std::chrono::minutes(10);
+    // argv: [device_id] [active_eth_core_index] [spin_per_beat] [hold_seconds]
+    const int device_id = (argc > 1) ? std::atoi(argv[1]) : 0;
+    const size_t eth_idx = (argc > 2) ? std::atoi(argv[2]) : 0;
+    const uint32_t spin = (argc > 3) ? std::strtoul(argv[3], nullptr, 0) : 200000u;
+    const int hold_s = (argc > 4) ? std::atoi(argv[4]) : 600;
 
-    IDevice* device = CreateDevice(kDeviceId);
+    // 1x1 mesh on the requested device.
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    IDevice* device = mesh_device->get_devices()[0];  // underlying device for eth-core queries
 
-    // Pick a trained ACTIVE eth core to watch. TODO(BH.0): select the specific core
-    // whose link you are monitoring with erisc_ports.sh (e.g. an inter-chip Cage-C core).
-    // Starting on a live-link core IS the coexistence test; if that is too risky for the
-    // first run, use an active core with a benign partner and confirm it stays UP.
+    // --- 2. Pin the eth core (was *active.begin() in the skeleton) ---
+    // get_active_ethernet_cores returns LOGICAL eth cores; pick one by index (argv[2]).
     const auto active = device->get_active_ethernet_cores(/*skip_reserved=*/true);
-    TT_FATAL(!active.empty(), "no active ethernet cores");
-    const CoreCoord eth_core = *active.begin();  // TODO: pin the exact core
+    std::vector<CoreCoord> cores(active.begin(), active.end());
+    TT_FATAL(!cores.empty(), "no active ethernet cores on device {}", device_id);
+    TT_FATAL(eth_idx < cores.size(), "eth_idx {} >= {} active cores", eth_idx, cores.size());
+    const CoreCoord eth_logical = cores[eth_idx];
+    // Print BOTH the logical and the physical/virtual coord so you know which
+    // erisc_ports.sh / tt-exalens NOC coord (X-Y) to monitor for this link.
+    const CoreCoord eth_phys = device->ethernet_core_from_logical_core(eth_logical);
+    std::cout << "BH.0: device " << device_id << " eth core logical=(" << eth_logical.x << "," << eth_logical.y
+              << ")  physical/NOC=(" << eth_phys.x << "," << eth_phys.y << ")  -- monitor this coord\n";
+    std::cout << "BH.0: heartbeat @ 0x" << std::hex << TT_RDMA_RCB_ADDR << std::dec << ", spin=" << spin
+              << ", hold=" << hold_s << "s\n";
 
+    // RISC1 (subordinate) = the free data mover; base FW owns NOC0 on RISC0, so RISC1 uses NOC1.
     Program program = CreateProgram();
-
-    // RISC1 (subordinate) is the free data mover. NOC MUST follow the processor:
-    // base FW uses NOC0 on RISC0, so RISC1 uses NOC1 (matches the device_print helper
-    // `.noc = static_cast<NOC>(processor)` and active_erisc's "ERISC1 -> NOC_1" rule).
     const EthernetConfig cfg{
-        .eth_mode = Eth::IDLE,  // not a tunneling/dispatch link; a resident compute kernel
+        .eth_mode = Eth::IDLE,  // resident compute kernel, not a tunneling/dispatch link
         .noc = NOC::NOC_1,
         .processor = DataMovementProcessor::RISCV_1,
     };
+    const KernelHandle k =
+        CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_heartbeat.cpp", eth_logical, cfg);
+    SetRuntimeArgs(program, k, eth_logical, {TT_RDMA_RCB_ADDR, spin});
 
-    const KernelHandle k = CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_heartbeat.cpp", eth_core, cfg);
+    // Dispatch NON-BLOCKING (kernel is persistent -> do NOT Finish()).
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 
-    SetRuntimeArgs(program, k, eth_core, {TT_RDMA_RCB_ADDR, kSpinPerBeat});
+    std::cout << "BH.0: kernel dispatched to RISC1. Observe from another terminal:\n"
+              << "  erisc_ports.sh <X-Y>   (port_status stays UP)\n"
+              << "  tt-exalens brxy <X-Y> 0x" << std::hex << TT_RDMA_RCB_ADDR << std::dec
+              << " 1   (heartbeat advances)\n";
 
-    // Dispatch NON-BLOCKING: the kernel is persistent (never returns), so do NOT Finish().
-    CommandQueue& cq = device->command_queue();
-    EnqueueProgram(cq, program, /*blocking=*/false);
+    std::this_thread::sleep_for(std::chrono::seconds(hold_s));
 
-    // Hold resident while you observe from another terminal:
-    //   bh-erisc-fpga/scripts/erisc_ports.sh <core>            # port_status stays UP
-    //   tt-exalens ... brxy <core> <TT_RDMA_RCB_ADDR> 1        # heartbeat advances
-    std::this_thread::sleep_for(kHoldFor);
-
-    // The kernel is still running (persistent). To stop it, reset the chip
-    // (sudo reboot, or `tt-smi -r --eth_train_skip`). Do NOT expect a clean
-    // CloseDevice() to reap a never-returning kernel.
+    // The kernel is still running (persistent). Stop it by resetting the chip
+    // (sudo reboot, or tt-smi -r --eth_train_skip). We intentionally do NOT
+    // Finish()/close() cleanly here — a never-returning kernel can't be reaped.
+    std::cout << "BH.0: hold elapsed. Kernel still resident; reset the chip to stop.\n";
     return 0;
 }

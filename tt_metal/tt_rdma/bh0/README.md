@@ -20,14 +20,31 @@ If (1) fails → RISC0 isn't yielding enough (coexistence model wrong — the lo
 If (2) fails → the kernel isn't actually running on RISC1.
 
 ## Build + run
-This is a skeleton; it is **not yet wired into CMake**. To run it:
-1. **Reconcile the host API** to this checkout's tt-metal version — copy the exact device-open +
-   launch boilerplate from `tests/tt_metal/tt_metal/deployment/eth/test_eth_data_integrity_dram.cpp`
-   (`CreateDevice` / `get_active_ethernet_cores(true)` / `CreateProgram` / `CreateKernel` /
-   `SetRuntimeArgs` / `EnqueueProgram`). Watch for `IDevice` vs `MeshDevice`.
-2. **Pin the eth core** in `bh0_heartbeat_host.cpp` to the specific link you monitor (e.g. an
-   inter-chip Cage-C core), instead of `*active.begin()`.
-3. Add a CMake target (mirror an existing `tests/tt_metal/.../eth` target), build tt-metal, run.
+The host is reconciled to this checkout's API (`distributed::MeshDevice` + `MeshWorkload`, pattern
+from `programming_examples/hello_world_datamovement_kernel`).
+
+**Builds IN-TREE only.** Active-eth kernel creation uses the *internal* `EthernetConfig` API, which
+is NOT in the public installed TT-Metalium (verified: an out-of-tree `find_package(TT-Metalium)`
+build compiles everything *except* `EthernetConfig`). So:
+
+1. Wire the target into the internal build — in `tests/tt_metal/tt_metal/CMakeLists.txt`, next to
+   `add_subdirectory(.../deployment)`, add:
+   ```cmake
+   add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/tt_rdma/bh0 tt_rdma_bh0)
+   ```
+2. Build the repo normally (`./build_metal.sh`) — `build_Release/` already exists on this box.
+3. Run (TT_METAL_HOME = repo root so the kernel path + contract headers resolve):
+   ```bash
+   TT_METAL_HOME=<repo-root> ./build_Release/.../bh0_heartbeat  [device_id] [eth_idx] [spin] [hold_s]
+   ```
+- **`eth_idx`** picks which active eth core (argv[2], default 0) — the "pin the core" knob. On start
+  the tool **prints the chosen core's logical AND physical/NOC coords**, so you know exactly which
+  `X-Y` to watch with `erisc_ports.sh` / `tt-exalens` (the logical eth coord ≠ the NOC coord).
+- `spin` paces the heartbeat writes; `hold_s` is the resident window (default 600 = 10 min).
+
+If a standalone `main()` can't link against `test_metal_common_libs`, fall back to the **gtest form**:
+add `bh0_heartbeat_host.cpp` to `UNIT_TESTS_DEPLOYMENT_SRC` and drive it from a `TEST()` using the
+`CommandQueueFixture` (that suite already uses `EthernetConfig` + `MeshDevice`).
 
 ## Observe (separate terminal, does NOT disturb the chip)
 ```bash
