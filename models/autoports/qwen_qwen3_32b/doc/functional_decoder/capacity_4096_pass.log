@@ -1,0 +1,12 @@
+Command:
+TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 QWEN3_32B_CONTEXT_PROBE_LEN=4096 timeout 300 pytest -q -s models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py
+
+Hardware: Blackhole p300c, 1x1 mesh selected from paired visible chips 2,3
+Result:
+capacity probe PASS: batch=32, seq_len=4096, output_shape=(1, 32, 4096, 5120)
+PASSED
+1 passed in 12.39s
+
+Process exit code: 0
+Post-run note: nanobind reported binding reference leaks during interpreter
+shutdown; the mesh closed and all four devices remained visible to tt-smi.

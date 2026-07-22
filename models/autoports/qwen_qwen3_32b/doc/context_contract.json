@@ -1,0 +1,69 @@
+{
+  "model": "Qwen/Qwen3-32B",
+  "hf_advertised_context": 40960,
+  "current_supported_context": 4096,
+  "limiting_reason": "device_dram",
+  "notes": "This correctness-first EmitPy translation proves the largest feasible batch-32 prefill length for one dense layer on one Blackhole device. The cap is a measured DRAM limit, not an EmitPy static-shape restriction; later optimization or multichip stages may extend it.",
+  "capacity_evidence": {
+    "hardware": "Blackhole p300c, one device (1x1 mesh), eight DRAM banks",
+    "workload": "one dense translated layer, emitted batch 32, BF16/TILE/DRAM defaults",
+    "largest_passing_probe": {
+      "sequence_length": 4096,
+      "result": "pass",
+      "output_shape": [1, 32, 4096, 5120],
+      "log": "doc/functional_decoder/capacity_4096_pass.log"
+    },
+    "adjacent_failing_probe": {
+      "sequence_length": 4097,
+      "padded_sequence_length": 4128,
+      "result": "expected_out_of_memory",
+      "requested_allocation_bytes": 1352663040,
+      "largest_free_block_bytes": 98279424,
+      "log": "doc/functional_decoder/capacity_4097_oom.log"
+    },
+    "advertised_context_impossibility": {
+      "single_mlp_activation_bytes": 67108864000,
+      "device_dram_bytes": 34178731008,
+      "note": "A single BF16 batch-32 gate/up activation at sequence 40960 exceeds the device's total DRAM."
+    }
+  },
+  "paths": {
+    "prefill": {
+      "status": "translated_and_tested",
+      "emit_package": "/home/mvasiljevic/emit-qwen3/g0_prefill",
+      "classification_signals": {
+        "emitted_sequence_length": 17,
+        "fill_cache_calls": 4096,
+        "paged_update_cache_calls": 0,
+        "decode_sdpa_calls": 0
+      },
+      "emitted_hidden_shape": [1, 32, 17, 5120],
+      "tested_sequence_lengths": [4, 17, 128, 4096]
+    },
+    "decode": {
+      "status": "translated_and_tested",
+      "emit_package": "/home/mvasiljevic/emit-qwen3/g1_decode",
+      "classification_signals": {
+        "emitted_sequence_length": 1,
+        "paged_update_cache_calls": 128,
+        "decode_sdpa_calls": 64
+      },
+      "emitted_hidden_shape": [1, 32, 1, 5120],
+      "tested_positions": [17]
+    }
+  },
+  "translation": {
+    "representative_layer": 32,
+    "source_layer_count": 64,
+    "source_mesh": [1, 4],
+    "source_tensor_parallel_degree": 4,
+    "functional_mesh": [1, 1],
+    "collective_policy": "collapsed_to_dense_math_over_full_unsharded_hf_weights",
+    "source_precision_policy": {
+      "qkv_o_gate_up_down_weights": "BFLOAT8_B after load-time fusion or transpose",
+      "normalization_weights": "BFLOAT16",
+      "kv_cache": "BFLOAT8_B"
+    },
+    "functional_precision_policy": "BFLOAT16 weights and activations; BF16/TILE/DRAM correctness defaults"
+  }
+}

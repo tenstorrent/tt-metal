@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "model": "Qwen/Qwen3-32B",
+  "source": {
+    "format": "pre-generated tt-mlir TTNN-to-EmitPy",
+    "prefill_package": "/home/mvasiljevic/emit-qwen3/g0_prefill",
+    "decode_package": "/home/mvasiljevic/emit-qwen3/g1_decode",
+    "representative_layer": 32,
+    "layer_count": 64
+  },
+  "mesh": {
+    "shape": [1, 4],
+    "axes": [
+      {"name": "data", "dimension": 0, "size": 1},
+      {"name": "tensor_parallel", "dimension": 1, "size": 4}
+    ],
+    "tp_degree": 4,
+    "fabric": "FABRIC_1D_RING",
+    "functional_translation_mesh": [1, 1]
+  },
+  "full_model_dimensions": {
+    "batch": 32,
+    "hidden_size": 5120,
+    "num_attention_heads": 64,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "intermediate_size": 25600,
+    "cache_length": 128
+  },
+  "boundary_tensors": [
+    {
+      "name": "hidden_states_and_residual",
+      "prefill_emitted_shape": [1, 1, 544, 5120],
+      "decode_emitted_shape": [1, 1, 32, 5120],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "mesh_dimensions": [1]
+    },
+    {
+      "name": "layer_output",
+      "prefill_emitted_shape": [1, 1, 544, 5120],
+      "decode_emitted_shape": [1, 1, 32, 5120],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated_after_all_reduce",
+      "mesh_dimensions": [1]
+    }
+  ],
+  "tensors": [
+    {
+      "name": "input_layernorm.weight",
+      "canonical_shape": [5120],
+      "emitted_shape_per_rank": [5120],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "mesh_dimensions": [1]
+    },
+    {
+      "name": "post_attention_layernorm.weight",
+      "canonical_shape": [5120],
+      "emitted_shape_per_rank": [5120],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "mesh_dimensions": [1]
+    },
+    {
+      "name": "self_attn.q_norm.weight",
+      "canonical_shape": [128],
+      "emitted_shape_per_rank": [128],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "mesh_dimensions": [1]
+    },
+    {
+      "name": "self_attn.k_norm.weight",
+      "canonical_shape": [128],
+      "emitted_shape_per_rank": [128],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "mesh_dimensions": [1]
+    },
+    {
+      "name": "self_attn.q_proj.weight",
+      "canonical_shape": [8192, 5120],
+      "emitted_shape_per_rank": [2048, 5120],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "canonical_shard_axis": 0,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "self_attn.k_proj.weight",
+      "canonical_shape": [1024, 5120],
+      "emitted_shape_per_rank": [256, 5120],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "canonical_shard_axis": 0,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "self_attn.v_proj.weight",
+      "canonical_shape": [1024, 5120],
+      "emitted_shape_per_rank": [256, 5120],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "canonical_shard_axis": 0,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "self_attn.fused_qkv.weight",
+      "canonical_matmul_shape": [5120, 10240],
+      "emitted_shape_per_rank_after_consteval": [5120, 2560],
+      "emitted_dtype": "BFLOAT8_B",
+      "fusion_order": ["q", "k", "v"],
+      "parallel_kind": "tensor_column",
+      "shard_axis": 1,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "self_attn.o_proj.weight",
+      "canonical_shape": [5120, 8192],
+      "emitted_shape_per_rank": [5120, 2048],
+      "emitted_matmul_shape_per_rank_after_consteval": [2048, 5120],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_row",
+      "canonical_shard_axis": 1,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "mlp.gate_proj.weight",
+      "canonical_shape": [25600, 5120],
+      "emitted_shape_per_rank": [6400, 5120],
+      "emitted_matmul_shape_per_rank_after_consteval": [5120, 6400],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "canonical_shard_axis": 0,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "mlp.up_proj.weight",
+      "canonical_shape": [25600, 5120],
+      "emitted_shape_per_rank": [6400, 5120],
+      "emitted_matmul_shape_per_rank_after_consteval": [5120, 6400],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "canonical_shard_axis": 0,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "mlp.down_proj.weight",
+      "canonical_shape": [5120, 25600],
+      "emitted_shape_per_rank": [5120, 6400],
+      "emitted_matmul_shape_per_rank_after_consteval": [6400, 5120],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype_after_consteval": "BFLOAT8_B",
+      "parallel_kind": "tensor_row",
+      "canonical_shard_axis": 1,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "query_heads",
+      "prefill_emitted_shape_per_rank": [32, 16, 17, 128],
+      "decode_emitted_shape_per_rank": [1, 32, 16, 128],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_head",
+      "prefill_head_axis": 1,
+      "decode_head_axis": 2,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "key_and_value_heads",
+      "prefill_emitted_shape_per_rank": [32, 2, 17, 128],
+      "decode_emitted_shape_per_rank": [1, 32, 2, 128],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_head",
+      "prefill_head_axis": 1,
+      "decode_head_axis": 2,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "key_cache_and_value_cache",
+      "emitted_shape_per_rank": [32, 2, 128, 128],
+      "dense_functional_shape": [32, 8, 128, 128],
+      "emitted_dtype": "BFLOAT8_B",
+      "parallel_kind": "tensor_head",
+      "head_axis": 1,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "rotary_cos_and_sin",
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "mesh_dimensions": [1]
+    },
+    {
+      "name": "attention_output_before_o_projection",
+      "prefill_emitted_shape_per_rank": [544, 2048],
+      "decode_emitted_shape_per_rank": [32, 2048],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_head",
+      "feature_axis": 1,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "o_projection_partial",
+      "prefill_emitted_shape_per_rank": [1, 1, 544, 5120],
+      "decode_emitted_shape_per_rank": [1, 1, 32, 5120],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "partial_sum",
+      "mesh_dimension": 1
+    },
+    {
+      "name": "mlp_gate_and_up_activations",
+      "prefill_emitted_shape_per_rank": [544, 6400],
+      "decode_emitted_shape_per_rank": [32, 6400],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_intermediate",
+      "feature_axis": 1,
+      "mesh_dimension": 1
+    },
+    {
+      "name": "mlp_down_projection_partial",
+      "prefill_emitted_shape_per_rank": [1, 1, 544, 5120],
+      "decode_emitted_shape_per_rank": [1, 1, 32, 5120],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "partial_sum",
+      "mesh_dimension": 1
+    }
+  ],
+  "collectives": [
+    {
+      "path": "prefill",
+      "placement": "after layer-32 self_attn.o_proj and before the attention residual add",
+      "op": "all_reduce",
+      "cluster_axis": 1,
+      "mesh_dimension": 1,
+      "reduce_type": "sum (TTNN all_reduce default)",
+      "topology": "Ring",
+      "emitted_dtype": "BFLOAT16",
+      "emit_line": 31278
+    },
+    {
+      "path": "prefill",
+      "placement": "after layer-32 mlp.down_proj and before the MLP residual add",
+      "op": "all_reduce",
+      "cluster_axis": 1,
+      "mesh_dimension": 1,
+      "reduce_type": "sum (TTNN all_reduce default)",
+      "topology": "Ring",
+      "emitted_dtype": "BFLOAT16",
+      "emit_line": 31306
+    },
+    {
+      "path": "decode",
+      "placement": "after layer-32 self_attn.o_proj and before the attention residual add",
+      "op": "all_reduce",
+      "cluster_axis": 1,
+      "mesh_dimension": 1,
+      "reduce_type": "sum (TTNN all_reduce default)",
+      "topology": "Ring",
+      "emitted_dtype": "BFLOAT16",
+      "emit_line": 6032
+    },
+    {
+      "path": "decode",
+      "placement": "after layer-32 mlp.down_proj and before the MLP residual add",
+      "op": "all_reduce",
+      "cluster_axis": 1,
+      "mesh_dimension": 1,
+      "reduce_type": "sum (TTNN all_reduce default)",
+      "topology": "Ring",
+      "emitted_dtype": "BFLOAT16",
+      "emit_line": 6064
+    }
+  ],
+  "absent_collectives_in_representative_layer": [
+    "all_gather",
+    "reduce_scatter",
+    "all_to_all",
+    "mesh_shard",
+    "collective_permute"
+  ],
+  "dense_collapse": {
+    "runtime_collectives": [],
+    "runtime_mesh_sharding": [],
+    "weight_source": "canonical full unsharded Hugging Face state_dict tensors",
+    "column_parallel_replacement": "one dense matmul with full Q/K/V/gate/up weight",
+    "row_parallel_replacement": "one dense matmul with full O/down weight; source all_reduce omitted"
+  }
+}

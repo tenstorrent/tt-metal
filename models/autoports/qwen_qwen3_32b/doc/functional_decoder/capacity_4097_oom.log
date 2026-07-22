@@ -1,0 +1,17 @@
+Command:
+TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 QWEN3_32B_CONTEXT_PROBE_LEN=4097 QWEN3_32B_CONTEXT_EXPECT_OOM=1 timeout 300 pytest -q -s models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py
+
+Hardware: Blackhole p300c, 1x1 mesh selected from paired visible chips 2,3
+Expected allocator result:
+Out of Memory: Not enough space to allocate 1352663040 B DRAM buffer across
+8 banks, where each bank needs to store 169082880 B, but bank size is
+4272341376 B (allocated: 4081033280 B, free: 191308096 B, largest free block:
+98279424 B)
+
+capacity probe EXPECTED OOM: batch=32, seq_len=4097
+PASSED
+1 passed in 11.98s
+
+Process exit code: 0
+Post-run note: nanobind reported binding reference leaks during interpreter
+shutdown; the mesh closed and all four devices remained visible to tt-smi.
