@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 #include <tracy/TracyTTDevice.hpp>
 #include "context/context_types.hpp"
 #include "realtime_profiler_consumer.hpp"
@@ -30,14 +31,17 @@ private:
     // Establish a chip's Tracy context on its first record, then recalibrate whenever the record's device_cycle_offset
     // moves (i.e. a host<->device re-anchor happened).
     void CalibrateFromRecord(const tt::ProgramRealtimeRecord& record);
-    // Create and calibrate a Tracy context for the given device.
-    void AddDevice(uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency);
+    // Create and calibrate a Tracy context for the given device; returns it (caller stores it in chips_).
+    TracyTTCtx AddDevice(uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency);
     // Handle a single program record.
     void HandleRecord(const tt::ProgramRealtimeRecord& record);
     // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
     TracyTTCtx GetContext(uint32_t chip_id);
     bool ValidateHostClockDomain();
+    // Convert a CLOCK_MONOTONIC host timestamp (the domain of clock_sync) into Tracy's rdtsc CPU-tick domain, which the
+    // Tracy context/calibration APIs require. Reads both host clocks side by side to pin the offset.
+    int64_t HostMonoNsToTracyCpuTicks(int64_t host_mono_ns);
     void PublishDeviceProfilerSyncAnchor(
         uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
 
@@ -59,14 +63,14 @@ private:
     bool host_clock_checked_ = false;
     bool host_clock_valid_ = false;
 #endif
-    std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
-    // Last device_cycle_offset applied to the Tracy context per chip; a change signals a re-anchor.
-    std::unordered_map<uint32_t, int64_t> last_device_cycle_offset_by_chip_;
-    // When the Tracy context was last recalibrated per chip. The servo re-anchors device_cycle_offset ~20x/s, but the
-    // GpuCalibration server math derives its slope from the gap between consecutive calibrations, so recalibrating that
-    // often collapses the device zones. The Tracy view only needs occasional drift correction, so throttle it.
-    std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> last_calibrate_at_by_chip_;
-    static constexpr std::chrono::seconds kTracyRecalibrateInterval{30};
+    // Per-chip Tracy state, indexed by chip_id. chip_ids are small and dense, so a flat vector keeps the per-record
+    // path hash-free (a vector index + an offset compare) — see CalibrateFromRecord / GetContext.
+    struct PerChip {
+        TracyTTCtx ctx = nullptr;  // null until this chip's first record creates its Tracy context
+        int64_t last_seen_offset =
+            0;  // last clock_sync.device_cycle_offset seen; a change signals a host<->device re-anchor
+    };
+    std::vector<PerChip> chips_;
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
 };
 

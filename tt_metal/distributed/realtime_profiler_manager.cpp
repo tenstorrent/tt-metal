@@ -103,7 +103,6 @@ constexpr uint32_t kSyncAckTokenWord = 0;
 struct CachedCalibration {
     std::chrono::steady_clock::time_point updated_at;
     double sync_frequency = 0.0;
-    double device_cycles_per_host_tick = 0.0;
     int64_t device_cycle_offset = 0;
     int64_t sync_rtt_ticks = 0;
 };
@@ -351,8 +350,7 @@ size_t RealtimeProfilerManager::publish_pages(
     records.clear();
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
-    const int64_t half_rtt_ns =
-        std::llround(static_cast<double>(dev_state.sync_rtt_ticks) * 0.5 * realtime_profiler_host_ns_per_tick());
+    const int64_t half_rtt_ns = std::llround(static_cast<double>(dev_state.sync_rtt_ticks) * 0.5);
     // Sync uncertainty is the anchor-placement bound (half the handshake RTT); drift over a re-anchor interval stays
     // well below it.
     const uint64_t sync_error_ns = static_cast<uint64_t>(half_rtt_ns);
@@ -916,7 +914,6 @@ void RealtimeProfilerManager::run_init_sync() {
             // frequency and device_cycle_offset stay valid. Skips run_sync and the constructor SYNC_CHECK entirely
             // (no device traffic); periodic finish-path syncs still re-anchor and refresh the cache during the session.
             dev_state.sync_frequency = cached->sync_frequency;
-            dev_state.device_cycles_per_host_tick = cached->device_cycles_per_host_tick;
             dev_state.device_cycle_offset = cached->device_cycle_offset;
             dev_state.sync_rtt_ticks = cached->sync_rtt_ticks;
             dev_state.first_timestamp = 0;
@@ -1051,8 +1048,7 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
         fifo_pages_window_max_ = 0;
         int64_t worst_sync_error_ns = 0;
         for (const auto& dev_state : devices_) {
-            const int64_t half_rtt_ns = std::llround(
-                static_cast<double>(dev_state.sync_rtt_ticks) * 0.5 * realtime_profiler_host_ns_per_tick());
+            const int64_t half_rtt_ns = std::llround(static_cast<double>(dev_state.sync_rtt_ticks) * 0.5);
             worst_sync_error_ns = std::max(worst_sync_error_ns, half_rtt_ns);
         }
         TTTracyPlotD(RT_PROFILER, "RT sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
@@ -1305,7 +1301,6 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
     // cancellation at absolute-timestamp magnitudes.
     if (samples.size() >= 2) {
         const double n = static_cast<double>(samples.size());
-        const double host_ns_per_tick = realtime_profiler_host_ns_per_tick();
 
         double host_mean = 0.0;
         double device_mean = 0.0;
@@ -1326,15 +1321,13 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         }
 
         if (std::abs(den) > 1e-10) {
-            dev_state.device_cycles_per_host_tick = num / den;
-            dev_state.sync_frequency = dev_state.device_cycles_per_host_tick / host_ns_per_tick;
+            dev_state.sync_frequency = num / den;
         } else {
             dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
-            dev_state.device_cycles_per_host_tick = dev_state.sync_frequency * host_ns_per_tick;
         }
 
         // Intercept via means: intercept = ȳ - slope * x̄ = device cycle count at host_time = 0.
-        const double intercept = device_mean - dev_state.device_cycles_per_host_tick * host_mean;
+        const double intercept = device_mean - dev_state.sync_frequency * host_mean;
         dev_state.first_timestamp = static_cast<uint64_t>(intercept);
         dev_state.sync_host_start = host_start_time;
 
@@ -1343,7 +1336,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         double residual_max_ns = 0.0;
         for (const auto& s : samples) {
             const double predicted_device =
-                device_mean + dev_state.device_cycles_per_host_tick * (static_cast<double>(s.host_time) - host_mean);
+                device_mean + dev_state.sync_frequency * (static_cast<double>(s.host_time) - host_mean);
             const double residual_ns =
                 (static_cast<double>(s.device_time) - predicted_device) / dev_state.sync_frequency;
             residual_sumsq_ns += residual_ns * residual_ns;
@@ -1363,7 +1356,6 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
             residual_max_ns);
     } else {
         dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
-        dev_state.device_cycles_per_host_tick = dev_state.sync_frequency * realtime_profiler_host_ns_per_tick();
         dev_state.first_timestamp = 0;
         dev_state.sync_host_start = host_start_time;
         log_warning(
@@ -1376,8 +1368,8 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
 
 void RealtimeProfilerManager::reanchor_device_cycle_offset(
     DeviceState& dev_state, int64_t host_anchor, uint64_t device_anchor) {
-    dev_state.device_cycle_offset = std::llround(
-        static_cast<double>(device_anchor) - dev_state.device_cycles_per_host_tick * static_cast<double>(host_anchor));
+    dev_state.device_cycle_offset =
+        std::llround(static_cast<double>(device_anchor) - dev_state.sync_frequency * static_cast<double>(host_anchor));
 }
 
 int64_t RealtimeProfilerManager::measure_sync_rtt_ticks(
@@ -1388,8 +1380,7 @@ int64_t RealtimeProfilerManager::measure_sync_rtt_ticks(
     // Poll our own pinned host word, which the device NOC-writes the token into (bypassing the record FIFO). Skip the
     // deadline check for the first kRttProbeHealthyPolls reads so a healthy handshake (far fewer) never reads a clock
     // inside the round trip it is timing; the endpoint below is read fresh, so the measurement stays exact.
-    const int64_t deadline =
-        host_before + static_cast<int64_t>(kRttProbeTimeoutNs / realtime_profiler_host_ns_per_tick());
+    const int64_t deadline = host_before + static_cast<int64_t>(kRttProbeTimeoutNs);
     uint32_t polls = 0;
     while (read_sync_ack(dev_state) != host_time_id) {
         if (++polls > kRttProbeHealthyPolls && realtime_profiler_host_timestamp() > deadline) {
@@ -1404,7 +1395,6 @@ void RealtimeProfilerManager::cache_calibration(const DeviceState& dev_state) {
     auto& entry = g_rt_profiler_calibration_by_chip[dev_state.chip_id];
     entry.updated_at = std::chrono::steady_clock::now();
     entry.sync_frequency = dev_state.sync_frequency;
-    entry.device_cycles_per_host_tick = dev_state.device_cycles_per_host_tick;
     entry.device_cycle_offset = dev_state.device_cycle_offset;
     entry.sync_rtt_ticks = dev_state.sync_rtt_ticks;
 }

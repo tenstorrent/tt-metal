@@ -506,7 +506,6 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     UnregisterProgramRealtimeProfilerCallback(handle);
 
-    const double host_ns_per_tick = realtime_profiler_host_ns_per_tick();
     // Generous bound: it covers host-clock read jitter and the gap between the bracketing reads and the actual
     // dispatch/completion. The check catches a fundamentally wrong mapping (off by ms and up), not µs-level skew.
     constexpr double kSlackNs = 2'000'000.0;
@@ -529,8 +528,8 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
         const double host_end_ns =
             (static_cast<double>(rec.end_timestamp) - static_cast<double>(rec.clock_sync.device_cycle_offset)) /
             rec.frequency;
-        const double before_ns = static_cast<double>(it->second.before_ticks) * host_ns_per_tick;
-        const double after_ns = static_cast<double>(it->second.after_ticks) * host_ns_per_tick;
+        const double before_ns = static_cast<double>(it->second.before_ticks);
+        const double after_ns = static_cast<double>(it->second.after_ticks);
 
         EXPECT_GE(host_start_ns, before_ns - kSlackNs)
             << "runtime_id=" << rec.runtime_id << ": record host start " << host_start_ns
