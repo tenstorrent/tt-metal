@@ -16,15 +16,34 @@ import torch
 
 import ttnn
 
-# BT.601 coefficients for input ∈ [-1, 1] → uint8 [0, 255].
-# These must match the values in yuv_conversion.hpp::yuv_bt601_coefficients().
+# BT.601 coefficients for input ∈ [-1, 1] → limited-range uint8.
+# These must match yuv_conversion.hpp::yuv_coefficients(BT601, MinusOneToOne, Limited).
 _Y_COEFF = (32.74, 64.28, 12.48, 125.5)
 _CB_COEFF = (-18.90, -37.10, 56.00, 128.0)
 _CR_COEFF = (56.00, -46.89, -9.11, 128.0)
 
+# (Kr, Kb) for the standard colorspaces (Kg = 1 - Kr - Kb).
+_KR_KB = {"BT601": (0.299, 0.114), "BT709": (0.2126, 0.0722), "BT2020": (0.2627, 0.0593)}
 
-def _host_yuv_reference(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Pure-PyTorch BT.601 reference: CHWT bf16 in [-1,1] → (Y, Cb, Cr) uint8.
+
+def _derive_coeffs(color_space: str, input_range: str, output_range: str):
+    """Python mirror of the C++ yuv_coefficients() derivation (independent oracle)."""
+    kr, kb = _KR_KB[color_space]
+    kg = 1.0 - kr - kb
+    lo, hi = (-1.0, 1.0) if input_range == "MinusOneToOne" else (0.0, 1.0)
+    s = 1.0 / (hi - lo)
+    yscale, yoff, cscale = (219.0, 16.0, 224.0) if output_range == "Limited" else (255.0, 0.0, 255.0)
+    off_y = yoff - yscale * s * lo
+    cbk = cscale * s / (2.0 * (1.0 - kb))
+    crk = cscale * s / (2.0 * (1.0 - kr))
+    y = (yscale * s * kr, yscale * s * kg, yscale * s * kb, off_y)
+    cb = (-cbk * kr, -cbk * kg, cbk * (1.0 - kb), 128.0)
+    cr = (crk * (1.0 - kr), -crk * kg, -crk * kb, 128.0)
+    return y, cb, cr
+
+
+def _yuv_reference(rgb: torch.Tensor, y_coeff, cb_coeff, cr_coeff):
+    """Pure-PyTorch reference: CHWT bf16 RGB → (Y, Cb, Cr) uint8 for given coeffs.
 
     Spatial subsampling for Cb/Cr: mean of each non-overlapping 2×2 block
     in (H, W) before quantisation to uint8.
@@ -38,7 +57,7 @@ def _host_yuv_reference(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, 
         w_r, w_g, w_b, off = coeff
         return w_r * R + w_g * G + w_b * B + off  # (H, W, T) float
 
-    Y = (linear(_Y_COEFF) + 0.5).clamp(0, 255).to(torch.uint8)
+    Y = (linear(y_coeff) + 0.5).clamp(0, 255).to(torch.uint8)
 
     # Cb/Cr are 4:2:0 subsampled: average each non-overlapping 2×2 block in
     # (H, W) in the float domain, then quantise once.  (RGB→chroma is affine, so
@@ -47,7 +66,12 @@ def _host_yuv_reference(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, 
         val = linear(coeff).view(H // 2, 2, W // 2, 2, T_).mean(dim=(1, 3))  # (H/2, W/2, T)
         return (val + 0.5).clamp(0, 255).to(torch.uint8)
 
-    return Y, subsample(_CB_COEFF), subsample(_CR_COEFF)
+    return Y, subsample(cb_coeff), subsample(cr_coeff)
+
+
+def _host_yuv_reference(rgb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """BT.601 limited-range reference for input ∈ [-1, 1]."""
+    return _yuv_reference(rgb, _Y_COEFF, _CB_COEFF, _CR_COEFF)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +268,36 @@ class TestYUVColorSpaceAPI:
         assert not torch.equal(
             luma[ttnn.experimental.YUVColorSpace.BT601], luma[ttnn.experimental.YUVColorSpace.BT709]
         ), "BT601 and BT709 luma should differ"
+
+    @pytest.mark.parametrize("input_range", ["MinusOneToOne", "ZeroToOne"])
+    def test_input_range(self, device, input_range):
+        # Both input normalizations must convert correctly against an
+        # independently-derived reference for that range.
+        #
+        # ZeroToOne is ~1 LSB less precise on Y: its derived weights are ~2x
+        # larger than MinusOneToOne's (e.g. wG 128.5 vs 64.3) and so pack to a
+        # coarser bf16 grid (step 1.0 near 128 vs 0.5 near 64). Y tolerance is
+        # relaxed to 2 for that case accordingly.
+        H, W, T = 64, 64, 64
+        gen = torch.Generator().manual_seed(13)
+        rgb01 = torch.rand(3, H, W, T, generator=gen, dtype=torch.bfloat16)  # [0, 1]
+        rgb = rgb01 if input_range == "ZeroToOne" else (rgb01.float() * 2.0 - 1.0).to(torch.bfloat16)
+
+        y_c, cb_c, cr_c = _derive_coeffs("BT601", input_range, "Limited")
+        ref_Y, ref_Cb, ref_Cr = _yuv_reference(rgb, y_c, cb_c, cr_c)
+
+        tt_in = ttnn.from_torch(rgb, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        y, cb, cr = ttnn.experimental.yuv_conversion(
+            tt_in,
+            color_space=ttnn.experimental.YUVColorSpace.BT601,
+            input_range=getattr(ttnn.experimental.RGBRange, input_range),
+            output_range=ttnn.experimental.YUVRange.Limited,
+        )
+        ttnn.synchronize_device(device)
+        y_tol = 1 if input_range == "MinusOneToOne" else 2
+        assert (ttnn.to_torch(y).squeeze(0).int() - ref_Y.int()).abs().max().item() <= y_tol, f"{input_range} Y"
+        assert (ttnn.to_torch(cb).squeeze(0).int() - ref_Cb.int()).abs().max().item() <= 2, f"{input_range} Cb"
+        assert (ttnn.to_torch(cr).squeeze(0).int() - ref_Cr.int()).abs().max().item() <= 2, f"{input_range} Cr"
 
 
 _SWEEP_H = [2, 4, 6, 10, 32, 64, 180]
