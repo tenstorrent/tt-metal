@@ -106,6 +106,11 @@ void kernel_main() {
         // mid_view_cb aliases the mid_cb L1 region but has no producer of its own, and its output
         // tile-rows sit at non-page-aligned byte offsets within the block that pops can't express.
         // So set its fifo_rd_ptr directly to the block base plus each output tile-row's offset.
+        // Reconfigure the unpacker/packer from the untilize config (src_cb/mid_cb) to the tilize
+        // config (mid_view_cb/out_cb). tilize_init's state_configure is sentinel-only, so the
+        // hardware reconfig must be explicit — for bf16 it's a no-op, for bfloat8 it's required.
+        reconfig_data_format_srca(src_cb, mid_view_cb);
+        pack_reconfig_data_format(mid_cb, out_cb);
         tilize_init(mid_view_cb, tiles_per_block, out_cb);
         for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
             UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })

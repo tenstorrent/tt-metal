@@ -177,11 +177,17 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
-    TT_FATAL(
-        input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
-            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
-        "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+    if (retile) {
+        TT_FATAL(
+            !is_block_float(input_tensor_a.dtype()) || tile_height >= 16,
+            "Retile tilize requires a full-face tile height (16 or greater) for block float inputs");
+    } else {
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
+                input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
+                input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
+            "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+    }
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {

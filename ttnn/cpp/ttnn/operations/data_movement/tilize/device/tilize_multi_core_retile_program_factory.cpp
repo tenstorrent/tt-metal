@@ -50,12 +50,12 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    auto intermediate_dtype = is_block_float(a.dtype()) ? tt::tt_metal::DataType::BFLOAT16 : output.dtype();
+    tt::DataFormat mid_cb_data_format = datatype_to_dataformat_converter(intermediate_dtype);
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_cb_data_format);
-    const uint32_t mid_page_size = input_single_tile_size;
-    // The intermediate stays in the input data format (conversion happens on the final pack), so
-    // the consumer view sizes an output tile in the input format, not the output format.
-    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_cb_data_format);
+    const uint32_t mid_input_page_size = input_tile.get_tile_size(mid_cb_data_format);
+    const uint32_t mid_output_page_size = output_tile.get_tile_size(mid_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -129,19 +129,19 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     // program-creation time: c_1 carries the input tile shape for pack_untilize to write into, c_2
     // the output tile shape so llk_unpack_tilize reads the correct number of RM rows.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * mid_pages_per_out_block * mid_page_size,
+        .total_size = 2 * mid_pages_per_out_block * mid_input_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{
             CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(mid_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = mid_page_size,
+                .data_format = mid_cb_data_format,
+                .page_size = mid_input_page_size,
                 .tile = input_tile,
             },
             CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(mid_view_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = out_tile_size_input_fmt,
+                .data_format = mid_cb_data_format,
+                .page_size = mid_output_page_size,
                 .tile = output_tile,
             },
         }},
@@ -211,8 +211,8 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
             output_cb_index,
             in_tile_height,
             out_tile_height,
-            out_tile_size_input_fmt,
-            mid_page_size,
+            mid_output_page_size,
+            mid_input_page_size,
         };
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,

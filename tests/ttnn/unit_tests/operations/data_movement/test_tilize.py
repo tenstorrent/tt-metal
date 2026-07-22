@@ -1008,7 +1008,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
 )
 @pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
 @pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
     """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
     torch.manual_seed(42)
@@ -1016,6 +1016,14 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
 
     if input_tile_shape[0] == output_tile_shape[0]:
         pytest.skip("Input and output tile shapes are the same")
+
+    # bfloat8_b tilize/untilize LLK does not support partial-face tiles (tile height < 16): the
+    # untilize/tilize half of the retile produces garbage (PCC ~0) whenever either the input or
+    # output tile has a partial face. This matches the convention in test_tiny_tile.py ("blocked
+    # dtypes (bfloat8_b/bfloat4_b) are not supported at a tiny tile"). Full-face tiles (16x32,
+    # 32x32) are supported on both the sharded and interleaved retile paths.
+    # if dtype == ttnn.bfloat8_b and (input_tile_shape[0] < 16 or output_tile_shape[0] < 16):
+    #     pytest.skip("bfloat8_b tilize/untilize LLK does not support partial-face tiles (height < 16)")
 
     # Build a (possibly sharded) already-tiled input using the source tile shape.
     mem_cfg = None
@@ -1053,4 +1061,7 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert tt_output.layout == ttnn.TILE_LAYOUT
     if shard_layout is not None:
         assert tt_output.memory_config().memory_layout == shard_layout
-    assert_equal(torch_input, ttnn.to_torch(tt_output))
+    if dtype == ttnn.bfloat8_b:
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+    else:
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
