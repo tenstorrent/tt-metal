@@ -283,6 +283,20 @@ ttnn::Tensor repeat(
                 return working_tensor;  // No valid spec; keep interleaved.
             }
         }
+        // Reject an over-provisioned explicit block-sharded output grid before resharding into it
+        // (see validate_block_shard_grid_not_over_provisioned). physical extents from the repeated
+        // tensor's tile-padded shape.
+        {
+            const auto& padded = working_tensor.padded_shape();
+            const int32_t rank = static_cast<int32_t>(padded.rank());
+            uint64_t physical_height = 1;
+            for (int32_t i = 0; i + 1 < rank; ++i) {
+                physical_height *= static_cast<uint64_t>(padded[i]);
+            }
+            const uint64_t physical_width = rank > 0 ? static_cast<uint64_t>(padded[-1]) : 1;
+            operations::data_movement::repeat::validate_block_shard_grid_not_over_provisioned(
+                final_mc, static_cast<uint32_t>(physical_height), static_cast<uint32_t>(physical_width));
+        }
         working_tensor = ttnn::interleaved_to_sharded(working_tensor, final_mc, std::nullopt);
     }
 

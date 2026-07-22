@@ -1019,15 +1019,53 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
     )
 
 
-def test_repeat_block_sharded_derived_grid_is_minimal(device):
-    """Regression: when repeat synthesizes a block-sharded output grid (output memory config with no
-    explicit shard spec -- the TT-Forge compiler's op-constraints query path), it must report the minimal grid
-    its shards occupy, not the full device grid. tt-metal would otherwise trim the grid to the used
-    cores at allocation, leaving the reported layout inconsistent with the physical buffer potentially causing bad PCC.
+def test_repeat_block_sharded_explicit_over_provisioned_grid_errors(device, expect_error):
+    """A falsely-reported (over-provisioned) explicit block-sharded output grid must be a catchable
+    error, not a silent trim that leaves the reported grid inconsistent with the physical buffer.
 
-    Input 1x1x1x128 in a 1x4 block-sharded grid; the 1x1x8x128 result (= 32x128 padded = 1 tile tall
-    x 4 tiles wide = 4 shards) must be reported on 4 cores, not the full device grid.
+    1x1x8x128 = 32x128 padded = 1 tile tall x 4 tiles wide = 4 shards, so an explicit 8x8 (64-core)
+    grid is over-provisioned and must be rejected rather than silently trimmed to 4 cores.
     """
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 1, 128), dtype=torch.bfloat16)
+
+    input_mem_config = _explicit_block_shard_config(device, grid_y=1, grid_x=4, sh=32, sw=32)
+    over_provisioned_output = _explicit_block_shard_config(device, grid_y=8, grid_x=8, sh=32, sw=32)
+
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_mem_config
+    )
+    with expect_error(RuntimeError, "larger than the"):
+        ttnn.repeat(ttnn_in, [1, 1, 8, 1], memory_config=over_provisioned_output)
+
+
+@pytest.mark.parametrize(
+    "num_repeats, expected_grid_rows, expected_grid_cols",
+    [
+        (8, 1, 4),  # out 1x1x8x128 (the Falcon shape) = 1 tile tall x 4 wide -> 1 row x 4 cols (4 cores)
+        (64, 2, 4),  # out 1x1x64x128  = 2 tiles tall x 4 wide -> 2 rows x 4 cols (8 cores)
+        (128, 4, 4),  # out 1x1x128x128 = 4 tiles tall x 4 wide -> 4 rows x 4 cols (16 cores)
+        (256, 8, 4),  # out 1x1x256x128 = 8 tiles tall x 4 wide -> 8 rows x 4 cols (32 cores)
+    ],
+)
+def test_repeat_block_sharded_derived_grid_scales_with_shape(
+    device, num_repeats, expected_grid_rows, expected_grid_cols
+):
+    """Regression (TT-Forge Falcon3 repeat->bad PCC): when repeat synthesizes a block-sharded
+    output grid (output memory config with no explicit shard spec -- the compiler's op-constraints
+    query path), it must report the minimal grid its shards occupy and scale that grid with the
+    output, not pin it to the full device grid. tt-metal would otherwise trim the grid to the used
+    cores at allocation, leaving the reported layout inconsistent with the physical buffer.
+
+    repeat [1,1,N,1] on [1,1,1,128] -> [1,1,N,128] = ceil(N/32) tiles tall x 4 tiles wide, so the
+    derived grid is ceil(N/32) rows x 4 cols (1x4 at N=8, 2x4 at N=64, 4x4 at N=128, 8x4 at N=256).
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    if expected_grid_rows > compute_grid.y or expected_grid_cols > compute_grid.x:
+        pytest.skip(
+            f"device grid ({compute_grid.y}x{compute_grid.x}) too small for {expected_grid_rows}x{expected_grid_cols}"
+        )
+
     torch.manual_seed(0)
     x = torch.rand((1, 1, 1, 128), dtype=torch.bfloat16)
 
@@ -1038,13 +1076,16 @@ def test_repeat_block_sharded_derived_grid_is_minimal(device):
     ttnn_in = ttnn.from_torch(
         x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_mem_config
     )
-    result = ttnn.repeat(ttnn_in, [1, 1, 8, 1], memory_config=derived_block_output)
+    result = ttnn.repeat(ttnn_in, [1, 1, num_repeats, 1], memory_config=derived_block_output)
 
     shard_spec = result.memory_config().shard_spec
     assert shard_spec is not None, "expected a sharded output"
-    # 4 shards (1x4 tiles) must occupy 4 cores; the bug synthesised the full device grid instead.
-    assert shard_spec.num_cores() == 4, f"grid not minimal: {shard_spec.num_cores()} cores ({shard_spec.grid})"
-
-    ref = x.repeat(1, 1, 8, 1)
-    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_pcc(ref.float(), got.float(), 0.9999)
+    grid = shard_spec.grid.bounding_box().grid_size()  # CoreCoord: x = columns, y = rows
+    assert (grid.y, grid.x) == (expected_grid_rows, expected_grid_cols), (
+        f"expected {expected_grid_rows}x{expected_grid_cols} (rows x cols) grid, "
+        f"got {grid.y}x{grid.x} ({shard_spec.grid})"
+    )
+    # No PCC check here: eager consumers read the live (trimmed) buffer, so data is correct with or
+    # without this fix -- PCC would not discriminate. The reported grid above is the regression. The
+    # corruption this fix prevents only surfaces in the compiled program (reader args baked from the
+    # advertised grid); data correctness of repeat itself is covered by the run_repeat_test cases.
