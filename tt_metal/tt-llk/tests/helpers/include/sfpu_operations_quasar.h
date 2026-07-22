@@ -21,12 +21,15 @@
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
+#include "sfpu/ckernel_sfpu_clamp.h"
 #include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rsqrt.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
+#include "sfpu/ckernel_sfpu_softplus.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
@@ -217,6 +220,35 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::square)
     {
         _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::clamp)
+    {
+        // Clamp bounds are fixed to [-1.0, +1.0] as FP16A bit patterns (0xBC00 / 0x3C00), matching
+        // the UnarySFPUGolden._clamp reference (min=-1, max=1, offset 0). Extra args are forwarded
+        // to the per-face functor call by _llk_math_eltwise_unary_sfpu_params_.
+        _llk_math_eltwise_unary_sfpu_params_(
+            _calculate_clamp_<APPROX, ITERATIONS>,
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(0xBC00),  // min = -1.0 (fp16a)
+            static_cast<std::uint32_t>(0x3C00)); // max = +1.0 (fp16a)
+    }
+    else if constexpr (OPERATION == SfpuType::negative)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_<APPROX, ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        // Softplus params are beta / (1/beta) / threshold as fp32 bit patterns, matching the
+        // UnarySFPUGolden._softplus reference defaults (beta = 1.0, threshold = 20.0). Extra args
+        // are forwarded to the per-face functor call by _llk_math_eltwise_unary_sfpu_params_.
+        _llk_math_eltwise_unary_sfpu_params_(
+            _calculate_softplus_<APPROX, is_fp32_dest_acc_en, ITERATIONS>,
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(0x3F800000),  // beta = 1.0 (fp32)
+            static_cast<std::uint32_t>(0x3F800000),  // 1/beta = 1.0 (fp32)
+            static_cast<std::uint32_t>(0x41A00000)); // threshold = 20.0 (fp32)
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {

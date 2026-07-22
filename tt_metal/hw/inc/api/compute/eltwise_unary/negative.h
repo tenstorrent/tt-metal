@@ -8,14 +8,11 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#ifndef ARCH_QUASAR
 #include "sfpu/ckernel_sfpu_negative.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-#ifndef ARCH_QUASAR
 
 ALWI void negative_tile_init() { MATH(SFPU_UNARY_INIT(negative)); }
 // clang-format off
@@ -36,6 +33,8 @@ ALWI void negative_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
+
+#ifndef ARCH_QUASAR
 
 ALWI void negative_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(

@@ -1368,8 +1368,25 @@ std::string_view QuasarComputeKernel::get_linker_opt_level() const { return this
 
 std::string QuasarComputeKernel::config_hash() const {
     // QuasarComputeProcessor values must be sorted to ensure consistent ordering for hash generation
-    TT_ASSERT(std::is_sorted(this->compute_processors_.begin(), this->compute_processors_.end()));
-    return fmt::format("{}", fmt::join(this->compute_processors_, "_"));
+    TT_ASSERT(std::is_sorted(compute_processors_.begin(), compute_processors_.end()));
+
+    std::string unpack_mode_descriptor = "default";
+    const auto& unpack_modes = config_.unpack_to_dest_mode;
+    if (std::ranges::any_of(unpack_modes, [](auto v) { return v != UnpackToDestMode::Default; })) {
+        unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
+    }
+
+    return fmt::format(
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        fmt::join(compute_processors_, "_"),
+        enchantum::to_string(config_.math_fidelity),
+        config_.fp32_dest_acc_en,
+        config_.math_approx_mode,
+        config_.dst_full_sync_en,
+        config_.bfp8_pack_precise,
+        config_.enable_2x_src_format,
+        config_.unpack_to_dest_en,
+        unpack_mode_descriptor);
 }
 
 uint8_t QuasarComputeKernel::expected_num_binaries() const {

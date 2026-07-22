@@ -72,6 +72,17 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
+    {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
+    // The bound / beta / threshold literals baked into these chains must stay in sync with the goldens in
+    // sfpu_function().
+    //   clamp: min = -1.0, max = +1.0. NOTE: the bound param encoding differs by arch (Quasar decodes via
+    //          sfpi::sFloat16a = FP16A; BH/WH load the raw word into vConstIntPrgm0 = fp32), so this chain
+    //          is re-emitted per-arch in run_sfpu_all_same_buffer; the entry here is just a placeholder.
+    {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBC00u, 0x3C00u);"}}},
+    //   softplus: beta = 1.0, 1/beta = 1.0, threshold = 20.0 as fp32 bit patterns (decoded via
+    //             Converter::as_float on every arch).
+    {"softplus",
+     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, 0x3F800000u, 0x3F800000u, 0x41A00000u);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -168,6 +179,18 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "square") {
         return bfloat16(static_cast<float>(input) * static_cast<float>(input));
+    }
+    if (op_name == "negative") {
+        return -input;
+    }
+    if (op_name == "clamp") {
+        // Bounds must match the FP16A literals in the "clamp" SFPU_OP_CHAIN_0 above.
+        return std::clamp(input, -1.0f, 1.0f);
+    }
+    if (op_name == "softplus") {
+        // beta = 1, threshold = 20 (matches the "softplus" SFPU_OP_CHAIN_0 above). Numerically stable:
+        // above the threshold softplus collapses to the identity, elsewhere use log1p(exp(x)).
+        return (input > 20.0f) ? input : std::log1p(std::exp(input));
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -282,6 +305,14 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.0f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
+    if (op_name == "clamp") {
+        // Span beyond the [-1, 1] bounds so the below-min, in-range, and above-max branches all fire.
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
+    }
+    if (op_name == "softplus") {
+        // Wide range: exercises the near-linear region, the polynomial region, and the a > 5 tail.
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-8.0f, 8.0f, numel, seed);
+    }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
 
@@ -354,6 +385,11 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
     }
     if (op_name == "log") {
         return {0.03f, 0.02f};
+    }
+    if (op_name == "softplus") {
+        // Polynomial approximation; the bf16-Dest path also clamps the residual to 0 past a=5, so the
+        // absolute error can reach ~exp(-5) = 0.0067 for large-magnitude inputs. atol covers that.
+        return {0.06f, 0.02f};
     }
     return {0.06f, 0.006f};
 }
@@ -865,6 +901,15 @@ bool run_sfpu_all_same_buffer(
     }
 
     std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    if (test_config.sfpu_op == "clamp") {
+        // clamp bounds (-1.0, +1.0) are encoded per-arch: Quasar's _calculate_clamp_ decodes params as
+        // FP16A, while BH/WH load them into vConstIntPrgm0 and interpret the raw 32-bit word as fp32.
+        // Re-emit the chain with the right literals for the device under test (must match the clamp golden).
+        const bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
+        const std::string min_lit = is_quasar ? "0xBC00u" : "0xBF800000u";
+        const std::string max_lit = is_quasar ? "0x3C00u" : "0x3F800000u";
+        sfpu_defines["SFPU_OP_CHAIN_0"] = "clamp_tile_init(); clamp_tile(0, " + min_lit + ", " + max_lit + ");";
+    }
     sfpu_defines["SFPU_UNARY_OP"] = "1";
     sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
@@ -874,14 +919,45 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
-    return is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
-                   : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    const bool ok =
+        is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
+                : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+
+    // On mismatch, dump the first few (input, golden, actual) triples so failures are diagnosable from the
+    // log instead of just a boolean. bf16 path only (the Float32 path is relu-only and already passing).
+    if (!ok && !is_fp32) {
+        const auto in_u = unpack_vector<bfloat16, uint32_t>(packed_input);
+        const auto gold_u = unpack_vector<bfloat16, uint32_t>(packed_golden);
+        const auto got_u = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
+        const size_t n = std::min<size_t>({in_u.size(), gold_u.size(), got_u.size()});
+        int shown = 0;
+        for (size_t i = 0; i < n && shown < 24; ++i) {
+            const float in = static_cast<float>(in_u[i]);
+            const float gold = static_cast<float>(gold_u[i]);
+            const float got = static_cast<float>(got_u[i]);
+            if (gold != got) {
+                log_error(
+                    tt::LogTest,
+                    "sfpu mismatch op={} 32bit_dest={} idx={} in={} golden={} actual={}",
+                    test_config.sfpu_op,
+                    test_config.en_32bit_dest,
+                    i,
+                    in,
+                    gold,
+                    got);
+                ++shown;
+            }
+        }
+    }
+    return ok;
 }
 
 namespace {
@@ -1553,6 +1629,12 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "lez"),
         std::make_tuple(1, "square"),
         std::make_tuple(4, "square"),
+        std::make_tuple(1, "negative"),
+        std::make_tuple(4, "negative"),
+        std::make_tuple(1, "clamp"),
+        std::make_tuple(4, "clamp"),
+        std::make_tuple(1, "softplus"),
+        std::make_tuple(4, "softplus"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
@@ -1676,6 +1758,12 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
     ::testing::Values(
+        std::make_tuple(1, "negative"),
+        std::make_tuple(4, "negative"),
+        std::make_tuple(1, "clamp"),
+        std::make_tuple(4, "clamp"),
+        std::make_tuple(1, "softplus"),
+        std::make_tuple(4, "softplus"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
