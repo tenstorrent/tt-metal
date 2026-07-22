@@ -2,8 +2,27 @@
 
 set -e
 
-LOGFILE=log
+LOGDIR="."
+LOGFILE="deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 ITERS=5
+
+while [ -n "$1" ]
+do
+	case "$1" in
+	-l)
+		LOGDIR="$2"
+		shift
+		;;
+	*)
+		echo "Unknown option: $1"
+		exit 1
+		;;
+	esac
+	shift
+done
+
+mkdir -p "$LOGDIR"
+LOGFILE="$LOGDIR/$LOGFILE"
 
 GREEN="$(printf '\033[32m')"
 RED="$(printf '\033[31m')"
