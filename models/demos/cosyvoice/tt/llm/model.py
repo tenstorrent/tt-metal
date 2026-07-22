@@ -1,4 +1,4 @@
-"""CosyVoice2 LLM — TTNN wrapper around tt_transformers Qwen2.5-0.5B.
+"""CosyVoice LLM — TTNN wrapper around tt_transformers Qwen2.5-0.5B.
 
 Reuses the tt_transformers Transformer (24× TransformerBlock, GQA attention,
 SwiGLU MLP, RMSNorm, RoPE, KV cache) and adds CosyVoice-specific glue:
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.cosyvoice.tt.llm.sampling import sampling_ids
@@ -79,6 +80,7 @@ class CosyVoiceLLM:
         )
 
         self._setup_speech_embedding(speech_heads)
+        self._trace_id = None
 
     def _setup_speech_embedding(self, speech_heads: Dict[str, torch.Tensor]):
         speech_emb_weight = speech_heads["speech_embedding.weight"].unsqueeze(0).unsqueeze(0)
@@ -194,6 +196,9 @@ class CosyVoiceLLM:
         Returns:
             log_probs: [SPEECH_TOKEN_VOCAB] host tensor
         """
+        if self._trace_id is not None:
+            return self._decode_step_traced(speech_token_id, current_pos)
+
         token_tensor = ttnn.from_torch(
             torch.tensor([[speech_token_id]], dtype=torch.int32),
             dtype=ttnn.uint32,
@@ -235,6 +240,111 @@ class CosyVoiceLLM:
         logits = logits_torch[0, 0, 0, :SPEECH_TOKEN_VOCAB].float()
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
         return log_probs
+
+    def _init_trace(self, start_pos: int):
+        """Initialize trace capture for decode loop.
+
+        Must be called after prefill, with the position of the first decode step.
+        Performs a compile warmup, then captures the decode forward as a trace.
+        """
+        decode_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, None)
+
+        self._trace_token_host = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self._trace_pos_host = ttnn.from_torch(
+            torch.zeros(1, dtype=torch.int32),
+            dtype=ttnn.int32,
+        )
+
+        self._trace_token_buf = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._trace_pos_buf = ttnn.from_torch(
+            torch.tensor([start_pos], dtype=torch.int32),
+            dtype=ttnn.int32,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        rot_idxs = self.model.rope_setup.get_rot_idxs(torch.tensor([start_pos]))
+        self._trace_rot_idx_buf = rot_idxs
+        self._trace_rot_idx_shape = rot_idxs.shape
+
+        ttnn.copy_host_to_device_tensor(self._trace_token_host, self._trace_token_buf)
+        ttnn.copy_host_to_device_tensor(self._trace_pos_host, self._trace_pos_buf)
+
+        self._decode_forward_device()
+
+        ttnn.copy_host_to_device_tensor(self._trace_token_host, self._trace_token_buf)
+        ttnn.copy_host_to_device_tensor(self._trace_pos_host, self._trace_pos_buf)
+
+        self._trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._trace_output = self._decode_forward_device()
+        ttnn.end_trace_capture(self.mesh_device, self._trace_id, cq_id=0)
+
+        logger.info(f"Decode trace captured (start_pos={start_pos})")
+
+    def _decode_forward_device(self) -> ttnn.Tensor:
+        """Device-side decode forward (traceable). Reads from persistent buffers."""
+        speech_emb = ttnn.embedding(
+            self._trace_token_buf,
+            self.speech_embedding_weights,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        speech_emb = ttnn.unsqueeze_to_4D(speech_emb)
+
+        decode_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, None)
+        speech_emb = ttnn.to_memory_config(speech_emb, decode_mem_cfg)
+
+        rot_mats = self.model.rope_setup.get_rot_mats(self._trace_rot_idx_buf)
+
+        tt_logits = self.model.forward(
+            speech_emb,
+            self._trace_pos_buf,
+            rot_mats_global=rot_mats,
+            mode=Mode.DECODE,
+        )
+
+        tt_logits = ttnn.untilize(tt_logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return tt_logits
+
+    def _decode_step_traced(self, speech_token_id: int, current_pos: int) -> torch.Tensor:
+        """Replay the captured decode trace with updated inputs."""
+        token_host = ttnn.from_torch(
+            torch.tensor([[speech_token_id]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        pos_host = ttnn.from_torch(
+            torch.tensor([current_pos], dtype=torch.int32),
+            dtype=ttnn.int32,
+        )
+        rot_idx_host = self.model.rope_setup.get_rot_idxs(torch.tensor([current_pos]), on_host=True)
+
+        ttnn.copy_host_to_device_tensor(token_host, self._trace_token_buf)
+        ttnn.copy_host_to_device_tensor(pos_host, self._trace_pos_buf)
+        ttnn.copy_host_to_device_tensor(rot_idx_host, self._trace_rot_idx_buf)
+
+        ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+
+        logits_torch = ttnn.to_torch(self._trace_output)
+        logits = logits_torch[0, 0, 0, :SPEECH_TOKEN_VOCAB].float()
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+        return log_probs
+
+    def release_trace(self):
+        """Release the captured decode trace."""
+        if self._trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._trace_id)
+            self._trace_id = None
 
     @torch.inference_mode()
     def generate(
@@ -285,6 +395,9 @@ class CosyVoiceLLM:
 
         out_tokens.append(token_id)
         current_pos = prefix.shape[1]
+
+        if self._trace_id is None:
+            self._init_trace(current_pos)
 
         for step in range(1, max_len):
             ignore_eos = step < min_len

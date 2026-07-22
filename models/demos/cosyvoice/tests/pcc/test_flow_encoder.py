@@ -1,4 +1,4 @@
-"""PCC tests for CosyVoice2 flow encoder (Phase 2b).
+"""PCC tests for CosyVoice flow encoder (Phase 2b).
 
 Tests:
   1. Encoder mu PCC ≥ 0.99 vs golden fixtures (per-mode)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Phase 0.7 — Generate golden reference fixtures for CosyVoice2-0.5B.
+"""Phase 0.7 — Generate golden reference fixtures for CosyVoice
 
-Runs the CosyVoice2 reference pipeline on CPU with:
+Runs the CosyVoice reference pipeline on CPU with:
   - seed = 1986 (the 4 global seed calls the yaml itself makes: random,
     numpy, torch, torch.cuda.all — replicated here for determinism), AND
   - RAS (repetition-aware sampling) with the fixed seed for deterministic

@@ -1,11 +1,11 @@
-"""PCC tests for CosyVoice flow estimator + CFM (Phase 2b).
+"""PCC tests for CosyVoice flow estimator TTNN port (Stage 2.3).
 
 Tests:
-  1. Estimator dphi_dt PCC ≥ 0.99 (per-step, step 0)
-  2. CFM Euler loop mel PCC ≥ 0.99 (final output)
+  1. TTNN Estimator dphi_dt PCC ≥ 0.99 (per-step, step 0)
+  2. TTNN CFM Euler loop mel PCC ≥ 0.99 (final output, all 10 steps)
 
 Run:
-  pytest models/demos/cosyvoice/tests/pcc/test_flow_estimator.py -v
+  pytest models/demos/cosyvoice/tests/pcc/test_flow_estimator_ttnn.py -v
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 import torch
+
+import ttnn
 
 DEMO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_DIR = DEMO_ROOT / "model_data" / "golden" / "flow"
@@ -34,24 +36,31 @@ PCC_THRESHOLD = 0.99
 
 
 @pytest.fixture(scope="module")
-def estimator():
-    from models.demos.cosyvoice.tt.flow.unet_estimator import UNetEstimator
-    from models.demos.cosyvoice.tt.flow.weights import load_flow_weights
-
-    components = load_flow_weights(str(FLOW_PT))
-    return UNetEstimator(components["decoder"])
+def device():
+    dev = ttnn.open_device(device_id=0, l1_small_size=64 * 1024, trace_region_size=5000000)
+    yield dev
+    ttnn.close_device(dev)
 
 
 @pytest.fixture(scope="module")
-def cfm(estimator):
+def estimator_ttnn(device):
+    from models.demos.cosyvoice.tt.flow.estimator_ttnn import UNetEstimatorTtnn
+    from models.demos.cosyvoice.tt.flow.weights import load_flow_weights
+
+    components = load_flow_weights(str(FLOW_PT))
+    return UNetEstimatorTtnn(components["decoder"], device)
+
+
+@pytest.fixture(scope="module")
+def cfm_ttnn(estimator_ttnn):
     from models.demos.cosyvoice.tt.flow.cfm import CausalConditionalCFM
 
-    return CausalConditionalCFM(estimator)
+    return CausalConditionalCFM(estimator_ttnn)
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_estimator_dphi_dt_pcc(estimator, mode):
-    """Estimator dphi_dt PCC ≥ 0.99 at step 0."""
+def test_estimator_ttnn_dphi_dt_pcc(estimator_ttnn, mode):
+    """TTNN Estimator dphi_dt PCC ≥ 0.99 at step 0."""
     golden_path = GOLDEN_DIR / f"{mode}.pt"
     if not golden_path.exists():
         pytest.skip(f"Golden fixture not found: {golden_path}")
@@ -66,7 +75,6 @@ def test_estimator_dphi_dt_pcc(estimator, mode):
     golden_dphi_dt = g["dphi_dt"]
 
     t = t_span[0].unsqueeze(0)
-    dt = t_span[1] - t_span[0]
 
     x_in = torch.zeros([2, 80, x_init.size(2)], dtype=spks.dtype)
     mask_in = torch.zeros([2, 1, x_init.size(2)], dtype=spks.dtype)
@@ -83,15 +91,15 @@ def test_estimator_dphi_dt_pcc(estimator, mode):
     cond_in[0] = cond
 
     with torch.no_grad():
-        dphi_dt = estimator.forward(x_in, mask_in, mu_in, t_in, spks_in, cond_in)
+        dphi_dt = estimator_ttnn.forward(x_in, mask_in, mu_in, t_in, spks_in, cond_in)
 
     passing, msg = comp_pcc(golden_dphi_dt[0], dphi_dt, PCC_THRESHOLD)
     assert passing, f"[{mode}] dphi_dt[0] PCC failed: {msg}"
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_cfm_mel_pcc(cfm, mode):
-    """CFM Euler loop mel PCC ≥ 0.99."""
+def test_cfm_ttnn_mel_pcc(cfm_ttnn, mode):
+    """TTNN CFM Euler loop mel PCC ≥ 0.99 (all 10 steps)."""
     golden_path = GOLDEN_DIR / f"{mode}.pt"
     if not golden_path.exists():
         pytest.skip(f"Golden fixture not found: {golden_path}")
@@ -99,7 +107,7 @@ def test_cfm_mel_pcc(cfm, mode):
     g = torch.load(str(golden_path), map_location="cpu", weights_only=True)
 
     with torch.no_grad():
-        mel = cfm.solve_euler(g["x_init"], g["t_span"], g["mu"], g["mask"], g["spks"], g["cond"])
+        mel = cfm_ttnn.solve_euler(g["x_init"], g["t_span"], g["mu"], g["mask"], g["spks"], g["cond"])
 
     passing, msg = comp_pcc(g["mel"], mel, PCC_THRESHOLD)
     assert passing, f"[{mode}] mel PCC failed: {msg}"

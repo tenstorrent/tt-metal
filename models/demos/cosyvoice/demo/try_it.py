@@ -35,7 +35,7 @@ def main():
     from models.demos.cosyvoice.tt.pipeline import TtnnCosyVoice
 
     print("Opening N300 device...")
-    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
+    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024, trace_region_size=5000000)
 
     print("Loading pipeline (LLM + flow + vocoder)...")
     pipe = TtnnCosyVoice(device, model_dir=str(CKPT_DIR))

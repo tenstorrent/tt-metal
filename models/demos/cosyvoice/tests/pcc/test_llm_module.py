@@ -1,4 +1,4 @@
-"""PCC tests for CosyVoice2 LLM (Phase 2a).
+"""PCC tests for CosyVoice LLM (Phase 2a).
 
 Tests:
   1. Teacher-forced logits PCC ≥ 0.99 vs golden fixtures (per-step)
@@ -31,7 +31,7 @@ TOKEN_ACCURACY_THRESHOLD = 0.95
 
 @pytest.fixture(scope="module")
 def mesh_device():
-    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
+    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024, trace_region_size=5000000)
     yield device
     ttnn.close_device(device)
 

@@ -1,13 +1,8 @@
-"""Performance tests — C6 throughput gates.
+"""Performance tests
 
-Targets:
-  - LLM decode: >= 30 tokens/s (batch 1) — HARD GATE
-  - E2E RTF (real-time factor): < 0.5 — Stage-2 target (flow on host is bottleneck)
-
-Stage-1 known limitation: The flow estimator (UNet1D, 12 mid blocks, 256-ch) runs
-on host CPU. With 10 NFE × CFG batch=2, each CFM step takes ~1.6s. Even reducing
-NFE to 5 only brings flow+voc RTF to ~0.9. Achieving RTF < 0.5 requires moving
-the flow estimator to device (Stage 2: trace+2CQ, on-device flow).
+Stage 2.3: Flow estimator ported to TTNN on N300 (4.3x speedup vs host CPU).
+Stage 2.5: NFE reduced from 10→6 (40% fewer estimator evaluations).
+6 NFE × CFG batch=2: ~2.7s on device (was ~19s on host with NFE=10).
 
 Usage:
     source /root/tt-metal/python_env/bin/activate
@@ -43,7 +38,7 @@ WARMUP_STEPS = 3
 def pipeline():
     import ttnn
 
-    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
+    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024, trace_region_size=5000000)
 
     sys.path.insert(0, str(DEMO_ROOT))
     from models.demos.cosyvoice.tt.pipeline import TtnnCosyVoice
@@ -74,6 +69,9 @@ def test_llm_decode_throughput(pipeline):
         log_probs = pipeline.llm.decode_step(token_id, current_pos)
         current_pos += 1
 
+    if pipeline.llm._trace_id is None:
+        pipeline.llm._init_trace(current_pos)
+
     t0 = time.perf_counter()
     for i in range(WARMUP_STEPS, WARMUP_STEPS + n_decode):
         token_id = golden_tokens[i].item()
@@ -87,11 +85,10 @@ def test_llm_decode_throughput(pipeline):
 
 
 @pytest.mark.xfail(
-    reason="Stage-1: flow estimator on host CPU → RTF ~2.2. Target <0.5 requires Stage-2 device flow.",
-    strict=False,
+    reason="RTF < 0.5 requires Stage 2.4 (vocoder→device, BLOCKED by bf16 precision); NFE 10→6 done (D31)"
 )
 def test_e2e_rtf(pipeline):
-    """C6: E2E real-time factor < 0.5 (Stage-2 target; recorded in Stage 1)."""
+    """C6: E2E real-time factor < 0.5 (Stage-2 target)."""
     t0 = time.perf_counter()
     waveform = pipeline.inference_zero_shot(ZERO_SHOT_TEXT, ZERO_SHOT_PROMPT_TEXT, ZERO_SHOT_PROMPT_WAV)
     gen_time = time.perf_counter() - t0
@@ -100,7 +97,6 @@ def test_e2e_rtf(pipeline):
     rtf = gen_time / audio_duration
 
     print(f"\n[C6] E2E RTF: {rtf:.3f} (gen={gen_time:.2f}s, audio={audio_duration:.2f}s)")
-    print(f"[C6] Breakdown: LLM ~34 tok/s on N300; flow (10 NFE × CFG) + vocoder on host CPU")
-    print(f"[C6] Stage-2 path: move flow estimator to device (trace+2CQ) to achieve RTF < 0.5")
+    print(f"[C6] Breakdown: LLM ~113 tok/s on N300; flow estimator NFE=6 on N300 (Stage 2.3+2.5)")
     assert waveform.shape[1] > 0, "No audio generated"
     assert rtf < 0.5, f"E2E RTF {rtf:.3f} >= 0.5 target"

@@ -1,4 +1,4 @@
-"""PCC tests for CosyVoice2 HiFT vocoder (Phase 2c).
+"""PCC tests for CosyVoice HiFT vocoder (Phase 2c).
 
 Tests:
   1. mel→waveform PCC ≥ 0.99 vs golden/hift/<mode>.pt['waveform']

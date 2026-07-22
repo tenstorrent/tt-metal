@@ -28,8 +28,8 @@ _FLOW_PT = _CKPT_DIR / "flow.pt"
 _HIFT_PT = _CKPT_DIR / "hift.pt"
 
 from models.demos.cosyvoice.tt.flow.cfm import CausalConditionalCFM
+from models.demos.cosyvoice.tt.flow.estimator_ttnn import UNetEstimatorTtnn
 from models.demos.cosyvoice.tt.flow.flow_matching import FlowEncoderModel
-from models.demos.cosyvoice.tt.flow.unet_estimator import UNetEstimator
 from models.demos.cosyvoice.tt.flow.weights import load_flow_weights
 from models.demos.cosyvoice.tt.hifigan.generator import HiFTVocoder
 from models.demos.cosyvoice.tt.llm.model import CosyVoiceLLM
@@ -124,8 +124,8 @@ class TtnnCosyVoice:
         self.flow_encoder = FlowEncoderModel(flow_weights)
         self.flow_encoder.eval()
 
-        estimator = UNetEstimator(flow_weights["decoder"])
-        self.cfm = CausalConditionalCFM(estimator)
+        estimator = UNetEstimatorTtnn(flow_weights["decoder"], self.mesh_device)
+        self.cfm = CausalConditionalCFM(estimator, n_timesteps=6)
 
     def _init_vocoder(self):
         self.vocoder = HiFTVocoder.from_checkpoint(_HIFT_PT)

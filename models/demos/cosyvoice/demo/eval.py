@@ -40,7 +40,7 @@ SAMPLE_RATE = 24000
 def pipeline():
     import ttnn
 
-    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
+    device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024, trace_region_size=5000000)
 
     sys.path.insert(0, str(DEMO_ROOT))
     from models.demos.cosyvoice.tt.pipeline import TtnnCosyVoice

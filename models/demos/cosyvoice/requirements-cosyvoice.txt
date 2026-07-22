@@ -1,4 +1,4 @@
-# Curated Python deps for CosyVoice2-0.5B reference bring-up (Stage 1) inside the
+# Curated Python deps for CosyVoice reference bring-up (Stage 1) inside the
 # tt-metal env. This file is the source of truth for `pip install -r`; deliberately
 # kept inside the demo dir so the next engineer can reproduce 1:1.
 #

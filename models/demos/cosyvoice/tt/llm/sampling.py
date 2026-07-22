@@ -1,4 +1,4 @@
-"""RAS (Repetition-Aware Sampling) for CosyVoice2 LLM decode.
+"""RAS (Repetition-Aware Sampling) for CosyVoice LLM decode.
 
 Ported from `cosyvoice/utils/common.py::ras_sampling` (reference repo @ 074ca6d).
 Runs entirely on host (CPU) — logits are read back from device each step.

@@ -73,8 +73,6 @@ class LLMConfig:
     llm_output_size: int = 896
     spk_embed_dim: int = 192
     mix_ratio: Tuple[int, int] = (5, 15)  # bistream text:speech — Stage-2
-    # RAS sampling params (Stage-1 eval uses greedy / top_k=1 to sidestep RAS
-    # nondeterminism; RAS validated separately):
     top_p: float = 0.8
     top_k: int = 25
     win_size: int = 10
