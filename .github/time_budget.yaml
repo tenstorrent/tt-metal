@@ -328,6 +328,7 @@ models:
     bh_quietbox_2: 260
     bh_galaxy: 70
     bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
+    bh_sc4: 130  # WAN 2.2 T2V + I2V multihost quad perf tests (2x timeout 60 + headroom); observed ~40min/leg
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172

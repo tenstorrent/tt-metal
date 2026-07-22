@@ -1,0 +1,18 @@
+# Quad Black Hole galaxy mesh for the WAN 2.2 multihost CI tests (bh_sc4 SKU).
+# 4 galaxies cabled together => 4 hosts x 32 chips = 128 devices, exposed as a 32x4 torus.
+# The WAN pipeline tests request a (4, 32) submesh from this parent mesh via create_submesh.
+# Copied from tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto,
+# the proven quad BH galaxy descriptor also used by the bh_sc4-mgd SKU. host_topology [4, 1]
+# gives one MPI rank per galaxy/host; tt-run auto-allocation generates the rank bindings/rankfile
+# from this file plus the allocated host list.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 4, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
