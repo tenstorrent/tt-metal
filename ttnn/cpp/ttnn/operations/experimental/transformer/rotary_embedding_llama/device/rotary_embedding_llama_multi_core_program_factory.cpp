@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 ProgramDescriptor RotaryEmbeddingLlamaMultiCore::create_descriptor(
     const RotaryEmbeddingLlamaParams& operation_attributes,
     const RotaryEmbeddingLlamaInputs& tensor_args,
-    tt::tt_metal::Tensor& output) {
+    ttnn::Tensor& output) {
     ProgramDescriptor desc;
 
     const auto& input = tensor_args.input_tensor;

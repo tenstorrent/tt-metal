@@ -21,7 +21,7 @@ struct MoveDeviceOperation {
     using operation_attributes_t = ttnn::prim::MoveOperationAttributes;
     using tensor_args_t = ttnn::prim::MoveTensorArgs;
     using tensor_return_value_t = Tensor;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using program_factory_t = std::variant<MoveProgramFactory, MoveOverlapProgramFactory, MoveShardedProgramFactory>;
 

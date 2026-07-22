@@ -79,7 +79,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
-    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<ttnn::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
@@ -101,7 +101,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
 // guards for the receiver-contiguous layout.
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
-    const tt::tt_metal::Tensor& weight,
+    const ttnn::Tensor& weight,
     const GlobalCircularBuffer& gcb);
 
 }  // namespace ttnn::global_circular_buffer
