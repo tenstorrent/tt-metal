@@ -734,3 +734,16 @@ rs_prod_confirm.py -> rs_prod_confirm_results.json):** the gate selects reduce-s
 | 128x2048x2048 | (3,4,1,2,3) | 27.16 | 24.64 | -9.26% |
 | 256x2048x1024 | (1,4,2,2,4) | 22.42 | 20.47 | -8.67% |
 | 256x2048x2048 | (1,4,3,2,4) | 37.64 | 34.61 | -8.05% |
+
+### [Post-cleanup perf remeasurement vs pre-cleanup baseline] (harness regime_a_prod_perf.py)
+Rewrote the 60-shape perf harness on the PUBLIC op (config=None -> auto-picker -> linear chain), replacing
+the deleted diag-coupled harness. Measured the CLEANED-UP production op (kernel wall via device profiler,
+median over 8 runs) across all 60 Mt<=8 corpus shapes and compared to the collected pre-cleanup baseline
+regime_a_current_perf.json (chain configuration). **Result: the diag/reduction-experiment removal + hardcoding
++ factory restructure is PERF-NEUTRAL on the chain — mean -0.25%, median -0.34%, worst |delta| 2.88%, ALL 60
+within 3% (57/60 within 2%), zero shapes >3% off baseline.** The 5 shapes that briefly ran reduce-scatter as
+the pre-cleanup production default are now cleanly back on the chain = back to the chain baseline
+(64x2048x1024 +0.00%, 128x2048x1024 -0.23%, 128x2048x2048 +2.11%, 256x2048x1024 +0.68%, 256x2048x2048 +1.72%).
+Relative to the reduce-scatter-era production (before this cleanup) those 5 are ~+5..+10% slower — the
+INTENTIONAL removal of reduce-scatter (its -5..-9% win is a recoverable design in this log, to be reintroduced
+cleanly for multi-device). Results: tools/mm_sweep/regime_a_prod_perf_results.json.
