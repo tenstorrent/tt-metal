@@ -56,7 +56,7 @@ passes=0
 run_test() {
 	for i in $(seq "$ITERS")
 	do
-		printf "$MESSAGE"
+		printf "$MESSAGE loop $i "
 		if ! "$@" >> "$LOGFILE" 2>&1
 		then
 			failures=$((failures + 1))
