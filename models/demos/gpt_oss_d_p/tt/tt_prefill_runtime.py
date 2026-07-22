@@ -23,6 +23,7 @@ The KV-cache WRITE + gather-back are done and validated; only the read-back-for-
 """
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -253,6 +254,54 @@ class TtPrefillRuntime:
         v = torch.stack([gather(kv.v, c) for c in range(nkv)], dim=0).unsqueeze(0)
         return k, v
 
+    def _kv_diag(self, gL, g_k, dev_k, g_v, dev_v):
+        """Bring-up diagnostic (gated by GPT_OSS_KV_DUMP) to localize a per-position K RoPE error.
+
+        Dumps golden/device K & V (both Meta space, natural position order, [1, nkv, n_tokens,
+        head_dim]) to /data/mdragula/kv_dump and prints a compact per-SP-block + per-head K PCC so a
+        single galaxy run reveals WHERE K diverges:
+          * uniform low PCC everywhere            => base convention (unlikely; unit test is green)
+          * degrades at SP-rank block boundaries  => per-rank global-position offset in the rope
+          * scattered specific positions          => block-cyclic cos/sin reorder mismatch
+        Deep per-position analysis lives in /data/mdragula/analyze_kv_dump.py (CPU, re-runnable)."""
+
+        def _pcc(a, b):
+            a = a.reshape(-1).float()
+            b = b.reshape(-1).float()
+            a = a - a.mean()
+            b = b - b.mean()
+            d = a.norm() * b.norm()
+            return float(torch.dot(a, b) / d) if d > 0 else 1.0
+
+        sp = self.config.mesh_shape[0]
+        n_tokens = dev_k.shape[2]
+        chunk_local = self.config.chunk_size // sp  # SP-rank contiguous block width (one-shot)
+        out_dir = Path("/data/mdragula/kv_dump")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "g_k": g_k,
+                "dev_k": dev_k,
+                "g_v": g_v,
+                "dev_v": dev_v,
+                "sp": sp,
+                "chunk_local": chunk_local,
+                "n_tokens": n_tokens,
+                "layer": gL,
+            },
+            out_dir / f"layer_{gL}.pt",
+        )
+        blocks = []
+        for r in range(sp):
+            a, b = r * chunk_local, min((r + 1) * chunk_local, n_tokens)
+            if a >= n_tokens:
+                break
+            blocks.append(f"blk{r}[{a}:{b}]={_pcc(g_k[:, :, a:b, :], dev_k[:, :, a:b, :]):.4f}")
+        heads = " ".join(f"h{h}={_pcc(g_k[:, h], dev_k[:, h]):.4f}" for h in range(dev_k.shape[1]))
+        logger.info(f"[kv-diag L{gL}] K per-SP-block (chunk_local={chunk_local}): {' '.join(blocks)}")
+        logger.info(f"[kv-diag L{gL}] K per-head:     {heads}")
+        logger.info(f"[kv-diag L{gL}] dumped -> {out_dir / f'layer_{gL}.pt'}")
+
     def kv_cache_pcc_check(
         self, kv_caches=None, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
     ) -> float:
@@ -280,6 +329,11 @@ class TtPrefillRuntime:
         src = torch.tensor(src, dtype=torch.long)
 
         kv_dir = Path(trace_dir) / "kv_cache"
+        _dump_env = os.environ.get("GPT_OSS_KV_DUMP", "")
+        if _dump_env == "all":
+            _dump_set = set(range(first_layer_idx, first_layer_idx + self.config.num_layers))
+        else:
+            _dump_set = {int(x) for x in _dump_env.split(",") if x.strip()} if _dump_env else set()
         logger.info(f"[kv-pcc] per-layer K / V vs golden ({trace_dir}):")
         min_k, min_v = 1.0, 1.0
         for L in range(self.config.num_layers):
@@ -292,5 +346,7 @@ class TtPrefillRuntime:
             pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
             min_k, min_v = min(min_k, pcc_k), min(min_v, pcc_v)
             logger.info(f"  layer {gL:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
+            if gL in _dump_set:
+                self._kv_diag(gL, g_k, dev_k, g_v, dev_v)
         logger.info(f"[kv-pcc] min PCC across {self.config.num_layers} layers: K={min_k:.5f} V={min_v:.5f}")
         return min(min_k, min_v)

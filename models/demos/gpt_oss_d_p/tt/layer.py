@@ -10,9 +10,33 @@ Unlike M3 there is NO dense-layer branch and NO shared expert: EVERY layer is a 
 layer from ``hf_config.layer_types[layer_idx]`` (see attention/__init__.py:Attention).
 """
 
+import os
+
 import ttnn
 from models.demos.gpt_oss_d_p.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss_d_p.utils.substate import substate
+
+_DELTA_PROBE = os.environ.get("GPT_OSS_DELTA_PROBE", "") != ""
+
+
+def _delta_stats(tag, layer_idx, t):
+    """Bring-up probe (GPT_OSS_DELTA_PROBE): log per-layer L2 norm / mean-abs / signed-mean of a
+    residual delta from device(0)'s shard. A growing signed-mean = a directional bias accumulating in
+    that sublayer's output (the fingerprint of the per-layer logic error hitting V harder than K)."""
+    try:
+        import torch  # noqa
+
+        from loguru import logger
+
+        d0 = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        logger.info(
+            f"[delta-probe L{layer_idx:>2}] {tag}: L2={d0.norm():.3f}  mean|x|={d0.abs().mean():.4f}  "
+            f"signed_mean={d0.mean():.5f}  max|x|={d0.abs().max():.3f}"
+        )
+    except Exception as e:  # never let the probe break a run
+        from loguru import logger
+
+        logger.warning(f"[delta-probe] failed at L{layer_idx} {tag}: {e}")
 
 from .attention import Attention, AttentionConfig, ProgramConfig
 from .mlp import MLP
@@ -131,6 +155,9 @@ class DecoderLayer:
         )
         hidden_states_post_norm.deallocate(True)
 
+        if _DELTA_PROBE:
+            _delta_stats("attn_out", self.layer_idx, hidden_states)
+
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
         residual = hidden_states
@@ -138,6 +165,9 @@ class DecoderLayer:
 
         hidden_states = self.mlp(hidden_states_post_norm)
         hidden_states_post_norm.deallocate(True)
+
+        if _DELTA_PROBE:
+            _delta_stats("moe_out ", self.layer_idx, hidden_states)
 
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
