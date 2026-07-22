@@ -19,5 +19,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     using namespace compute_kernel_lib;
-    eltwise_chain(EltwiseShape::tiles(n), BinaryFpu<cb_a, cb_b, BinaryFpuOp::Mul>{}, PackTile<cb_out>{});
+    eltwise_chain(
+        EltwiseShape::tiles(n), BinaryFpu<input(cb_a), input(cb_b), BinaryFpuOp::Mul>{}, PackTile<output(cb_out)>{});
 }

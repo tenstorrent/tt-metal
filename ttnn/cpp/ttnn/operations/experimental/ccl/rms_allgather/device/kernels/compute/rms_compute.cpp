@@ -81,13 +81,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in);
     ckl::add<
-        cb_in0,
-        cb_in1,
-        cb_in,
-        ckl::BroadcastDim::None,
-        ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
-        ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
-        ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::input(cb_in0, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+        ckl::input(cb_in1, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+        ckl::output(cb_in, ckl::OutputLifecycle::Bulk),
+        ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     index_h_offset += block_w;
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
@@ -97,10 +94,8 @@ void kernel_main() {
 #endif
 
     ckl::square<
-        cb_in,
-        cb_x2,
-        ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
-        ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+        ckl::input(cb_in, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+        ckl::output(cb_x2, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
         ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     // E(x^2)
@@ -187,27 +182,20 @@ void kernel_main() {
 
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
-                ckl::BinaryFpu<cb_var, cb_eps>{},
+                ckl::BinaryFpu<ckl::input(cb_var), ckl::input(cb_eps)>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
-                ckl::PackTile<cb_stats_reduced>{});
+                ckl::PackTile<ckl::output(cb_stats_reduced)>{});
         }
     }
     ckl::mul<
-        cb_xmm,
-        cb_ex_global,
-        cb_im,
-        ckl::BroadcastDim::Col,
-        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-        ckl::input(ckl::InputLifecycle::Bulk),
-        ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::input(cb_xmm, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+        ckl::input(cb_ex_global, ckl::InputLifecycle::Bulk),
+        ckl::output(cb_im, ckl::OutputLifecycle::Bulk),
+        ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     ckl::mul<
-        cb_im,
-        cb_gamma,
-        cb_outgamma,
-        ckl::BroadcastDim::Row,
-        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-        ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-        ckl::output(ckl::OutputLifecycle::ReserveAllPushPerChunk)>(
-        ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::input(cb_im, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+        ckl::input(cb_gamma, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+        ckl::output(cb_outgamma, ckl::OutputLifecycle::ReserveAllPushPerChunk),
+        ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

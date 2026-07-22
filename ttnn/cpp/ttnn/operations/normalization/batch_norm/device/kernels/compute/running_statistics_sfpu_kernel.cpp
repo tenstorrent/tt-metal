@@ -33,23 +33,24 @@ ALWI void update_running_stat() {
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
-        ckl::CopyTile<cb_one, D::D0, ckl::input(CM, SCALAR)>{},
-        ckl::CopyTile<cb_momentum, D::D1, ckl::input(CM, SCALAR)>{},
+        ckl::CopyTile<ckl::input(cb_one, CM, SCALAR), D::D0>{},
+        ckl::CopyTile<ckl::input(cb_momentum, CM, SCALAR), D::D1>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<cb_old, D::D1, ckl::input(STREAM, SCALAR)>{},
+        ckl::CopyTile<ckl::input(cb_old, STREAM, SCALAR), D::D1>{},
         MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<cb_momentum, D::D1, ckl::input(CM, SCALAR)>{},
-        ckl::CopyTile<cb_batch, D::D2, ckl::input(STREAM, SCALAR)>{},
+        ckl::CopyTile<ckl::input(cb_momentum, CM, SCALAR), D::D1>{},
+        ckl::CopyTile<ckl::input(cb_batch, STREAM, SCALAR), D::D2>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<cb_updated, ckl::output(ckl::OutputLifecycle::Bulk)>{},
-        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::output(OUT_CM)>>{});
+        ckl::PackTile<ckl::output(cb_updated, ckl::OutputLifecycle::Bulk)>{},
+        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<ckl::output(cb_out0, OUT_CM)>>{});
 }
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcCb, uint32_t DstCb>
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
-        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, SrcCb, DstCb>(ckl::EltwiseShape::single());
+        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcCb), ckl::output(DstCb)>(
+            ckl::EltwiseShape::single());
     }
 }
 

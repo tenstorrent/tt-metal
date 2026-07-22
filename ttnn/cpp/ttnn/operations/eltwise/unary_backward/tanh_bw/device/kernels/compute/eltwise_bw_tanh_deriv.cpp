@@ -28,14 +28,14 @@ void kernel_main() {
     ckl::eltwise_chain(
         shape,
         ckl::CopyTile<
-            cb_grad_out,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(
+                cb_grad_out, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D1,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(
+                cb_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
         ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-        ckl::PackTile<cb_grad_in, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_grad_in, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 }

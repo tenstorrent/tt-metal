@@ -99,14 +99,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                reduce_result_cb,
-                epsilon_cb,
+                ckl::input(reduce_result_cb),
+                ckl::input(epsilon_cb, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, use_legacy_rsqrt ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<reduce_result_cb>{});
+            ckl::PackTile<ckl::output(reduce_result_cb)>{});
 
         /*
          * norm x
@@ -115,13 +113,10 @@ void kernel_main() {
         cb_wait_front(reduce_result_cb, 1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             ckl::mul<
-                input_cb,
-                reduce_result_cb,
-                mul_rms_result_cb,
-                ckl::BroadcastDim::Col,
-                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(ckl::InputLifecycle::CallerManaged),
-                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
+                ckl::input(input_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(reduce_result_cb, ckl::InputLifecycle::CallerManaged),
+                ckl::output(mul_rms_result_cb, ckl::OutputLifecycle::Bulk),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             /**
              * Weight (gamma) fusion
@@ -131,17 +126,16 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
                     ckl::BinaryFpu<
-                        mul_rms_result_cb,
-                        weight_cb,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::Row,
-                        ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(mul_rms_result_cb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(
+                            weight_cb,
                             ckl::InputLifecycle::CallerManaged,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set)>{0u, col_tile},
-                    ckl::PackTile<mul_weight_result_cb, ckl::output(ckl::OutputLifecycle::Chunked)>{});
+                            ckl::TileOffset::Set),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Row>{0u, col_tile},
+                    ckl::PackTile<ckl::output(mul_weight_result_cb, ckl::OutputLifecycle::Chunked)>{});
             }
 
             /**
@@ -226,13 +220,10 @@ void kernel_main() {
                 cb_push_back(rotated_input_cb, block_size);
 
                 ckl::add<
-                    intermediate_cb,
-                    rotated_input_cb,
-                    output_cb,
-                    ckl::BroadcastDim::None,
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_size, block_size));
+                    ckl::input(intermediate_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(rotated_input_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(output_cb, ckl::OutputLifecycle::Bulk),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block_size, block_size));
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);

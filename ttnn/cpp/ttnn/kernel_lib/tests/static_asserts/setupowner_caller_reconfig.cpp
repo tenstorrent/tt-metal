@@ -21,5 +21,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
-    eltwise_chain<SetupOwner::Caller>(EltwiseShape::tiles(n), CopyTile<cb_in>{}, Exp<>{}, PackTile<cb_out>{});
+    eltwise_chain<SetupOwner::Caller>(
+        EltwiseShape::tiles(n), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
 }

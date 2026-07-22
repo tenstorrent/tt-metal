@@ -21,16 +21,18 @@ void kernel_main() {
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::EltwiseShape::tiles(B * Ht * Wt),
         compute_kernel_lib::BinaryFpu<
-            cb_lhs,
-            cb_rhs,
+            compute_kernel_lib::input(
+                cb_lhs,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::DataFormatReconfig::Disabled),
+            compute_kernel_lib::input(
+                cb_rhs,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::DataFormatReconfig::Disabled),
             CHAIN_BCAST_OP,
-            CHAIN_BCAST_DIM,
-            compute_kernel_lib::input(
-                compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
-            compute_kernel_lib::input(
-                compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>{},
-        compute_kernel_lib::PackTile<
+            CHAIN_BCAST_DIM>{},
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(
             cb_out,
-            compute_kernel_lib::output(
-                compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>{});
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>{});
 }

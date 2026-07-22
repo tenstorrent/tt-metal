@@ -22,7 +22,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        BinaryFpu<cb_a, cb_b>{},
-        DestReuseBinary<cb_c, BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA>{},
-        PackTile<cb_out>{});
+        BinaryFpu<input(cb_a), input(cb_b)>{},
+        DestReuseBinary<input(cb_c), BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA>{},
+        PackTile<output(cb_out)>{});
 }

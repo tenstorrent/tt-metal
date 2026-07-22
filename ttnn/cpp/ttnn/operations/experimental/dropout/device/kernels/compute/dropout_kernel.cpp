@@ -26,9 +26,8 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(total_tiles),
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::Dropout<ckl::Dst::D0>{int_probability, int_scale_factor, seed},
-        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

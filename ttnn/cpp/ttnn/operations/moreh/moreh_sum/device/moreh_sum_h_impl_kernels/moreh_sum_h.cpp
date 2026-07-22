@@ -56,7 +56,7 @@ void kernel_main() {
 
             // Optional masking of last H tile.
             if constexpr (do_mask_h) {
-                // CopyTile<cb_input> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
+                // CopyTile<input(cb_input)> + CopyTile<input(cb_mask_h), D1> + Mask + PackTile.
                 // Reconfig: original uses `copy_tile_to_dst_init_short` (no _with_dt)
                 // and plain pack_tile, with a single FP32_DEST_ACC_EN-guarded
                 // reconfig_data_format_srca(cb_input) on entry. The chain's
@@ -69,10 +69,10 @@ void kernel_main() {
                 // cb_masked_input OutputLifecycle::Streaming.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<cb_input>{},
-                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                    ckl::CopyTile<ckl::input(cb_input)>{},
+                    ckl::CopyTile<ckl::input(cb_mask_h, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                    ckl::PackTile<cb_masked_input>{});
+                    ckl::PackTile<ckl::output(cb_masked_input)>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(

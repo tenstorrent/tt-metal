@@ -41,25 +41,27 @@ void kernel_main() {
                 if (h == 0) {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::tiles(onetile),
-                        ckl::CopyTile<cb_dy>{},
-                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                        ckl::CopyTile<ckl::input(cb_dy)>{},
+                        ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::HeldStream), ckl::Dst::D1>{},
                         ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                        ckl::PackTile<cb_add>{});
+                        ckl::PackTile<ckl::output(cb_add)>{});
                 } else {
                     constexpr auto cb_inter0 = tt::CBIndex::c_24;
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::tiles(onetile),
-                        ckl::CopyTile<cb_dy>{},
-                        ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                        ckl::CopyTile<ckl::input(cb_dy)>{},
+                        ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::HeldStream), ckl::Dst::D1>{},
                         ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                        ckl::PackTile<cb_inter0>{});
-                    ckl::add<cb_add, cb_inter0, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                        ckl::PackTile<ckl::output(cb_inter0)>{});
+                    ckl::add<ckl::input(cb_add), ckl::input(cb_inter0), ckl::output(cb_add)>(
+                        ckl::EltwiseShape::tiles(onetile));
                 }
             } else {
                 if (h == 0) {
-                    ckl::copy<cb_dy, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::copy<ckl::input(cb_dy), ckl::output(cb_add)>(ckl::EltwiseShape::tiles(onetile));
                 } else {
-                    ckl::add<cb_add, cb_dy, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::add<ckl::input(cb_add), ckl::input(cb_dy), ckl::output(cb_add)>(
+                        ckl::EltwiseShape::tiles(onetile));
                 }
             }
         }
@@ -69,16 +71,16 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < Ht; ++h) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            ckl::unary<ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>, cb_y, cb_exp>(
-                ckl::EltwiseShape::tiles(onetile));
+            ckl::unary<
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>,
+                ckl::input(cb_y),
+                ckl::output(cb_exp)>(ckl::EltwiseShape::tiles(onetile));
             ckl::mul<
-                cb_exp,
-                cb_sum,
-                cb_inter2,
-                ckl::BroadcastDim::Row,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
-            ckl::sub<cb_dy, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_exp),
+                ckl::input(cb_sum, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_inter2),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(onetile));
+            ckl::sub<ckl::input(cb_dy), ckl::input(cb_inter2), ckl::output(cb_dx)>(ckl::EltwiseShape::tiles(onetile));
         }
 
         cb_sum_obj.pop_front(onetile);
@@ -88,18 +90,19 @@ void kernel_main() {
             if (h == Ht - 1) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::BinaryFpu<cb_y, cb_dy, ckl::BinaryFpuOp::Mul>{},
-                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::BinaryFpu<ckl::input(cb_y), ckl::input(cb_dy), ckl::BinaryFpuOp::Mul>{},
+                    ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::HeldStream), ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                    ckl::PackTile<cb_ydy>{});
+                    ckl::PackTile<ckl::output(cb_ydy)>{});
             } else {
-                ckl::mul<cb_y, cb_dy, cb_ydy>(ckl::EltwiseShape::tiles(onetile));
+                ckl::mul<ckl::input(cb_y), ckl::input(cb_dy), ckl::output(cb_ydy)>(ckl::EltwiseShape::tiles(onetile));
             }
 
             if (h == 0) {
-                ckl::copy<cb_ydy, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                ckl::copy<ckl::input(cb_ydy), ckl::output(cb_add)>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                ckl::add<cb_add, cb_ydy, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                ckl::add<ckl::input(cb_add), ckl::input(cb_ydy), ckl::output(cb_add)>(
+                    ckl::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -108,20 +111,18 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < Ht; ++h) {
             ckl::sub<
-                cb_dy,
-                cb_sum,
-                cb_inter2,
-                ckl::BroadcastDim::Row,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_dy),
+                ckl::input(cb_sum, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_inter2),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
-            ckl::mul<cb_y, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
+            ckl::mul<ckl::input(cb_y), ckl::input(cb_inter2), ckl::output(cb_dx)>(ckl::EltwiseShape::tiles(onetile));
 #else
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::BinaryFpu<cb_y, cb_inter2, ckl::BinaryFpuOp::Mul>{},
+                ckl::BinaryFpu<ckl::input(cb_y), ckl::input(cb_inter2), ckl::BinaryFpuOp::Mul>{},
                 ckl::Negative<ckl::Dst::D0>{},
-                ckl::PackTile<cb_dx>{});
+                ckl::PackTile<ckl::output(cb_dx)>{});
 #endif
         }
 

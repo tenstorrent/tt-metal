@@ -21,10 +21,10 @@ struct UnaryBcastImpl;
 
 }  // namespace detail
 
-template <BroadcastDim Dim, uint32_t Cb, InputSpec Input = input(), Dst DstSlot = Dst::D0>
-using UnaryBcast = detail::UnaryBcastImpl<Cb, detail::unary_bcast_config_bits(Dim, Input, DstSlot)>;
+template <BroadcastDim Dim, InputSpec Input, Dst DstSlot = Dst::D0>
+using UnaryBcast = detail::UnaryBcastImpl<Input.cb_id, detail::unary_bcast_config_bits(Dim, Input, DstSlot)>;
 
-template <BroadcastDim Dim, uint32_t CbIn, uint32_t CbOut, InputSpec Input = input(), OutputSpec Output = output()>
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
 ALWI void unary_bcast(EltwiseShape shape);
 
 }  // namespace compute_kernel_lib

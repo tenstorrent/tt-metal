@@ -47,16 +47,13 @@ inline constexpr InputLifecycle InputLifecycle::OuterStream = {WaitPolicy::PerOu
 inline constexpr OutputLifecycle OutputLifecycle::Streaming = {ReservePolicy::PerTile, PushPolicy::PerTile};
 inline constexpr OutputLifecycle OutputLifecycle::Chunked = {ReservePolicy::PerChunk, PushPolicy::PerChunk};
 inline constexpr OutputLifecycle OutputLifecycle::Bulk = {ReservePolicy::Upfront, PushPolicy::AtEnd};
-inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerTile = {
-    ReservePolicy::Upfront, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
 inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerChunk = {
     ReservePolicy::Upfront, PushPolicy::PerChunk};
 inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy::None, PushPolicy::None};
 inline constexpr OutputLifecycle OutputLifecycle::ReserveNonePushEnd = {ReservePolicy::None, PushPolicy::AtEnd};
-inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {
-    ReservePolicy::OneUpfront, PushPolicy::OneAtEnd};
-inline constexpr OutputLifecycle OutputLifecycle::DestAccumulation = {
-    ReservePolicy::PerOuter, PushPolicy::PerOuter};
+inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {ReservePolicy::OneUpfront, PushPolicy::OneAtEnd};
+inline constexpr OutputLifecycle OutputLifecycle::DestAccumulation = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
 
 constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk) : Ht(H), Wt(W), block_size(blk) {}
 
@@ -152,6 +149,7 @@ struct ConfigField {
 };
 
 struct InputSpecConfig {
+    // Buffer identity remains a separate Impl NTTP; this key packs only operand behavior.
     using WaitField = ConfigField<WaitPolicy, first_config_bit, WaitPolicy::Cumulative>;
     using PopField = ConfigField<PopPolicy, WaitField::end, PopPolicy::AtEnd>;
     using IndexField = ConfigField<OperandKind, PopField::end, OperandKind::Scalar>;
@@ -160,41 +158,40 @@ struct InputSpecConfig {
 
     static constexpr uint32_t used_bits = ReconfigField::end;
     static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
-    static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "InputSpec exceeds uint16_t storage");
+    static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "InputSpec behavior exceeds uint16_t storage");
 
     static constexpr uint16_t encode(InputSpec spec) noexcept {
         return static_cast<uint16_t>(
             WaitField::encode(spec.lifecycle.wait_policy) | PopField::encode(spec.lifecycle.pop_policy) |
-            IndexField::encode(spec.index) | OffsetField::encode(spec.offset) |
-            ReconfigField::encode(spec.reconfig));
+            IndexField::encode(spec.index) | OffsetField::encode(spec.offset) | ReconfigField::encode(spec.reconfig));
     }
 
-    static constexpr InputSpec decode(uint16_t storage) noexcept;
+    static constexpr InputSpec decode(uint16_t storage, uint32_t cb_id) noexcept;
 };
 
 struct OutputSpecConfig {
+    // Buffer identity remains a separate Impl NTTP; this key packs only operand behavior.
     using ReserveField = ConfigField<ReservePolicy, first_config_bit, ReservePolicy::OneUpfront>;
     using PushField = ConfigField<PushPolicy, ReserveField::end, PushPolicy::OneAtEnd>;
     using ReconfigField = ConfigField<DataFormatReconfig, PushField::end, DataFormatReconfig::Enabled>;
     using ReluField = ConfigField<PackRelu, ReconfigField::end, PackRelu::Zero>;
     using L1AccumulationField = ConfigField<L1Accumulation, ReluField::end, L1Accumulation::SeedFirst>;
-    using DestAccumulationField =
-        ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::Enabled>;
+    using DestAccumulationField = ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::Enabled>;
     using OffsetField = ConfigField<TileOffset, DestAccumulationField::end, TileOffset::Set>;
 
     static constexpr uint32_t used_bits = OffsetField::end;
     static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
-    static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "OutputSpec exceeds uint16_t storage");
+    static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "OutputSpec behavior exceeds uint16_t storage");
 
     static constexpr uint16_t encode(OutputSpec spec) noexcept {
         return static_cast<uint16_t>(
             ReserveField::encode(spec.lifecycle.reserve_policy) | PushField::encode(spec.lifecycle.push_policy) |
             ReconfigField::encode(spec.reconfig) | ReluField::encode(spec.relu) |
-            L1AccumulationField::encode(spec.l1_accumulation) |
-            DestAccumulationField::encode(spec.dest_accumulation) | OffsetField::encode(spec.offset));
+            L1AccumulationField::encode(spec.l1_accumulation) | DestAccumulationField::encode(spec.dest_accumulation) |
+            OffsetField::encode(spec.offset));
     }
 
-    static constexpr OutputSpec decode(uint16_t storage) noexcept;
+    static constexpr OutputSpec decode(uint16_t storage, uint32_t cb_id) noexcept;
 };
 
 }  // namespace detail
@@ -213,16 +210,18 @@ constexpr bool OutputLifecycle::operator!=(OutputLifecycle other) const noexcept
 
 namespace detail {
 
-constexpr InputSpec InputSpecConfig::decode(uint16_t storage) noexcept {
+constexpr InputSpec InputSpecConfig::decode(uint16_t storage, uint32_t cb_id) noexcept {
     return {
+        cb_id,
         {WaitField::decode(storage), PopField::decode(storage)},
         IndexField::decode(storage),
         ReconfigField::decode(storage),
         OffsetField::decode(storage)};
 }
 
-constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage) noexcept {
+constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage, uint32_t cb_id) noexcept {
     return {
+        cb_id,
         {ReserveField::decode(storage), PushField::decode(storage)},
         ReconfigField::decode(storage),
         ReluField::decode(storage),
@@ -234,22 +233,27 @@ constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage) noexcept {
 }  // namespace detail
 
 constexpr InputSpec input(
-    InputLifecycle lifecycle, OperandKind index, DataFormatReconfig reconfig, TileOffset offset) noexcept {
-    return {lifecycle, index, reconfig, offset};
+    uint32_t cb_id,
+    InputLifecycle lifecycle,
+    OperandKind index,
+    DataFormatReconfig reconfig,
+    TileOffset offset) noexcept {
+    return {cb_id, lifecycle, index, reconfig, offset};
 }
 
-constexpr InputSpec input(InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept {
-    return input(lifecycle, OperandKind::Scalar, reconfig);
+constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept {
+    return input(cb_id, lifecycle, OperandKind::Scalar, reconfig);
 }
 
 constexpr OutputSpec output(
+    uint32_t cb_id,
     OutputLifecycle lifecycle,
     DataFormatReconfig reconfig,
     PackRelu relu,
     L1Accumulation l1_accumulation,
     DestAccumulation dest_accumulation,
     TileOffset offset) noexcept {
-    return {lifecycle, reconfig, relu, l1_accumulation, dest_accumulation, offset};
+    return {cb_id, lifecycle, reconfig, relu, l1_accumulation, dest_accumulation, offset};
 }
 
 namespace detail {
@@ -265,12 +269,13 @@ struct CopyTileConfig {
     constexpr explicit CopyTileConfig(uint32_t encoded) noexcept : bits(encoded) {}
 
     constexpr Dst dst() const noexcept { return DstField::decode(bits); }
-    constexpr InputSpec input_spec() const noexcept { return InputSpecConfig::decode(InputField::decode(bits)); }
+    constexpr InputSpec input_spec(uint32_t cb_id) const noexcept {
+        return InputSpecConfig::decode(InputField::decode(bits), cb_id);
+    }
 };
 
 struct PackTileConfig {
-    using OutputField =
-        ConfigField<uint16_t, first_config_bit, static_cast<uint16_t>(OutputSpecConfig::storage_mask)>;
+    using OutputField = ConfigField<uint16_t, first_config_bit, static_cast<uint16_t>(OutputSpecConfig::storage_mask)>;
     using DstField = ConfigField<Dst, OutputField::end, Dst::D15>;
 
     uint32_t bits;
@@ -279,7 +284,9 @@ struct PackTileConfig {
         bits(OutputField::encode(OutputSpecConfig::encode(output_spec)) | DstField::encode(dst)) {}
     constexpr explicit PackTileConfig(uint32_t encoded) noexcept : bits(encoded) {}
 
-    constexpr OutputSpec output_spec() const noexcept { return OutputSpecConfig::decode(OutputField::decode(bits)); }
+    constexpr OutputSpec output_spec(uint32_t cb_id) const noexcept {
+        return OutputSpecConfig::decode(OutputField::decode(bits), cb_id);
+    }
     constexpr Dst dst() const noexcept { return DstField::decode(bits); }
 };
 
@@ -288,20 +295,14 @@ struct BinaryFpuConfig {
     using BroadcastField = ConfigField<BroadcastDim, OpField::end, BroadcastDim::Scalar>;
     using AInputField =
         ConfigField<uint16_t, BroadcastField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
-    using BInputField =
-        ConfigField<uint16_t, AInputField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+    using BInputField = ConfigField<uint16_t, AInputField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
     using DstField = ConfigField<Dst, BInputField::end, Dst::D15>;
     using AccumulationField = ConfigField<DestAccumulation, DstField::end, DestAccumulation::Enabled>;
 
     uint32_t bits;
 
     constexpr BinaryFpuConfig(
-        BinaryFpuOp op,
-        BroadcastDim bcast,
-        InputSpec a,
-        InputSpec b,
-        Dst dst,
-        DestAccumulation accumulation) noexcept :
+        BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept :
         bits(
             OpField::encode(op) | BroadcastField::encode(bcast) | AInputField::encode(InputSpecConfig::encode(a)) |
             BInputField::encode(InputSpecConfig::encode(b)) | DstField::encode(dst) |
@@ -310,8 +311,12 @@ struct BinaryFpuConfig {
 
     constexpr BinaryFpuOp op() const noexcept { return OpField::decode(bits); }
     constexpr BroadcastDim broadcast() const noexcept { return BroadcastField::decode(bits); }
-    constexpr InputSpec a_input_spec() const noexcept { return InputSpecConfig::decode(AInputField::decode(bits)); }
-    constexpr InputSpec b_input_spec() const noexcept { return InputSpecConfig::decode(BInputField::decode(bits)); }
+    constexpr InputSpec a_input_spec(uint32_t cb_id) const noexcept {
+        return InputSpecConfig::decode(AInputField::decode(bits), cb_id);
+    }
+    constexpr InputSpec b_input_spec(uint32_t cb_id) const noexcept {
+        return InputSpecConfig::decode(BInputField::decode(bits), cb_id);
+    }
     constexpr Dst dst() const noexcept { return DstField::decode(bits); }
     constexpr DestAccumulation accumulation() const noexcept { return AccumulationField::decode(bits); }
 };
@@ -319,8 +324,7 @@ struct BinaryFpuConfig {
 struct DestReuseBinaryConfig {
     using OpField = ConfigField<BinaryFpuOp, first_config_bit, BinaryFpuOp::Mul>;
     using ReuseField = ConfigField<DestReuseType, OpField::end, DestReuseType::DEST_TO_SRCB>;
-    using InputField =
-        ConfigField<uint16_t, ReuseField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
+    using InputField = ConfigField<uint16_t, ReuseField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
     using DstInField = ConfigField<Dst, InputField::end, Dst::D15>;
     using DstOutField = ConfigField<Dst, DstInField::end, Dst::D15>;
 
@@ -329,14 +333,15 @@ struct DestReuseBinaryConfig {
     constexpr DestReuseBinaryConfig(
         BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst_in, Dst dst_out) noexcept :
         bits(
-            OpField::encode(op) | ReuseField::encode(reuse) |
-            InputField::encode(InputSpecConfig::encode(input_spec)) | DstInField::encode(dst_in) |
-            DstOutField::encode(dst_out)) {}
+            OpField::encode(op) | ReuseField::encode(reuse) | InputField::encode(InputSpecConfig::encode(input_spec)) |
+            DstInField::encode(dst_in) | DstOutField::encode(dst_out)) {}
     constexpr explicit DestReuseBinaryConfig(uint32_t encoded) noexcept : bits(encoded) {}
 
     constexpr BinaryFpuOp op() const noexcept { return OpField::decode(bits); }
     constexpr DestReuseType reuse() const noexcept { return ReuseField::decode(bits); }
-    constexpr InputSpec input_spec() const noexcept { return InputSpecConfig::decode(InputField::decode(bits)); }
+    constexpr InputSpec input_spec(uint32_t cb_id) const noexcept {
+        return InputSpecConfig::decode(InputField::decode(bits), cb_id);
+    }
     constexpr Dst dst_in() const noexcept { return DstInField::decode(bits); }
     constexpr Dst dst_out() const noexcept { return DstOutField::decode(bits); }
 };
@@ -350,12 +355,7 @@ constexpr uint32_t pack_tile_config_bits(OutputSpec output_spec, Dst dst) noexce
 }
 
 constexpr uint32_t binary_fpu_config_bits(
-    BinaryFpuOp op,
-    BroadcastDim bcast,
-    InputSpec a,
-    InputSpec b,
-    Dst dst,
-    DestAccumulation accumulation) noexcept {
+    BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept {
     return BinaryFpuConfig{op, bcast, a, b, dst, accumulation}.bits;
 }
 
@@ -370,19 +370,27 @@ constexpr uint32_t dest_reuse_binary_config_bits(
 // implementation detail of the chain pipeline — no chain caller references them, so they
 // live here rather than on the public eltwise_chain.hpp surface.
 inline constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;  // "no CB on this slot" (== NO_PREV_DFB); a real
-                                                // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
+                                                      // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
 
 template <class... Es>
 struct EltwiseChain;  // typed list of elements (defined below)
 
-template <class Chain> struct chain_has_duplicate_upfront_dfbs;
-template <class Chain> struct chain_pack_writes_collide;
-template <class Chain> struct chain_per_side_dfbs_consistent;
-template <class Chain> struct chain_math_mop_uniform;
-template <class Chain> struct chain_sfpu_inits_uniform;
-template <class Chain> struct chain_hoist_math_mop;
-template <class Chain> struct chain_hoist_sfpu;
-template <class Chain> struct chain_hoist_pack;
+template <class Chain>
+struct chain_has_duplicate_upfront_dfbs;
+template <class Chain>
+struct chain_pack_writes_collide;
+template <class Chain>
+struct chain_per_side_dfbs_consistent;
+template <class Chain>
+struct chain_math_mop_uniform;
+template <class Chain>
+struct chain_sfpu_inits_uniform;
+template <class Chain>
+struct chain_hoist_math_mop;
+template <class Chain>
+struct chain_hoist_sfpu;
+template <class Chain>
+struct chain_hoist_pack;
 
 template <class Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_dfbs<Chain>::value;
@@ -526,7 +534,8 @@ ALWI uint32_t tile_base_value([[maybe_unused]] uint32_t stored) noexcept {
 //   template <Approx A = Approx::Exact, Approx F = Approx::Fast, Dst Slot = Dst::D0>
 //   struct Exp : UnaryOp<Exp<A, F, Slot>, Slot> {
 //       static void init()                        { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
-//       static void exec_impl(uint32_t slot_off)  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot) + slot_off); }
+//       static void exec_impl(uint32_t slot_off)  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot) +
+//       slot_off); }
 //   };
 
 template <class Derived, Dst Slot>
@@ -643,18 +652,28 @@ inline constexpr bool is_bcast_mode_v = is_one_of_v<M, OperandKind::Row, Operand
 template <OperandKind M>
 ALWI constexpr uint32_t idx(
     [[maybe_unused]] uint32_t i_flat, [[maybe_unused]] uint32_t ht, [[maybe_unused]] uint32_t wt) noexcept {
-    if constexpr (M == OperandKind::Scalar) return 0;
-    else if constexpr (M == OperandKind::Block) return i_flat;
-    else if constexpr (M == OperandKind::Row) return wt;
-    else return ht;  // Col
+    if constexpr (M == OperandKind::Scalar) {
+        return 0;
+    } else if constexpr (M == OperandKind::Block) {
+        return i_flat;
+    } else if constexpr (M == OperandKind::Row) {
+        return wt;
+    } else {
+        return ht;  // Col
+    }
 }
 
 template <OperandKind M>
 ALWI constexpr uint32_t window([[maybe_unused]] uint32_t Ht, [[maybe_unused]] uint32_t Wt) noexcept {
-    if constexpr (M == OperandKind::Block) return Ht * Wt;
-    else if constexpr (M == OperandKind::Row) return Wt;
-    else if constexpr (M == OperandKind::Col) return Ht;
-    else return 1u;  // Scalar
+    if constexpr (M == OperandKind::Block) {
+        return Ht * Wt;
+    } else if constexpr (M == OperandKind::Row) {
+        return Wt;
+    } else if constexpr (M == OperandKind::Col) {
+        return Ht;
+    } else {
+        return 1u;  // Scalar
+    }
 }
 
 // Allowed (Policy × Mode) combinations. Row/Col cannot stream per-tile —
@@ -675,7 +694,9 @@ struct ElementList {
 
 // Build an `EltwiseChain<...>` from a parameter pack. (Defined in the public namespace.)
 template <class... Es>
-ALWI constexpr auto make_chain(Es...) -> EltwiseChain<Es...> { return {}; }
+ALWI constexpr auto make_chain(Es...) -> EltwiseChain<Es...> {
+    return {};
+}
 
 // Fold helper: `if constexpr` over each element with a callable.
 template <class F, class... Es>
@@ -704,25 +725,35 @@ struct count_v_helper : std::integral_constant<size_t, (size_t{Pred<Es>::value} 
 // (output addressing derives from the walk + TileOffset, not a pack_output_index accessor.)
 // =============================================================================
 
-template <class T, class = void> struct has_dfb_a    : std::false_type {};
-template <class T> struct has_dfb_a<T, std::void_t<decltype(T::dfb_a_id())>> : std::true_type {};
+template <class T, class = void>
+struct has_dfb_a : std::false_type {};
+template <class T>
+struct has_dfb_a<T, std::void_t<decltype(T::dfb_a_id())>> : std::true_type {};
 
-template <class T, class = void> struct has_dfb_b    : std::false_type {};
-template <class T> struct has_dfb_b<T, std::void_t<decltype(T::dfb_b_id())>> : std::true_type {};
+template <class T, class = void>
+struct has_dfb_b : std::false_type {};
+template <class T>
+struct has_dfb_b<T, std::void_t<decltype(T::dfb_b_id())>> : std::true_type {};
 
-template <class T, class = void> struct has_pack_dfb : std::false_type {};
-template <class T> struct has_pack_dfb<T, std::void_t<decltype(T::pack_dfb_id())>> : std::true_type {};
+template <class T, class = void>
+struct has_pack_dfb : std::false_type {};
+template <class T>
+struct has_pack_dfb<T, std::void_t<decltype(T::pack_dfb_id())>> : std::true_type {};
 
 // Forward declarations — defined below (used by reader_pair_collide / writer_pair_collide
 // earlier in the file's flow).
-template <class E> constexpr uint32_t dfb_a_of();
-template <class E> constexpr uint32_t dfb_b_of();
-template <class E> constexpr uint32_t pack_dfb_of();
+template <class E>
+constexpr uint32_t dfb_a_of();
+template <class E>
+constexpr uint32_t dfb_b_of();
+template <class E>
+constexpr uint32_t pack_dfb_of();
 
 // ChainTraits<Es...> — the one value-reflection aggregate for the whole chain (defined
 // once below, after the per-element accessors it reads). Forward-declared here so the
 // trait wrappers (chain_lane_width etc.) can name it.
-template <class... Es> struct ChainTraits;
+template <class... Es>
+struct ChainTraits;
 
 // =============================================================================
 // Per-Side prev-CB SFINAE probe
@@ -750,14 +781,23 @@ struct has_reconfig_pack<E, std::void_t<decltype(E::reconfig_pack_dfb)>> : std::
 template <Side S, class E>
 constexpr uint32_t dfb_for_side() {
     if constexpr (S == Side::SrcA) {
-        if constexpr (has_reconfig_srca<E>::value) return E::reconfig_srca_dfb;
-        else                                       return NO_PREV_DFB;
+        if constexpr (has_reconfig_srca<E>::value) {
+            return E::reconfig_srca_dfb;
+        } else {
+            return NO_PREV_DFB;
+        }
     } else if constexpr (S == Side::SrcB) {
-        if constexpr (has_reconfig_srcb<E>::value) return E::reconfig_srcb_dfb;
-        else                                       return NO_PREV_DFB;
+        if constexpr (has_reconfig_srcb<E>::value) {
+            return E::reconfig_srcb_dfb;
+        } else {
+            return NO_PREV_DFB;
+        }
     } else {  // Pack
-        if constexpr (has_reconfig_pack<E>::value) return E::reconfig_pack_dfb;
-        else                                       return NO_PREV_DFB;
+        if constexpr (has_reconfig_pack<E>::value) {
+            return E::reconfig_pack_dfb;
+        } else {
+            return NO_PREV_DFB;
+        }
     }
 }
 
@@ -767,10 +807,10 @@ constexpr uint32_t dfb_for_side() {
 // caller to declare None — which honestly reflects "the chain does no reconfig, I own the format."
 template <class... Es>
 constexpr bool chain_requests_no_reconfig() {
-    return ((dfb_for_side<Side::SrcA, Es>() == NO_PREV_DFB &&
-             dfb_for_side<Side::SrcB, Es>() == NO_PREV_DFB &&
-             dfb_for_side<Side::Pack, Es>() == NO_PREV_DFB) &&
-            ...);
+    return (
+        (dfb_for_side<Side::SrcA, Es>() == NO_PREV_DFB && dfb_for_side<Side::SrcB, Es>() == NO_PREV_DFB &&
+         dfb_for_side<Side::Pack, Es>() == NO_PREV_DFB) &&
+        ...);
 }
 
 // Per-side prev-CB history, last opt-in pack CB, and heterogeneous-pack detection are
@@ -819,7 +859,7 @@ struct OutputStream {
 template <uint32_t Cb, uint32_t ConfigBits>
 struct detail::CopyTileImpl : InputStream, CopyTileTag {
     static constexpr CopyTileConfig Config{ConfigBits};
-    static constexpr InputSpec Input = Config.input_spec();
+    static constexpr InputSpec Input = Config.input_spec(Cb);
     static constexpr Dst DstSlot = Config.dst();
     static constexpr InputLifecycle Policy = Input.lifecycle;
     static constexpr DataFormatReconfig Reconfig = Input.reconfig;
@@ -829,45 +869,47 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     using Base::tile_base;
 
     // ---- compile-time validation ----
-    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
-                  "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
     // Comprehensive (IndexMode, Policy) legality. Block rejects PerTile-pop
-    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-index pitfall) and PerTile-wait-of-1
-    // (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-index pitfall) and
+    // PerTile-wait-of-1 (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
     // legal lifecycle — caller-sized.
-    static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
-                  "CopyTile: (IndexMode, Policy) is illegal for Block — exclude "
-                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
+    static_assert(
+        is_legal_kind_lifecycle(IndexMode, Policy),
+        "CopyTile: (IndexMode, Policy) is illegal for Block — exclude "
+        "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / "
+        "InputLifecycle::NoWaitPop on Block walkers.");
     // 2D: RowBcast / ColBcast require non-streaming policy (matches binary_op_helpers ROW/SCALAR rule).
-    static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
-                  "CopyTile: RowBcast / ColBcast index require non-streaming policy "
-                  "(WaitUpfrontPopAtEnd, WaitNoPop, InputLifecycle::NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
+    static_assert(
+        detail::valid_policy_mode_v<Policy, IndexMode>,
+        "CopyTile: RowBcast / ColBcast index require non-streaming policy "
+        "(WaitUpfrontPopAtEnd, WaitNoPop, InputLifecycle::NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
     // TileOffset::Set requires InputLifecycle::Bulk-family / InputLifecycle::CallerManaged lifecycle — iter-dependent
-    // counts (InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative/Held{Stream,Cumulative}/InputLifecycle::NoWaitPop) can't
-    // compose with runtime base offsets. Caller must size CB to base+window.
-    static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
-                  "CopyTile: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle "
-                  "(InputLifecycle::Bulk / InputLifecycle::HeldBulk / InputLifecycle::DeferredPop / InputLifecycle::BulkDrain / InputLifecycle::CallerManaged)");
+    // counts
+    // (InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative/Held{Stream,Cumulative}/InputLifecycle::NoWaitPop)
+    // can't compose with runtime base offsets. Caller must size CB to base+window.
+    static_assert(
+        Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+        "CopyTile: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle "
+        "(InputLifecycle::Bulk / InputLifecycle::HeldBulk / InputLifecycle::DeferredPop / InputLifecycle::BulkDrain / "
+        "InputLifecycle::CallerManaged)");
 
-    static constexpr uint32_t dfb             = Cb;
-    static constexpr uint32_t       dfb_a_id()       { return Cb; }
+    static constexpr uint32_t dfb = Cb;
+    static constexpr uint32_t dfb_a_id() { return Cb; }
     // CopyTile reads one CB front (srcA via dfb_a_id); dfb_b / b_policy absent -> defaults apply.
-    static constexpr InputLifecycle a_policy()      { return Policy; }
-    static constexpr bool           is_upfront      =
+    static constexpr InputLifecycle a_policy() { return Policy; }
+    static constexpr bool is_upfront =
         is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
 
     // Prev-CB fold: CopyTile loads CbA only. srcb/pack sides are absent -> dfb_for_side
     // defaults them to NO_PREV_DFB.
-    static constexpr uint32_t reconfig_srca_dfb =
-        (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srca_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
     constexpr CopyTileImpl() noexcept = default;
     constexpr explicit CopyTileImpl(uint32_t base) noexcept : Base(base) {}
 
     // ---- chain pipeline hooks ----
-    static ALWI void init() {
-        copy_tile_init(Cb);
-    }
+    static ALWI void init() { copy_tile_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
@@ -887,7 +929,7 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
 template <uint32_t Cb, uint32_t ConfigBits>
 struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr PackTileConfig Config{ConfigBits};
-    static constexpr OutputSpec Output = Config.output_spec();
+    static constexpr OutputSpec Output = Config.output_spec(Cb);
     static constexpr OutputLifecycle Policy = Output.lifecycle;
     static constexpr DataFormatReconfig Reconfig = Output.reconfig;
     static constexpr PackRelu Relu = Output.relu;
@@ -901,27 +943,24 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     // policies write distinct tiles in one reserved window; front-advancing policies stay pinned.
     static constexpr bool walk = Policy.reserve_policy == ReservePolicy::Upfront;
 
-    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
-                  "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(is_legal_output_lifecycle(Policy),
-                  "PackTile: output lifecycle is not a named OutputLifecycle");
+    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(is_legal_output_lifecycle(Policy), "PackTile: output lifecycle is not a named OutputLifecycle");
     static_assert(
-        L1AccumulationMode == L1Accumulation::Disabled ||
-            Policy == OutputLifecycle::L1Accumulation || Policy == OutputLifecycle::CallerManaged,
+        L1AccumulationMode == L1Accumulation::Disabled || Policy == OutputLifecycle::L1Accumulation ||
+            Policy == OutputLifecycle::CallerManaged,
         "PackTile: L1 accumulation requires OutputLifecycle::L1Accumulation or CallerManaged");
     static_assert(
         Policy != OutputLifecycle::L1Accumulation || L1AccumulationMode != L1Accumulation::Disabled,
         "PackTile: OutputLifecycle::L1Accumulation requires L1 accumulation");
     static_assert(
-        DestAccumulationMode == DestAccumulation::Disabled ||
-            Policy == OutputLifecycle::DestAccumulation || Policy == OutputLifecycle::CallerManaged,
+        DestAccumulationMode == DestAccumulation::Disabled || Policy == OutputLifecycle::DestAccumulation ||
+            Policy == OutputLifecycle::CallerManaged,
         "PackTile: DEST accumulation requires OutputLifecycle::DestAccumulation or CallerManaged");
     static_assert(
         Policy != OutputLifecycle::DestAccumulation || DestAccumulationMode == DestAccumulation::Enabled,
         "PackTile: OutputLifecycle::DestAccumulation requires DEST accumulation");
     static_assert(
-        L1AccumulationMode == L1Accumulation::Disabled ||
-            DestAccumulationMode == DestAccumulation::Disabled,
+        L1AccumulationMode == L1Accumulation::Disabled || DestAccumulationMode == DestAccumulation::Disabled,
         "PackTile: L1 and DEST accumulation cannot be combined");
     static_assert(
         L1AccumulationMode == L1Accumulation::Disabled || Relu == PackRelu::Disabled,
@@ -930,30 +969,29 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     // output CB (caller pre-reserved a window large enough for base + kind window).
     // InputLifecycle::Streaming / InputLifecycle::Chunked reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
-    static_assert(Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
-                  "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
-                  "(OutputLifecycle::Bulk / OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::CallerManaged)");
+    static_assert(
+        Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
+        "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
+        "(OutputLifecycle::Bulk / OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::CallerManaged)");
 
-    static constexpr uint32_t  dfb                 = Cb;
-    static constexpr uint32_t          pack_dfb_id()        { return Cb; }
-    static constexpr Dst               pack_dst_slot       = DstSlot;
+    static constexpr uint32_t dfb = Cb;
+    static constexpr uint32_t pack_dfb_id() { return Cb; }
+    static constexpr Dst pack_dst_slot = DstSlot;
     static constexpr bool uses_l1_accumulation = L1AccumulationMode != L1Accumulation::Disabled;
     static constexpr bool seeds_l1_accumulation = L1AccumulationMode == L1Accumulation::SeedFirst;
     static constexpr bool manages_l1_accumulation_lifecycle = Policy == OutputLifecycle::L1Accumulation;
-    static constexpr bool uses_dest_accumulation_lifecycle =
-        DestAccumulationMode == DestAccumulation::Enabled;
+    static constexpr bool uses_dest_accumulation_lifecycle = DestAccumulationMode == DestAccumulation::Enabled;
     static constexpr bool manages_dest_accumulation_lifecycle = Policy == OutputLifecycle::DestAccumulation;
     static constexpr bool uses_pack_relu = Relu != PackRelu::Disabled;
-    static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
-    static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
+    static constexpr bool is_upfront = (Policy == OutputLifecycle::Bulk);
+    static constexpr bool uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
     // `walk` (walk vs pinned output addressing) is derived from OutputLifecycle above.
 
     // Prev-CB fold: PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
     // emitted — fold keeps prior pack target.
     // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
-    static constexpr uint32_t reconfig_pack_dfb =
-        (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_pack_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
     constexpr PackTileImpl() noexcept = default;
     constexpr explicit PackTileImpl(uint32_t base) noexcept : Base(base) {}
@@ -984,8 +1022,8 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
         const uint32_t base = tile_base_value<Offset>(tile_base);
         const uint32_t out_idx = walk ? (base + i_flat) : base;
         pack_tile<
-            /*out_of_order_output=*/Offset == TileOffset::Set ||
-            L1AccumulationMode != L1Accumulation::Disabled>(to_u32(DstSlot) + slot_offset, Cb, out_idx);
+            /*out_of_order_output=*/Offset == TileOffset::Set || L1AccumulationMode != L1Accumulation::Disabled>(
+            to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
@@ -1001,8 +1039,8 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
 template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits>
 struct detail::BinaryFpuImpl : BinaryFpuTag {
     static constexpr BinaryFpuConfig Config{ConfigBits};
-    static constexpr InputSpec AInput = Config.a_input_spec();
-    static constexpr InputSpec BInput = Config.b_input_spec();
+    static constexpr InputSpec AInput = Config.a_input_spec(CbA);
+    static constexpr InputSpec BInput = Config.b_input_spec(CbB);
     static constexpr BinaryFpuOp Op = Config.op();
     static constexpr BroadcastDim Bcast = Config.broadcast();
     static constexpr DestAccumulation Accumulation = Config.accumulation();
@@ -1013,55 +1051,64 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static constexpr OperandKind BIndex = BInput.index;
     static constexpr TileOffset OffsetA = AInput.offset;
     static constexpr TileOffset OffsetB = BInput.offset;
-    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
-                  "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
         Accumulation == DestAccumulation::Disabled || DstSlot == Dst::D0,
         "BinaryFpu: DEST accumulation requires Dst::D0");
     // Comprehensive per-side (IndexMode, Policy) legality. Block rejects PerTile-pop
-    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-index pitfall) and PerTile-wait-of-1
-    // (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
+    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-index pitfall) and
+    // PerTile-wait-of-1 (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
     // legal lifecycle — caller-sized.
-    static_assert(is_legal_kind_lifecycle(AIndex, APolicy),
-                  "BinaryFpu: (AIndex, APolicy) is illegal for Block — exclude "
-                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
-    static_assert(is_legal_kind_lifecycle(BIndex, BPolicy),
-                  "BinaryFpu: (BIndex, BPolicy) is illegal for Block — exclude "
-                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
+    static_assert(
+        is_legal_kind_lifecycle(AIndex, APolicy),
+        "BinaryFpu: (AIndex, APolicy) is illegal for Block — exclude "
+        "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / "
+        "InputLifecycle::NoWaitPop on Block walkers.");
+    static_assert(
+        is_legal_kind_lifecycle(BIndex, BPolicy),
+        "BinaryFpu: (BIndex, BPolicy) is illegal for Block — exclude "
+        "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / "
+        "InputLifecycle::NoWaitPop on Block walkers.");
     // same_dfb dedup safety: when CbA == CbB the B-side wait/pop is skipped. Matching
     // indices ensure both sides walk the same shared-CB range; matching lifecycles ensure
     // the retained A-side wait/pop schedule also satisfies B.
-    static_assert((CbA != CbB) || AIndex == BIndex,
-                  "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
-                  "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
-    static_assert((CbA != CbB) || APolicy == BPolicy,
-                  "BinaryFpu: when CbA == CbB, AInput and BInput must use the same "
-                  "InputLifecycle (B-side wait/pop is deduped).");
+    static_assert(
+        (CbA != CbB) || AIndex == BIndex,
+        "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
+        "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
+    static_assert(
+        (CbA != CbB) || APolicy == BPolicy,
+        "BinaryFpu: when CbA == CbB, AInput and BInput must use the same "
+        "InputLifecycle (B-side wait/pop is deduped).");
     // 2D: RowBcast / ColBcast on either side require non-streaming policy.
-    static_assert(detail::valid_policy_mode_v<APolicy, AIndex>,
-                  "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
-    static_assert(detail::valid_policy_mode_v<BPolicy, BIndex>,
-                  "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
+    static_assert(
+        detail::valid_policy_mode_v<APolicy, AIndex>,
+        "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
+    static_assert(
+        detail::valid_policy_mode_v<BPolicy, BIndex>,
+        "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
     // Per-operand TileBase lifecycle compatibility — InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative
     // can't compose with runtime base offsets (iter-dependent wait/pop counts).
-    static_assert(OffsetA == TileOffset::Unset || is_legal_input_lifecycle_with_base(APolicy),
-                  "BinaryFpu: OffsetA Set requires APolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
-    static_assert(OffsetB == TileOffset::Unset || is_legal_input_lifecycle_with_base(BPolicy),
-                  "BinaryFpu: OffsetB Set requires BPolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
+    static_assert(
+        OffsetA == TileOffset::Unset || is_legal_input_lifecycle_with_base(APolicy),
+        "BinaryFpu: OffsetA Set requires APolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
+    static_assert(
+        OffsetB == TileOffset::Unset || is_legal_input_lifecycle_with_base(BPolicy),
+        "BinaryFpu: OffsetB Set requires BPolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
     // Per-block streaming uses chunk-local CB front. When the two sides use
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
     // caller-managed → absolute index `base_tile + j`), the chain dispatcher
     // resolves them separately via the 3-arg exec / exec overloads gated by
     // `needs_per_side_idx`. Same-regime hits the 2-arg fast path.
 
-    static constexpr uint32_t      dfb_a_id()  { return CbA; }
-    static constexpr uint32_t      dfb_b_id()  { return CbB; }
-    static constexpr InputLifecycle a_policy(){ return APolicy; }
-    static constexpr InputLifecycle b_policy(){ return BPolicy; }
-    static constexpr bool          is_upfront =
+    static constexpr uint32_t dfb_a_id() { return CbA; }
+    static constexpr uint32_t dfb_b_id() { return CbB; }
+    static constexpr InputLifecycle a_policy() { return APolicy; }
+    static constexpr InputLifecycle b_policy() { return BPolicy; }
+    static constexpr bool is_upfront =
         is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined> ||
         is_one_of_v<BPolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
-    static constexpr bool          same_dfb    = (CbA == CbB);
+    static constexpr bool same_dfb = (CbA == CbB);
     static constexpr bool uses_dest_accumulation = (Accumulation == DestAccumulation::Enabled);
     static constexpr Dst accumulated_dst_slot = DstSlot;
 
@@ -1080,10 +1127,8 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     // Per-side selection (Input / SrcA / SrcB) lets the caller opt into a single-side
     // fold when the other side is already programmed (by a previous chain element on
     // the same side, or by external init).
-    static constexpr uint32_t reconfig_srca_dfb =
-        (AInput.reconfig == DataFormatReconfig::Enabled) ? CbA : NO_PREV_DFB;
-    static constexpr uint32_t reconfig_srcb_dfb =
-        (BInput.reconfig == DataFormatReconfig::Enabled) ? CbB : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srca_dfb = (AInput.reconfig == DataFormatReconfig::Enabled) ? CbA : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srcb_dfb = (BInput.reconfig == DataFormatReconfig::Enabled) ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
 
     InputStream a;
@@ -1117,9 +1162,9 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
             // get_operand_tensor_shape, matching `add_bcast_rows_init_short` /
             // `sub_bcast_cols_init_short` etc. exactly.
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
-            constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
-                                (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
-                                                           ckernel::EltwiseBinaryType::ELWMUL;
+            constexpr auto et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
+                                : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
+                                                           : ckernel::EltwiseBinaryType::ELWMUL;
             if constexpr (Op == BinaryFpuOp::Mul) {
                 MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>(
                     CbA, CbB, Accumulation == DestAccumulation::Enabled)));
@@ -1145,30 +1190,38 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     // per-side traits. `ht` is unchanged (always absolute row); `wt_local` /
     // `wt_abs` cover the per-side column index when needed. Same-regime fast
     // path forwards through the 2-arg overload.
-    ALWI void exec(uint32_t i_flat_local,
-                      uint32_t i_flat_abs,
-                      uint32_t ht,
-                      uint32_t wt_local,
-                      uint32_t wt_abs,
-                      uint32_t slot_offset) const {
+    ALWI void exec(
+        uint32_t i_flat_local,
+        uint32_t i_flat_abs,
+        uint32_t ht,
+        uint32_t wt_local,
+        uint32_t wt_abs,
+        uint32_t slot_offset) const {
         const uint32_t a_flat = a_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
-        const uint32_t a_wt   = a_uses_local_idx ? wt_local     : wt_abs;
-        const uint32_t b_wt   = b_uses_local_idx ? wt_local     : wt_abs;
-        const uint32_t a_idx  = tile_base_value<OffsetA>(a.tile_base) + detail::idx<AIndex>(a_flat, ht, a_wt);
-        const uint32_t b_idx  = tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex>(b_flat, ht, b_wt);
-        const uint32_t dst = Accumulation == DestAccumulation::Enabled
-                                 ? to_u32(DstSlot)
-                                 : to_u32(DstSlot) + slot_offset;
+        const uint32_t a_wt = a_uses_local_idx ? wt_local : wt_abs;
+        const uint32_t b_wt = b_uses_local_idx ? wt_local : wt_abs;
+        const uint32_t a_idx = tile_base_value<OffsetA>(a.tile_base) + detail::idx<AIndex>(a_flat, ht, a_wt);
+        const uint32_t b_idx = tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex>(b_flat, ht, b_wt);
+        const uint32_t dst =
+            Accumulation == DestAccumulation::Enabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
-            if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
-            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, dst);
-            else                                       mul_tiles(CbA, CbB, a_idx, b_idx, dst);
+            if constexpr (Op == BinaryFpuOp::Add) {
+                add_tiles(CbA, CbB, a_idx, b_idx, dst);
+            } else if constexpr (Op == BinaryFpuOp::Sub) {
+                sub_tiles(CbA, CbB, a_idx, b_idx, dst);
+            } else {
+                mul_tiles(CbA, CbB, a_idx, b_idx, dst);
+            }
         } else {
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
-            if constexpr      (Op == BinaryFpuOp::Add) add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
-            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
-            else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            if constexpr (Op == BinaryFpuOp::Add) {
+                add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            } else if constexpr (Op == BinaryFpuOp::Sub) {
+                sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            } else {
+                mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+            }
         }
     }
 
@@ -1186,7 +1239,7 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     static constexpr DestReuseBinaryConfig Config{ConfigBits};
     static constexpr BinaryFpuOp Op = Config.op();
     static constexpr DestReuseType ReuseType = Config.reuse();
-    static constexpr InputSpec InputConfig = Config.input_spec();
+    static constexpr InputSpec InputConfig = Config.input_spec(Cb);
     static constexpr Dst DstIn = Config.dst_in();
     static constexpr Dst DstOut = Config.dst_out();
     static constexpr InputLifecycle Policy = InputConfig.lifecycle;
@@ -1195,36 +1248,40 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     using Base = InputStream;
     using Base::tile_base;
 
-    static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
-                  "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
-    static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
-                  "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
-                  "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop on Block walkers.");
-    static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
-                  "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
-    static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
-                  "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle");
+    static_assert(
+        to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
+        "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(
+        is_legal_kind_lifecycle(IndexMode, Policy),
+        "DestReuseBinary: (IndexMode, Policy) is illegal for Block — exclude "
+        "InputLifecycle::Streaming / InputLifecycle::HeldStream / InputLifecycle::BulkDrain / "
+        "InputLifecycle::NoWaitPop on Block walkers.");
+    static_assert(
+        detail::valid_policy_mode_v<Policy, IndexMode>,
+        "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
+    static_assert(
+        Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+        "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged "
+        "lifecycle");
 
     // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (dfb_a),
     // DEST_TO_SRCA -> CB on srcB (dfb_b). The other side is the DEST register, not a CB (INVALID_DFB).
-    static constexpr uint32_t       dfb                = Cb;
-    static constexpr uint32_t       dfb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : INVALID_DFB; }
-    static constexpr uint32_t       dfb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : INVALID_DFB; }
-    static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr bool           is_upfront        =
+    static constexpr uint32_t dfb = Cb;
+    static constexpr uint32_t dfb_a_id() { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : INVALID_DFB; }
+    static constexpr uint32_t dfb_b_id() { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : INVALID_DFB; }
+    static constexpr InputLifecycle a_policy() { return Policy; }
+    static constexpr bool is_upfront =
         is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
 
     // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
     //
-    static constexpr uint32_t       reconfig_srca_dfb  =
-        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCB)
-            ? Cb
-            : NO_PREV_DFB;
-    static constexpr uint32_t       reconfig_srcb_dfb  =
-        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCA)
-            ? Cb
-            : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srca_dfb =
+        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb
+                                                                                                          : NO_PREV_DFB;
+    static constexpr uint32_t reconfig_srcb_dfb =
+        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb
+                                                                                                          : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
     constexpr DestReuseBinaryImpl() noexcept = default;
@@ -1233,9 +1290,9 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     // srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
     static ALWI void init() {
-        constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
-                            (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
-                                                       ckernel::EltwiseBinaryType::ELWMUL;
+        constexpr auto et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
+                            : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
+                                                       : ckernel::EltwiseBinaryType::ELWMUL;
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
@@ -1243,14 +1300,13 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
-                            (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
-                                                       ckernel::EltwiseBinaryType::ELWMUL;
+        constexpr auto et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
+                            : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
+                                                       : ckernel::EltwiseBinaryType::ELWMUL;
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx =
-            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
 
@@ -1292,8 +1348,7 @@ template <class, class = void>
 struct elem_lane_width : std::integral_constant<uint32_t, 1> {};
 
 template <class E>
-struct elem_lane_width<E, std::void_t<decltype(E::lane_width)>>
-    : std::integral_constant<uint32_t, E::lane_width> {};
+struct elem_lane_width<E, std::void_t<decltype(E::lane_width)>> : std::integral_constant<uint32_t, E::lane_width> {};
 
 template <class E>
 constexpr uint32_t elem_lane_width_v = elem_lane_width<E>::value;
@@ -1343,8 +1398,8 @@ constexpr uint32_t chain_max_block_value() {
 }  // namespace detail
 
 template <class... Es>
-struct chain_max_block<EltwiseChain<Es...>>
-    : std::integral_constant<uint32_t, detail::chain_max_block_value<Es...>()> {};
+struct chain_max_block<EltwiseChain<Es...>> : std::integral_constant<uint32_t, detail::chain_max_block_value<Es...>()> {
+};
 
 template <class Chain>
 inline constexpr uint32_t chain_max_block_v = chain_max_block<Chain>::value;
@@ -1354,15 +1409,12 @@ inline constexpr uint32_t chain_max_block_v = chain_max_block<Chain>::value;
 // Per-tile policies (Streaming / HeldStream) consume ONE tile per iter and can't do block_size > 1;
 // for such chains the chain clamps block_size to 1 at runtime (not a static_assert).
 namespace detail {
-template <class E> constexpr InputLifecycle b_policy_of();  // defined below (defaults to CallerManaged)
+template <class E>
+constexpr InputLifecycle b_policy_of();  // defined below (defaults to CallerManaged)
 
 constexpr bool policy_supports_block(InputLifecycle p) {
-    return p == InputLifecycle::Bulk ||
-           p == InputLifecycle::HeldBulk ||
-           p == InputLifecycle::Pipelined ||
-           p == InputLifecycle::HeldCumulative ||
-           p == InputLifecycle::CallerManaged ||
-           p == InputLifecycle::Chunked;
+    return p == InputLifecycle::Bulk || p == InputLifecycle::HeldBulk || p == InputLifecycle::Pipelined ||
+           p == InputLifecycle::HeldCumulative || p == InputLifecycle::CallerManaged || p == InputLifecycle::Chunked;
 }
 
 template <class E>
@@ -1386,34 +1438,55 @@ namespace detail {
 
 // SFINAE accessors for the two members the collision derivations read but not every
 // element declares (CB readers carry is_upfront; PackTile carries pack_dst_slot).
-template <class E, class = void> struct has_is_upfront_m : std::false_type {};
-template <class E> struct has_is_upfront_m<E, std::void_t<decltype(E::is_upfront)>> : std::true_type {};
-template <class E> constexpr bool is_upfront_of() {
-    if constexpr (has_is_upfront_m<E>::value) return E::is_upfront; else return false;
+template <class E, class = void>
+struct has_is_upfront_m : std::false_type {};
+template <class E>
+struct has_is_upfront_m<E, std::void_t<decltype(E::is_upfront)>> : std::true_type {};
+template <class E>
+constexpr bool is_upfront_of() {
+    if constexpr (has_is_upfront_m<E>::value) {
+        return E::is_upfront;
+    } else {
+        return false;
+    }
 }
-template <class E, class = void> struct has_pack_dst_slot_m : std::false_type {};
-template <class E> struct has_pack_dst_slot_m<E, std::void_t<decltype(E::pack_dst_slot)>> : std::true_type {};
-template <class E> constexpr Dst pack_dst_slot_of() {
-    if constexpr (has_pack_dst_slot_m<E>::value) return E::pack_dst_slot; else return Dst::D0;
+template <class E, class = void>
+struct has_pack_dst_slot_m : std::false_type {};
+template <class E>
+struct has_pack_dst_slot_m<E, std::void_t<decltype(E::pack_dst_slot)>> : std::true_type {};
+template <class E>
+constexpr Dst pack_dst_slot_of() {
+    if constexpr (has_pack_dst_slot_m<E>::value) {
+        return E::pack_dst_slot;
+    } else {
+        return Dst::D0;
+    }
 }
 // b_policy defaults to CallerManaged (the unary-reader / no-srcB-CB case), so only elements
 // with a genuine srcB operand (BinaryFpu) declare it.
-template <class E, class = void> struct has_b_policy_m : std::false_type {};
-template <class E> struct has_b_policy_m<E, std::void_t<decltype(E::b_policy())>> : std::true_type {};
-template <class E> constexpr InputLifecycle b_policy_of() {
-    if constexpr (has_b_policy_m<E>::value) return E::b_policy(); else return InputLifecycle::CallerManaged;
+template <class E, class = void>
+struct has_b_policy_m : std::false_type {};
+template <class E>
+struct has_b_policy_m<E, std::void_t<decltype(E::b_policy())>> : std::true_type {};
+template <class E>
+constexpr InputLifecycle b_policy_of() {
+    if constexpr (has_b_policy_m<E>::value) {
+        return E::b_policy();
+    } else {
+        return InputLifecycle::CallerManaged;
+    }
 }
 
 // One plain-data descriptor per element — reflected once via the existing accessors.
 struct ElemDesc {
     bool is_cb_reader;
     bool is_pack;
-    uint32_t srca_cb;      // dfb_for_side<SrcA> (NO_PREV_DFB when not programmed) — per-side consistency + prev input
-    uint32_t srcb_cb;      // dfb_for_side<SrcB>
-    uint32_t pack_side_dfb; // dfb_for_side<Pack> (reconfig_pack_dfb) — prev / last_pack / hetero input
-    uint32_t dfb_a;         // dfb_a_of (INVALID_DFB when n/a) — reader-collision input
-    uint32_t dfb_b;         // dfb_b_of (INVALID_DFB when n/a)
-    uint32_t pack_dfb;      // pack_dfb_of (INVALID_DFB when n/a) — writer-collision input
+    uint32_t srca_cb;        // dfb_for_side<SrcA> (NO_PREV_DFB when not programmed) — per-side consistency + prev input
+    uint32_t srcb_cb;        // dfb_for_side<SrcB>
+    uint32_t pack_side_dfb;  // dfb_for_side<Pack> (reconfig_pack_dfb) — prev / last_pack / hetero input
+    uint32_t dfb_a;          // dfb_a_of (INVALID_DFB when n/a) — reader-collision input
+    uint32_t dfb_b;          // dfb_b_of (INVALID_DFB when n/a)
+    uint32_t pack_dfb;       // pack_dfb_of (INVALID_DFB when n/a) — writer-collision input
     Dst pack_dst_slot;
     bool uses_l1_accumulation;
     bool seeds_l1_accumulation;
@@ -1439,42 +1512,58 @@ struct ElemDesc {
 
 template <class E>
 constexpr bool uses_l1_accumulation_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::uses_l1_accumulation;
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::uses_l1_accumulation;
+    }
     return false;
 }
 template <class E>
 constexpr bool seeds_l1_accumulation_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::seeds_l1_accumulation;
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::seeds_l1_accumulation;
+    }
     return false;
 }
 template <class E>
 constexpr bool manages_l1_accumulation_lifecycle_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::manages_l1_accumulation_lifecycle;
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::manages_l1_accumulation_lifecycle;
+    }
     return false;
 }
 template <class E>
 constexpr bool uses_dest_accumulation_of() {
-    if constexpr (is_binary_fpu_op_v<E>) return E::uses_dest_accumulation;
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return E::uses_dest_accumulation;
+    }
     return false;
 }
 template <class E>
 constexpr Dst accumulated_dst_slot_of() {
-    if constexpr (is_binary_fpu_op_v<E>) return E::accumulated_dst_slot;
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return E::accumulated_dst_slot;
+    }
     return Dst::D0;
 }
 template <class E>
 constexpr bool uses_dest_accumulation_lifecycle_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::uses_dest_accumulation_lifecycle;
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::uses_dest_accumulation_lifecycle;
+    }
     return false;
 }
 template <class E>
 constexpr bool manages_dest_accumulation_lifecycle_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::manages_dest_accumulation_lifecycle;
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::manages_dest_accumulation_lifecycle;
+    }
     return false;
 }
 template <class E>
 constexpr bool uses_pack_relu_of() {
-    if constexpr (is_pack_tile_op_v<E>) return E::uses_pack_relu;
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::uses_pack_relu;
+    }
     return false;
 }
 template <class E>
@@ -1605,65 +1694,95 @@ constexpr ElemDesc describe() {
 // `n` (the array is sized [N?N:1], so an empty chain must NOT read the lone default slot).
 constexpr uint32_t ct_lane_width(const ElemDesc* d, int n) {
     uint32_t w = 1;
-    for (int i = 0; i < n; ++i)
-        if (d[i].lane_width > w) w = d[i].lane_width;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].lane_width > w) {
+            w = d[i].lane_width;
+        }
+    }
     return w;
 }
 constexpr uint32_t ct_transient_lane_width(const ElemDesc* d, int n) {
     uint32_t w = 0;
-    for (int i = 0; i < n; ++i)
-        if (d[i].transient_lane_width > w) w = d[i].transient_lane_width;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].transient_lane_width > w) {
+            w = d[i].transient_lane_width;
+        }
+    }
     return w;
 }
 constexpr bool ct_supports_block(const ElemDesc* d, int n) {
     bool r = true;
-    for (int i = 0; i < n; ++i) r = r && d[i].supports_block;
+    for (int i = 0; i < n; ++i) {
+        r = r && d[i].supports_block;
+    }
     return r;
 }
-constexpr bool ct_side_consistent(const ElemDesc* d, int n, uint32_t ElemDesc::*side) {
+constexpr bool ct_side_consistent(const ElemDesc* d, int n, uint32_t ElemDesc::* side) {
     uint32_t seen = NO_PREV_DFB;
     for (int i = 0; i < n; ++i) {
         uint32_t dfb = d[i].*side;
-        if (dfb == NO_PREV_DFB) continue;
-        if (seen == NO_PREV_DFB) seen = dfb;
-        else if (seen != dfb) return false;
+        if (dfb == NO_PREV_DFB) {
+            continue;
+        }
+        if (seen == NO_PREV_DFB) {
+            seen = dfb;
+        } else if (seen != dfb) {
+            return false;
+        }
     }
     return true;
 }
 constexpr bool ct_reader_collide(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < n; ++i) {
         for (int j = i + 1; j < n; ++j) {
-            if (!(d[i].is_cb_reader && d[j].is_cb_reader)) continue;
-            if (!(d[i].is_upfront && d[j].is_upfront)) continue;
+            if (!(d[i].is_cb_reader && d[j].is_cb_reader)) {
+                continue;
+            }
+            if (!(d[i].is_upfront && d[j].is_upfront)) {
+                continue;
+            }
             uint32_t a0 = d[i].dfb_a, a1 = d[i].dfb_b, b0 = d[j].dfb_a, b1 = d[j].dfb_b;
-            if ((a0 != INVALID_DFB && (a0 == b0 || a0 == b1)) || (a1 != INVALID_DFB && (a1 == b0 || a1 == b1)))
+            if ((a0 != INVALID_DFB && (a0 == b0 || a0 == b1)) || (a1 != INVALID_DFB && (a1 == b0 || a1 == b1))) {
                 return true;
+            }
         }
+    }
     return false;
 }
 constexpr bool ct_writer_collide(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        for (int j = i + 1; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
             if (d[i].is_pack && d[j].is_pack && d[i].pack_dfb == d[j].pack_dfb &&
-                d[i].pack_dst_slot == d[j].pack_dst_slot)
+                d[i].pack_dst_slot == d[j].pack_dst_slot) {
                 return true;
+            }
+        }
+    }
     return false;
 }
 constexpr bool ct_any_l1_accumulation(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].uses_l1_accumulation) return true;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].uses_l1_accumulation) {
+            return true;
+        }
+    }
     return false;
 }
 constexpr bool ct_all_writers_l1_accumulation(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].is_pack && !d[i].uses_l1_accumulation) return false;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_pack && !d[i].uses_l1_accumulation) {
+            return false;
+        }
+    }
     return true;
 }
 constexpr bool ct_l1_accumulation_modes_consistent(const ElemDesc* d, int n) {
     bool found = false;
     bool seed_first = false;
     for (int i = 0; i < n; ++i) {
-        if (!d[i].is_pack || !d[i].uses_l1_accumulation) continue;
+        if (!d[i].is_pack || !d[i].uses_l1_accumulation) {
+            continue;
+        }
         if (!found) {
             found = true;
             seed_first = d[i].seeds_l1_accumulation;
@@ -1674,35 +1793,51 @@ constexpr bool ct_l1_accumulation_modes_consistent(const ElemDesc* d, int n) {
     return true;
 }
 constexpr bool ct_any_seed_first_l1_accumulation(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].seeds_l1_accumulation) return true;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].seeds_l1_accumulation) {
+            return true;
+        }
+    }
     return false;
 }
 constexpr bool ct_pack_dfbs_consistent(const ElemDesc* d, int n) {
     uint32_t seen = INVALID_DFB;
     for (int i = 0; i < n; ++i) {
-        if (!d[i].is_pack) continue;
-        if (seen == INVALID_DFB) seen = d[i].pack_dfb;
-        else if (seen != d[i].pack_dfb) return false;
+        if (!d[i].is_pack) {
+            continue;
+        }
+        if (seen == INVALID_DFB) {
+            seen = d[i].pack_dfb;
+        } else if (seen != d[i].pack_dfb) {
+            return false;
+        }
     }
     return true;
 }
 constexpr uint32_t ct_managed_l1_accumulation_lifecycles(const ElemDesc* d, int n) {
     uint32_t count = 0;
-    for (int i = 0; i < n; ++i)
-        if (d[i].manages_l1_accumulation_lifecycle) ++count;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].manages_l1_accumulation_lifecycle) {
+            ++count;
+        }
+    }
     return count;
 }
 constexpr bool ct_any_dest_accumulation(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].uses_dest_accumulation) return true;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].uses_dest_accumulation) {
+            return true;
+        }
+    }
     return false;
 }
 constexpr uint32_t ct_dest_accumulation_slot_count(const ElemDesc* d, int n) {
     bool seen[DEST_AUTO_LIMIT] = {};
     uint32_t count = 0;
     for (int i = 0; i < n; ++i) {
-        if (!d[i].uses_dest_accumulation) continue;
+        if (!d[i].uses_dest_accumulation) {
+            continue;
+        }
         const uint32_t slot = to_u32(d[i].accumulated_dst_slot);
         if (!seen[slot]) {
             seen[slot] = true;
@@ -1713,8 +1848,11 @@ constexpr uint32_t ct_dest_accumulation_slot_count(const ElemDesc* d, int n) {
 }
 constexpr uint32_t ct_pack_writer_count(const ElemDesc* d, int n) {
     uint32_t count = 0;
-    for (int i = 0; i < n; ++i)
-        if (d[i].is_pack) ++count;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_pack) {
+            ++count;
+        }
+    }
     return count;
 }
 constexpr bool ct_dest_accumulation_pack_matches(const ElemDesc* d, int n) {
@@ -1725,29 +1863,44 @@ constexpr bool ct_dest_accumulation_pack_matches(const ElemDesc* d, int n) {
             break;
         }
     }
-    for (int i = 0; i < n; ++i)
-        if (d[i].is_pack && d[i].pack_dst_slot != sticky) return false;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_pack && d[i].pack_dst_slot != sticky) {
+            return false;
+        }
+    }
     return true;
 }
 constexpr bool ct_all_writers_dest_accumulation_lifecycle(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].is_pack && !d[i].uses_dest_accumulation_lifecycle) return false;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_pack && !d[i].uses_dest_accumulation_lifecycle) {
+            return false;
+        }
+    }
     return true;
 }
 constexpr bool ct_any_dest_accumulation_lifecycle(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].uses_dest_accumulation_lifecycle) return true;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].uses_dest_accumulation_lifecycle) {
+            return true;
+        }
+    }
     return false;
 }
 constexpr uint32_t ct_managed_dest_accumulation_lifecycles(const ElemDesc* d, int n) {
     uint32_t count = 0;
-    for (int i = 0; i < n; ++i)
-        if (d[i].manages_dest_accumulation_lifecycle) ++count;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].manages_dest_accumulation_lifecycle) {
+            ++count;
+        }
+    }
     return count;
 }
 constexpr bool ct_any_pack_relu(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i)
-        if (d[i].uses_pack_relu) return true;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].uses_pack_relu) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1769,26 +1922,40 @@ constexpr PrevTable<M> ct_build_prev(const ElemDesc* d, int n) {
         t.srca[i] = pa;
         t.srcb[i] = pb;
         t.pack[i] = pp;
-        if (d[i].srca_cb != NO_PREV_DFB) pa = d[i].srca_cb;
-        if (d[i].srcb_cb != NO_PREV_DFB) pb = d[i].srcb_cb;
-        if (d[i].pack_side_dfb != NO_PREV_DFB) pp = d[i].pack_side_dfb;
+        if (d[i].srca_cb != NO_PREV_DFB) {
+            pa = d[i].srca_cb;
+        }
+        if (d[i].srcb_cb != NO_PREV_DFB) {
+            pb = d[i].srcb_cb;
+        }
+        if (d[i].pack_side_dfb != NO_PREV_DFB) {
+            pp = d[i].pack_side_dfb;
+        }
     }
     return t;
 }
 // Last opt-in pack CB in chain order (iter-to-iter wraparound prev for pack site 0).
 constexpr uint32_t ct_last_pack_cb(const ElemDesc* d, int n) {
     uint32_t last = NO_PREV_DFB;
-    for (int i = 0; i < n; ++i)
-        if (d[i].pack_side_dfb != NO_PREV_DFB) last = d[i].pack_side_dfb;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].pack_side_dfb != NO_PREV_DFB) {
+            last = d[i].pack_side_dfb;
+        }
+    }
     return last;
 }
 // True iff ≥2 opt-in pack sites declare different CBs (boot can't program all).
 constexpr bool ct_pack_hetero(const ElemDesc* d, int n) {
     uint32_t first = NO_PREV_DFB;
     for (int i = 0; i < n; ++i) {
-        if (d[i].pack_side_dfb == NO_PREV_DFB) continue;
-        if (first == NO_PREV_DFB) first = d[i].pack_side_dfb;
-        else if (first != d[i].pack_side_dfb) return true;
+        if (d[i].pack_side_dfb == NO_PREV_DFB) {
+            continue;
+        }
+        if (first == NO_PREV_DFB) {
+            first = d[i].pack_side_dfb;
+        } else if (first != d[i].pack_side_dfb) {
+            return true;
+        }
     }
     return false;
 }
@@ -1810,17 +1977,14 @@ struct ChainTraits {
     static constexpr bool all_writers_l1_accumulation = ct_all_writers_l1_accumulation(d, N);
     static constexpr bool l1_accumulation_modes_consistent = ct_l1_accumulation_modes_consistent(d, N);
     static constexpr bool pack_dfbs_consistent = ct_pack_dfbs_consistent(d, N);
-    static constexpr uint32_t managed_l1_accumulation_lifecycles =
-        ct_managed_l1_accumulation_lifecycles(d, N);
+    static constexpr uint32_t managed_l1_accumulation_lifecycles = ct_managed_l1_accumulation_lifecycles(d, N);
     static constexpr bool any_dest_accumulation = ct_any_dest_accumulation(d, N);
     static constexpr uint32_t dest_accumulation_slot_count = ct_dest_accumulation_slot_count(d, N);
     static constexpr uint32_t pack_writer_count = ct_pack_writer_count(d, N);
     static constexpr bool dest_accumulation_pack_matches = ct_dest_accumulation_pack_matches(d, N);
-    static constexpr bool all_writers_dest_accumulation_lifecycle =
-        ct_all_writers_dest_accumulation_lifecycle(d, N);
+    static constexpr bool all_writers_dest_accumulation_lifecycle = ct_all_writers_dest_accumulation_lifecycle(d, N);
     static constexpr bool any_dest_accumulation_lifecycle = ct_any_dest_accumulation_lifecycle(d, N);
-    static constexpr uint32_t managed_dest_accumulation_lifecycles =
-        ct_managed_dest_accumulation_lifecycles(d, N);
+    static constexpr uint32_t managed_dest_accumulation_lifecycles = ct_managed_dest_accumulation_lifecycles(d, N);
     static constexpr bool any_pack_relu = ct_any_pack_relu(d, N);
 
     // Per-side prev-CB history (one sweep), + pack-side metadata.
@@ -1835,8 +1999,7 @@ template <class Chain>
 struct chain_supports_block;
 
 template <class... Es>
-struct chain_supports_block<EltwiseChain<Es...>>
-    : std::bool_constant<detail::ChainTraits<Es...>::supports_block> {};
+struct chain_supports_block<EltwiseChain<Es...>> : std::bool_constant<detail::ChainTraits<Es...>::supports_block> {};
 
 template <class Chain>
 inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
@@ -1852,8 +2015,8 @@ struct elem_per_block_reader : std::false_type {};
 
 template <class E>
 struct elem_per_block_reader<E, std::enable_if_t<is_cb_reader_op_v<E>>>
-    : std::bool_constant<(E::a_policy() == InputLifecycle::Chunked) ||
-                         (b_policy_of<E>() == InputLifecycle::Chunked)> {};
+    : std::bool_constant<(E::a_policy() == InputLifecycle::Chunked) || (b_policy_of<E>() == InputLifecycle::Chunked)> {
+};
 
 template <class E, class = void>
 struct elem_per_block_pack : std::false_type {};
@@ -1863,8 +2026,7 @@ struct elem_per_block_pack<E, std::void_t<decltype(E::uses_per_block_pack)>>
     : std::bool_constant<E::uses_per_block_pack> {};
 
 template <class E>
-inline constexpr bool element_uses_per_block_index_v =
-    elem_per_block_reader<E>::value || elem_per_block_pack<E>::value;
+inline constexpr bool element_uses_per_block_index_v = elem_per_block_reader<E>::value || elem_per_block_pack<E>::value;
 
 // elem_needs_per_side_idx_v — true when the element wants per-side
 // local-vs-absolute index resolution (BinaryFpu when A/B policies disagree on
@@ -1884,11 +2046,13 @@ inline constexpr bool elem_needs_per_side_idx_v = elem_needs_per_side_idx<E>::va
 
 // chain_has_duplicate_upfront_dfbs / chain_pack_writes_collide — pairwise collision
 // checks, implemented as flat nested loops in ChainTraits (reader_collide / writer_collide).
-template <class... Es> struct chain_has_duplicate_upfront_dfbs<EltwiseChain<Es...>>
+template <class... Es>
+struct chain_has_duplicate_upfront_dfbs<EltwiseChain<Es...>>
     : std::bool_constant<detail::ChainTraits<Es...>::reader_collide> {};
 
-template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
-    : std::bool_constant<detail::ChainTraits<Es...>::writer_collide> {};
+template <class... Es>
+struct chain_pack_writes_collide<EltwiseChain<Es...>> : std::bool_constant<detail::ChainTraits<Es...>::writer_collide> {
+};
 
 // `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort decisions on whether each
 // element's init() can run once at boot instead of per tile. The two cohorts (math-MOP =
@@ -1930,17 +2094,17 @@ struct is_math_mop_op_t : std::bool_constant<is_math_mop_op_v<E>> {};
 // satisfy `std::is_same_v<Rep, E>`. If no element matches, the chain is
 // vacuously uniform (returns true).
 template <template <class> class Pred, class... Es>
-struct first_match { using type = void; };
+struct first_match {
+    using type = void;
+};
 
 template <template <class> class Pred, class First, class... Rest>
 struct first_match<Pred, First, Rest...> {
-    using type = std::conditional_t<Pred<First>::value, First,
-                                    typename first_match<Pred, Rest...>::type>;
+    using type = std::conditional_t<Pred<First>::value, First, typename first_match<Pred, Rest...>::type>;
 };
 
 template <template <class> class Pred, class Rep, class... Es>
-struct all_match_rep
-    : std::bool_constant<(((!Pred<Es>::value) || std::is_same_v<Rep, Es>) && ...)> {};
+struct all_match_rep : std::bool_constant<(((!Pred<Es>::value) || std::is_same_v<Rep, Es>) && ...)> {};
 
 // Empty `Rep == void` short-circuits to `true` (no element matched Pred at all,
 // so the "must equal Rep" condition is vacuously satisfied).
@@ -1961,8 +2125,7 @@ struct chain_per_side_dfbs_consistent : std::true_type {};
 
 template <class... Es>
 struct chain_per_side_dfbs_consistent<EltwiseChain<Es...>>
-    : std::bool_constant<detail::ChainTraits<Es...>::srca_consistent &&
-                         detail::ChainTraits<Es...>::srcb_consistent> {};
+    : std::bool_constant<detail::ChainTraits<Es...>::srca_consistent && detail::ChainTraits<Es...>::srcb_consistent> {};
 
 template <class Chain>
 struct chain_math_mop_uniform : std::true_type {};
@@ -1986,8 +2149,8 @@ struct chain_hoist_math_mop : std::false_type {};
 
 template <class... Es>
 struct chain_hoist_math_mop<EltwiseChain<Es...>>
-    : std::bool_constant<chain_per_side_cbs_consistent_v<EltwiseChain<Es...>> &&
-                         chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
+    : std::bool_constant<
+          chain_per_side_cbs_consistent_v<EltwiseChain<Es...>> && chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
 
 // SFPU cohort hoist: requires math-MOP hoist AND SFPU init uniformity.
 // True when every element's init can be emitted at boot (the fully-hoisted shape).
@@ -1996,8 +2159,8 @@ struct chain_hoist_sfpu : std::false_type {};
 
 template <class... Es>
 struct chain_hoist_sfpu<EltwiseChain<Es...>>
-    : std::bool_constant<chain_hoist_math_mop_v<EltwiseChain<Es...>> &&
-                         chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
+    : std::bool_constant<
+          chain_hoist_math_mop_v<EltwiseChain<Es...>> && chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
 
 // Pack cohort hoist: pack init + reconfig are fully boot-emitted, with NO per-stage pack
 // reconfig in the loop. True iff the chain isn't pack-hetero (homogeneous opt-in pack CBs).
@@ -2006,8 +2169,7 @@ template <class Chain>
 struct chain_hoist_pack : std::true_type {};
 
 template <class... Es>
-struct chain_hoist_pack<EltwiseChain<Es...>>
-    : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
+struct chain_hoist_pack<EltwiseChain<Es...>> : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
 
 // True iff no element requests any reconfig. SetupOwner::Caller requires this so an enabled but
 // inert operand reconfig (which the helper would silently ignore) is a compile error
@@ -2078,8 +2240,7 @@ ALWI void emit_pre_element_transitions() {
     // via `emit_per_stage_pack_reconfig`, where the 2-arg LLK form's cache check
     // handles intra-stage transitions cheaply and the per-iter wraparound from
     // last-pack-cb to first-pack-cb is correctly programmed.
-    constexpr bool defer_pack_to_per_stage =
-        PackHetero && (prev_p != NO_PREV_DFB);
+    constexpr bool defer_pack_to_per_stage = PackHetero && (prev_p != NO_PREV_DFB);
 
     // ---- srca + srcb: coalesce when both sides share prev-state ----
     if constexpr (reconf_a && reconf_b) {
@@ -2135,14 +2296,14 @@ ALWI void emit_pre_element_transitions() {
 // (so iter k+1's site 0 sees iter k's site N-1 as the previous descriptor
 // state). The LLK's compare-and-skip on matching formats keeps the cost to
 // a few cycles when adjacent stages happen to share a dtype.
-ALWI void emit_per_stage_pack_reconfig(
-    uint32_t curr_p, uint32_t prev_chain, uint32_t last_pack_cb, bool pack_hetero) {
-    if (!pack_hetero || curr_p == NO_PREV_DFB) return;
+ALWI void emit_per_stage_pack_reconfig(uint32_t curr_p, uint32_t prev_chain, uint32_t last_pack_cb, bool pack_hetero) {
+    if (!pack_hetero || curr_p == NO_PREV_DFB) {
+        return;
+    }
     // Wraparound: first opt-in pack site has no in-chain prev; on iter ≥ 1 the
     // packer ended the previous iter on `last_pack_cb`. The LLK 2-arg form does
     // the right thing on iter 0 too (cache check vs. boot-initialized state).
-    const uint32_t prev_p =
-        (prev_chain != NO_PREV_DFB) ? prev_chain : last_pack_cb;
+    const uint32_t prev_p = (prev_chain != NO_PREV_DFB) ? prev_chain : last_pack_cb;
     if (prev_p != NO_PREV_DFB) {
         pack_reconfig_data_format(prev_p, curr_p);
     }
@@ -2191,9 +2352,7 @@ ALWI void elem_pack_init() {
 // disjoint from compute cohorts and is always hoisted).
 template <bool HoistMath, bool HoistSfpu, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class ElemT>
 ALWI void hoist_compute_init_one([[maybe_unused]] ElemT& elem) {
-    constexpr bool emit =
-        (is_math_mop_op_v<ElemT> && HoistMath) ||
-        (is_dest_only_op_v<ElemT> && HoistSfpu);
+    constexpr bool emit = (is_math_mop_op_v<ElemT> && HoistMath) || (is_dest_only_op_v<ElemT> && HoistSfpu);
     if constexpr (emit) {
         emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
         elem.init();  // instance dispatch (see convention note above): a runtime-stateful init reads its members here
@@ -2229,7 +2388,15 @@ ALWI void hoist_compute_init_one([[maybe_unused]] ElemT& elem) {
 
 namespace detail {
 
-template <bool EmitMathInit, bool EmitSfpuInit, uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero, class ElemT>
+template <
+    bool EmitMathInit,
+    bool EmitSfpuInit,
+    uint32_t SlotBase,
+    uint32_t PrevA,
+    uint32_t PrevB,
+    uint32_t PrevP,
+    bool PackHetero,
+    class ElemT>
 ALWI void elem_apply_compute(
     [[maybe_unused]] const ElemT& elem,
     [[maybe_unused]] uint32_t i_flat,
@@ -2281,12 +2448,13 @@ ALWI void elem_apply_compute(
         for (uint32_t j = 0; j < inner_count; ++j) {
             if constexpr (per_side) {
                 // Per-side path: chain hands both indices; element picks per operand.
-                elem.exec(/*i_flat_local=*/j,
-                             /*i_flat_abs=*/(i_flat + j),
-                             ht,
-                             /*wt_local=*/j,
-                             /*wt_abs=*/(wt + j),
-                             SlotBase + j * chain_lane_width);
+                elem.exec(
+                    /*i_flat_local=*/j,
+                    /*i_flat_abs=*/(i_flat + j),
+                    ht,
+                    /*wt_local=*/j,
+                    /*wt_abs=*/(wt + j),
+                    SlotBase + j * chain_lane_width);
             } else {
                 const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
                 elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
@@ -2336,14 +2504,15 @@ ALWI void elem_apply_pack(
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-        emit_per_stage_pack_reconfig(
-            dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
+        emit_per_stage_pack_reconfig(dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
         if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerTile) {
             DataflowBuffer(ElemT::dfb).reserve_back(1);
         } else if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerChunk) {
             DataflowBuffer(ElemT::dfb).reserve_back(inner_count);
         }
-        if constexpr (AnyPackRelu) elem.configure_relu();
+        if constexpr (AnyPackRelu) {
+            elem.configure_relu();
+        }
         for (uint32_t j = 0; j < inner_count; ++j) {
             const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
             elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
@@ -2385,18 +2554,16 @@ ALWI void elem_wait_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
             }
         } else {
             if constexpr (E::APolicy == InputLifecycle::BulkDrain) {
-                DataflowBuffer(E::dfb_a_id()).wait_front(
-                    Ht * Wt + tile_base_value<E::OffsetA>(e.a.tile_base));
+                DataflowBuffer(E::dfb_a_id()).wait_front(Ht * Wt + tile_base_value<E::OffsetA>(e.a.tile_base));
             } else if constexpr (E::APolicy.wait_policy == WaitPolicy::Upfront) {
-                DataflowBuffer(E::dfb_a_id()).wait_front(
-                    detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
+                DataflowBuffer(E::dfb_a_id())
+                    .wait_front(detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
             }
             if constexpr (E::BPolicy == InputLifecycle::BulkDrain) {
-                DataflowBuffer(E::dfb_b_id()).wait_front(
-                    Ht * Wt + tile_base_value<E::OffsetB>(e.b.tile_base));
+                DataflowBuffer(E::dfb_b_id()).wait_front(Ht * Wt + tile_base_value<E::OffsetB>(e.b.tile_base));
             } else if constexpr (E::BPolicy.wait_policy == WaitPolicy::Upfront) {
-                DataflowBuffer(E::dfb_b_id()).wait_front(
-                    detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
+                DataflowBuffer(E::dfb_b_id())
+                    .wait_front(detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
             }
         }
     } else if constexpr (is_cb_reader_op_v<E>) {
@@ -2430,12 +2597,12 @@ ALWI void elem_pop_upfront_end(const E& e, uint32_t Ht, uint32_t Wt) {
             }
         } else {
             if constexpr (E::APolicy.pop_policy == PopPolicy::AtEnd) {
-                DataflowBuffer(E::dfb_a_id()).pop_front(
-                    detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
+                DataflowBuffer(E::dfb_a_id())
+                    .pop_front(detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
             }
             if constexpr (E::BPolicy.pop_policy == PopPolicy::AtEnd) {
-                DataflowBuffer(E::dfb_b_id()).pop_front(
-                    detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
+                DataflowBuffer(E::dfb_b_id())
+                    .pop_front(detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
             }
         }
     } else if constexpr (is_cb_reader_op_v<E>) {
@@ -2449,8 +2616,7 @@ template <class E>
 ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_writer_op_v<E>) {
         if constexpr (E::Policy.push_policy == PushPolicy::AtEnd) {
-            DataflowBuffer(E::dfb).push_back(
-                (E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Offset>(e.tile_base));
+            DataflowBuffer(E::dfb).push_back((E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Offset>(e.tile_base));
         } else if constexpr (E::Policy.push_policy == PushPolicy::OneAtEnd) {
             DataflowBuffer(E::dfb).push_back(1);
         }
@@ -2460,21 +2626,33 @@ ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
 // adapters, it needs no element runtime state, so one non-template emitter serves
 // every element without changing A-before-B or element-order sequencing.
 ALWI void emit_wait_per_row(uint32_t cb_a, bool wait_a, uint32_t cb_b, bool wait_b) {
-    if (wait_a) DataflowBuffer(cb_a).wait_front(1);
-    if (wait_b) DataflowBuffer(cb_b).wait_front(1);
+    if (wait_a) {
+        DataflowBuffer(cb_a).wait_front(1);
+    }
+    if (wait_b) {
+        DataflowBuffer(cb_b).wait_front(1);
+    }
 }
 
 ALWI void emit_pop_per_row(uint32_t cb_a, bool pop_a, uint32_t cb_b, bool pop_b) {
-    if (pop_a) DataflowBuffer(cb_a).pop_front(1);
-    if (pop_b) DataflowBuffer(cb_b).pop_front(1);
+    if (pop_a) {
+        DataflowBuffer(cb_a).pop_front(1);
+    }
+    if (pop_b) {
+        DataflowBuffer(cb_b).pop_front(1);
+    }
 }
 
 ALWI void emit_reserve_per_row(uint32_t cb, bool reserve) {
-    if (reserve) DataflowBuffer(cb).reserve_back(1);
+    if (reserve) {
+        DataflowBuffer(cb).reserve_back(1);
+    }
 }
 
 ALWI void emit_push_per_row(uint32_t cb, bool push) {
-    if (push) DataflowBuffer(cb).push_back(1);
+    if (push) {
+        DataflowBuffer(cb).push_back(1);
+    }
 }
 
 }  // namespace detail
@@ -2490,14 +2668,13 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     static_assert(
         detail::ChainTraits<Es...>::any_dest_accumulation ==
             detail::ChainTraits<Es...>::any_dest_accumulation_lifecycle,
-        "eltwise_chain: DEST accumulation must be enabled on both BinaryFpu and output()");
+        "eltwise_chain: DEST accumulation must be enabled on both BinaryFpu and output(...)");
     static_assert(
         !detail::ChainTraits<Es...>::any_dest_accumulation ||
             detail::ChainTraits<Es...>::dest_accumulation_slot_count == 1,
         "eltwise_chain: DEST accumulation requires one sticky DEST slot");
     static_assert(
-        !detail::ChainTraits<Es...>::any_dest_accumulation ||
-            detail::ChainTraits<Es...>::pack_writer_count == 1,
+        !detail::ChainTraits<Es...>::any_dest_accumulation || detail::ChainTraits<Es...>::pack_writer_count == 1,
         "eltwise_chain: DEST accumulation requires exactly one PackTile");
     static_assert(
         !detail::ChainTraits<Es...>::any_dest_accumulation ||
@@ -2515,16 +2692,13 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
             detail::ChainTraits<Es...>::transient_lane_width < DEST_AUTO_LIMIT,
         "eltwise_chain: sticky D0 leaves insufficient DEST capacity for a transient lane");
     static_assert(
-        !detail::ChainTraits<Es...>::any_dest_accumulation ||
-            !detail::ChainTraits<Es...>::any_l1_accumulation,
+        !detail::ChainTraits<Es...>::any_dest_accumulation || !detail::ChainTraits<Es...>::any_l1_accumulation,
         "eltwise_chain: DEST and L1 accumulation cannot be combined");
     static_assert(
-        !detail::ChainTraits<Es...>::any_l1_accumulation ||
-            detail::ChainTraits<Es...>::pack_dfbs_consistent,
+        !detail::ChainTraits<Es...>::any_l1_accumulation || detail::ChainTraits<Es...>::pack_dfbs_consistent,
         "eltwise_chain: L1 accumulation requires one output CB");
     static_assert(
-        !detail::ChainTraits<Es...>::any_l1_accumulation ||
-            detail::ChainTraits<Es...>::all_writers_l1_accumulation,
+        !detail::ChainTraits<Es...>::any_l1_accumulation || detail::ChainTraits<Es...>::all_writers_l1_accumulation,
         "eltwise_chain: L1 accumulation cannot mix ordinary and accumulating PackTile elements");
     static_assert(
         detail::ChainTraits<Es...>::l1_accumulation_modes_consistent,
@@ -2532,30 +2706,32 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     static_assert(
         detail::ChainTraits<Es...>::managed_l1_accumulation_lifecycles <= 1,
         "eltwise_chain: only one PackTile may manage the L1-accumulation output lifecycle");
-    static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
-                  "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
-    static_assert(!chain_pack_writes_collide_v<Chain>,
-                  "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
+    static_assert(
+        !chain_has_duplicate_upfront_cbs_v<Chain>,
+        "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
+    static_assert(
+        !chain_pack_writes_collide_v<Chain>, "eltwise_chain: two PackTile elements collide on (dfb, dst_slot).");
     // SetupOwner::Caller means "the caller did the chain's whole one-time setup itself, once,
     // before the loop." That's only achievable if EVERY part of it is boot-hoistable: uniform
     // math MOP + SFPU init (so input/srca-srcb reconfig is boot-only) AND homogeneous pack CBs
     // (so output/pack reconfig is boot-only — no per-stage pack reconfig in the loop). Otherwise
     // some setup must re-emit per tile, the caller can't pre-do it once, and the knob silently
     // skips a needed init/reconfig — a footgun. Forbid it at compile time.
-    static_assert(SO == SetupOwner::Chain ||
-                      (chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain> &&
-                       chain_hoist_pack_v<Chain>),
-                  "SetupOwner::Caller requires a chain whose entire one-time setup is boot-hoistable "
-                  "(uniform math MOP + SFPU init AND homogeneous pack CBs) so that input AND output "
-                  "reconfig are boot-only and nothing self-emits per tile. This chain has setup that "
-                  "must re-emit per tile, so the caller cannot own it once — use SetupOwner::Chain.");
+    static_assert(
+        SO == SetupOwner::Chain ||
+            (chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain> && chain_hoist_pack_v<Chain>),
+        "SetupOwner::Caller requires a chain whose entire one-time setup is boot-hoistable "
+        "(uniform math MOP + SFPU init AND homogeneous pack CBs) so that input AND output "
+        "reconfig are boot-only and nothing self-emits per tile. This chain has setup that "
+        "must re-emit per tile, so the caller cannot own it once — use SetupOwner::Chain.");
     // Honesty: under SetupOwner::Caller the chain emits NO reconfig at all (the caller owns the
     // setup), so enabled operand reconfig on any element is inert and lies about what runs inside
     // the helper. Require each input/output spec to disable it.
-    static_assert(SO == SetupOwner::Chain || chain_no_reconfig_requested_v<Chain>,
-                  "SetupOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
-                  "reconfig (the caller owns the setup), so the setting is inert and misleading. Disable "
-                  "reconfig in every input/output spec — the caller's manual setup owns the format.");
+    static_assert(
+        SO == SetupOwner::Chain || chain_no_reconfig_requested_v<Chain>,
+        "SetupOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
+        "reconfig (the caller owns the setup), so the setting is inert and misleading. Disable "
+        "reconfig in every input/output spec — the caller's manual setup owns the format.");
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
@@ -2568,7 +2744,9 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              detail::ChainTraits<Es...>::pack_hetero,
              Es>(),
          ...);
-        (detail::hoist_compute_init_one<hoist_math, hoist_sfpu,
+        (detail::hoist_compute_init_one<
+             hoist_math,
+             hoist_sfpu,
              detail::ChainTraits<Es...>::prev.srca[Is],
              detail::ChainTraits<Es...>::prev.srcb[Is],
              detail::ChainTraits<Es...>::prev.pack[Is],
@@ -2602,42 +2780,45 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
                  detail::ChainTraits<Es...>::d[Is].wait_a_per_outer,
                  detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
-                 detail::ChainTraits<Es...>::d[Is].wait_b_per_outer), ...);
+                 detail::ChainTraits<Es...>::d[Is].wait_b_per_outer),
+             ...);
             (detail::emit_reserve_per_row(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb,
-                 detail::ChainTraits<Es...>::d[Is].reserve_per_outer), ...);
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, detail::ChainTraits<Es...>::d[Is].reserve_per_outer),
+             ...);
             tile_regs_acquire();
             for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
-                const uint32_t inner_count =
-                    (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
+                const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
                 const uint32_t i_flat = row_base + wt_base;
-                (detail::elem_apply_compute<!hoist_math, !hoist_sfpu, 1,
+                (detail::elem_apply_compute<
+                     !hoist_math,
+                     !hoist_sfpu,
+                     1,
                      detail::ChainTraits<Es...>::prev.srca[Is],
                      detail::ChainTraits<Es...>::prev.srcb[Is],
                      detail::ChainTraits<Es...>::prev.pack[Is],
                      detail::ChainTraits<Es...>::pack_hetero,
-                     std::remove_reference_t<Es>>(
-                     elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
+                     std::remove_reference_t<Es>>(elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
                  ...);
             }
             tile_regs_commit();
             tile_regs_wait();
-            (detail::elem_apply_pack<detail::ChainTraits<Es...>::any_pack_relu,
+            (detail::elem_apply_pack<
+                 detail::ChainTraits<Es...>::any_pack_relu,
                  detail::ChainTraits<Es...>::prev.pack[Is],
                  detail::ChainTraits<Es...>::last_pack_cb,
                  detail::ChainTraits<Es...>::pack_hetero,
-                 std::remove_reference_t<Es>>(
-                 elts, row_base, ht, 0, 1, 0, Ht, Wt),
+                 std::remove_reference_t<Es>>(elts, row_base, ht, 0, 1, 0, Ht, Wt),
              ...);
             tile_regs_release();
             (detail::emit_push_per_row(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb,
-                 detail::ChainTraits<Es...>::d[Is].push_per_outer), ...);
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, detail::ChainTraits<Es...>::d[Is].push_per_outer),
+             ...);
             (detail::emit_pop_per_row(
                  detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
                  detail::ChainTraits<Es...>::d[Is].pop_a_per_outer,
                  detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
-                 detail::ChainTraits<Es...>::d[Is].pop_b_per_outer), ...);
+                 detail::ChainTraits<Es...>::d[Is].pop_b_per_outer),
+             ...);
         }
     } else {
         if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
@@ -2649,34 +2830,38 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
                  detail::ChainTraits<Es...>::d[Is].wait_a_per_outer,
                  detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
-                 detail::ChainTraits<Es...>::d[Is].wait_b_per_outer), ...);
+                 detail::ChainTraits<Es...>::d[Is].wait_b_per_outer),
+             ...);
             for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
-                const uint32_t inner_count =
-                    (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
+                const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
                 const uint32_t i_flat = row_base + wt_base;
                 tile_regs_acquire();
-                (detail::elem_apply_compute<!hoist_math, !hoist_sfpu, 0,
+                (detail::elem_apply_compute<
+                     !hoist_math,
+                     !hoist_sfpu,
+                     0,
                      detail::ChainTraits<Es...>::prev.srca[Is],
                      detail::ChainTraits<Es...>::prev.srcb[Is],
                      detail::ChainTraits<Es...>::prev.pack[Is],
                      detail::ChainTraits<Es...>::pack_hetero,
-                     std::remove_reference_t<Es>>(
-                     elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
+                     std::remove_reference_t<Es>>(elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
                  ...);
                 tile_regs_commit();
                 tile_regs_wait();
                 if constexpr (detail::ChainTraits<Es...>::any_seed_first_l1_accumulation) {
                     for (uint32_t j = 0; j < inner_count; ++j) {
                         (detail::elem_apply_seed_first_l1_pack(elts, i_flat, ht, wt_base, j, chain_lane_w), ...);
-                        if (i_flat == 0 && j == 0) pack_reconfig_l1_acc(1);
+                        if (i_flat == 0 && j == 0) {
+                            pack_reconfig_l1_acc(1);
+                        }
                     }
                 } else {
-                    (detail::elem_apply_pack<detail::ChainTraits<Es...>::any_pack_relu,
+                    (detail::elem_apply_pack<
+                         detail::ChainTraits<Es...>::any_pack_relu,
                          detail::ChainTraits<Es...>::prev.pack[Is],
                          detail::ChainTraits<Es...>::last_pack_cb,
                          detail::ChainTraits<Es...>::pack_hetero,
-                         std::remove_reference_t<Es>>(
-                         elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
+                         std::remove_reference_t<Es>>(elts, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt),
                      ...);
                 }
                 tile_regs_release();
@@ -2685,12 +2870,17 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  detail::ChainTraits<Es...>::d[Is].outer_input_a_cb,
                  detail::ChainTraits<Es...>::d[Is].pop_a_per_outer,
                  detail::ChainTraits<Es...>::d[Is].outer_input_b_cb,
-                 detail::ChainTraits<Es...>::d[Is].pop_b_per_outer), ...);
+                 detail::ChainTraits<Es...>::d[Is].pop_b_per_outer),
+             ...);
         }
-        if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) pack_reconfig_l1_acc(0);
+        if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
+            pack_reconfig_l1_acc(0);
+        }
     }
 
-    if constexpr (detail::ChainTraits<Es...>::any_pack_relu) pack_relu_config(ReluConfig::none());
+    if constexpr (detail::ChainTraits<Es...>::any_pack_relu) {
+        pack_relu_config(ReluConfig::none());
+    }
     (detail::elem_pop_upfront_end(elts, Ht, Wt), ...);
     (detail::elem_push_at_end(elts, Ht, Wt), ...);
 }
@@ -2731,8 +2921,7 @@ namespace detail {
 template <class E>
 constexpr uint32_t dfb_a_of() {
     if constexpr (is_cb_reader_op_v<E>) {
-        static_assert(has_dfb_a<E>::value,
-                      "CbReader element must declare 'static constexpr uint32_t dfb_a_id()'");
+        static_assert(has_dfb_a<E>::value, "CbReader element must declare 'static constexpr uint32_t dfb_a_id()'");
         return E::dfb_a_id();
     } else {
         return INVALID_DFB;
@@ -2742,8 +2931,8 @@ constexpr uint32_t dfb_a_of() {
 template <class E>
 constexpr uint32_t dfb_b_of() {
     if constexpr (is_binary_fpu_op_v<E> || is_dest_reuse_binary_op_v<E>) {
-        static_assert(has_dfb_b<E>::value,
-                      "Binary CbReader element must declare 'static constexpr uint32_t dfb_b_id()'");
+        static_assert(
+            has_dfb_b<E>::value, "Binary CbReader element must declare 'static constexpr uint32_t dfb_b_id()'");
         return E::dfb_b_id();
     } else {
         return INVALID_DFB;
@@ -2753,8 +2942,8 @@ constexpr uint32_t dfb_b_of() {
 template <class E>
 constexpr uint32_t pack_dfb_of() {
     if constexpr (is_pack_tile_op_v<E>) {
-        static_assert(has_pack_dfb<E>::value,
-                      "CbWriter element must declare 'static constexpr uint32_t pack_dfb_id()'");
+        static_assert(
+            has_pack_dfb<E>::value, "CbWriter element must declare 'static constexpr uint32_t pack_dfb_id()'");
         return E::pack_dfb_id();
     } else {
         return INVALID_DFB;

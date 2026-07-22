@@ -15,13 +15,10 @@ namespace ckl = compute_kernel_lib;
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain() {
     ckl::mul<
-        in0_cb,
-        in1_cb,
-        out_cb,
-        ckl::BroadcastDim::None,
-        ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-        ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-        ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(ckl::EltwiseShape::single());
+        ckl::input(in0_cb, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+        ckl::input(in1_cb, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+        ckl::output(out_cb, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+        ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
 }
 
 void kernel_main() {
@@ -48,12 +45,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             if (j < half_Wt) {
                 ckl::mul<
-                    rotated_in_cb,
-                    scalar_cb,
-                    rotated_in_interm_cb,
-                    ckl::BroadcastDim::Scalar,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::input(rotated_in_cb),
+                    ckl::input(scalar_cb, ckl::InputLifecycle::CallerManaged),
+                    ckl::output(rotated_in_interm_cb),
+                    ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 mul_tiles_chain<rotated_in_interm_cb, sin_cb, sin_interm_cb>();
@@ -65,7 +60,8 @@ void kernel_main() {
 
             mul_tiles_chain<in_cb, cos_cb, cos_interm_cb>();
 
-            ckl::add<cos_interm_cb, sin_interm_cb, out_cb>(ckl::EltwiseShape::tiles(onetile));
+            ckl::add<ckl::input(cos_interm_cb), ckl::input(sin_interm_cb), ckl::output(out_cb)>(
+                ckl::EltwiseShape::tiles(onetile));
         }
     }
 }

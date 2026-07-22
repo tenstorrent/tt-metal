@@ -174,13 +174,10 @@ void kernel_main() {
         // row upfront and deadlock the streaming reader. cb_x output is also streamed
         // (im6_t = 2*block_size) -> Chunked. tiles(Wt_padded) keeps every internal block full.
         ckl::add<
-            cb_in,
-            cb_inb,
-            cb_x,
-            ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::output(ckl::OutputLifecycle::Chunked)>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::output(cb_x, ckl::OutputLifecycle::Chunked),
+            ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
@@ -229,14 +226,10 @@ void kernel_main() {
         // the squaring below waits it whole via HeldBulk once this stage completes).
         // tiles(Wt_padded) keeps every internal block full.
         ckl::sub<
-            cb_x,
-            cb_ex,
-            cb_xmm,
-            ckl::BroadcastDim::Col,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::CallerManaged),
-            ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>(
-            ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::input(cb_x, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+            ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_xmm, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled),
+            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
         cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -269,10 +262,8 @@ void kernel_main() {
          *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
          */
         ckl::square<
-            cb_xmm,
-            cb_xmm2,
-            ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-            ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+            ckl::input(cb_xmm, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+            ckl::output(cb_xmm2, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
             ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
@@ -294,14 +285,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                cb_ex2,
-                cb_eps,
+                ckl::input(cb_ex2),
+                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_ex2pe>{});
+            ckl::PackTile<ckl::output(cb_ex2pe)>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);

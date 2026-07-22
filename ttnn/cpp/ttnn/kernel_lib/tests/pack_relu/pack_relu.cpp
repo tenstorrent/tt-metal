@@ -16,7 +16,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_in>{},
-        PackTile<cb_relu, output(OutputLifecycle::Streaming, DataFormatReconfig::Enabled, PackRelu::Zero)>{},
-        PackTile<cb_linear>{});
+        CopyTile<input(cb_in)>{},
+        PackTile<output(cb_relu, OutputLifecycle::Streaming, DataFormatReconfig::Enabled, PackRelu::Zero)>{},
+        PackTile<output(cb_linear)>{});
 }

@@ -96,14 +96,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Fused pre-add (migrated to eltwise_chain; Bulk/Bulk mirrors main's wait_front+add+pop
         // on both operands, produces the intermediate CB that works around the transpose_dest bug).
         ckl::add<
-            cb_in,
-            cb_inb,
-            cb_interm_pre_add,
-            ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(
-            ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+            ckl::input(cb_in, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::output(cb_interm_pre_add, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -463,16 +459,15 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                cb_ex2,
-                cb_eps,
+                ckl::input(cb_ex2),
+                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_ex2pe, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::PackTile<ckl::output(cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
-        ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
+        ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(cb_ex2pe), ckl::output(cb_ex2pe)>(
+            ckl::EltwiseShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.

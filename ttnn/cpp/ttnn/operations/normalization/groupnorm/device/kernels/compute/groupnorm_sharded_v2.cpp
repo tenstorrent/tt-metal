@@ -298,25 +298,17 @@ void kernel_main() {
             }
             cb_ex_global.wait_front(1);
             ckl::sub<
-                cb_x_id,
-                cb_ex_global_id,
-                cb_x_id,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::tiles(block_hw));
+                ckl::input(cb_x_id),
+                ckl::input(cb_ex_global_id, ckl::InputLifecycle::CallerManaged),
+                ckl::output(cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(block_hw));
             cb_ex_global.pop_front(1);
 
             ckl::mul<
-                cb_x_id,
-                cb_input_mask_id,
-                cb_x_id,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Row),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::grid(block_h, block_w));
+                ckl::input(cb_x_id),
+                ckl::input(cb_input_mask_id, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Row),
+                ckl::output(cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(block_h, block_w));
             reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
             // (x - E[x])^2
@@ -372,26 +364,19 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
-                    cb_ex_global_id,
-                    cb_eps_id,
+                    ckl::input(cb_ex_global_id),
+                    ckl::input(cb_eps_id, ckl::InputLifecycle::CallerManaged),
                     ckl::BinaryFpuOp::Add,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                    ckl::BroadcastDim::None>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
-                ckl::PackTile<
-                    cb_ex2pe_id,
-                    ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
             cb_ex2pe.wait_front(1);
             ckl::mul<
-                cb_x_id,
-                cb_ex2pe_id,
-                cb_x_id,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::tiles(block_hw));
+                ckl::input(cb_x_id),
+                ckl::input(cb_ex2pe_id, ckl::InputLifecycle::CallerManaged),
+                ckl::output(cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(block_hw));
             cb_ex2pe.pop_front(1);
             cb_x.wait_front(block_hw);
             //  add or copy with previous output results
@@ -548,50 +533,34 @@ void kernel_main() {
     if constexpr (do_gamma) {
         if constexpr (use_negative_mask == false) {
             ckl::mul<
-                cb_out_id,
-                cb_gamma_id,
-                cb_outgamma_id,
-                ckl::BroadcastDim::Row,
-                ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
-                ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(cb_out_id, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+                ckl::input(cb_gamma_id, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(cb_outgamma_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outgamma.wait_front(per_core_MN);
         } else {
             ckl::mul<
-                cb_in_id,
-                cb_gamma_id,
-                cb_in_id,
-                ckl::BroadcastDim::Row,
-                ckl::input(ckl::InputLifecycle::BulkDrain),
-                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(cb_in_id, ckl::InputLifecycle::BulkDrain),
+                ckl::input(cb_gamma_id, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(cb_in_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
             ckl::add<
-                cb_inbeta_id,
-                cb_beta_id,
-                cb_outbeta_id,
-                ckl::BroadcastDim::Row,
-                ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
-                ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(cb_inbeta_id, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+                ckl::input(cb_beta_id, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(cb_outbeta_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outbeta.wait_front(per_core_MN);
         } else {
             ckl::add<
-                cb_in_id,
-                cb_beta_id,
-                cb_in_id,
-                ckl::BroadcastDim::Row,
-                ckl::input(ckl::InputLifecycle::BulkDrain),
-                ckl::input(ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::grid(per_core_M, per_core_N));
+                ckl::input(cb_in_id, ckl::InputLifecycle::BulkDrain),
+                ckl::input(cb_beta_id, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Row),
+                ckl::output(cb_in_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 

@@ -18,11 +18,10 @@ void kernel_main() {
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     compute_kernel_lib::unary<
         compute_kernel_lib::Typecast<CHAIN_TYPECAST_IN_DF, CHAIN_TYPECAST_OUT_DF, compute_kernel_lib::Dst::D0>,
-        input_cb,
-        output_cb,
         compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            input_cb, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
-        compute_kernel_lib::EltwiseShape::tiles(total_tiles));
+            output_cb,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::EltwiseShape::tiles(total_tiles));
 }

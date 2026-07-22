@@ -39,32 +39,34 @@ void kernel_main() {
     binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
 
     if constexpr (has_divisor) {
-        ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_divisor_recip, ckl::input(ckl::InputLifecycle::Bulk)>(
+        ckl::unary<ckl::Recip<D::D0>, ckl::input(cb_divisor, ckl::InputLifecycle::Bulk), ckl::output(cb_divisor_recip)>(
             ckl::EltwiseShape::single());
     }
 
     constexpr auto weight_mul = ckl::OptionalChainElement<
         has_weight,
-        ckl::DestReuseBinary<cb_tmp_weight, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
+        ckl::DestReuseBinary<ckl::input(cb_tmp_weight), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
 
     constexpr auto negate = ckl::Negative<D::D0>{};
-    constexpr auto pack_out = ckl::PackTile<cb_output>{};
+    constexpr auto pack_out = ckl::PackTile<ckl::output(cb_output)>{};
 
     if constexpr (has_divisor) {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(per_core_tile_cnt),
             ckl::BinaryFpu<
-                cb_tmp_input,
-                cb_divisor_recip,
+                ckl::input(cb_tmp_input),
+                ckl::input(cb_divisor_recip, ckl::InputLifecycle::Bulk),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::Bulk)>{},
+                ckl::BroadcastDim::Scalar>{},
             negate,
             weight_mul,
             pack_out);
     } else {
         ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(per_core_tile_cnt), ckl::CopyTile<cb_tmp_input>{}, negate, weight_mul, pack_out);
+            ckl::EltwiseShape::tiles(per_core_tile_cnt),
+            ckl::CopyTile<ckl::input(cb_tmp_input)>{},
+            negate,
+            weight_mul,
+            pack_out);
     }
 }

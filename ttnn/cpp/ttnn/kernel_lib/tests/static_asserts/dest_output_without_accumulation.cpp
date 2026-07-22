@@ -14,13 +14,12 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_in>{},
-        PackTile<
+        CopyTile<input(cb_in)>{},
+        PackTile<output(
             cb_out,
-            output(
-                OutputLifecycle::DestAccumulation,
-                DataFormatReconfig::Enabled,
-                PackRelu::Disabled,
-                L1Accumulation::Disabled,
-                DestAccumulation::Enabled)>{});
+            OutputLifecycle::DestAccumulation,
+            DataFormatReconfig::Enabled,
+            PackRelu::Disabled,
+            L1Accumulation::Disabled,
+            DestAccumulation::Enabled)>{});
 }

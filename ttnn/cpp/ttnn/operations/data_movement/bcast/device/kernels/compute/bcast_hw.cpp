@@ -28,11 +28,9 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(B * Ht * Wt),
         ckl::BinaryFpu<
-            cb_lhs,
-            cb_rhs,
+            ckl::input(cb_lhs, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_rhs, rhs_lifecycle, ckl::DataFormatReconfig::Disabled),
             CHAIN_BCAST_OP,
-            CHAIN_BCAST_DIM,
-            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-            ckl::input(rhs_lifecycle, ckl::DataFormatReconfig::Disabled)>{},
-        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+            CHAIN_BCAST_DIM>{},
+        ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

@@ -33,16 +33,14 @@ void kernel_main() {
         ckl::EltwiseShape::tiles(num_tiles),
         // grad_out -> D0 ; x -> D1 (wait owner) / D2 / D5 (pop owner)
         ckl::CopyTile<
-            cb_grad_out,
-            D::D0,
-            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_grad_out, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            D::D0>{},
         ckl::
-            CopyTile<cb_input, D::D1, ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
+            CopyTile<ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled), D::D1>{},
         ckl::CopyTile<
-            cb_input,
-            D::D2,
-            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled)>{},
-        ckl::CopyTile<cb_input, D::D5, ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            D::D2>{},
+        ckl::CopyTile<ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled), D::D5>{},
         // z = beta * (x + kappa * x^3)
         ckl::Square<D::D1>{},                   // D1 = x^2
         ckl::MulBinary<D::D1, D::D2, D::D1>{},  // D1 = x^3
@@ -79,5 +77,5 @@ void kernel_main() {
         // D1 = cdf_term + x * pdf_term ; D0 = grad * D1
         ckl::AddBinary<D::D1, D::D2, D::D1>{},
         ckl::MulBinary<D::D0, D::D1, D::D0>{},
-        ckl::PackTile<cb_grad_in, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_grad_in, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

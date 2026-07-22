@@ -18,26 +18,18 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
             ckl::mul<
-                tt::CBIndex::c_2,
-                tt::CBIndex::c_0,
-                tt::CBIndex::c_16,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::tiles(onetile));
+                ckl::input(tt::CBIndex::c_2, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(tt::CBIndex::c_0, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                ckl::output(tt::CBIndex::c_16, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
         }
 
         if (has_other_grad) {
             ckl::mul<
-                tt::CBIndex::c_1,
-                tt::CBIndex::c_0,
-                tt::CBIndex::c_17,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                ckl::EltwiseShape::tiles(onetile));
+                ckl::input(tt::CBIndex::c_1, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(tt::CBIndex::c_0, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                ckl::output(tt::CBIndex::c_17, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
         }
     }
 }

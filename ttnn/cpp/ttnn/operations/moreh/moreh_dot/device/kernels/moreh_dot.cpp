@@ -19,14 +19,10 @@ void kernel_main() {
         bool last_out = block == (per_core_block_cnt - 1);
 
         ckl::mul<
-            tt::CBIndex::c_0,
-            tt::CBIndex::c_1,
-            tt::CBIndex::c_24,
-            ckl::BroadcastDim::None,
-            ckl::input(),
-            ckl::input(),
-            ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-            ckl::EltwiseShape::tiles(onetile));
+            ckl::input(tt::CBIndex::c_0),
+            ckl::input(tt::CBIndex::c_1),
+            ckl::output(tt::CBIndex::c_24, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 
         // reduce-w
         if (last_out) {

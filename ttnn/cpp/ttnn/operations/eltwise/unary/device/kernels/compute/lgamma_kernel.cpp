@@ -31,13 +31,11 @@ void kernel_main() {
         ckl::EltwiseShape::tiles(num_tiles),
         // x -> D0 (owns the wait), x -> D1.
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D1,
-            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
         // D2 = 0.5 ; D1 = x - 0.5 ; D1 = (x-0.5 < 0)
         ckl::FillScalar<ckl::Dst::D2>{0.5f},
         ckl::SubBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
@@ -54,21 +52,18 @@ void kernel_main() {
         // D2 = M_PI ; reload x -> D1 ; D1 = sin(frac(x) * M_PI)
         ckl::FillScalar<ckl::Dst::D2>{M_PI},
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D1,
-            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
         ckl::Frac<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         ckl::Sin<ckl::Dst::D1>{},
         // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D2,
-            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D2>{},
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D3,
-            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D3>{},
         ckl::Floor<ckl::Dst::D3>{},
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
@@ -79,9 +74,8 @@ void kernel_main() {
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
         // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D2,
-            ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D2>{},
         ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

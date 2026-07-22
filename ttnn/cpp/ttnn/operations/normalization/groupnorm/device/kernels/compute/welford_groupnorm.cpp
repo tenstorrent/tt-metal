@@ -556,45 +556,39 @@ void kernel_main() {
                         ckl::eltwise_chain(
                             ckl::EltwiseShape::single(),
                             ckl::BinaryFpu<
-                                cb_x_id,
-                                cb_gamma_id,
-                                ckl::BinaryFpuOp::Mul,
-                                ckl::BroadcastDim::Row,
-                                ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                                ckl::input(cb_x_id, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
                                 ckl::input(
+                                    cb_gamma_id,
                                     ckl::InputLifecycle::CallerManaged,
                                     ckl::OperandKind::Scalar,
                                     ckl::DataFormatReconfig::Enabled,
-                                    ckl::TileOffset::Set)>{0u, nt},
-                            ckl::PackTile<
-                                cb_x_id,
-                                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                                    ckl::TileOffset::Set),
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::BroadcastDim::Row>{0u, nt},
+                            ckl::PackTile<ckl::output(
+                                cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
                     }
 
                     if constexpr (do_beta) {
                         ckl::eltwise_chain(
                             ckl::EltwiseShape::single(),
                             ckl::BinaryFpu<
-                                cb_x_id,
-                                cb_beta_id,
-                                ckl::BinaryFpuOp::Add,
-                                ckl::BroadcastDim::Row,
-                                ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                                ckl::input(cb_x_id, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
                                 ckl::input(
+                                    cb_beta_id,
                                     ckl::InputLifecycle::CallerManaged,
                                     ckl::OperandKind::Scalar,
                                     ckl::DataFormatReconfig::Enabled,
-                                    ckl::TileOffset::Set)>{0u, nt},
-                            ckl::PackTile<
-                                cb_x_id,
-                                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                                    ckl::TileOffset::Set),
+                                ckl::BinaryFpuOp::Add,
+                                ckl::BroadcastDim::Row>{0u, nt},
+                            ckl::PackTile<ckl::output(
+                                cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
                     }
 
                     ckl::copy<
-                        cb_x_id,
-                        cb_out_id,
-                        ckl::input(),
-                        ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                        ckl::input(cb_x_id),
+                        ckl::output(cb_out_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
                         ckl::EltwiseShape::single());
                 }
             }

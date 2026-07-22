@@ -185,21 +185,21 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                cb_stats_reduced,
-                cb_stats_reduced,
-                ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::None,
                 ckl::input(
+                    cb_stats_reduced,
                     ckl::InputLifecycle::HeldBulk,
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Enabled,
                     ckl::TileOffset::Set),
                 ckl::input(
+                    cb_stats_reduced,
                     ckl::InputLifecycle::HeldBulk,
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Enabled,
-                    ckl::TileOffset::Set)>{1, 1},
-            ckl::PackTile<cb_mean_squared, ckl::output(ckl::OutputLifecycle::Bulk)>{});
+                    ckl::TileOffset::Set),
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None>{1, 1},
+            ckl::PackTile<ckl::output(cb_mean_squared, ckl::OutputLifecycle::Bulk)>{});
 
         /*
          * E[x**2] - E[x]**2  — sub at index 0.
@@ -209,13 +209,10 @@ void kernel_main() {
          * Reconfig: explicit reconfig + sub_tiles_init -> Input. Explicit pack_reconfig -> Output.
          */
         ckl::sub<
-            cb_stats_reduced,
-            cb_mean_squared,
-            cb_var,
-            ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::HeldBulk),
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::single());
+            ckl::input(cb_stats_reduced, ckl::InputLifecycle::HeldBulk),
+            ckl::input(cb_mean_squared, ckl::InputLifecycle::Bulk),
+            ckl::output(cb_var, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
 
         /*
          * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
@@ -226,14 +223,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                cb_var,
-                cb_eps,
+                ckl::input(cb_var),
+                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_recip_sqrt_var>{});
+            ckl::PackTile<ckl::output(cb_recip_sqrt_var)>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

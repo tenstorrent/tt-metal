@@ -19,8 +19,8 @@
  * `kernel_main`:
  *
  *     template <bool DO_MASK> inline void run_op(uint32_t n) {
- *         eltwise_chain(EltwiseShape::tiles(n), CopyTile<...>{},
- *             OptionalChainElement<DO_MASK, MaskInject<...>>{}, SfpuOp<...>{}, PackTile<...>{});
+ *         eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(...)>{},
+ *             OptionalChainElement<DO_MASK, MaskInject<...>>{}, SfpuOp<...>{}, PackTile<output(...)>{});
  *     }
  *     void kernel_main() {
  *         if (get_arg_val<uint32_t>(0) != 0) run_op<true>(n); else run_op<false>(n);

@@ -113,14 +113,14 @@ void kernel_main() {
         cb_rotated_in_interm.push_back(onetile);
 
         // sin_interim = rotated * sin  (chain waits+pops rotated_in_interm_cb; sin held/streamed per mode)
-        mul<rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, trig_bcast, input(), input(trig_lifecycle)>(
+        mul<input(rotated_in_interm_cb), input(updated_sin_cb, trig_lifecycle), output(sin_interm_cb), trig_bcast>(
             EltwiseShape::tiles(onetile));
 
         // cos_interim = in * cos  (chain waits+pops in_cb; cos held/streamed per mode)
-        mul<in_cb, updated_cos_cb, cos_interm_cb, trig_bcast, input(), input(trig_lifecycle)>(
+        mul<input(in_cb), input(updated_cos_cb, trig_lifecycle), output(cos_interm_cb), trig_bcast>(
             EltwiseShape::tiles(onetile));
 
         // out = cos_interim + sin_interim
-        add<cos_interm_cb, sin_interm_cb, out_cb>(EltwiseShape::tiles(onetile));
+        add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(EltwiseShape::tiles(onetile));
     }
 }

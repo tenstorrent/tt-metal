@@ -22,9 +22,9 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<cb_cond>{},
-        CopyTile<cb_a, Dst::D1>{},
-        CopyTile<cb_b, Dst::D2>{},
+        CopyTile<input(cb_cond)>{},
+        CopyTile<input(cb_a), Dst::D1>{},
+        CopyTile<input(cb_b), Dst::D2>{},
         Where<DataFormat::Float16_b, Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
-        PackTile<cb_out>{});
+        PackTile<output(cb_out)>{});
 }

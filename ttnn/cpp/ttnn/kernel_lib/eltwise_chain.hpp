@@ -49,14 +49,14 @@
  * --------
  *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
- *       CopyTile<dfb_in>{},
+ *       CopyTile<input(dfb_in)>{},
  *       Exp<>{},
- *       PackTile<dfb_out>{});
+ *       PackTile<output(dfb_out)>{});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
- *       BinaryFpu<dfb_a, dfb_b, BinaryFpuOp::Add>{},
- *       PackTile<dfb_out>{});
+ *       BinaryFpu<input(dfb_a), input(dfb_b), BinaryFpuOp::Add>{},
+ *       PackTile<output(dfb_out)>{});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
@@ -72,9 +72,11 @@
 
 namespace compute_kernel_lib {
 
-// Buffer-identity values throughout the chain (the `dfb`-named NTTPs, accessors, ElemDesc
-// fields and the INVALID_DFB / NO_PREV_DFB sentinels) are dataflow-buffer ids: today the
-// integer buffer index (a `tt::CBIndex` value, 0..31) passed as an NTTP.
+// Buffer identities throughout the chain (the `cb_id` fields on InputSpec / OutputSpec,
+// `dfb`-named implementation accessors and ElemDesc fields, and the INVALID_DFB /
+// NO_PREV_DFB sentinels) are dataflow-buffer ids: today an integer `tt::CBIndex` value.
+// The public element aliases accept complete input(...) / output(...) specs and forward each
+// id as a separate implementation NTTP so it does not consume packed configuration bits.
 
 // (The marker-tag hierarchy — CbReaderTag/CbWriterTag/DestOnlyTag + the per-element
 //  leaf tags — and the is_*_op_v classification predicates are internal pipeline
@@ -268,9 +270,10 @@ enum class PackRelu : bool { Disabled = false, Zero = true };
 // 1e. Grouped operand configuration
 // =============================================================================
 //
-// `input(...)` and `output(...)` group the compile-time properties of one operand.
+// `input(...)` and `output(...)` bind a buffer id to the compile-time properties of one operand.
 
 struct InputSpec {
+    uint32_t cb_id;
     InputLifecycle lifecycle;
     OperandKind index;
     DataFormatReconfig reconfig;
@@ -278,6 +281,7 @@ struct InputSpec {
 };
 
 struct OutputSpec {
+    uint32_t cb_id;
     OutputLifecycle lifecycle;
     DataFormatReconfig reconfig;
     PackRelu relu;
@@ -286,19 +290,21 @@ struct OutputSpec {
     TileOffset offset;
 };
 
-/// Group one input operand's configuration.
+/// Bind one input buffer id to its configuration.
 /// Defaults: Streaming lifecycle, Scalar indexing, reconfig enabled, and no tile offset.
 constexpr InputSpec input(
+    uint32_t cb_id,
     InputLifecycle lifecycle = InputLifecycle::Streaming,
     OperandKind index = OperandKind::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileOffset offset = TileOffset::Unset) noexcept;
-constexpr InputSpec input(InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
+constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
 
-/// Group one output operand's configuration.
+/// Bind one output buffer id to its configuration.
 /// Defaults: Streaming lifecycle, reconfig enabled, no accumulation, no pack ReLU,
 /// and no tile offset.
 constexpr OutputSpec output(
+    uint32_t cb_id,
     OutputLifecycle lifecycle = OutputLifecycle::Streaming,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     PackRelu relu = PackRelu::Disabled,
@@ -361,7 +367,7 @@ enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 /// FPU broadcast dimension. Caller MUST pass explicitly — no inference. Mirrors
 /// `ckernel::BroadcastType` values (NONE=0, COL=1, ROW=2, SCALAR=3).
 ///
-/// `BinaryFpu<CbA, CbB, ...>` always applies this intra-tile broadcast to operand B (`CbB`);
+/// `BinaryFpu<input(CbA), input(CbB), ...>` always applies this intra-tile broadcast to operand B (`CbB`);
 /// operand A is never the broadcast source. This is independent of each operand's `OperandKind`,
 /// which only selects the tile index read during the (Ht x Wt) walk.
 ///
@@ -408,33 +414,27 @@ struct DestReuseBinaryImpl;
 
 }  // namespace detail
 
-template <uint32_t Cb, Dst DstSlot = Dst::D0, InputSpec Input = input()>
-using CopyTile = detail::CopyTileImpl<Cb, detail::copy_tile_config_bits(DstSlot, Input)>;
+template <InputSpec Input, Dst DstSlot = Dst::D0>
+using CopyTile = detail::CopyTileImpl<Input.cb_id, detail::copy_tile_config_bits(DstSlot, Input)>;
 
 template <
-    uint32_t CbA,
-    uint32_t CbB,
+    InputSpec AInput,
+    InputSpec BInput,
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
-    InputSpec AInput = input(),
-    InputSpec BInput = input(),
     Dst DstSlot = Dst::D0,
     DestAccumulation Accumulation = DestAccumulation::Disabled>
-using BinaryFpu =
-    detail::BinaryFpuImpl<CbA, CbB, detail::binary_fpu_config_bits(Op, Bcast, AInput, BInput, DstSlot, Accumulation)>;
+using BinaryFpu = detail::BinaryFpuImpl<
+    AInput.cb_id,
+    BInput.cb_id,
+    detail::binary_fpu_config_bits(Op, Bcast, AInput, BInput, DstSlot, Accumulation)>;
 
-template <
-    uint32_t Cb,
-    BinaryFpuOp Op,
-    DestReuseType ReuseType,
-    InputSpec Input = input(),
-    Dst DstIn = Dst::D0,
-    Dst DstOut = Dst::D0>
-using DestReuseBinary =
-    detail::DestReuseBinaryImpl<Cb, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstIn, DstOut)>;
+template <InputSpec Input, BinaryFpuOp Op, DestReuseType ReuseType, Dst DstIn = Dst::D0, Dst DstOut = Dst::D0>
+using DestReuseBinary = detail::
+    DestReuseBinaryImpl<Input.cb_id, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstIn, DstOut)>;
 
-template <uint32_t Cb, OutputSpec Output = output(), Dst DstSlot = Dst::D0>
-using PackTile = detail::PackTileImpl<Cb, detail::pack_tile_config_bits(Output, DstSlot)>;
+template <OutputSpec Output, Dst DstSlot = Dst::D0>
+using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bits(Output, DstSlot)>;
 
 // (Chain-shape trait predicates, the EltwiseChain type-list wrapper, and the INVALID_DFB sentinel
 //  are implementation detail — declared in eltwise_chain.inl, not on this public surface.)

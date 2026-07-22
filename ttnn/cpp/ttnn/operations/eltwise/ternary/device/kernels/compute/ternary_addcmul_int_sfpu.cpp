@@ -26,20 +26,20 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
         ckl::CopyTile<
-            cb_in0,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(
+                cb_in0, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::CopyTile<
-            cb_in1,
-            ckl::Dst::D1,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(
+                cb_in1, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
         ckl::CopyTile<
-            cb_in2,
-            ckl::Dst::D2,
-            ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(
+                cb_in2, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D2>{},
         ckl::FillInt<ADDCMUL_DATA_FORMAT, ckl::Dst::D3>{scalar_arg},
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D3>{},  // D3 = scalar*in1
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
         ckl::AddIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = in0 + D2
-        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 }

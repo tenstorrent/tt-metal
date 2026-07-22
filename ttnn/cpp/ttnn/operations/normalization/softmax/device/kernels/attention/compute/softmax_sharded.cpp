@@ -38,14 +38,12 @@ ALWI void calc_numeric_stable() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(block_w, subblock_w),
         ckl::BinaryFpu<
-            cb_in,
-            cb_max,
+            ckl::input(cb_in, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(cb_max, ckl::InputLifecycle::Bulk),
             ckl::BinaryFpuOp::Sub,
-            ckl::BroadcastDim::Col,
-            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk)>{},
+            ckl::BroadcastDim::Col>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
     cb_out_obj.wait_front(block_w);
 }
 
@@ -112,28 +110,23 @@ void kernel_main() {
     for (uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
         ckl::mul<
-            cb_in0,
-            cb_fused_scale,
-            cb_scale_mask,
-            ckl::BroadcastDim::Scalar,
-            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::HeldBulk),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_w, subblock_w));
+            ckl::input(cb_in0, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(cb_fused_scale, ckl::InputLifecycle::HeldBulk),
+            ckl::output(cb_scale_mask, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(block_w, subblock_w));
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(block_w, subblock_w),
             ckl::BinaryFpu<
-                cb_scale_mask,
-                cb_fused_attn,
+                ckl::input(cb_scale_mask, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(cb_fused_attn, mask_lifecycle, ckl::OperandKind::Block),
                 ckl::BinaryFpuOp::Add,
-                mask_bcast,
-                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(mask_lifecycle, ckl::OperandKind::Block)>{},
+                mask_bcast>{},
             // Exp dropped when NUMERIC_STABLE (it is fused into calc_numeric_stable below).
             ckl::OptionalChainElement<
                 !numeric_stable,
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-            ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -152,9 +145,9 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(block_w, subblock_w),
             ckl::
-                CopyTile<cb_in0, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block)>{},
+                CopyTile<ckl::input(cb_in0, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block), ckl::Dst::D0>{},
             ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<cb_exps, ckl::output(ckl::OutputLifecycle::Bulk)>{});
+            ckl::PackTile<ckl::output(cb_exps, ckl::OutputLifecycle::Bulk)>{});
 #endif
 #endif  // FUSED_SCALE_MASK
 
@@ -178,12 +171,9 @@ void kernel_main() {
             });
 
         ckl::mul<
-            cb_exps,
-            cb_recipsumexps,
-            cb_out0,
-            ckl::BroadcastDim::Col,
-            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(block_w, subblock_w));
+            ckl::input(cb_exps, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
+            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block_w, subblock_w));
     }
 }

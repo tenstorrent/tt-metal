@@ -61,31 +61,33 @@ void kernel_main() {
             if (mask_this) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<cb_x>{},
-                    ckl::CopyTile<cb_mask_w, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                    ckl::CopyTile<ckl::input(cb_x)>{},
+                    ckl::CopyTile<ckl::input(cb_mask_w, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
                     ckl::OptionalChainElement<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>>{},
                     ckl::OptionalChainElement<!minus_inf, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>{},
                     ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
                     ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
                     ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                    ckl::PackTile<cb_val>{});
+                    ckl::PackTile<ckl::output(cb_val)>{});
             } else {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<cb_x>{},
+                    ckl::CopyTile<ckl::input(cb_x)>{},
                     ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
                     ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
                     ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                    ckl::PackTile<cb_val>{});
+                    ckl::PackTile<ckl::output(cb_val)>{});
             }
 
             if (col_idx == 0) {
-                ckl::copy<cb_val, cb_cal>(ckl::EltwiseShape::tiles(onetile));
+                ckl::copy<ckl::input(cb_val), ckl::output(cb_cal)>(ckl::EltwiseShape::tiles(onetile));
             } else {
 #ifdef IS_ZERO
-                ckl::add<cb_val, cb_cal, cb_cal>(ckl::EltwiseShape::tiles(onetile));
+                ckl::add<ckl::input(cb_val), ckl::input(cb_cal), ckl::output(cb_cal)>(
+                    ckl::EltwiseShape::tiles(onetile));
 #else
-                ckl::binary_sfpu<ckl::BinaryMax<>, cb_val, cb_cal, cb_cal>(ckl::EltwiseShape::tiles(onetile));
+                ckl::binary_sfpu<ckl::BinaryMax<>, ckl::input(cb_val), ckl::input(cb_cal), ckl::output(cb_cal)>(
+                    ckl::EltwiseShape::tiles(onetile));
 #endif
             }
         }
@@ -94,9 +96,9 @@ void kernel_main() {
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<cb_reduce>{},
+            ckl::CopyTile<ckl::input(cb_reduce)>{},
             ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-            ckl::PackTile<cb_y>{});
+            ckl::PackTile<ckl::output(cb_y)>{});
     }
 
     cb_one_obj.pop_front(onetile);

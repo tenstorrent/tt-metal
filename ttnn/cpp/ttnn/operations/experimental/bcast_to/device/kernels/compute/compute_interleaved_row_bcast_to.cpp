@@ -41,11 +41,9 @@ void kernel_main() {
                         // The caller owns setup, so the chain must not reconfigure formats.
                         ckl::UnaryBcast<
                             ckl::BroadcastDim::Row,
-                            cb_id_src,
-                            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
-                        ckl::PackTile<
-                            cb_id_dst,
-                            ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                            ckl::input(cb_id_src, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
+                        ckl::PackTile<ckl::output(
+                            cb_id_dst, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
                     ++num_tiles_read;
                 }
             }

@@ -19,34 +19,32 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     CircularBuffer accumulator(cb_acc);
 
-    using ManagedPack = PackTile<
+    using ManagedPack = PackTile<output(
         cb_acc,
-        output(
-            OutputLifecycle::L1Accumulation,
-            DataFormatReconfig::Disabled,
-            PackRelu::Disabled,
-            L1Accumulation::SeedFirst)>;
-    using CallerManagedPack = PackTile<
+        OutputLifecycle::L1Accumulation,
+        DataFormatReconfig::Disabled,
+        PackRelu::Disabled,
+        L1Accumulation::SeedFirst)>;
+    using CallerManagedPack = PackTile<output(
         cb_acc,
-        output(
-            OutputLifecycle::CallerManaged,
-            DataFormatReconfig::Disabled,
-            PackRelu::Disabled,
-            L1Accumulation::SeedFirst)>;
+        OutputLifecycle::CallerManaged,
+        DataFormatReconfig::Disabled,
+        PackRelu::Disabled,
+        L1Accumulation::SeedFirst)>;
 
     if constexpr (caller_managed) {
         accumulator.reserve_back(1);
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<cb_in, Dst::D0, input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{},
+            CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{},
             CallerManagedPack{});
         accumulator.push_back(1);
     } else {
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<cb_in, Dst::D0, input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{},
+            CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{},
             ManagedPack{});
     }
 
-    eltwise_chain(EltwiseShape::single(), CopyTile<cb_acc>{}, PackTile<cb_out>{});
+    eltwise_chain(EltwiseShape::single(), CopyTile<input(cb_acc)>{}, PackTile<output(cb_out)>{});
 }

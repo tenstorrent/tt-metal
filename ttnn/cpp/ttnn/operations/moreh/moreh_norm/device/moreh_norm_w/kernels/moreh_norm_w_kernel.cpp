@@ -69,51 +69,51 @@ void kernel_main() {
             if (do_mask_w && (col_idx == Wt - 1)) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<cb_x>{},
-                    ckl::CopyTile<cb_mask_w, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                    ckl::CopyTile<ckl::input(cb_x)>{},
+                    ckl::CopyTile<ckl::input(cb_mask_w, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::Abs<ckl::Dst::D0>{},
-                    ckl::PackTile<cb_xabs>{});
+                    ckl::PackTile<ckl::output(cb_xabs)>{});
             } else {
-                ckl::unary<ckl::Abs<ckl::Dst::D0>, cb_x, cb_xabs>(ckl::EltwiseShape::tiles(onetile));
+                ckl::unary<ckl::Abs<ckl::Dst::D0>, ckl::input(cb_x), ckl::output(cb_xabs)>(
+                    ckl::EltwiseShape::tiles(onetile));
             }
 
             if (p_is_negative) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<cb_xabs, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                     ckl::PowerIterative<ckl::Dst::D0>{p},
                     ckl::Recip<ckl::Dst::D0>{},
-                    ckl::PackTile<cb_xpow>{});
+                    ckl::PackTile<ckl::output(cb_xpow)>{});
             } else {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<cb_xabs, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                     ckl::PowerIterative<ckl::Dst::D0>{p},
-                    ckl::PackTile<cb_xpow>{});
+                    ckl::PackTile<ckl::output(cb_xpow)>{});
             }
             ckl::unary<
                 ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
-                cb_xabs,
-                cb_logx,
-                ckl::input(ckl::InputLifecycle::NoWaitPop)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_xabs, ckl::InputLifecycle::NoWaitPop),
+                ckl::output(cb_logx)>(ckl::EltwiseShape::tiles(onetile));
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
-                    cb_logx,
-                    cb_decimal,
+                    ckl::input(cb_logx),
+                    ckl::input(cb_decimal, ckl::InputLifecycle::CallerManaged),
                     ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                    ckl::BroadcastDim::None>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<cb_exp_lxmd>{});
-            ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
+                ckl::PackTile<ckl::output(cb_exp_lxmd)>{});
+            ckl::mul<ckl::input(cb_xpow), ckl::input(cb_exp_lxmd), ckl::output(cb_correct_xpow)>(
+                ckl::EltwiseShape::tiles(onetile));
 
             if (col_idx == 0) {
-                ckl::copy<cb_correct_xpow, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
+                ckl::copy<ckl::input(cb_correct_xpow), ckl::output(cb_xpowadd)>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                ckl::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
+                ckl::add<ckl::input(cb_correct_xpow), ckl::input(cb_xpowadd), ckl::output(cb_xpowadd)>(
+                    ckl::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -122,34 +122,31 @@ void kernel_main() {
         if (recip_p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_xpowsum, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::CopyTile<ckl::input(cb_xpowsum, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                 ckl::PowerIterative<ckl::Dst::D0>{recip_p},
                 ckl::Recip<ckl::Dst::D0>{},
-                ckl::PackTile<cb_tmp0>{});
+                ckl::PackTile<ckl::output(cb_tmp0)>{});
         } else {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_xpowsum, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::CopyTile<ckl::input(cb_xpowsum, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                 ckl::PowerIterative<ckl::Dst::D0>{recip_p},
-                ckl::PackTile<cb_tmp0>{});
+                ckl::PackTile<ckl::output(cb_tmp0)>{});
         }
         ckl::unary<
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
-            cb_xpowsum,
-            cb_tmp1,
-            ckl::input(ckl::InputLifecycle::NoWaitPop)>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(cb_xpowsum, ckl::InputLifecycle::NoWaitPop),
+            ckl::output(cb_tmp1)>(ckl::EltwiseShape::tiles(onetile));
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                cb_tmp1,
-                cb_recip_p_decimal,
+                ckl::input(cb_tmp1),
+                ckl::input(cb_recip_p_decimal, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<cb_tmp2>{});
-        ckl::mul<cb_tmp0, cb_tmp2, cb_y>(ckl::EltwiseShape::tiles(onetile));
+            ckl::PackTile<ckl::output(cb_tmp2)>{});
+        ckl::mul<ckl::input(cb_tmp0), ckl::input(cb_tmp2), ckl::output(cb_y)>(ckl::EltwiseShape::tiles(onetile));
     }
 
     cb_pop_front(cb_one, onetile);

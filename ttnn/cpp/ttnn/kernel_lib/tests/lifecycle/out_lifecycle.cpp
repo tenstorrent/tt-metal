@@ -29,29 +29,29 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     CircularBuffer cb_out_obj(cb_out);
-    auto in = CopyTile<cb_in, Dst::D0, input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{};
+    auto in = CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{};
 
     if constexpr (life == 0) {
         eltwise_chain(
             EltwiseShape::tiles(n),
             in,
-            PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
     } else if constexpr (life == 1) {
         eltwise_chain(
             EltwiseShape::tiles(n),
             in,
-            PackTile<cb_out, output(OutputLifecycle::Bulk, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, OutputLifecycle::Bulk, DataFormatReconfig::Disabled)>{});
     } else if constexpr (life == 2) {
         eltwise_chain(
             EltwiseShape::tiles(n),
             in,
-            PackTile<cb_out, output(OutputLifecycle::ReserveAllPushPerTile, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, OutputLifecycle::ReserveAllPushPerTile, DataFormatReconfig::Disabled)>{});
     } else {  // life == 3: CallerManaged — chain packs only, caller brackets reserve+push
         cb_out_obj.reserve_back(n);
         eltwise_chain(
             EltwiseShape::tiles(n),
             in,
-            PackTile<cb_out, output(OutputLifecycle::CallerManaged, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, OutputLifecycle::CallerManaged, DataFormatReconfig::Disabled)>{});
         cb_out_obj.push_back(n);
     }
 }

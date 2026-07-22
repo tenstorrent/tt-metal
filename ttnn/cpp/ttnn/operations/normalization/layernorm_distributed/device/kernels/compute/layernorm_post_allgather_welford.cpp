@@ -141,18 +141,17 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                cb_stats_reduced_id,
-                cb_eps_id,
-                ckl::BinaryFpuOp::Add,
-                ckl::BroadcastDim::None,
                 ckl::input(
+                    cb_stats_reduced_id,
                     ckl::InputLifecycle::HeldBulk,
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Enabled,
                     ckl::TileOffset::Set),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{1, 0u},
+                ckl::input(cb_eps_id, ckl::InputLifecycle::CallerManaged),
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None>{1, 0u},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
-            ckl::PackTile<cb_recip_sqrt_var_id>{});
+            ckl::PackTile<ckl::output(cb_recip_sqrt_var_id)>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

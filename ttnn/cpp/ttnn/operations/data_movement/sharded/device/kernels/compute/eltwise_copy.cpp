@@ -18,11 +18,9 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
 
     compute_kernel_lib::copy<
-        cb_in,
-        cb_out,
         compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_in, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
+            cb_out, compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
         compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt));
 }

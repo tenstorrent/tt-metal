@@ -15,13 +15,11 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         BinaryFpu<
-            cb_in,
-            cb_in,
+            input(cb_in),
+            input(cb_in),
             BinaryFpuOp::Add,
             BroadcastDim::None,
-            input(),
-            input(),
             Dst::D0,
             DestAccumulation::Enabled>{},
-        PackTile<cb_out>{});
+        PackTile<output(cb_out)>{});
 }

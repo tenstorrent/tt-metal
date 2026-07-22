@@ -33,24 +33,21 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::OptionalChainElement<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
-        ckl::PackTile<cb_tmp0, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_tmp0, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            cb_tmp0,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_tmp0, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::CopyTile<
-            cb_tmp0,
-            ckl::Dst::D1,
-            ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_tmp0, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
         ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
         ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

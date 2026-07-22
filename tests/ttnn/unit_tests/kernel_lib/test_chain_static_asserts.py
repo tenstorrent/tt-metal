@@ -106,7 +106,7 @@ def test_dest_wrong_output_illegal(device, expect_error):
         device,
         expect_error,
         "dest_wrong_output.cpp",
-        "DEST accumulation must be enabled on both BinaryFpu and output()",
+        "DEST accumulation must be enabled on both BinaryFpu and output(...)",
     )
 
 
@@ -115,7 +115,7 @@ def test_dest_output_without_accumulation_illegal(device, expect_error):
         device,
         expect_error,
         "dest_output_without_accumulation.cpp",
-        "DEST accumulation must be enabled on both BinaryFpu and output()",
+        "DEST accumulation must be enabled on both BinaryFpu and output(...)",
     )
 
 

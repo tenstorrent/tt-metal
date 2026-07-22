@@ -76,13 +76,12 @@ void kernel_main() {
             if (do_mask_w) {
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::CopyTile<tt::CBIndex::c_0>{},
+                    compute_kernel_lib::CopyTile<compute_kernel_lib::input(tt::CBIndex::c_0)>{},
                     compute_kernel_lib::CopyTile<
-                        cb_mask_w,
-                        compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::input(compute_kernel_lib::InputLifecycle::CallerManaged)>{},
+                        compute_kernel_lib::input(cb_mask_w, compute_kernel_lib::InputLifecycle::CallerManaged),
+                        compute_kernel_lib::Dst::D1>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_masked_input>{});
+                    compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_masked_input)>{});
                 cb_input = cb_masked_input;
             }
 

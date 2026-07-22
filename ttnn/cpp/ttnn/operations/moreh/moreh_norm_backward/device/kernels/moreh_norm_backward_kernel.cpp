@@ -60,91 +60,94 @@ void kernel_main() {
         cb_y_obj.wait_front(onetile);
         cb_dy_obj.wait_front(onetile);
 
-        ckl::unary<ckl::Sign<ckl::Dst::D0>, cb_x, cb_sign, ckl::input(ckl::InputLifecycle::HeldStream)>(
+        ckl::unary<ckl::Sign<ckl::Dst::D0>, ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::output(cb_sign)>(
             ckl::EltwiseShape::tiles(onetile));
 
         if (p_minus_one_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                 ckl::Abs<ckl::Dst::D0>{},
                 ckl::PowerIterative<ckl::Dst::D0>{p_minus_one},
                 ckl::Recip<ckl::Dst::D0>{},
-                ckl::PackTile<cb_xpow>{});
+                ckl::PackTile<ckl::output(cb_xpow)>{});
         } else {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                 ckl::Abs<ckl::Dst::D0>{},
                 ckl::PowerIterative<ckl::Dst::D0>{p_minus_one},
-                ckl::PackTile<cb_xpow>{});
+                ckl::PackTile<ckl::output(cb_xpow)>{});
         }
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<cb_x, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::NoWaitPop)>{},
+            ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::NoWaitPop), ckl::Dst::D0>{},
             ckl::Abs<ckl::Dst::D0>{},
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<cb_logx>{});
+            ckl::PackTile<ckl::output(cb_logx)>{});
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                cb_logx,
-                cb_decimal,
+                ckl::input(cb_logx),
+                ckl::input(cb_decimal, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<cb_exp_lxmd>{});
-        ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
-
-        ckl::mul<cb_correct_xpow, cb_y, cb_tmp4, kBcast, ckl::input(), ckl::input(ckl::InputLifecycle::CallerManaged)>(
+            ckl::PackTile<ckl::output(cb_exp_lxmd)>{});
+        ckl::mul<ckl::input(cb_xpow), ckl::input(cb_exp_lxmd), ckl::output(cb_correct_xpow)>(
             ckl::EltwiseShape::tiles(onetile));
 
-        ckl::mul<cb_tmp4, cb_dy, cb_tmp5, kBcast, ckl::input(), ckl::input(ckl::InputLifecycle::CallerManaged)>(
-            ckl::EltwiseShape::tiles(onetile));
+        ckl::mul<
+            ckl::input(cb_correct_xpow),
+            ckl::input(cb_y, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_tmp4),
+            kBcast>(ckl::EltwiseShape::tiles(onetile));
+
+        ckl::mul<
+            ckl::input(cb_tmp4),
+            ckl::input(cb_dy, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_tmp5),
+            kBcast>(ckl::EltwiseShape::tiles(onetile));
 
         if (p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_y, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::CopyTile<ckl::input(cb_y, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                 ckl::PowerIterative<ckl::Dst::D0>{p},
                 ckl::Recip<ckl::Dst::D0>{},
-                ckl::PackTile<cb_xpow>{});
+                ckl::PackTile<ckl::output(cb_xpow)>{});
         } else {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<cb_y, ckl::Dst::D0, ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                ckl::CopyTile<ckl::input(cb_y, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
                 ckl::PowerIterative<ckl::Dst::D0>{p},
-                ckl::PackTile<cb_xpow>{});
+                ckl::PackTile<ckl::output(cb_xpow)>{});
         }
         ckl::unary<
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
-            cb_y,
-            cb_logx,
-            ckl::input(ckl::InputLifecycle::NoWaitPop)>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(cb_y, ckl::InputLifecycle::NoWaitPop),
+            ckl::output(cb_logx)>(ckl::EltwiseShape::tiles(onetile));
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                cb_logx,
-                cb_decimal,
+                ckl::input(cb_logx),
+                ckl::input(cb_decimal, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::None>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<cb_exp_lxmd>{});
+            ckl::PackTile<ckl::output(cb_exp_lxmd)>{});
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
-            ckl::BinaryFpu<cb_xpow, cb_exp_lxmd, ckl::BinaryFpuOp::Mul>{},
+            ckl::BinaryFpu<ckl::input(cb_xpow), ckl::input(cb_exp_lxmd), ckl::BinaryFpuOp::Mul>{},
             ckl::Recip<ckl::Dst::D0>{},
-            ckl::PackTile<cb_recip_ypow>{});
+            ckl::PackTile<ckl::output(cb_recip_ypow)>{});
 
-        ckl::mul<cb_tmp5, cb_recip_ypow, cb_tmp4, kBcast>(ckl::EltwiseShape::tiles(onetile));
+        ckl::mul<ckl::input(cb_tmp5), ckl::input(cb_recip_ypow), ckl::output(cb_tmp4), kBcast>(
+            ckl::EltwiseShape::tiles(onetile));
 
         cb_dy_obj.pop_front(onetile);
 
-        ckl::mul<cb_sign, cb_tmp4, cb_dx>(ckl::EltwiseShape::tiles(onetile));
+        ckl::mul<ckl::input(cb_sign), ckl::input(cb_tmp4), ckl::output(cb_dx)>(ckl::EltwiseShape::tiles(onetile));
     }
 
     cb_decimal_obj.pop_front(onetile);

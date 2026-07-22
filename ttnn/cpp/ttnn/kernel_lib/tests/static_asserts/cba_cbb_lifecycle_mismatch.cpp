@@ -21,11 +21,9 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         BinaryFpu<
-            cb_in,
-            cb_in,
+            input(cb_in, InputLifecycle::Bulk),
+            input(cb_in, InputLifecycle::HeldBulk),
             BinaryFpuOp::Add,
-            BroadcastDim::None,
-            input(InputLifecycle::Bulk),
-            input(InputLifecycle::HeldBulk)>{},
-        PackTile<cb_out>{});
+            BroadcastDim::None>{},
+        PackTile<output(cb_out)>{});
 }

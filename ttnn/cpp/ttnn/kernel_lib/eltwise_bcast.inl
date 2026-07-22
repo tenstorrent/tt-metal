@@ -17,13 +17,13 @@ struct UnaryBcastConfig {
     uint32_t bits;
 
     constexpr UnaryBcastConfig(BroadcastDim dim, InputSpec input_spec, Dst dst) noexcept :
-        bits(
-            DimField::encode(dim) | InputField::encode(InputSpecConfig::encode(input_spec)) |
-            DstField::encode(dst)) {}
+        bits(DimField::encode(dim) | InputField::encode(InputSpecConfig::encode(input_spec)) | DstField::encode(dst)) {}
     constexpr explicit UnaryBcastConfig(uint32_t encoded) noexcept : bits(encoded) {}
 
     constexpr BroadcastDim dim() const noexcept { return DimField::decode(bits); }
-    constexpr InputSpec input_spec() const noexcept { return InputSpecConfig::decode(InputField::decode(bits)); }
+    constexpr InputSpec input_spec(uint32_t cb_id) const noexcept {
+        return InputSpecConfig::decode(InputField::decode(bits), cb_id);
+    }
     constexpr Dst dst() const noexcept { return DstField::decode(bits); }
 };
 
@@ -37,7 +37,7 @@ template <uint32_t Cb, uint32_t ConfigBits>
 struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr UnaryBcastConfig Config{ConfigBits};
     static constexpr BroadcastDim Dim = Config.dim();
-    static constexpr InputSpec Input = Config.input_spec();
+    static constexpr InputSpec Input = Config.input_spec(Cb);
     static constexpr Dst DstSlot = Config.dst();
     static constexpr InputLifecycle Policy = Input.lifecycle;
     static constexpr OperandKind IndexMode = Input.index;
@@ -106,9 +106,9 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 };
 
-template <BroadcastDim Dim, uint32_t CbIn, uint32_t CbOut, InputSpec Input, OutputSpec Output>
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
 ALWI void unary_bcast(EltwiseShape shape) {
-    eltwise_chain(shape, UnaryBcast<Dim, CbIn, Input>{}, PackTile<CbOut, Output>{});
+    eltwise_chain(shape, UnaryBcast<Dim, Input>{}, PackTile<Output>{});
 }
 
 }  // namespace compute_kernel_lib

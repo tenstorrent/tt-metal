@@ -106,69 +106,53 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     ckl::BinaryFpu<
-                        rotated_in_interm_cb,
-                        sin_cb,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(rotated_in_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
                         ckl::input(
+                            sin_cb,
                             ckl::InputLifecycle::CallerManaged,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set)>{0u, sin_cos_row_cnt * Wt},
-                    ckl::PackTile<
-                        sin_interm_cb,
-                        ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
+                            ckl::TileOffset::Set),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<ckl::output(
+                        sin_interm_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
 #else
                 ckl::mul<
-                    rotated_in_interm_cb,
-                    sin_cb,
-                    sin_interm_cb,
-                    ckl::BroadcastDim::None,
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
-                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::input(rotated_in_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(sin_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(sin_interm_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
 #if RELOAD_IMPL == 0
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     ckl::BinaryFpu<
-                        in_cb,
-                        cos_cb,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(in_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
                         ckl::input(
+                            cos_cb,
                             ckl::InputLifecycle::CallerManaged,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set)>{0u, sin_cos_row_cnt * Wt},
-                    ckl::PackTile<
-                        cos_interm_cb,
-                        ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
+                            ckl::TileOffset::Set),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<ckl::output(
+                        cos_interm_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>{});
 #else
                 ckl::mul<
-                    in_cb,
-                    cos_cb,
-                    cos_interm_cb,
-                    ckl::BroadcastDim::None,
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
-                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::input(in_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(cos_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(cos_interm_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
                 ckl::add<
-                    cos_interm_cb,
-                    sin_interm_cb,
-                    out_cb,
-                    ckl::BroadcastDim::None,
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
-                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::input(cos_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(sin_interm_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::output(out_cb, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

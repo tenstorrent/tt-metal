@@ -48,20 +48,15 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
-                cb_in0,
-                cb_res,
-                cb_inp,
-                ckl::BroadcastDim::None,
-                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::output(ckl::OutputLifecycle::Bulk)>(squaring_shape);
+                ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(cb_res, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::output(cb_inp, ckl::OutputLifecycle::Bulk),
+                ckl::BroadcastDim::None>(squaring_shape);
         }
 
         ckl::square<
-            cb_inp,
-            cb_x2,
-            ckl::input(ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(squaring_shape);
+            ckl::input(cb_inp, ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
+            ckl::output(cb_x2, ckl::OutputLifecycle::Bulk)>(squaring_shape);
 
         ckl::reduce<
             PoolType::AVG,

@@ -31,11 +31,11 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 
     eltwise_chain(
         EltwiseShape::single(),
-        CopyTile<cb_batch_var, Dst::D0, input(InputLifecycle::Bulk)>{},
-        CopyTile<cb_eps, Dst::D1, input(InputLifecycle::CallerManaged)>{},
+        CopyTile<input(cb_batch_var, InputLifecycle::Bulk), Dst::D0>{},
+        CopyTile<input(cb_eps, InputLifecycle::CallerManaged), Dst::D1>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Rsqrt<>{},
-        PackTile<cb_den>{});
+        PackTile<output(cb_den)>{});
 
     const uint32_t inner_count = freq - tile_start;
 
@@ -43,17 +43,17 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 
     eltwise_chain(
         EltwiseShape::tiles(inner_count),
-        CopyTile<cb_other>{},
-        CopyTile<cb_bcast, Dst::D1, input(InputLifecycle::Bulk)>{},
+        CopyTile<input(cb_other)>{},
+        CopyTile<input(cb_bcast, InputLifecycle::Bulk), Dst::D1>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<cb_den, Dst::D1, input(InputLifecycle::Bulk)>{},
+        CopyTile<input(cb_den, InputLifecycle::Bulk), Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        OptionalChainElement<WeightHas, CopyTile<cb_weight, Dst::D1, input(InputLifecycle::Bulk)>>{},
+        OptionalChainElement<WeightHas, CopyTile<input(cb_weight, InputLifecycle::Bulk), Dst::D1>>{},
         OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, input(InputLifecycle::Bulk)>>{},
+        OptionalChainElement<BiasHas, CopyTile<input(cb_bias, InputLifecycle::Bulk), Dst::D1>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
-        PackTile<cb_final_out>{});
+        PackTile<output(cb_final_out)>{});
 }
 
 void kernel_main() {

@@ -81,13 +81,10 @@ void kernel_main() {
         }
 
         ckl::sub<
-            cb_in0,
-            cb_max,
-            cb_x_m_max,
-            ckl::BroadcastDim::Row,
-            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(Ht));
+            ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(cb_max, ckl::InputLifecycle::Bulk),
+            ckl::output(cb_x_m_max, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Ht));
 
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef SOFTMAX
@@ -98,28 +95,27 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(Ht - 1),
             ckl::CopyTile<
-                cb_x_m_max,
-                ckl::Dst::D0,
-                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block)>{},
+                ckl::input(cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+                ckl::Dst::D0>{},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<cb_exps>{});
+            ckl::PackTile<ckl::output(cb_exps)>{});
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::CopyTile<
-                cb_x_m_max,
-                ckl::Dst::D0,
                 ckl::input(
+                    cb_x_m_max,
                     ckl::InputLifecycle::CallerManaged,
                     ckl::OperandKind::Block,
                     ckl::DataFormatReconfig::Enabled,
-                    ckl::TileOffset::Set)>{Ht - 1},
+                    ckl::TileOffset::Set),
+                ckl::Dst::D0>{Ht - 1},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+            ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
             ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-            ckl::PackTile<cb_exps>{});
+            ckl::PackTile<ckl::output(cb_exps)>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -158,22 +154,16 @@ void kernel_main() {
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef LOG
         ckl::sub<
-            cb_x_m_max,
-            cb_recipsumexps,
-            cb_out0,
-            ckl::BroadcastDim::Row,
-            ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(Ht));
+            ckl::input(cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
+            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Ht));
 #else
         ckl::mul<
-            cb_exps,
-            cb_recipsumexps,
-            cb_out0,
-            ckl::BroadcastDim::Row,
-            ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::tiles(Ht));
+            ckl::input(cb_exps, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
+            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk),
+            ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Ht));
 #endif
         cb_x_m_max_obj.pop_front(Ht);
     }

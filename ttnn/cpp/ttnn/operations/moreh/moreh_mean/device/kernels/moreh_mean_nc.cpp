@@ -42,26 +42,23 @@ void kernel_main() {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             if (enable_reload) {
-                ckl::add<cb_in0, cb_intermed0, cb_intermed0>(ckl::EltwiseShape::tiles(onetile));
+                ckl::add<ckl::input(cb_in0), ckl::input(cb_intermed0), ckl::output(cb_intermed0)>(
+                    ckl::EltwiseShape::tiles(onetile));
             } else {
                 ckl::add<
-                    cb_in0,
-                    cb_in1,
-                    cb_intermed0,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
+                    ckl::input(cb_in0),
+                    ckl::input(cb_in1, ckl::InputLifecycle::CallerManaged),
+                    ckl::output(cb_intermed0),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
             }
 
             enable_reload = true;
         }
 
         ckl::mul<
-            cb_intermed0,
-            cb_scalar,
-            cb_out0,
-            ckl::BroadcastDim::Scalar,
-            ckl::input(),
-            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(cb_intermed0),
+            ckl::input(cb_scalar, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_out0),
+            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
     }
 }

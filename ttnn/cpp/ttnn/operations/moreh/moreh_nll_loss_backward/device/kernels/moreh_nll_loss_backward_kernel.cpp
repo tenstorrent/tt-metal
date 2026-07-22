@@ -27,7 +27,7 @@ void kernel_main() {
     init_sfpu(cb_output_grad, cb_input_grad);
 
 #if defined(DIVISOR)
-    ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_tmp1, ckl::input(ckl::InputLifecycle::Bulk)>(
+    ckl::unary<ckl::Recip<D::D0>, ckl::input(cb_divisor, ckl::InputLifecycle::Bulk), ckl::output(cb_tmp1)>(
         ckl::EltwiseShape::single());
 
     cb_wait_front(cb_tmp1, 1);
@@ -37,23 +37,18 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                cb_tmp_weight,
-                cb_output_grad,
+                ckl::input(cb_tmp_weight),
+                ckl::input(cb_output_grad, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::Scalar>{},
             ckl::Negative<D::D0>{},
-            ckl::PackTile<cb_tmp2>{});
+            ckl::PackTile<ckl::output(cb_tmp2)>{});
 
         compute_kernel_lib::mul<
-            cb_tmp2,
-            cb_tmp1,
-            cb_input_grad,
-            compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::input(),
-            compute_kernel_lib::input(compute_kernel_lib::InputLifecycle::CallerManaged)>(
-            compute_kernel_lib::EltwiseShape::single());
+            compute_kernel_lib::input(cb_tmp2),
+            compute_kernel_lib::input(cb_tmp1, compute_kernel_lib::InputLifecycle::CallerManaged),
+            compute_kernel_lib::output(cb_input_grad),
+            compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::single());
     }
 
     cb_pop_front(cb_output_grad, 1);
@@ -65,14 +60,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                cb_tmp_weight,
-                cb_output_grad,
+                ckl::input(cb_tmp_weight),
+                ckl::input(cb_output_grad, ckl::InputLifecycle::CallerManaged),
                 ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+                ckl::BroadcastDim::Scalar>{},
             ckl::Negative<D::D0>{},
-            ckl::PackTile<cb_input_grad>{});
+            ckl::PackTile<ckl::output(cb_input_grad)>{});
     }
 
     cb_pop_front(cb_output_grad, 1);

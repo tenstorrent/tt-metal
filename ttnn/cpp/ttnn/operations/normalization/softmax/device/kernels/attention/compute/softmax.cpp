@@ -42,14 +42,12 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(Wt, ndst),
         ckl::BinaryFpu<
-            cb_in,
-            cb_max,
+            ckl::input(cb_in, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(cb_max, ckl::InputLifecycle::Bulk),
             ckl::BinaryFpuOp::Sub,
-            ckl::BroadcastDim::Col,
-            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk)>{},
+            ckl::BroadcastDim::Col>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<cb_out, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
     cb_out_obj.wait_front(Wt);
 }
 
@@ -116,12 +114,10 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
         ckl::mul<
-            cb_in0,
-            cb_fused_scale,
-            cb_scale_mask,
-            ckl::BroadcastDim::Scalar,
-            ckl::input(),
-            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(Wt));
+            ckl::input(cb_in0),
+            ckl::input(cb_fused_scale, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_scale_mask),
+            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(Wt));
 #ifdef CAUSAL_MASK
         cb_fused_attn_obj.wait_front(Wt);
 #else
@@ -133,16 +129,14 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(Wt, ndst),
             ckl::BinaryFpu<
-                cb_scale_mask,
-                cb_fused_attn,
+                ckl::input(cb_scale_mask, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                ckl::input(cb_fused_attn, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
                 ckl::BinaryFpuOp::Add,
-                mask_bcast,
-                ckl::input(ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                ckl::input(ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block)>{},
+                mask_bcast>{},
             ckl::OptionalChainElement<
                 !numeric_stable,
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-            ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -175,26 +169,24 @@ void kernel_main() {
         if (mask_padded_data) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(Wt - 1),
-                ckl::CopyTile<cb_in0>{},
+                ckl::CopyTile<ckl::input(cb_in0)>{},
                 ckl::OptionalChainElement<
                     !numeric_stable,
                     ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-                ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
-                    cb_in0,
-                    cb_mask_padded,
+                    ckl::input(cb_in0),
+                    ckl::input(cb_mask_padded, ckl::InputLifecycle::HeldBulk),
                     ckl::BinaryFpuOp::Add,
-                    ckl::BroadcastDim::Row,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::HeldBulk)>{},  // cb_mask_padded: held scalar, chain waits(1), no
-                                                                   // pop
+                    ckl::BroadcastDim::Row>{},  // cb_mask_padded: held scalar, chain waits(1), no
+                                                // pop
                 ckl::OptionalChainElement<
                     !numeric_stable,
                     ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-                ckl::PackTile<cb_x, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -210,10 +202,8 @@ void kernel_main() {
 #else
             ckl::unary<
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>,
-                cb_in0,
-                cb_exps,
-                ckl::input(),
-                ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::input(cb_in0),
+                ckl::output(cb_exps, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
                 ckl::EltwiseShape::tiles(Wt));
 #endif
         }
@@ -236,13 +226,10 @@ void kernel_main() {
             });
 
         ckl::mul<
-            cb_exps,
-            cb_recipsumexps,
-            cb_out0,
-            ckl::BroadcastDim::Col,
-            ckl::input(ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::output(ckl::OutputLifecycle::Chunked)>(ckl::EltwiseShape::tiles(Wt, ndst));
+            ckl::input(cb_exps, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
+            ckl::output(cb_out0, ckl::OutputLifecycle::Chunked),
+            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the CBs are left balanced.

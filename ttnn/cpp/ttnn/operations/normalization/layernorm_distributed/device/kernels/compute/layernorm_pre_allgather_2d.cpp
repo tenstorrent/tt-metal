@@ -55,13 +55,10 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
-                cb_in0_id,
-                cb_res_id,
-                cb_inp_id,
-                ckl::BroadcastDim::None,
-                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::output(ckl::OutputLifecycle::Bulk)>(ckl::EltwiseShape::of(Wt / blk, blk));
+                ckl::input(cb_in0_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::input(cb_res_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                ckl::output(cb_inp_id, ckl::OutputLifecycle::Bulk),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::of(Wt / blk, blk));
         }
 
         /*

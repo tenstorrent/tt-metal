@@ -23,8 +23,8 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain<SetupOwner::Caller>(
         EltwiseShape::tiles(n),
-        CopyTile<cb_in, Dst::D0, input(InputLifecycle::Streaming, DataFormatReconfig::Disabled)>{},
+        CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{},
         Exp<>{},
         Sqrt<>{},  // different SFPU op than Exp -> non-uniform -> not boot-hoistable
-        PackTile<cb_out, output(OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+        PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
 }

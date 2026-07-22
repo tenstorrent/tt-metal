@@ -48,21 +48,18 @@ void kernel_main() {
             ckl::OptionalChainElement<
                 has_bcast,
                 ckl::BinaryFpu<
-                    cb_in1,
-                    cb_in0,
+                    ckl::input(cb_in1, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(cb_in0),
                     ckl::BinaryFpuOp::Add,
-                    bcast_dim,
-                    ckl::input(ckl::InputLifecycle::CallerManaged)>>{},
-            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<cb_in0>>{},
-            ckl::PackTile<cb_intermed0>{});
+                    bcast_dim>>{},
+            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<ckl::input(cb_in0)>>{},
+            ckl::PackTile<ckl::output(cb_intermed0)>{});
 
         ckl::mul<
-            cb_intermed0,
-            cb_scalar,
-            cb_out0,
-            ckl::BroadcastDim::Scalar,
-            ckl::input(),
-            ckl::input(ckl::InputLifecycle::CallerManaged)>(ckl::EltwiseShape::tiles(onetile));
+            ckl::input(cb_intermed0),
+            ckl::input(cb_scalar, ckl::InputLifecycle::CallerManaged),
+            ckl::output(cb_out0),
+            ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
     }
     cb_in1_obj.pop_front(onetile);
 }

@@ -16,11 +16,10 @@ void kernel_main() {
     compute_kernel_hw_startup(src_cb_id, dst_cb_id);
 
     compute_kernel_lib::copy<
-        src_cb_id,
-        dst_cb_id,
         compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            src_cb_id, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles));
+            dst_cb_id,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

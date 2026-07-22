@@ -23,15 +23,13 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D1,
-            ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
         ckl::Negative<ckl::Dst::D1>{},
         ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D1>{},
         ckl::Logsigmoid<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

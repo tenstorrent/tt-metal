@@ -30,19 +30,17 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D0,
-            ckl::input(ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
         ckl::Hardsigmoid<ckl::Dst::D0>{},
         ckl::OptionalChainElement<
             kIsFloat32,
             ckl::CopyTile<
-                cb_input,
-                ckl::Dst::D1,
-                ckl::input(ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled)>>{},
+                ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+                ckl::Dst::D1>>{},
         ckl::OptionalChainElement<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
         ckl::OptionalChainElement<
             kIsFloat,
-            ckl::DestReuseBinary<cb_input, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{},
-        ckl::PackTile<cb_output, ckl::output(ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DestReuseBinary<ckl::input(cb_input), ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{},
+        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
 }

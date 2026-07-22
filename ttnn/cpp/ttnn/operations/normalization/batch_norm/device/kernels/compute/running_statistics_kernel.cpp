@@ -26,26 +26,23 @@ ALWI void update_running_stat() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
-            cb_one,
-            cb_momentum,
+            ckl::input(cb_one, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_momentum, ckl::InputLifecycle::CallerManaged),
             BinaryFpuOp::Sub,
-            ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::CallerManaged),
-            ckl::input(ckl::InputLifecycle::CallerManaged)>{},                               // D0 = 1 - momentum
-        ckl::DestReuseBinary<cb_old, BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1 - momentum) *
-                                                                                             // old_stat
+            ckl::BroadcastDim::None>{},  // D0 = 1 - momentum
+        ckl::DestReuseBinary<ckl::input(cb_old), BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1 -
+                                                                                                         // momentum) *
+                                                                                                         // old_stat
         ckl::BinaryFpu<
-            cb_momentum,
-            cb_batch,
+            ckl::input(cb_momentum, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_batch),
             BinaryFpuOp::Mul,
             ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::CallerManaged),
-            ckl::input(),
             D::D1>{},                           // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
-        ckl::PackTile<cb_updated, ckl::output(ckl::OutputLifecycle::Bulk)>{},
+        ckl::PackTile<ckl::output(cb_updated, ckl::OutputLifecycle::Bulk)>{},
         ckl::
-            OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::output(ckl::OutputLifecycle::CallerManaged)>>{});
+            OptionalChainElement<AlsoOut0, ckl::PackTile<ckl::output(cb_out0, ckl::OutputLifecycle::CallerManaged)>>{});
 }
 
 void kernel_main() {

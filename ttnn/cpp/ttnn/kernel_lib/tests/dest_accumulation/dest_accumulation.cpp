@@ -22,30 +22,26 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     using Accumulate = BinaryFpu<
-        cb_a,
-        cb_b,
+        input(cb_a, InputLifecycle::Bulk, OperandKind::Block),
+        input(cb_b, InputLifecycle::Bulk, OperandKind::Block),
         BinaryFpuOp::Add,
         BroadcastDim::None,
-        input(InputLifecycle::Bulk, OperandKind::Block),
-        input(InputLifecycle::Bulk, OperandKind::Block),
         Dst::D0,
         DestAccumulation::Enabled>;
-    using ManagedPack = PackTile<
+    using ManagedPack = PackTile<output(
         cb_out,
-        output(
-            OutputLifecycle::DestAccumulation,
-            DataFormatReconfig::Enabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
-            DestAccumulation::Enabled)>;
-    using CallerManagedPack = PackTile<
+        OutputLifecycle::DestAccumulation,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Disabled,
+        DestAccumulation::Enabled)>;
+    using CallerManagedPack = PackTile<output(
         cb_out,
-        output(
-            OutputLifecycle::CallerManaged,
-            DataFormatReconfig::Enabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
-            DestAccumulation::Enabled)>;
+        OutputLifecycle::CallerManaged,
+        DataFormatReconfig::Enabled,
+        PackRelu::Disabled,
+        L1Accumulation::Disabled,
+        DestAccumulation::Enabled)>;
 
     using ManagedChain = EltwiseChain<Accumulate, ManagedPack>;
     using CallerManagedChain = EltwiseChain<Accumulate, CallerManagedPack>;

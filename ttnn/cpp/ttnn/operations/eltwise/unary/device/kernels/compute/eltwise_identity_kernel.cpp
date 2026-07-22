@@ -17,11 +17,10 @@ void kernel_main() {
     init_sfpu(cb_input, cb_output);
 
     compute_kernel_lib::copy<
-        cb_input,
-        cb_output,
         compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_input, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles));
+            cb_output,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

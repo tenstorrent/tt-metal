@@ -27,44 +27,37 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
-            cb_batch_var,
-            cb_eps,
+            ckl::input(cb_batch_var, ckl::InputLifecycle::Bulk),
+            ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
             ckl::BinaryFpuOp::Add,
-            ckl::BroadcastDim::None,
-            ckl::input(ckl::InputLifecycle::Bulk),
-            ckl::input(ckl::InputLifecycle::CallerManaged)>{},
+            ckl::BroadcastDim::None>{},
         ckl::Rsqrt<>{},
-        ckl::PackTile<cb_den>{});
+        ckl::PackTile<ckl::output(cb_den)>{});
 
     const uint32_t inner_count = freq - tile_start;
 
     constexpr auto sub_op = ckl::BinaryFpu<
-        cb_other,
-        cb_bcast,
+        ckl::input(cb_other),
+        ckl::input(cb_bcast, ckl::InputLifecycle::Bulk),
         ckl::BinaryFpuOp::Sub,
-        ckl::BroadcastDim::None,
-        ckl::input(),
-        ckl::input(ckl::InputLifecycle::Bulk)>{};
+        ckl::BroadcastDim::None>{};
     constexpr auto mul_den = ckl::DestReuseBinary<
-        cb_den,
+        input(cb_den, ckl::InputLifecycle::Bulk),
         ckl::BinaryFpuOp::Mul,
-        ckl::DestReuseType::DEST_TO_SRCA,
-        input(ckl::InputLifecycle::Bulk)>{};
+        ckl::DestReuseType::DEST_TO_SRCA>{};
     constexpr auto mul_weight = ckl::OptionalChainElement<
         WeightHas,
         ckl::DestReuseBinary<
-            cb_weight,
+            ckl::input(cb_weight, ckl::InputLifecycle::Bulk),
             ckl::BinaryFpuOp::Mul,
-            ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::input(ckl::InputLifecycle::Bulk)>>{};
+            ckl::DestReuseType::DEST_TO_SRCA>>{};
     constexpr auto add_bias = ckl::OptionalChainElement<
         BiasHas,
         ckl::DestReuseBinary<
-            cb_bias,
+            ckl::input(cb_bias, ckl::InputLifecycle::Bulk),
             ckl::BinaryFpuOp::Add,
-            ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::input(ckl::InputLifecycle::Bulk)>>{};
-    constexpr auto pack_out = ckl::PackTile<cb_output_0>{};
+            ckl::DestReuseType::DEST_TO_SRCA>>{};
+    constexpr auto pack_out = ckl::PackTile<ckl::output(cb_output_0)>{};
 
     ckl::eltwise_chain(ckl::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
 }

@@ -17,15 +17,13 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);
 
     compute_kernel_lib::mul<
-        cb_x,
-        cb_clip_coef_clamped,
-        cb_y,
-        compute_kernel_lib::BroadcastDim::Scalar,
         compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_x, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::input(
-            compute_kernel_lib::InputLifecycle::Bulk, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_clip_coef_clamped,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles));
+            cb_y, compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

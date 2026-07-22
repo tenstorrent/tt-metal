@@ -93,15 +93,13 @@ void kernel_main() {
         rotated_in_interm_cb_obj.wait_front(Wt);
 
         compute_kernel_lib::mul<
-            rotated_in_interm_cb,
-            sin_cb,
-            sin_interm_cb,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::input(compute_kernel_lib::InputLifecycle::CallerManaged),
-            compute_kernel_lib::input(compute_kernel_lib::InputLifecycle::CallerManaged),
+            compute_kernel_lib::input(rotated_in_interm_cb, compute_kernel_lib::InputLifecycle::CallerManaged),
+            compute_kernel_lib::input(sin_cb, compute_kernel_lib::InputLifecycle::CallerManaged),
             compute_kernel_lib::output(
-                compute_kernel_lib::OutputLifecycle::CallerManaged, compute_kernel_lib::DataFormatReconfig::Disabled)>(
-            compute_kernel_lib::EltwiseShape::single());
+                sin_interm_cb,
+                compute_kernel_lib::OutputLifecycle::CallerManaged,
+                compute_kernel_lib::DataFormatReconfig::Disabled),
+            compute_kernel_lib::BroadcastDim::None>(compute_kernel_lib::EltwiseShape::single());
         sin_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.pop_front(Wt);
 

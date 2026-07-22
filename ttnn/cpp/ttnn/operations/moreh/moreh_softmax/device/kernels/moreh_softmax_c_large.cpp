@@ -35,9 +35,10 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                ckl::copy<cb_in0, cb_max>(ckl::EltwiseShape::tiles(onetile));
+                ckl::copy<ckl::input(cb_in0), ckl::output(cb_max)>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                ckl::binary_sfpu<ckl::BinaryMax<>, cb_in0, cb_max, cb_max>(ckl::EltwiseShape::tiles(onetile));
+                ckl::binary_sfpu<ckl::BinaryMax<>, ckl::input(cb_in0), ckl::input(cb_max), ckl::output(cb_max)>(
+                    ckl::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -46,41 +47,39 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
-                    cb_in0,
-                    cb_max,
+                    ckl::input(cb_in0),
+                    ckl::input(cb_max, ckl::InputLifecycle::HeldStream),
                     ckl::BinaryFpuOp::Sub,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::BroadcastDim::None>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<cb_exps>{});
+                ckl::PackTile<ckl::output(cb_exps)>{});
 #else
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
-                    cb_in0,
-                    cb_max,
+                    ckl::input(cb_in0),
+                    ckl::input(cb_max, ckl::InputLifecycle::HeldStream),
                     ckl::BinaryFpuOp::Sub,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::BroadcastDim::None>{},
                 ckl::Negative<ckl::Dst::D0>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<cb_exps>{});
+                ckl::PackTile<ckl::output(cb_exps)>{});
 #endif
 
             if (i == 0) {
-                ckl::copy<cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                ckl::copy<ckl::input(cb_exps), ckl::output(cb_add)>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                ckl::add<cb_add, cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
+                ckl::add<ckl::input(cb_add), ckl::input(cb_exps), ckl::output(cb_add)>(
+                    ckl::EltwiseShape::tiles(onetile));
             }
         }
 
 #ifdef LOG
-        ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_add, cb_recipsumexps>(
+        ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, ckl::input(cb_add), ckl::output(cb_recipsumexps)>(
             ckl::EltwiseShape::tiles(onetile));
 #else
-        ckl::unary<ckl::Recip<ckl::Dst::D0>, cb_add, cb_recipsumexps>(ckl::EltwiseShape::tiles(onetile));
+        ckl::unary<ckl::Recip<ckl::Dst::D0>, ckl::input(cb_add), ckl::output(cb_recipsumexps)>(
+            ckl::EltwiseShape::tiles(onetile));
 #endif
 
         cb_recipsumexps_obj.wait_front(onetile);
@@ -88,70 +87,59 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             ckl::sub<
-                cb_in0,
-                cb_max,
-                cb_tmp,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_in0),
+                ckl::input(cb_max, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_tmp),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
             ckl::sub<
-                cb_tmp,
-                cb_recipsumexps,
-                cb_out0,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_tmp),
+                ckl::input(cb_recipsumexps, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_out0),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 #else
-            ckl::sub<cb_max, cb_in0, cb_tmp, ckl::BroadcastDim::None, ckl::input(ckl::InputLifecycle::HeldStream)>(
-                ckl::EltwiseShape::tiles(onetile));
             ckl::sub<
-                cb_tmp,
-                cb_recipsumexps,
-                cb_out0,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_max, ckl::InputLifecycle::HeldStream),
+                ckl::input(cb_in0),
+                ckl::output(cb_tmp),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
+            ckl::sub<
+                ckl::input(cb_tmp),
+                ckl::input(cb_recipsumexps, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_out0),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 #endif
 #else
 #ifdef SOFTMAX
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
-                    cb_in0,
-                    cb_max,
+                    ckl::input(cb_in0),
+                    ckl::input(cb_max, ckl::InputLifecycle::HeldStream),
                     ckl::BinaryFpuOp::Sub,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::BroadcastDim::None>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<cb_exps>{});
+                ckl::PackTile<ckl::output(cb_exps)>{});
             ckl::mul<
-                cb_exps,
-                cb_recipsumexps,
-                cb_out0,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_exps),
+                ckl::input(cb_recipsumexps, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_out0),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 #else
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
-                    cb_in0,
-                    cb_max,
+                    ckl::input(cb_in0),
+                    ckl::input(cb_max, ckl::InputLifecycle::HeldStream),
                     ckl::BinaryFpuOp::Sub,
-                    ckl::BroadcastDim::None,
-                    ckl::input(),
-                    ckl::input(ckl::InputLifecycle::HeldStream)>{},
+                    ckl::BroadcastDim::None>{},
                 ckl::Negative<ckl::Dst::D0>{},
                 ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<cb_exps>{});
+                ckl::PackTile<ckl::output(cb_exps)>{});
             ckl::mul<
-                cb_exps,
-                cb_recipsumexps,
-                cb_out0,
-                ckl::BroadcastDim::None,
-                ckl::input(),
-                ckl::input(ckl::InputLifecycle::HeldStream)>(ckl::EltwiseShape::tiles(onetile));
+                ckl::input(cb_exps),
+                ckl::input(cb_recipsumexps, ckl::InputLifecycle::HeldStream),
+                ckl::output(cb_out0),
+                ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 #endif
 #endif
         }
