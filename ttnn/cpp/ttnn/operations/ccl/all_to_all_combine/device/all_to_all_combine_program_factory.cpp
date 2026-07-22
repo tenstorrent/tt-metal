@@ -158,7 +158,8 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     });
 
     // client interface
-    constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
+    // [0] data unicast; [1]/[2] bidirectional completion atomic-inc (pos/neg arcs); [1] reused for init send.
+    constexpr auto num_headers = 3;
     constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_headers * CLIENT_INTERFACE_SIZE,

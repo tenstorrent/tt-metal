@@ -25,13 +25,25 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
-    // x is restricted to BFLOAT8_B — the only dtype the existing callers
-    // (TtRoutedExpert typecasts the dispatched buffer to BF8_B before this
-    // op) and tests exercise. The kernel CB-size config can also accept
-    // BFLOAT16, but that path is untested; reintroduce when a real caller
-    // + PCC test for BF16 lands.
-    TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
-    TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
+    // x layout/dtype depends on x_is_row_major:
+    //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
+    //   true: x is ROW_MAJOR BFLOAT16 (the dispatch output) — the reader streams
+    //     sticks and the compute kernel tilizes them to bf8_b before the matmul,
+    //     fusing the standalone to_layout. Off preserves the pre-fusion path for
+    //     standalone / Wormhole callers.
+    if (op.x_is_row_major) {
+        TT_FATAL(
+            t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "x must be BFLOAT16 when x_is_row_major, got {}",
+            t.x.dtype());
+        TT_FATAL(
+            t.x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "x must be ROW_MAJOR when x_is_row_major, got {}",
+            t.x.layout());
+    } else {
+        TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
+        TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
+    }
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");
     TT_FATAL(t.x.logical_shape().rank() >= 2, "x must have rank >= 2, got rank {}", t.x.logical_shape().rank());
     // For rank > 2, all leading dims must be 1 — we treat x as effectively
@@ -61,6 +73,16 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     TT_FATAL(op.chunk_M_tiles > 0, "chunk_M_tiles must be > 0");
+    // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
+    // buffer spanning many experts, so its allocated M only bounds m_tiles from
+    // above — the reader/writer index into x at the region offset.
+    TT_FATAL(op.m_tiles > 0, "m_tiles must be > 0");
+    TT_FATAL(
+        op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
+    // read_x_at_offset needs expert_region_offsets to locate this expert's x
+    // rows in the shared buffer (the reader fetches start[global_id]).
+    TT_FATAL(
+        !op.read_x_at_offset || t.expert_region_offsets.has_value(), "read_x_at_offset requires expert_region_offsets");
 
     // Weight tensors share x's storage / layout / memory contract — fail
     // host-side if the caller forgot to upload one, picked the wrong layout,
@@ -150,8 +172,15 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
         TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "optional_output must be TILE layout");
         TT_FATAL(is_dram_interleaved(out), "optional_output must be DRAM-interleaved");
+        // Output dtype must match x EXCEPT in row-major mode: there x is bf16
+        // ROW_MAJOR but the tilized output is bf8_b TILE (for downstream
+        // combine), so the two legitimately differ. The tilize/down-matmul packs
+        // to the output's dtype regardless.
         TT_FATAL(
-            out.dtype() == t.x.dtype(), "optional_output dtype ({}) must match x dtype ({})", out.dtype(), t.x.dtype());
+            op.x_is_row_major || out.dtype() == t.x.dtype(),
+            "optional_output dtype ({}) must match x dtype ({})",
+            out.dtype(),
+            t.x.dtype());
         const auto& out_shape = out.padded_shape();
         TT_FATAL(
             out_shape.rank() == x_shape.rank(),
@@ -229,15 +258,23 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
+    uint32_t m_tiles,
+    bool read_x_at_offset,
+    bool x_is_row_major,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets) {
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
+            .m_tiles = m_tiles,
             .local_expert_id = local_expert_id,
+            .read_x_at_offset = read_x_at_offset,
+            .x_is_row_major = x_is_row_major,
+            .activation = activation,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,

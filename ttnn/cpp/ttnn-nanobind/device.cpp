@@ -94,7 +94,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",
@@ -289,7 +293,11 @@ void device_module(nb::module_& m_device) {
         nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
+    m_device.def(
+        "CloseDevice",
+        [](MeshDevice* device) { device->close(); },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -305,6 +313,7 @@ void device_module(nb::module_& m_device) {
                 device_entry.second->close();
             }
         },
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -387,16 +396,28 @@ void device_module(nb::module_& m_device) {
         },
         nb::arg("unpadded_shape"),
         R"doc(
-        Pads the given shape to tile shape based on specified padding options.
+        Pads the given shape to tile shape (rounds last two dims up to multiples of 32).
+
+        .. deprecated::
+            This function is deprecated and will be removed in a future release.
+            Use ``ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)`` which handles
+            tile-alignment automatically.
+
+            If you only need the padded shape without converting layout, align
+            dimensions manually::
+
+                import math
+                TILE = 32
+                shape = list(original_shape)
+                shape[-1] = math.ceil(shape[-1] / TILE) * TILE
+                if len(shape) >= 2:
+                    shape[-2] = math.ceil(shape[-2] / TILE) * TILE
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
 
         Returns:
             List of [int]: The padded shape.
-
-        Note:
-            This functionality is planned for deprecation in the future.
 
         Example:
             >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
@@ -716,7 +737,10 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            {
+                nb::gil_scoped_release release;
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -724,7 +748,6 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
-        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
             This call waits for any in-flight invocations of the callback to finish.

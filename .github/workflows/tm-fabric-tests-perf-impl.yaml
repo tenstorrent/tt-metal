@@ -22,10 +22,15 @@ on:
         type: boolean
         default: true
         description: "Run T3K ubench - Fabric Mux BW performance test"
+      run-perf-fabric-mux-v2-throughput:
+        required: false
+        type: boolean
+        default: true
+        description: "Run T3K ubench - Fabric Mux V2 Throughput performance test"
 
 jobs:
   generate-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -48,6 +53,10 @@ jobs:
 
           if [[ "${{ inputs.run-perf-fabric-mux-bw }}" == "true" ]]; then
             matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Mux BW","cmd":"TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py"}')
+          fi
+
+          if [[ "${{ inputs.run-perf-fabric-mux-v2-throughput }}" == "true" ]]; then
+            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Mux V2 Throughput","cmd":"TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py"}')
           fi
 
           # If no items selected, fail the job with an error

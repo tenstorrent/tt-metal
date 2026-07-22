@@ -30,7 +30,9 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IN_TILE_DIMS,
     MATH_FIDELITY,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     PARTIAL_FACE,
     STOCHASTIC_ROUNDING,
     THROTTLE_LEVEL,
@@ -179,6 +181,12 @@ def test_math_matmul(
         tilized_in1, in1_dimensions, tile_dimensions=[in1_tile_r_dim, in1_tile_c_dim]
     )
 
+    # Matmul sweep shapes deliberately fit one destination section. Repeat the
+    # complete matmul block four times so the same test also validates section
+    # hand-off without changing the operation's RT/CT/KT contract.
+    num_blocks = 4
+    num_tiles_in_block = matmul_config.tile_dimensions.tile_cnt
+
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
         formats,
@@ -190,6 +198,8 @@ def test_math_matmul(
         ],
         runtimes=[
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_FACES(num_faces, num_faces_in0, num_faces_in1),
             UNPACK_TRANS_FACES(transpose),
             UNPACK_TRANS_WITHIN_FACE(transpose),
@@ -220,15 +230,11 @@ def test_math_matmul(
             formats.output_format,
             tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
             tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
-            tile_count_res=matmul_config.tile_dimensions.tile_cnt,
+            tile_count_res=matmul_config.tile_dimensions.tile_cnt * num_blocks,
         ),
         dest_acc=matmul_config.dest_acc,
     )
     res_from_L1 = configuration.run().result
-
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
@@ -238,10 +244,15 @@ def test_math_matmul(
         (in0_dimensions[0], in1_dimensions[1]),
         tile_dimensions=[in0_tile_r_dim, in1_tile_c_dim],
     )
+    golden_tensor = golden_tensor.repeat(num_blocks)
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
 
     if num_faces < 4:
         num_elements_per_tile = in0_tile_r_dim * in1_tile_c_dim
-        tile_cnt = matmul_config.tile_dimensions.output_tile_cnt
+        tile_cnt = matmul_config.tile_dimensions.output_tile_cnt * num_blocks
 
         # Compare each tile separately
         TILE_R_DIM, TILE_C_DIM = 32, 32

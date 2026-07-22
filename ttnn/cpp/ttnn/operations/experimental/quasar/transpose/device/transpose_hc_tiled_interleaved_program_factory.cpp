@@ -17,6 +17,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,6 +28,7 @@ using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 namespace ttnn::prim::qsr {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // DFB / kernel / tensor names for the HC tiled interleaved factory's ProgramSpec.
 const DFBSpecName SRC_CB{"src_cb"};
@@ -36,10 +38,12 @@ const KernelSpecName HCTI_WRITER{"hcti_writer"};
 const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFactory::create_program_artifacts(
     const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& input_tensor = tensor_args.input;
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
@@ -169,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
                 {"tile_width", 1u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
     // Writer DFB bindings (SRC_CB consumer; PAD_CB consumer when padding).
@@ -205,7 +209,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
     spec.kernels.push_back(std::move(reader));
@@ -268,24 +272,24 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_tiles", num_tiles_per_core},
-                    {"start_id", start_idx},
-                },
-        });
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"start_tile_idx", start_idx},
-                    {"end_tile_idx", end_idx},
-                    {"start_padding_tile_idx", padded_start_idx},
-                    {"end_padding_tile_idx", padded_end_idx},
-                },
-        });
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"num_tiles", num_tiles_per_core},
+                {"start_id", start_idx},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_tile_idx", start_idx},
+                {"end_tile_idx", end_idx},
+                {"start_padding_tile_idx", padded_start_idx},
+                {"end_padding_tile_idx", padded_end_idx},
+            });
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;

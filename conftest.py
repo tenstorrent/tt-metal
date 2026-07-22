@@ -135,6 +135,16 @@ class CIv2ModelDownloadUtils_:
             subprocess.run(
                 [
                     "wget",
+                    # LFC is an internal cluster service and must be reached directly. The CIv2
+                    # no_proxy entry for it is scheme-prefixed ("http://...") so it never matches
+                    # the target hostname; without --no-proxy, wget sends the request through the
+                    # restricted egress proxy, which returns 503 for internal hosts.
+                    "--no-proxy",
+                    # LFC occasionally refuses direct connections; wget does not retry connection
+                    # refusals by default, so opt in and back off a few times before giving up.
+                    "--tries=5",
+                    "--retry-connrefused",
+                    "--waitretry=10",
                     "-r",
                     "-nH",
                     "-x",
@@ -799,14 +809,23 @@ def _check_requires_grid_size(device_or_mesh, marker):
 
 @pytest.fixture(autouse=True)
 def check_requires_grid_size(request):
-    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores)."""
-    marker = request.node.get_closest_marker("requires_grid_size")
-    if marker is None:
+    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores).
+
+    Enforces *every* requires_grid_size marker on the item, not just the closest
+    one. A parametrized case commonly carries both a function-level default
+    requirement and a stricter per-param requirement (via pytest.param(marks=...));
+    get_closest_marker() would return only one of them and silently drop the other,
+    letting an under-provisioned grid (e.g. a harvested board) run a case that needs
+    more cores. Applying all markers makes the strictest requirement win.
+    """
+    markers = list(request.node.iter_markers("requires_grid_size"))
+    if not markers:
         return
     for name in ("bh_2d_mesh_device", "mesh_device", "device"):
         if name in request.fixturenames:
             device_or_mesh = request.getfixturevalue(name)
-            _check_requires_grid_size(device_or_mesh, marker)
+            for marker in markers:
+                _check_requires_grid_size(device_or_mesh, marker)
             return
     pytest.skip(
         "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"
@@ -1195,9 +1214,9 @@ def ttnn_graph_report(request):
     """
     Automatically generate graph reports when config enables it.
 
-    Activates when enable_logging and report_path are set, and either
-    enable_graph_report or enable_comparison_mode is on. Skipped when a graph
-    capture is already active (e.g. a test that manages its own capture).
+    Gates on enable_logging and either enable_graph_report or enable_comparison_mode,
+    then delegates to ``ttnn.graph_report.run_pytest_graph_report_fixture`` for
+    report_path validation, capture lifecycle, and import.
     """
     import ttnn
 
@@ -1210,76 +1229,8 @@ def ttnn_graph_report(request):
     if not enable_graph_report and not enable_comparison_mode:
         yield
         return
-    report_path = getattr(ttnn.CONFIG, "report_path", None)
-    report_name = getattr(ttnn.CONFIG, "report_name", None)
-    if report_path is None or not report_name or str(report_name).strip() == "":
-        yield
-        return
-    if ttnn.graph.is_graph_capture_active():
-        yield
-        return
 
-    # Ensure we are torn down before device fixtures: request whichever device
-    # the test uses so pytest tears us down first, then the device.
-    if "mesh_device" in request.fixturenames:
-        request.getfixturevalue("mesh_device")
-    if "device" in request.fixturenames:
-        request.getfixturevalue("device")
-
-    report_path = Path(report_path)
-    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
-
-    if enable_graph_report:
-        if enable_detailed_buffer_report:
-            ttnn.graph.enable_detailed_buffer_tracing()
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-
-    try:
-        yield
-    finally:
-        report_path.mkdir(parents=True, exist_ok=True)
-
-        if enable_graph_report:
-            if not ttnn.graph.is_graph_capture_active():
-                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
-            else:
-                if ttnn.distributed_context_is_initialized():
-                    rank = int(ttnn.distributed_context_get_rank())
-                    world_size = int(ttnn.distributed_context_get_size())
-                else:
-                    rank, world_size = 0, 1
-                if world_size > 1:
-                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
-                else:
-                    json_path = report_path / "graph_capture.json"
-                ttnn.graph.end_graph_capture_to_file(str(json_path))
-                if ttnn.distributed_context_is_initialized():
-                    ttnn.distributed_context_barrier()
-                if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                    from ttnn.graph_report import import_report
-
-                    import_report(report_path, report_path)
-                    (report_path / "graph_capture.json").unlink(missing_ok=True)
-                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                        p.unlink(missing_ok=True)
-                if ttnn.distributed_context_is_initialized():
-                    ttnn.distributed_context_barrier()
-
-            if enable_detailed_buffer_report:
-                ttnn.graph.disable_detailed_buffer_tracing()
-        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
-            ttnn.graph.flush_comparison_records_to_db(report_path)
-
-        if ttnn.distributed_context_is_initialized():
-            rank = int(ttnn.distributed_context_get_rank())
-            world_size = int(ttnn.distributed_context_get_size())
-        else:
-            rank, world_size = 0, 1
-        if world_size > 1:
-            config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
-        else:
-            config_path = report_path / "config.json"
-        ttnn.save_config_to_json_file(config_path)
+    yield from ttnn.graph_report.run_pytest_graph_report_fixture(request)
 
 
 @pytest.fixture(scope="function", autouse=True)

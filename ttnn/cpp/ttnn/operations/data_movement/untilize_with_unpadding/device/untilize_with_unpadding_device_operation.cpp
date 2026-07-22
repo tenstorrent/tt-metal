@@ -108,11 +108,18 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                         "Output memory config layout must be INTERLEAVED but got {}",
                         operation_attributes.output_mem_config.memory_layout());
+                    // The height-sharded -> interleaved writer walks each core's absolute rows and
+                    // maps every row to its (matrix, row-in-matrix), so it handles any batch and any
+                    // alignment of matrices to core boundaries (whole matrices per core, a single
+                    // matrix split across cores, or a batch whose matrices straddle cores). It only
+                    // requires that each shard span the full padded matrix width, which height
+                    // sharding always satisfies.
                     TT_FATAL(
-                        input_tensor_a.physical_volume() /
-                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                            1,
-                        "Can only write unbatched output interleaved");
+                        input_tensor_a.shard_spec().value().shape[1] == input_tensor_a.padded_shape()[-1],
+                        "Height-sharded untilize to interleaved output requires the shard width ({}) to equal the "
+                        "padded tensor width ({})",
+                        input_tensor_a.shard_spec().value().shape[1],
+                        input_tensor_a.padded_shape()[-1]);
                 }
                 // What else?
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -216,7 +223,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    SmallVector<uint32_t> out_shape;
+    ttsl::SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input;
     size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);

@@ -35,29 +35,27 @@ GlobalCircularBuffer create_global_circular_buffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }
 
-GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
+GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
+    bool support_multi_receiver_shards) {
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
 }
 
-GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
+// Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the
+// bank's shard interleaving all its receivers (one read serves every receiver on the bank). Always
+// single-sender per bank. Extracted from the former public create_global_circular_buffer_for_matmul_1d;
+// the public entry point now detects the layout and dispatches here or to build_matmul_1d_gcb_recv_contig.
+static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
     const std::vector<tt::tt_metal::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type) {
-    TT_FATAL(!program_configs.empty(), "Must provide at least one program config");
-    TT_FATAL(
-        program_configs.size() == weights.size(),
-        "Expected one weight tensor per program config; got {} configs and {} weights",
-        program_configs.size(),
-        weights.size());
     TT_FATAL(size > 0, "size must be > 0");
     TT_FATAL(!bank_to_receivers.empty(), "bank_to_receivers must be non-empty");
 
@@ -255,11 +253,28 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
         size,
         kMaxCbPagesBytes);
 
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type);
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, size, buffer_type, /*support_multi_receiver_shards=*/true);
 }
 
 namespace {
+
+// Classify a prefetcher weight's DRAM layout. This mirrors tt_metal's detect_layout_mode
+// (impl/buffers/tensor_prefetcher_manager.cpp) and MUST stay in sync with it: the runtime
+// prefetcher routes on that function, so if this factory classifies a weight differently the
+// validation here and the kernel's actual consumption disagree (wrong output / silent hang).
+//
+// Key on how the weight was ALLOCATED, not on shard count. Some legacy WIDTH_SHARDED buffers also
+// expose an NdShardSpec-like descriptor via BDS, so the explicit legacy shard spec must win; and a
+// shard-count test is ambiguous when total_receivers == num_banks (num_shards == num_banks in both
+// layouts). num_shards == ring_size for recv-contig is enforced separately by the validator.
+bool is_receiver_contiguous_weight(const tt::tt_metal::Tensor& weight) {
+    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "prefetcher weight must live in DRAM");
+    if (weight.buffer()->has_shard_spec()) {
+        return false;  // legacy K-row-major (WIDTH_SHARDED)
+    }
+    return weight.nd_shard_spec().has_value();
+}
 
 // Shared receiver-contiguous weight ↔ matmul cross-checks, parameterized on ring_size so both the
 // block_count helper (ring_size from the GCB) and the GCB factory (ring_size from bank_to_receivers /
@@ -353,20 +368,17 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     return ring_size;
 }
 
-GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
+// Builds the GCB for a receiver-contiguous (NdShardSpec) weight: num_shards == ring_size, each shard
+// (full K, N/ring_size) owned by exactly one receiver. Supports dual senders per bank. Extracted from
+// the former public create_global_circular_buffer_for_matmul_1d_recv_contig.
+static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
     const std::vector<tt::tt_metal::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
-    TT_FATAL(!program_configs.empty(), "Must provide at least one program config");
-    TT_FATAL(
-        program_configs.size() == weights.size(),
-        "Expected one weight tensor per program config; got {} configs and {} weights",
-        program_configs.size(),
-        weights.size());
+    bool support_multi_receiver_shards) {
     TT_FATAL(size > 0, "size must be > 0");
     TT_FATAL(!bank_to_receivers.empty(), "bank_to_receivers must be non-empty");
 
@@ -383,8 +395,10 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
     // All matmuls share the GCB receiver rectangle, so they must agree on the ring shape, and that
     // ring must match bank_to_receivers' total receiver count.
     uint32_t max_page_bytes = 0;
+    bool all_configs_stream = true;
     for (size_t i = 0; i < program_configs.size(); ++i) {
         const auto& cfg = program_configs[i];
+        all_configs_stream = all_configs_stream && cfg.stream_in1;
         const auto& grid = cfg.compute_with_storage_grid_size;
         const uint32_t cfg_ring_size = grid.x * grid.y;
         TT_FATAL(
@@ -412,27 +426,82 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
         max_page_bytes = std::max(max_page_bytes, page_bytes);
     }
 
-    // The matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full layer's
-    // worth of pages. Same cap as the K-row-major builder (see create_global_circular_buffer_for_matmul_1d
-    // for why kMaxCbPagesBytes exists); no L1 budget check — callers size to fit their own receiver L1.
+    // A batched matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full
+    // layer's worth of pages. A stream_in1 matmul instead consumes K-blocks FIFO as they land, so a
+    // shallow window is valid -- and shrinking the GCB is the whole point of streaming. Relax the
+    // floor to a double-buffer (one page filling while another drains) when every matmul sharing this
+    // GCB streams; a GCB shared with any batched matmul keeps the full-layer floor. Same cap as the
+    // K-row-major builder (see create_global_circular_buffer_for_matmul_1d for why kMaxCbPagesBytes
+    // exists); no L1 budget check — callers size to fit their own receiver L1.
     constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
-    const uint32_t min_size = max_page_bytes * ring_size;
+    constexpr uint32_t kStreamMinWindowBlocks = 2;  // double-buffer floor for stream_in1
+    const uint32_t min_blocks = all_configs_stream ? kStreamMinWindowBlocks : ring_size;
+    const uint32_t min_size = max_page_bytes * min_blocks;
     TT_FATAL(
         size >= min_size,
-        "GCB size ({} B) must be at least ring_size * largest page ({} * {} = {} B); the matmul does "
-        "wait_front(ring_size) so it needs that many pages buffered before it consumes.",
+        "GCB size ({} B) must be at least {} * largest page ({} B) = {} B. {}",
         size,
-        ring_size,
+        min_blocks,
         max_page_bytes,
-        min_size);
+        min_size,
+        all_configs_stream ? "stream_in1 matmuls consume K-blocks FIFO but still need a double-buffered window."
+                           : "The matmul does wait_front(ring_size), so it needs a full layer buffered before "
+                             "it consumes.");
     TT_FATAL(
         size <= kMaxCbPagesBytes,
         "GCB size ({} B) exceeds the remote-CB page-count cap ({} B). Reduce size.",
         size,
         kMaxCbPagesBytes);
 
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
+}
+
+GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
+    MeshDevice* mesh_device,
+    const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
+    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type,
+    std::optional<bool> support_multi_receiver_shards) {
+    TT_FATAL(!program_configs.empty(), "Must provide at least one program config");
+    TT_FATAL(
+        program_configs.size() == weights.size(),
+        "Expected one weight tensor per program config; got {} configs and {} weights",
+        program_configs.size(),
+        weights.size());
+
+    // All weights share one GCB receiver rectangle, so they must all use the same DRAM layout.
+    // Detect from the weight allocation (not the caller) so callers don't have to know which builder
+    // to pick — the tensor's layout determines what the prefetcher does.
+    const bool recv_contig = is_receiver_contiguous_weight(weights.front());
+    for (size_t i = 1; i < weights.size(); ++i) {
+        TT_FATAL(
+            is_receiver_contiguous_weight(weights[i]) == recv_contig,
+            "weights[{}] has a different DRAM layout than weights[0]; all weights sharing one GCB must be either "
+            "all receiver-contiguous (NdShardSpec) or all legacy K-row-major (WIDTH_SHARDED)",
+            i);
+    }
+
+    if (recv_contig) {
+        // Dual senders are the production default for receiver-contiguous weights (highest per-bank
+        // bandwidth); single-receiver banks fall back to one sender automatically. An explicit value
+        // overrides (e.g. a benchmark forcing single-sender for an A/B comparison). Recall the flag's
+        // sense: false => dual senders, true => single sender.
+        const bool single_sender = support_multi_receiver_shards.value_or(false);
+        return build_matmul_1d_gcb_recv_contig(
+            mesh_device, program_configs, weights, bank_to_receivers, size, buffer_type, single_sender);
+    }
+
+    // Legacy K-row-major is single-sender per bank by construction (a bank's shard feeds all its
+    // receivers), so it cannot honor a dual-sender request. The layout-derived default is single; an
+    // explicit request for dual (support_multi_receiver_shards=false) is an error here.
+    TT_FATAL(
+        support_multi_receiver_shards.value_or(true),
+        "support_multi_receiver_shards=false (dual senders) requires a receiver-contiguous (NdShardSpec) weight; the "
+        "supplied weight is legacy K-row-major (WIDTH_SHARDED), which is always single-sender per bank");
+    return build_matmul_1d_gcb_krow_major(mesh_device, program_configs, weights, bank_to_receivers, size, buffer_type);
 }
 
 }  // namespace ttnn::global_circular_buffer

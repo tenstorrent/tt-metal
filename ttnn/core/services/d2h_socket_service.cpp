@@ -218,13 +218,14 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes) {
 //   [0]  socket_config_addr
 //   [1]  termination_semaphore_addr
 Program build_persistent_d2h_program(
-    const Buffer& device_buffer,
+    const Buffer* device_buffer,
     const CoreCoord& sender_core,
     uint32_t socket_config_buffer_address,
     uint32_t termination_semaphore_addr,
     const D2HChunkPlan& plan,
     uint32_t tensor_page_size,
     DataType dtype,
+    bool tensor_enabled,
     const D2HWorkerSyncArgs& worker_sync,
     const D2HMetadataArgs& metadata) {
     auto program = CreateProgram();
@@ -237,7 +238,8 @@ Program build_persistent_d2h_program(
                            .set_page_size(data_cb_index, plan.socket_page_size);
     CreateCircularBuffer(program, sender_core, data_cb_cfg);
 
-    auto tensor_accessor_args = TensorAccessorArgs(device_buffer);
+    auto tensor_accessor_args =
+        tensor_enabled ? TensorAccessorArgs(*device_buffer) : TensorAccessorArgs(static_cast<const Buffer*>(nullptr));
     auto tensor_accessor_compile_args = tensor_accessor_args.get_compile_time_args();
 
     // --- Reader (RISCV_0): DRAM reads + worker-sync handshake ---
@@ -271,7 +273,7 @@ Program build_persistent_d2h_program(
         program,
         reader_kernel,
         sender_core,
-        {termination_semaphore_addr, static_cast<uint32_t>(device_buffer.address())});
+        {termination_semaphore_addr, tensor_enabled ? static_cast<uint32_t>(device_buffer->address()) : 0u});
 
     // --- Writer (RISCV_1): socket PCIe writes + metadata ---
     std::vector<uint32_t> writer_ct_args = {
@@ -314,59 +316,70 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     TT_FATAL(mesh_device_ != nullptr, "D2HStreamService: mesh_device must not be null");
     TT_FATAL(cfg_.fifo_size_bytes > 0, "D2HStreamService: fifo_size_bytes must be > 0");
     TT_FATAL(
+        tensor_enabled() || cfg_.metadata_size_bytes > 0,
+        "D2HStreamService: metadata-only mode (absent global_spec) requires metadata_size_bytes > 0");
+    TT_FATAL(
         cfg_.metadata_size_bytes == 0 || cfg_.worker_cores.has_value(),
         "D2HStreamService: metadata_size_bytes={} requires Config::worker_cores to be set",
         cfg_.metadata_size_bytes);
+
     if (cfg_.worker_cores.has_value()) {
         const auto& wr = cfg_.worker_cores.value();
         num_workers_ = (wr.end_coord.x - wr.start_coord.x + 1) * (wr.end_coord.y - wr.start_coord.y + 1);
+        TT_FATAL(num_workers_ >= 1, "D2HStreamService: worker_cores must contain at least one core");
         if (cfg_.metadata_size_bytes > 0) {
-            TT_FATAL(
-                cfg_.metadata_master_core.has_value(),
-                "D2HStreamService: Config::metadata_master_core is required when metadata_size_bytes > 0");
-            const auto& mf = cfg_.metadata_master_core.value();
-            TT_FATAL(
-                mf.x >= wr.start_coord.x && mf.x <= wr.end_coord.x && mf.y >= wr.start_coord.y &&
-                    mf.y <= wr.end_coord.y,
-                "D2HStreamService: metadata_master_core ({}, {}) must lie within worker_cores {}",
-                mf.x,
-                mf.y,
-                wr);
-            TT_FATAL(num_workers_ >= 1, "D2HStreamService: worker_cores must contain at least one core");
-            metadata_master_core_ = mf;
-        } else {
-            TT_FATAL(num_workers_ >= 1, "D2HStreamService: worker_cores must contain at least one core");
+            if (cfg_.metadata_master_core.has_value()) {
+                const auto& mf = cfg_.metadata_master_core.value();
+                TT_FATAL(
+                    mf.x >= wr.start_coord.x && mf.x <= wr.end_coord.x && mf.y >= wr.start_coord.y &&
+                        mf.y <= wr.end_coord.y,
+                    "D2HStreamService: metadata_master_core ({}, {}) must lie within worker_cores {}",
+                    mf.x,
+                    mf.y,
+                    wr);
+                metadata_master_core_ = mf;
+            } else {
+                metadata_master_core_ = wr.start_coord;
+            }
         }
     }
 
-    if (cfg_.mapper == nullptr) {
-        ttsl::SmallVector<distributed::MeshMapperConfig::Placement> replicate_all(
-            mesh_device_->shape().dims(), distributed::MeshMapperConfig::Replicate{});
-        cfg_.mapper = ttnn::distributed::create_mesh_mapper(
-            *mesh_device_, distributed::MeshMapperConfig{.placements = std::move(replicate_all)});
-    }
-    mapper_ = std::move(cfg_.mapper);
+    std::vector<distributed::MeshCoordinate> coords;
+    if (tensor_enabled()) {
+        if (cfg_.mapper == nullptr) {
+            ttsl::SmallVector<distributed::MeshMapperConfig::Placement> replicate_all(
+                mesh_device_->shape().dims(), distributed::MeshMapperConfig::Replicate{});
+            cfg_.mapper = ttnn::distributed::create_mesh_mapper(
+                *mesh_device_, distributed::MeshMapperConfig{.placements = std::move(replicate_all)});
+        }
+        mapper_ = std::move(cfg_.mapper);
 
-    const auto distributed_dummy = (*mapper_)(make_zero_host_tensor(cfg_.global_spec));
-    const auto& per_shard_spec = distributed_dummy.tensor_spec();
-    const auto& topology = distributed_dummy.tensor_topology();
+        const auto distributed_dummy = (*mapper_)(make_zero_host_tensor(*cfg_.global_spec));
+        const auto& per_shard_spec = distributed_dummy.tensor_spec();
+        const auto& topology = distributed_dummy.tensor_topology();
 
-    device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
-    per_shard_spec_ = device_tensor_.tensor_spec();
+        device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
+        per_shard_spec_ = device_tensor_.tensor_spec();
 
-    if (cfg_.composer_config.has_value()) {
-        composer_ = ttnn::distributed::create_mesh_composer(*mesh_device_, cfg_.composer_config.value());
+        if (cfg_.composer_config.has_value()) {
+            composer_ = ttnn::distributed::create_mesh_composer(*mesh_device_, cfg_.composer_config.value());
+        } else {
+            const auto comp_cfg = derive_composer_config(mapper_->config());
+            // Skip auto-composer when partial-shard mapper dims != mesh dims.
+            const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
+            if (!comp_cfg.dims.empty() && comp_cfg.dims.size() == effective_mesh.dims()) {
+                composer_ = ttnn::distributed::create_mesh_composer(*mesh_device_, comp_cfg);
+            }
+        }
+        const auto& tcoords = topology.mesh_coords();
+        coords.assign(tcoords.begin(), tcoords.end());
     } else {
-        const auto comp_cfg = derive_composer_config(mapper_->config());
-        // Skip auto-composer when partial-shard mapper dims != mesh dims.
-        const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
-        if (!comp_cfg.dims.empty() && comp_cfg.dims.size() == effective_mesh.dims()) {
-            composer_ = ttnn::distributed::create_mesh_composer(*mesh_device_, comp_cfg);
+        for (const auto& c : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+            coords.push_back(c);
         }
     }
 
     auto& svc = tt::tt_metal::internal::service_core_manager();
-    const auto& coords = topology.mesh_coords();
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
         auto claimable = svc.get_claimable_cores(d);
@@ -392,13 +405,31 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     // Derive the chunk plan BEFORE constructing sockets, so socket_page_size is known in time
     // to set on the sockets. L1 layout is uniform across coords, so a representative service
     // core suffices.
-    const uint32_t tensor_page_size = device_tensor_.buffer()->page_size();
-    const uint32_t tensor_num_pages = device_tensor_.buffer()->num_pages();
     auto* rep_device = mesh_device_->get_device(coords.front());
     const uint64_t service_core_free_l1 = svc.bytes_available(rep_device, service_cores_.at(coords.front()));
     const uint64_t usable_cb_l1 = service_core_cb_l1_budget(service_core_free_l1);
-    const D2HChunkPlan plan =
-        derive_d2h_chunk_plan(tensor_page_size, tensor_num_pages, usable_cb_l1, cfg_.max_socket_page_size_bytes);
+
+    D2HChunkPlan plan;
+    uint32_t tensor_page_size = 0;
+    if (tensor_enabled()) {
+        tensor_page_size = device_tensor_.buffer()->page_size();
+        const uint32_t tensor_num_pages = device_tensor_.buffer()->num_pages();
+        plan = derive_d2h_chunk_plan(tensor_page_size, tensor_num_pages, usable_cb_l1, cfg_.max_socket_page_size_bytes);
+    } else {
+        // Metadata-only: no tensor, no DRAM pages. num_socket_pages == 0 makes the reader's
+        // read loop a no-op and marks metadata-only on the wire; the writer pushes only the
+        // metadata page. socket_page_size must be PCIe-aligned; slot_count must be >= 1 for a
+        // valid (though unused) data-CB config.
+        const uint32_t pcie_align = hal::get_pcie_alignment();
+        plan = D2HChunkPlan{
+            .socket_page_size = static_cast<uint32_t>(
+                tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(pcie_align))),
+            .num_socket_pages = 0,
+            .pages_per_chunk = 0,
+            .slot_count = kD2HMinDataSlots,
+        };
+    }
+
     socket_page_size_ = plan.socket_page_size;
     num_socket_pages_ = plan.num_socket_pages;
     slot_count_ = plan.slot_count;
@@ -508,8 +539,11 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     workload_ = std::make_unique<distributed::MeshWorkload>();
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
-        const Buffer* dbuf = device_tensor_.mesh_buffer().get_device_buffer(core.device_coord);
-        TT_FATAL(dbuf != nullptr, "D2HStreamService: device buffer missing for coord {}", core.device_coord);
+        const Buffer* dbuf = nullptr;
+        if (tensor_enabled()) {
+            dbuf = device_tensor_.mesh_buffer().get_device_buffer(core.device_coord);
+            TT_FATAL(dbuf != nullptr, "D2HStreamService: device buffer missing for coord {}", core.device_coord);
+        }
         const uint32_t term_addr = static_cast<uint32_t>(termination_addrs_.at(core.device_coord));
 
         D2HWorkerSyncArgs worker_sync;
@@ -535,13 +569,14 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         }
 
         auto program = build_persistent_d2h_program(
-            *dbuf,
+            dbuf,
             core.core_coord,
             s->get_config_buffer_address(),
             term_addr,
             plan,
             tensor_page_size,
-            device_tensor_.dtype(),
+            tensor_enabled() ? device_tensor_.dtype() : DataType::UINT8,
+            tensor_enabled(),
             worker_sync,
             metadata);
         workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
@@ -558,9 +593,13 @@ D2HStreamService::D2HStreamService(
     uint32_t num_socket_pages) :
     is_owner_(false), cfg_(std::move(cfg)) {
     TT_FATAL(!sockets.empty(), "D2HStreamService(connector): sockets vector must not be empty");
-    TT_FATAL(cfg_.mapper != nullptr, "D2HStreamService(connector): mapper must be pre-built and supplied");
+    TT_FATAL(
+        cfg_.mapper != nullptr || !cfg_.global_spec.has_value(),
+        "D2HStreamService(connector): mapper must be pre-built when a tensor payload is configured");
     TT_FATAL(socket_page_size > 0, "D2HStreamService(connector): socket_page_size must be > 0");
-    TT_FATAL(num_socket_pages > 0, "D2HStreamService(connector): num_socket_pages must be > 0");
+    TT_FATAL(
+        num_socket_pages > 0 || cfg_.metadata_size_bytes > 0,
+        "D2HStreamService(connector): num_socket_pages must be > 0 unless metadata-only (metadata_size_bytes > 0)");
 
     mapper_ = std::move(cfg_.mapper);
     socket_page_size_ = socket_page_size;
@@ -570,8 +609,10 @@ D2HStreamService::D2HStreamService(
         s->set_page_size(socket_page_size_);
     }
 
-    const auto distributed_dummy = (*mapper_)(make_zero_host_tensor(cfg_.global_spec));
-    per_shard_spec_ = distributed_dummy.tensor_spec();
+    if (cfg_.global_spec.has_value()) {
+        const auto distributed_dummy = (*mapper_)(make_zero_host_tensor(*cfg_.global_spec));
+        per_shard_spec_ = distributed_dummy.tensor_spec();
+    }
 
     if (cfg_.metadata_size_bytes > 0) {
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
@@ -848,6 +889,10 @@ std::vector<distributed::D2HSocket*> D2HStreamService::get_sockets() const {
     return out;
 }
 
+DeviceAddr D2HStreamService::get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const {
+    return get_write_ack_counter_addr(coord);
+}
+
 CoreRange D2HStreamService::get_worker_cores() const {
     TT_FATAL(
         cfg_.worker_cores.has_value(),
@@ -918,7 +963,9 @@ const Tensor& D2HStreamService::get_backing_tensor() const {
     return device_tensor_;
 }
 
-std::size_t D2HStreamService::payload_size_bytes() const { return cfg_.global_spec.compute_packed_buffer_size_bytes(); }
+std::size_t D2HStreamService::payload_size_bytes() const {
+    return cfg_.global_spec.has_value() ? cfg_.global_spec->compute_packed_buffer_size_bytes() : 0;
+}
 
 std::size_t D2HStreamService::metadata_size_bytes() const { return cfg_.metadata_size_bytes; }
 
@@ -927,23 +974,29 @@ uint32_t D2HStreamService::get_slot_count() const { return slot_count_; }
 std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "D2HStreamService::export_descriptor: only owner-side services can be exported");
     TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::export_descriptor: mesh device unavailable");
-    TT_FATAL(mapper_ != nullptr, "D2HStreamService::export_descriptor: mapper unavailable");
 
     distributed::D2HStreamServiceDescriptor desc;
-    desc.global_shape = cfg_.global_spec.logical_shape();
-    desc.global_dtype = cfg_.global_spec.data_type();
-    desc.mesh_shape = mesh_device_->shape();
-    desc.mapper_config = mapper_->config();
-    if (cfg_.composer_config.has_value()) {
-        desc.composer_config = cfg_.composer_config.value();
-    } else {
-        // Mirror ctor: omit composer_config when auto-derived dims are malformed.
-        auto comp_cfg = derive_composer_config(mapper_->config());
-        const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
-        if (comp_cfg.dims.size() == effective_mesh.dims()) {
-            desc.composer_config = std::move(comp_cfg);
+    if (tensor_enabled()) {
+        TT_FATAL(mapper_ != nullptr, "D2HStreamService::export_descriptor: mapper unavailable");
+        desc.global_shape = cfg_.global_spec->logical_shape();
+        desc.global_dtype = cfg_.global_spec->data_type();
+        desc.mapper_config = mapper_->config();
+        if (cfg_.composer_config.has_value()) {
+            desc.composer_config = cfg_.composer_config.value();
+        } else {
+            // Mirror ctor: omit composer_config when auto-derived dims are malformed.
+            auto comp_cfg = derive_composer_config(mapper_->config());
+            const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
+            if (comp_cfg.dims.size() == effective_mesh.dims()) {
+                desc.composer_config = std::move(comp_cfg);
+            }
         }
+    } else {
+        // Metadata-only: no tensor spec / mapper. Empty shape + benign dtype; num_socket_pages == 0 is the marker.
+        desc.global_shape = tt::tt_metal::Shape{};
+        desc.global_dtype = DataType::UINT8;
     }
+    desc.mesh_shape = mesh_device_->shape();
     desc.socket_page_size = socket_page_size_;
     desc.num_socket_pages = num_socket_pages_;
     desc.metadata_size_bytes = cfg_.metadata_size_bytes;
@@ -969,13 +1022,18 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
     auto desc = distributed::D2HStreamServiceDescriptor::wait_and_read(
         distributed::descriptor_path_for_d2h_service(service_id), timeout_ms.value_or(10000));
 
-    const TensorLayout tensor_layout(
-        desc.global_dtype,
-        PageConfig(Layout::ROW_MAJOR),
-        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    TensorSpec global_spec(desc.global_shape, tensor_layout);
+    const bool metadata_only = (desc.num_socket_pages == 0);
 
-    auto mapper = ttnn::distributed::create_mesh_mapper(desc.mesh_shape, desc.mapper_config);
+    std::optional<TensorSpec> global_spec;
+    std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
+    if (!metadata_only) {
+        const TensorLayout tensor_layout(
+            desc.global_dtype,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+        global_spec = TensorSpec(desc.global_shape, tensor_layout);
+        mapper = ttnn::distributed::create_mesh_mapper(desc.mesh_shape, desc.mapper_config);
+    }
 
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
     sockets.reserve(desc.per_coord_entries.size());
@@ -1003,7 +1061,10 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
 }
 
 void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata) {
-    const size_t expected = cfg_.global_spec.compute_packed_buffer_size_bytes();
+    TT_FATAL(
+        tensor_enabled(),
+        "D2HStreamService::read_from_tensor: no tensor configured; use read_metadata() in metadata-only mode");
+    const size_t expected = cfg_.global_spec->compute_packed_buffer_size_bytes();
     TT_FATAL(
         bytes.size() == expected,
         "D2HStreamService::read_from_tensor: span size {} B does not match global_spec packed size {} B",
@@ -1015,10 +1076,10 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
         metadata.size(),
         cfg_.metadata_size_bytes);
     TT_FATAL(
-        cfg_.global_spec.layout() == Layout::ROW_MAJOR,
+        cfg_.global_spec->layout() == Layout::ROW_MAJOR,
         "D2HStreamService::read_from_tensor(span): global_spec must be ROW_MAJOR");
 
-    Tensor host_tensor = (*mapper_)(make_zero_host_tensor(cfg_.global_spec));
+    Tensor host_tensor = (*mapper_)(make_zero_host_tensor(*cfg_.global_spec));
     read_from_tensor(host_tensor, metadata);
 
     const size_t per_shard_bytes = per_shard_spec_->compute_packed_buffer_size_bytes();
@@ -1053,6 +1114,9 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
 }
 
 void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byte> metadata) {
+    TT_FATAL(
+        tensor_enabled(),
+        "D2HStreamService::read_from_tensor: no tensor configured; use read_metadata() in metadata-only mode");
     TT_FATAL(
         metadata.size() == cfg_.metadata_size_bytes,
         "D2HStreamService::read_from_tensor: metadata span size {} B does not match Config::metadata_size_bytes={}",
@@ -1106,17 +1170,40 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
     }
 
     if (cfg_.metadata_size_bytes > 0) {
-        TT_FATAL(!sockets_.empty(), "D2HStreamService::read_from_tensor: expected at least one socket for metadata");
-        sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
-        std::memcpy(metadata.data(), metadata_scratch_.data(), metadata.size());
-        for (size_t s = 1; s < sockets_.size(); ++s) {
-            sockets_[s]->read(metadata_scratch_.data(), /*num_pages=*/1);
-            TT_FATAL(
-                std::memcmp(metadata.data(), metadata_scratch_.data(), metadata.size()) == 0,
-                "D2HStreamService::read_from_tensor: metadata mismatch across sockets (socket index {})",
-                s);
-        }
+        read_metadata_from_sockets(metadata);
     }
 }
+
+void D2HStreamService::read_metadata(ttsl::Span<std::byte> metadata) {
+    TT_FATAL(
+        !tensor_enabled(),
+        "D2HStreamService::read_metadata: only valid in metadata-only mode; use read_from_tensor otherwise");
+    TT_FATAL(
+        cfg_.metadata_size_bytes > 0,
+        "D2HStreamService::read_metadata: metadata not configured (metadata_size_bytes == 0)");
+    TT_FATAL(
+        metadata.size() == cfg_.metadata_size_bytes,
+        "D2HStreamService::read_metadata: span size {} B does not match Config::metadata_size_bytes={}",
+        metadata.size(),
+        cfg_.metadata_size_bytes);
+    read_metadata_from_sockets(metadata);
+}
+
+void D2HStreamService::read_metadata_from_sockets(ttsl::Span<std::byte> metadata) {
+    TT_FATAL(
+        !sockets_.empty(),
+        "D2HStreamService::read_metadata_from_sockets: expected at least one socket for metadata");
+    sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
+    std::memcpy(metadata.data(), metadata_scratch_.data(), metadata.size());
+    for (size_t s = 1; s < sockets_.size(); ++s) {
+        sockets_[s]->read(metadata_scratch_.data(), /*num_pages=*/1);
+        TT_FATAL(
+            std::memcmp(metadata.data(), metadata_scratch_.data(), metadata.size()) == 0,
+            "D2HStreamService::read_metadata_from_sockets: metadata mismatch across sockets (socket index {})",
+            s);
+    }
+}
+
+bool D2HStreamService::tensor_enabled() const { return cfg_.global_spec.has_value(); }
 
 }  // namespace tt::tt_metal

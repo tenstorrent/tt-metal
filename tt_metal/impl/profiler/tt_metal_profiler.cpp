@@ -88,11 +88,34 @@ void setControlBuffer(
     const metal_SocDescriptor& soc_d = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
+
+    // In accumulate mode, tag dispatch cores so their firmware main scope keeps the
+    // classic guaranteed-slot layout + finish (accumulate is worker-core-only).
+    // Computed once here; otherwise the flag stays zero and behavior is unchanged.
+    std::vector<CoreCoord> dispatch_virtual_cores;
+    const bool tag_dispatch_cores = MetalContext::instance(context_id).rtoptions().get_profiler_accumulate();
+    if (tag_dispatch_cores) {
+        const auto& dispatch_core_config = get_dispatch_core_config();
+        for (const CoreCoord& core : tt::get_logical_dispatch_cores(
+                 MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl(),
+                 device_id,
+                 device->num_hw_cqs(),
+                 dispatch_core_config)) {
+            dispatch_virtual_cores.push_back(
+                device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config)));
+        }
+    }
+
     for (auto core :
          MetalContext::instance(context_id).get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
         const CoreCoord curr_core = core.first;
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
+        control_buffer[kernel_profiler::PROFILER_DISPATCH_CORE] =
+            (std::find(dispatch_virtual_cores.begin(), dispatch_virtual_cores.end(), curr_core) !=
+             dispatch_virtual_cores.end())
+                ? 1
+                : 0;
 
         writeToCoreControlBuffer(mesh_device, device, curr_core, control_buffer, force_slow_dispatch, context_id);
     }
@@ -590,6 +613,15 @@ void ProfilerSync(ProfilerSyncState state) {
     if (!MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
         return;
     }
+    // In accumulate mode, skip the dedicated device-host sync. Its kernel runs on
+    // SYNC_CORE (0,0) and overwrites that core's accumulated L1 profiler buffer
+    // (which is only flushed to DRAM when full), destroying its zones. The
+    // realtime (dispatch-core) profiler already provides device-host sync across
+    // all reporting cores, so the dedicated pass is redundant here. This is
+    // equivalent to running with sync disabled, which is a supported path.
+    if (MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        return;
+    }
     if (!getDeviceProfilerState(DEFAULT_CONTEXT_ID)) {
         return;
     }
@@ -708,6 +740,27 @@ void InitDeviceProfiler(IDevice* device) {
         return;
     }
 
+    // L1-accumulate is an internal runtime-team mode, not a general profiling mode.
+    // Warn loudly, once per process, at the start of any accumulate run.
+    if (MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        static std::atomic<bool> accumulate_warned = false;
+        if (!accumulate_warned.exchange(true)) {
+            log_warning(
+                tt::LogAlways,
+                "===================================== L1-ACCUMULATE PROFILING "
+                "=====================================");
+            log_warning(
+                tt::LogAlways,
+                "Accumulate mode is for INTERNAL RUNTIME-TEAM use only and must NOT be used for general "
+                "profiling: key information such as program / op IDs is not recorded, and the per-op perf "
+                "report is disabled. Results are raw accumulated device zones only.");
+            log_warning(
+                tt::LogAlways,
+                "=================================================================================="
+                "=================");
+        }
+    }
+
     TracySetCpuTime(TracyGetCpuTime());
 
     static std::atomic<bool> firstInit = true;
@@ -742,7 +795,10 @@ void InitDeviceProfiler(IDevice* device) {
     profiler.setProfileBufferBankSizeBytes(bank_size_bytes, num_dram_banks);
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    // Quasar uses the L1-only path for now;
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    }
 
     if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
@@ -856,9 +912,15 @@ static void ReadDeviceProfilerResultsImpl(
     TT_FATAL(
         !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() ||
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        // Accumulate mode keeps the un-pushed residual in L1 (only flushing to DRAM when the
+        // buffer is nearly full), so the L1 buffers must be read alongside DRAM.
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -906,9 +968,13 @@ void ReadDeviceProfilerResultsInternal(
         !MetalContext::instance(context_id).dprint_server(),
         "Debug print server is running, cannot read device profiler data");
 
-    if (include_l1 || MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
+    if (include_l1 || MetalContext::instance(context_id).rtoptions().get_profiler_trace_only() ||
+        MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance(context_id).hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
@@ -961,8 +1027,12 @@ void ProcessDeviceProfilerResults(
         return;
     }
 
-    if (MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+    if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
+        MetalContext::instance().rtoptions().get_profiler_accumulate()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        // Quasar uses the L1-only profiler path (no DRAM drain).
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }

@@ -19,6 +19,7 @@
 //
 
 #include "api/compute/transpose.h"
+#include "llk_assert.h"
 
 namespace ckernel {
 
@@ -73,9 +74,11 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
+    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559)
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
-    ASSERT(!enable_unpack_to_dest);  // transpose dest not implemented for Quasar yet, TODO: tt-llk#1559
+    LLK_ASSERT(
+        !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,

@@ -25,3 +25,17 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
     deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.cpp
     deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/experimental/reduction/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_EXPERIMENTAL_REDUCTION_NANOBIND_SRCS
+    fast_reduce_nc/fast_reduce_nc_nanobind.cpp
+    fast_reduce_nc/fast_reduce_nc_nanobind.cpp
+    deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
+    deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.cpp
+    integral_image/intimg_nanobind.cpp
+    deepseek_grouped_gate/deepseek_grouped_gate_nanobind.cpp
+)

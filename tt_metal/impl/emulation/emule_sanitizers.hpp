@@ -40,9 +40,7 @@ extern thread_local const uint64_t* __emule_l1_padding_ranges;
 extern thread_local uint32_t __emule_l1_padding_ranges_count;
 extern thread_local const uint64_t* __emule_l1_host_ranges;
 extern thread_local uint32_t __emule_l1_host_ranges_count;
-extern thread_local uint64_t* __emule_l1_resolved_ranges;
-extern thread_local uint32_t* __emule_l1_resolved_ranges_count;
-extern thread_local uint32_t __emule_l1_resolved_ranges_capacity;
+// (Object-Intent resolved-range log lives in the fiber ctx, not a thread-local — #241.)
 extern thread_local uint32_t __emule_cb_reserved_pages[32];
 extern thread_local uint32_t __emule_cb_waited_pages[32];
 extern thread_local bool __emule_cb_reserve_dangling[32];
@@ -95,8 +93,10 @@ public:
         const std::vector<uint64_t>& persistent_cb_ranges,
         uint32_t lx,
         uint32_t ly);
-    void setup_kernel_tls(const EmuleOobTensorState& oob, uint64_t* local_log, uint32_t cap, uint32_t* count);
-    void teardown_kernel_tls(const EmuleOobTensorState& oob, const uint64_t* local_log, uint32_t local_count);
+    // Accumulate a finished kernel's resolved-range log (from the fiber ctx) into the
+    // per-core resolved set that verify_post_launch consults. No-op for multi-kernel
+    // cores (nothing was snapshotted).
+    void accumulate_resolved(const EmuleOobTensorState& oob, const uint64_t* resolved_log, uint32_t count);
     void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly, const char* kernel_name) const;
 
 private:

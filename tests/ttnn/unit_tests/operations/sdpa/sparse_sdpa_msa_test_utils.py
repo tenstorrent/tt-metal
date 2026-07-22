@@ -18,14 +18,16 @@ SENTINEL = -1  # masked/invalid block id; contiguous tail per (group, query) row
 BLK_KV = 128  # MSA block size in tokens (= 4 tile-rows)
 
 
-def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV):
+def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=False, chunk_start_idx=0):
     """MSA block-sparse reference: attend the selected blocks, softmax, then PV with separate V.
-    Causal behavior is encoded by block selection in `indices`; there is no token-level causal mask.
 
         q       [B, H, S, d]            (post-rope, post-qk-norm — done upstream)
         k, v    [B, n_kv, T, d]         (separate tensors; T % blk_kv == 0)
         indices [B, n_kv, S, topk]      block-ids per (group, query); SENTINEL (-1) = masked, contiguous tail
         -> out  [B, H, S, v_dim]        (v_dim = v.shape[-1])
+
+    `causal=True` enables a token-level causality — required for correctness on the diagonal block,
+    whose selected tokens after the query position are future and must not be attended.
 
     Query heads sharing a KV head also share that KV head's block selection. All-masked rows return 0.
     """
@@ -57,15 +59,23 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV):
 
     scores = torch.einsum("bhsd,bhtd->bhst", qf * scale, kf)  # [B,H,S,T]
     scores = scores.masked_fill(~token_mask, float("-inf"))
+    if causal:
+        # Strictly-future keys (only ever inside the diagonal block; past blocks are all <= query pos).
+        q_pos = (torch.arange(S) + chunk_start_idx).view(1, 1, S, 1)
+        kv_pos = torch.arange(T).view(1, 1, 1, T)
+        scores = scores.masked_fill(kv_pos > q_pos, float("-inf"))
 
-    row_has_value = token_mask.any(dim=-1, keepdim=True)
+    row_has_value = (scores > float("-inf")).any(dim=-1, keepdim=True)
     scores = torch.where(row_has_value, scores, torch.zeros_like(scores))
     attn = torch.where(row_has_value, scores.softmax(dim=-1, dtype=torch.float32), torch.zeros_like(scores))
     return torch.einsum("bhst,bhtd->bhsd", attn, vf[..., :v_dim])  # [B,H,S,v_dim]
 
 
-def sparse_attention_ref_msa_sampled_tokens(q, k, v, indices, scale, sample_tokens, *, blk_kv=BLK_KV):
-    """Memory-light MSA reference for selected query tokens."""
+def sparse_attention_ref_msa_sampled_tokens(
+    q, k, v, indices, scale, sample_tokens, *, blk_kv=BLK_KV, causal=False, chunk_start_idx=0
+):
+    """Memory-light MSA reference for selected query tokens. `causal=True` adds the token-level causal
+    mask (a selected key may be a future token only inside the diagonal block; mask those out)."""
     B, H, _, d = q.shape
     n_kv, v_dim = k.shape[1], v.shape[-1]
     assert B == 1 and H % n_kv == 0
@@ -75,6 +85,7 @@ def sparse_attention_ref_msa_sampled_tokens(q, k, v, indices, scale, sample_toke
     outs = []
     for s in sample_tokens:
         out = torch.zeros(H, v_dim, dtype=torch.float32)
+        p = s + chunk_start_idx
         for g in range(n_kv):
             row = indices[0, g, s]
             valid_blocks = row[row >= 0].long()
@@ -84,6 +95,9 @@ def sparse_attention_ref_msa_sampled_tokens(q, k, v, indices, scale, sample_toke
             k_sel = torch.cat([kf[0, g, int(blk) * blk_kv : (int(blk) + 1) * blk_kv] for blk in valid_blocks], dim=0)
             v_sel = torch.cat([vf[0, g, int(blk) * blk_kv : (int(blk) + 1) * blk_kv] for blk in valid_blocks], dim=0)
             scores = torch.matmul(qf[0, h0:h1, s] * scale, k_sel.transpose(0, 1))
+            if causal:
+                key_ids = torch.cat([torch.arange(int(blk) * blk_kv, (int(blk) + 1) * blk_kv) for blk in valid_blocks])
+                scores = scores.masked_fill(key_ids.view(1, -1) > p, float("-inf"))
             attn = scores.softmax(dim=-1, dtype=torch.float32)
             out[h0:h1] = torch.matmul(attn, v_sel)
         outs.append(out)
@@ -180,7 +194,21 @@ def run_op_msa_composed(q, k, v, indices, device, *, k_chunk_size=128):
     return ttnn.to_torch(tt_out)[:, :H]  # drop dummy heads
 
 
-def run_op_msa_native(q, k, v, indices, device, *, block_size=BLK_KV, kv_dtype=ttnn.bfloat16, q_dtype=ttnn.bfloat16):
+def run_op_msa_native(
+    q,
+    k,
+    v,
+    indices,
+    device,
+    *,
+    block_size=BLK_KV,
+    kv_dtype=ttnn.bfloat16,
+    q_dtype=ttnn.bfloat16,
+    chunk_start_idx=None,
+    cluster_axis=None,
+    block_cyclic_sp_axis=None,
+    block_cyclic_chunk_local=None,
+):
     """Run the native op. K/V are pre-tiled; q/indices/output stay row-major."""
     _, H, _, d = q.shape
     scale = d**-0.5
@@ -206,6 +234,10 @@ def run_op_msa_native(q, k, v, indices, device, *, block_size=BLK_KV, kv_dtype=t
         dev_rm(indices.to(torch.int32), ttnn.uint32),  # -1 sentinel -> 0xFFFFFFFF bit pattern
         scale=scale,
         block_size=block_size,
+        chunk_start_idx=chunk_start_idx,  # set -> enable token-level diagonal-block causal mask
+        cluster_axis=cluster_axis,
+        block_cyclic_sp_axis=block_cyclic_sp_axis,  # set -> K/V are block-cyclic; op remaps block ids in-kernel
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
     )
     # Output dtype matches q. fp8 can't be to_torch'd directly, so typecast fp8 -> bf16 on device first.
     if tt_out.dtype == ttnn.fp8_e4m3:

@@ -20,6 +20,7 @@ on:
       - "(Runtime) Integration Tests"
       - "(Runtime) Sanity Tests"
       - "(Runtime) Performance Tests"
+      - "Blaze Models Prefill tests"
     types:
       - completed
 

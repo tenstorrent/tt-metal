@@ -6,7 +6,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -29,13 +32,14 @@ void kernel_main() {
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr);
 
+    Noc noc_obj;
+    CircularBuffer cb_scratch_buffer(scratch_buffer_cb_id);
+
     for (uint32_t page_index = start_page_index; page_index < start_page_index + num_pages; ++page_index) {
-        cb_wait_front(scratch_buffer_cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(scratch_buffer_cb_id);
-        auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-        noc_async_write<page_size>(l1_read_addr, noc_write_addr, page_size);
-        noc_async_writes_flushed();
-        cb_pop_front(scratch_buffer_cb_id, 1);
+        cb_scratch_buffer.wait_front(1);
+        noc_obj.async_write(cb_scratch_buffer, output_addr_gen, page_size, {}, {.page_id = page_index});
+        noc_obj.async_writes_flushed();
+        cb_scratch_buffer.pop_front(1);
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

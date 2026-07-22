@@ -45,8 +45,13 @@ on:
         required: false
         type: boolean
         default: false
-      run_tt_train_perf_tests:
-        description: "Run TT-Train Perf Tests (Python)"
+      run_tt_train_perf_pretraining_tests:
+        description: "Run TT-Train Pretraining Tests"
+        required: false
+        type: boolean
+        default: false
+      run_tt_train_perf_finetuning_tests:
+        description: "Run TT-Train Finetuning Tests"
         required: false
         type: boolean
         default: false
@@ -118,7 +123,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   generate-arch-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       l2-nightly-skus: ${{ steps.parse.outputs.l2-nightly-skus }}
     steps:
@@ -323,10 +328,10 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-perf-tests:
+  tt-train-perf-pretraining-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_perf_tests) &&
+      (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
@@ -337,6 +342,22 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      subcategories: pretraining
+  tt-train-perf-finetuning-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
+    secrets: inherit
+    uses: ./.github/workflows/tt-train-tests.yaml
+    with:
+      test-category: perf
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      subcategories: finetuning
 
   # =============================================================================
   # Triage team

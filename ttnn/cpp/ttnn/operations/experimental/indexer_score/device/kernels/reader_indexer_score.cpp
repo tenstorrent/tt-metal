@@ -17,6 +17,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/block_cyclic_remap.hpp"  // shared invP remap
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
@@ -48,29 +49,12 @@ constexpr uint32_t fused_stream_k = get_compile_time_arg_val(mc_ct_base + 9);
 // MSA constant gate: fill cb_w with gate_scale in L1 (no DRAM read, no mcast) instead of reading weights.
 constexpr uint32_t synthesize_gate = get_compile_time_arg_val(mc_ct_base + 10);
 constexpr uint32_t gate_scale_bits = get_compile_time_arg_val(mc_ct_base + 11);  // bf16 pair (two per word)
-
-// Block-cyclic (per-SP-shard) K layout: the gathered cache stores each SP shard's per-chunk slab back-to-back,
-// so logical token tile L physically lives at invP(L). invP, in tiles, is
-// page = L + shard*BC_SHARD_STRIDE_GAP - slab*BC_SLAB_STRIDE_GAP, with block_idx = L/BC_CHUNK_LOCAL_T,
-// slab = block_idx/BC_SP (which global chunk), shard = block_idx%BC_SP (which SP shard). The factory bakes the
-// divisors as compile-time defines (BC_CHUNK_LOCAL_T / BC_SP / BC_SHARD_STRIDE_GAP / BC_SLAB_STRIDE_GAP) only
-// when a block-cyclic layout is present (sp > 1), so the contiguous path emits no defines and BC_KTILE is the
-// identity -> byte-identical reader binary. Reading K in logical order keeps the causal mask + block-max-pool
-// (both keyed on the logical column) unchanged and yields score columns in natural token order.
-#ifdef BC_ENABLE
-// TODO: unify with ttnn.transformer.sparse_sdpa's logical_to_chunked_physical (sparse_sdpa_gather.hpp) -- same
-// block-cyclic invP; share via a common header later (units differ: tiles here, rows there).
-inline uint32_t logical_to_chunked_physical(
-    uint32_t logical, uint32_t chunk_local, uint32_t sp, uint32_t shard_stride_gap, uint32_t slab_stride_gap) {
-    const uint32_t block_idx = logical / chunk_local;
-    const uint32_t slab = block_idx / sp;          // which global chunk (high part)
-    const uint32_t shard = block_idx - slab * sp;  // which SP shard within the chunk (low part)
-    return logical + shard * shard_stride_gap - slab * slab_stride_gap;
-}
-#define BC_KTILE(L) logical_to_chunked_physical(L, BC_CHUNK_LOCAL_T, BC_SP, BC_SHARD_STRIDE_GAP, BC_SLAB_STRIDE_GAP)
-#else
-#define BC_KTILE(L) (L)
-#endif
+constexpr uint32_t bc_ct_base = mc_ct_base + 12;
+constexpr bool block_cyclic = get_compile_time_arg_val(bc_ct_base) != 0;
+constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
+constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
+constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
+constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
 
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
@@ -266,8 +250,12 @@ inline void read_k_chunk(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
-                // BC_KTILE: identity for contiguous K; invP(logical seq tile) for the per-SP-shard block-cyclic layout.
-                const uint32_t seq_tile = BC_KTILE(k_tile_start + k_col);
+                const uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
+                    block_cyclic,
+                    bc_chunk_local,
+                    bc_sp,
+                    bc_shard_stride_gap,
+                    bc_slab_stride_gap>(k_tile_start + k_col);
                 for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
                     noc.async_read(
                         k_acc,
@@ -285,7 +273,11 @@ inline void read_k_chunk(
  *  it while the next reads (overlap). Pushes the full k_chunk_tiles (pad cols stale, compute masks them).
  *  No mcast. mm_col_batch is shared with the compute kernel's DEST column batch (indexer_score_common.hpp). */
 template <typename KAcc>
-inline void read_k_chunk_streaming(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
+inline void read_k_chunk_streaming(
+    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t k_batch_page_offset) {
+    // k_batch_page_offset = indexed-cache slot shift (0 when not indexed), applied on top of the (possibly
+    // block-cyclic remapped) intra-slot page -- identical to read_k_chunk; the fused-streaming path must not
+    // drop it, or an indexed slot would silently read slot 0.
     CircularBuffer cb(cb_k);
     for (uint32_t cbase = 0; cbase < k_tiles_per_unit; cbase += mm_col_batch) {
         const uint32_t c_end = (cbase + mm_col_batch <= k_tiles_per_unit) ? (cbase + mm_col_batch) : k_tiles_per_unit;
@@ -294,13 +286,18 @@ inline void read_k_chunk_streaming(Noc noc, const KAcc& k_acc, uint32_t k_tile_s
         uint32_t ptr = cb.get_write_ptr();
         for (uint32_t c = cbase; c < c_end; ++c) {
             if (c < k_tiles_in_unit) {
-                const uint32_t seq_tile = BC_KTILE(k_tile_start + c);  // identity unless block-cyclic layout
+                const uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
+                    block_cyclic,
+                    bc_chunk_local,
+                    bc_sp,
+                    bc_shard_stride_gap,
+                    bc_slab_stride_gap>(k_tile_start + c);
                 for (uint32_t d = 0; d < head_dim_tiles; ++d) {
                     noc.async_read(
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         k_tile_bytes,
-                        {.page_id = seq_tile * head_dim_tiles + d},
+                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + d},
                         {});
                     ptr += k_tile_bytes;
                 }
@@ -367,7 +364,8 @@ void kernel_main() {
             if (real_band) {
                 span.set(group, band0 + band);
                 if constexpr (fuse_single && fused_stream_k) {
-                    read_k_chunk_streaming(noc, k_acc, span.k_tile_start(), span.k_tiles());  // no mcast: stream
+                    read_k_chunk_streaming(
+                        noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);  // no mcast: stream
                 } else {
                     // k FIRST: compute waits the whole k chunk, so reading k ahead lets the split q-row0 push
                     // unblock the first matmul.
