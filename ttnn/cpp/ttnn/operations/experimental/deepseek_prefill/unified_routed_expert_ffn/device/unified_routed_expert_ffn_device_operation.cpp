@@ -236,7 +236,7 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                  {"gate_bias", *t.gate_bias, static_cast<uint32_t>(gate_shape[-1])},
                  {"up_bias", *t.up_bias, static_cast<uint32_t>(up_shape[-1])},
                  {"down_bias", *t.down_bias, static_cast<uint32_t>(down_shape[-1])}}) {
-            TT_FATAL(b.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+            TT_FATAL(b.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
             TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
             TT_FATAL(is_dram_interleaved(b), "{} must be DRAM-interleaved", name);
             // Exact LOGICAL shape: a single row of exactly `expected_n` columns. The
