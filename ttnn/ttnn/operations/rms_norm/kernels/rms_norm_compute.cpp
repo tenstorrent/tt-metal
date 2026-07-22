@@ -18,6 +18,16 @@
 // (runtime scalar) BEFORE rsqrt on the same DST tile, which is exactly the
 // 1-tile in-DST finalize transform_in_place exists for (streaming_reduce_helpers
 // .hpp:104-105) — its inner ops are raw SFPU calls by that helper's design.
+//
+// Deviation (forced, advisory): the streaming-reduce wrapper
+// accumulate_reduce_block is stale in this kernel_lib checkout — it calls
+// reduce<>() with the CBs as RUNTIME args, but reduce<>()'s current signature
+// takes the CB ids as TEMPLATE params, so the wrapper does not compile. We call
+// the underlying reduce<> helper directly (still the reduce helper, not raw LLK)
+// with Accumulate::at(cb_rstd, b) for cross-block accumulation and route the
+// partial scaler to the last block — exactly what accumulate_reduce_block would
+// have done (streaming_reduce_helpers.inl:30-51). transform_in_place from the
+// same header is unaffected (it never calls reduce<>).
 
 #include <cstdint>
 
@@ -73,8 +83,15 @@ void kernel_main() {
                 ckl::tilize<BLOCK_SIZE, cb_x_sticks, cb_x_in>(1);
             }
             ckl::square<cb_x_in, cb_xsq>(block_shape);
-            ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-                cb_xsq, cb_scaler, cb_rstd, reduce_shape, b, NUM_BLOCKS, partial_scaler);
+            // Cross-block accumulating reduce: partial scaler only on the last block.
+            const ckl::ReducePartialScaler ps =
+                (b + 1 == NUM_BLOCKS) ? partial_scaler : ckl::ReducePartialScaler::none();
+            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_rstd>(
+                reduce_shape,
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(cb_rstd, b),
+                ckl::NoOp{},
+                ps);
         }
 
         // ---------- +eps, rsqrt -> 1/RMS (held across pass 2) ----------

@@ -1,0 +1,2 @@
+{"event":"test_run","target":"acceptance","result":"pass","detail":"70/70 passed in --dev and non-dev; golden gate consistent (12 pass / 192 xfail / 0 xpass on sampled shape)","ts":"2026-07-22T22:09:45+00:00"}
+{"event":"fix_applied","detail":"two forced kernel_lib deviations: accumulate_reduce_block->reduce<> direct (stale wrapper: CBs runtime vs template); prepare_partial_reduce_scalers->two prepare_reduce_scaler calls (stale wrapper: 4 template args vs 3). Both still helper-based, not raw LLK.","ts":"2026-07-22T22:09:45+00:00"}

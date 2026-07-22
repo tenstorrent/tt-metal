@@ -71,8 +71,8 @@ def create_program_descriptor(
         NC *= int(d)
 
     # Alignment-aware tile geometry (per-image ceil; op_design.md §6).
-    Ht_img = ttnn.div_up(origin_H, TILE_DIM)
-    Wt = ttnn.div_up(origin_W, TILE_DIM)
+    Ht_img = (origin_H + TILE_DIM - 1) // TILE_DIM
+    Wt = (origin_W + TILE_DIM - 1) // TILE_DIM
     R = NC * Ht_img
     partial_w = origin_W % TILE_DIM
     has_partial_w = partial_w != 0

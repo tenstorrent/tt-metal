@@ -61,16 +61,19 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(3);
 
     // --- scaler prep (once; wait-not-pop across all rows/passes) ---
+    // scaler = 1/origin_W so SUM-reduce produces mean(x^2) directly.
+    // Deviation (forced, advisory): prepare_partial_reduce_scalers is stale in
+    // this kernel_lib checkout (it forwards a 4th `compute_uses_reduce_tile`
+    // template arg to prepare_reduce_scaler, which takes 3). We emit the same
+    // full(tile0)+partial(tile1) pair it would produce, via two direct
+    // prepare_reduce_scaler calls (reduce_helpers_dataflow.inl:333-352). Pairs
+    // with ReducePartialScaler::last_tile_at(1) on the compute side.
     const float scaler_f = __builtin_bit_cast(float, inv_N_bits);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+        scaler_f);  // tile 0: full scaler
     if constexpr (HAS_PARTIAL_W) {
-        dataflow_kernel_lib::prepare_partial_reduce_scalers<
-            cb_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            partial_w>(scaler_f);
-    } else {
         dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scaler_f);
+            scaler_f, partial_w);  // tile 1: partial scaler (zeros padded lanes)
     }
 
     const auto in_accessor = TensorAccessor(in_args, src_addr, in_page);
