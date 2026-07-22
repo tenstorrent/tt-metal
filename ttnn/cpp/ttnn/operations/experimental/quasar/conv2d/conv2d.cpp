@@ -631,19 +631,25 @@ Result conv2d_L1(
         const uint64_t tilized_act_bytes =
             static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
         const uint64_t l1_bank = device->l1_size_per_core();
-        // "Won't fit": the tilized-activation output alone crowds the bank. Reserve ~20 % for the
-        // resident halo input, weights, matmul CBs and allocator fragmentation. The stem tilized
-        // (~3.67 MB) exceeds 0.80*bank (~3.11 MB) -> slice; small-M gap shapes stay far below -> plain
-        // split. (The OOM is at output-tensor allocation with the halo input already resident, so the
-        // tilized output is the dominant, split-specific term.)
-        const uint64_t fit_threshold = (l1_bank * 80) / 100;
+        // Two independent ceilings on the per-core tilized activation, whichever is SMALLER:
+        //   (1) L1 fit: the tilized-activation output alone crowds the bank; reserve ~20 % for the
+        //       resident halo input, weights, matmul CBs and allocator fragmentation.
+        //   (2) uint16_t DFB ring extent: Program A's borrowed DFB_OUT holds the WHOLE per-core tilized
+        //       activation (M*full_K tiles, single-buffer, stride 1), so its ring_bytes == tilized_act_bytes.
+        //       dataflow_buffer.cpp requires ring_bytes/16 (L1 units) < 65536, i.e. tilized_act_bytes < 1 MB.
+        //       This is the STRICTER limit on the emulator (bank ~3.8 MB) and is what the stem hits first
+        //       (1.75 MB tilized -> 114688 ring units > 65536), even though it fits L1. Use 80 % of the 1 MB
+        //       ring cap for margin (ring formula stride*(cap-1)+1 + alignment rounding).
+        constexpr uint64_t kDfbL1Align = 16;  // Quasar L1 alignment == DFB ring unit
+        const uint64_t dfb_ring_limit_bytes = (static_cast<uint64_t>(65536) * kDfbL1Align * 80) / 100;  // ~0.84 MB
+        const uint64_t fit_threshold = std::min<uint64_t>((l1_bank * 80) / 100, dfb_ring_limit_bytes);
         if (tilized_act_bytes > fit_threshold) {
-            // Number of output-height slices so each slice's tilized activation
-            // ((per_core_M/num_slices)*full_K) stays under half the bank, leaving ample room for the
-            // slice's halo input, weights and matmul CBs. num_slices >= 2 (a single slice does not fit
-            // or we would not be here). Clamp to the number of output image rows available to slice;
-            // run_sliced_op clamps further against its tile-row rounding.
-            const uint64_t tilized_budget = l1_bank / 2;
+            // Number of output-height slices so each slice's tilized activation ((per_core_M/num_slices)*full_K)
+            // stays under BOTH half the bank AND the uint16_t DFB ring cap, leaving ample room for the slice's
+            // halo input, weights and matmul CBs. num_slices >= 2 (a single slice does not fit or we would not
+            // be here). Clamp to the number of output image rows available to slice; run_sliced_op clamps
+            // further against its tile-row rounding.
+            const uint64_t tilized_budget = std::min<uint64_t>(l1_bank / 2, dfb_ring_limit_bytes);
             uint32_t num_slices =
                 static_cast<uint32_t>(tt::div_up(tilized_act_bytes, std::max<uint64_t>(tilized_budget, 1)));
             num_slices = std::max<uint32_t>(num_slices, 2);
