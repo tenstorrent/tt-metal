@@ -1,74 +1,13 @@
 # --- Mesh Descriptors ------------------------------------------------------
-# Subtorus quad-galaxy mock: 4x4 RING+RING torus spanning 4x4 host ranks (1x1 slice per rank, 16 ASICs).
+# Subtorus quad-galaxy mock: single 4x4 RING+RING torus on one host rank (16 ASICs).
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
   device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
-  host_topology   { dims: [ 4, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: RELAXED }
 }
 
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 3
-  }
-  physical_asic_position {
-    tray_id: 4
-    asic_location: 2
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 12
-  }
-  physical_asic_position {
-    tray_id: 1
-    asic_location: 2
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 13
-  }
-  physical_asic_position {
-    tray_id: 1
-    asic_location: 6
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 0
-  }
-  physical_asic_position {
-    tray_id: 1
-    asic_location: 3
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 15
-  }
-  physical_asic_position {
-    tray_id: 4
-    asic_location: 3
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 14
-  }
-  physical_asic_position {
-    tray_id: 4
-    asic_location: 7
-  }
-}

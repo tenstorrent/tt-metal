@@ -6,7 +6,6 @@ set(UNIT_TESTS_FABRIC_SRC
     common/fabric_worker_kernel_helpers.cpp
     common/fabric_command_interface.cpp
     fabric_router/test_routing_tables.cpp
-    fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
     fabric_router/test_physical_grouping_descriptor.cpp
     fabric_router/test_topology_mapper.cpp

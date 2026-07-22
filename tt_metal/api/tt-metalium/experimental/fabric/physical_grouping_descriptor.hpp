@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <map>
 #include <numeric>
-#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
@@ -77,28 +76,6 @@ struct GroupingInfo {
     // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;
-
-    // Logical pinning for MESH groupings committed from a PGD<->MGD topology match in get_valid_groupings_for_mgd:
-    // mesh-local chip id (row-major, 0..N-1) -> PGD slot (TrayID + ASICLocation). Populated at match time from
-    // the MGD<->PGD pairing and this grouping's item labels. Empty when the grouping did not originate from a PGD
-    // match (callers then assume row-major identity).
-    std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
-
-    GroupingInfo();
-    ~GroupingInfo();
-    GroupingInfo(const GroupingInfo&);
-    GroupingInfo(GroupingInfo&&) noexcept;
-    GroupingInfo& operator=(const GroupingInfo&);
-    GroupingInfo& operator=(GroupingInfo&&) noexcept;
-};
-
-// One disjoint placement produced by find_all_in_psd: the ASIC footprint it covers, plus the mesh-local
-// (row-major) chip id -> ASIC position pinning (copied from the matched grouping's mesh_node_to_asic_position;
-// empty when the grouping had no MGD pairing, where callers assume row-major identity). Only the pinning map is
-// retained, not the full GroupingInfo, to avoid deep-copying its items + adjacency_graph per placement.
-struct PsdPlacement {
-    std::unordered_set<tt::tt_metal::AsicID> asics;
-    std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 };
 
 // Type aliases for valid groupings map structure
@@ -145,12 +122,9 @@ public:
     // Returns a nested map: instance_type -> instance_name -> vector of valid GroupingInfo matches
     // There can be multiple valid groupings for each MGD instance
     // Requires a PhysicalSystemDescriptor reference for validation/filtering
-    // pinnings: optional (AsicPosition, FabricNodeId) constraints applied during PGD<->MGD topology matching
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings =
-            std::nullopt) const;
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
     // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
     // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
@@ -174,25 +148,35 @@ public:
         std::vector<std::string>& errors_out) const;
 
     // Find one maximal disjoint packing of the input `groupings` on the physical system descriptor.
-    // Returns one PsdPlacement per placement: its ASIC footprint and the mesh-local (row-major, 0..N-1)
-    // chip id -> ASIC position pinning, PsdPlacement::mesh_node_to_asic_position (copied from the matched
-    // grouping at PGD<->MGD match commit time; empty for groupings that did not originate from a PGD match,
-    // where callers assume row-major identity). No two placements share an ASIC. When multiple PGD grouping
-    // variants are provided, the variant with the highest total ASIC coverage is chosen; alternatives are not
-    // mixed in the same packing. Returns an empty vector if no valid packing exists.
-    std::vector<PsdPlacement> find_all_in_psd(
+    // Returns a vector of unordered_sets. Each element is one mesh footprint (ASIC IDs for a single placement).
+    // No two elements share an ASIC. When multiple PGD grouping variants are provided, the variant with the
+    // highest total ASIC coverage is chosen; alternatives are not mixed in the same packing.
+    // Returns an empty vector if no valid packing exists.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Same as above, but uses a prebuilt flat ASIC adjacency graph from the PSD (from
+    // Same semantics as the overload without `errors_out`.
+    // Additionally, `errors_out` receives detailed messages when mapping fails or no valid combined mapping can be
+    // formed.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        std::vector<std::string>& errors_out) const;
+
+    // Same as find_all_in_psd above, but uses a prebuilt flat ASIC adjacency graph from the PSD (from
     // build_flat_adjacency_map_from_psd). Callers that already built the graph can pass it to avoid a
-    // duplicate O(|PSD|) scan and graph construction. When non-null, `errors_out` receives detailed
-    // messages if no valid packing is found.
-    std::vector<PsdPlacement> find_all_in_psd(
+    // duplicate O(|PSD|) scan and graph construction.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph) const;
+
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-        std::vector<std::string>* errors_out = nullptr) const;
+        std::vector<std::string>& errors_out) const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
@@ -253,9 +237,7 @@ private:
     // Private helper that takes PSD pointer (used internally by public overloads)
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
-        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-        const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings =
-            std::nullopt) const;
+        const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
 
     // Private helper that takes PSD pointer (used internally by public overloads)
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(

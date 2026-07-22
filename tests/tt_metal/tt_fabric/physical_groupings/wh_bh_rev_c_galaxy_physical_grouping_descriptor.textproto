@@ -154,6 +154,21 @@ groupings {
   ]
 }
 
+# HOSTS: 4 trays (Rev C order: trays 2 and 3 swapped)
+groupings {
+  name: "BH_galaxy_hosts"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 grouping_ref { custom_type: "tray_2" } },
+    { id: 1 grouping_ref { custom_type: "tray_4" } },
+    { id: 2 grouping_ref { custom_type: "tray_1" } },
+    { id: 3 grouping_ref { custom_type: "tray_3" } }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
 # Half-trays (2x2 quadrants). Rev C groups them so each valid 4x2 mesh pair straddles
 # the two groups: HALFTRAY_1 = trays 1 & 3, HALFTRAY_2 = trays 2 & 4.
 # HALFTRAY_1: tray 1 quadrants

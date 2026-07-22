@@ -117,7 +117,7 @@ These matter for discovery, PGD lookup, and optional phase-2 mapping:
 | `TT_METAL_HOME` | Base for repo-relative PGD search paths; defaults to `.` if unset. |
 | `TT_METAL_MOCK_CLUSTER_DESC_PATH` | If set per rank, rank 0 can gather paths and emit **`phase2_mock_mapping.yaml`**; rankfile behavior may use a single local hostname for placement in mock scenarios. |
 
-Implementation: `find_and_load_physical_grouping_descriptor` in `tt_metal/fabric/fabric_host_utils.cpp` (shared with ControlPlane / TopologyMapper).
+Implementation: `find_and_load_pgd` in `tools/scaleout/src/generate_rank_bindings.cpp`.
 
 ---
 

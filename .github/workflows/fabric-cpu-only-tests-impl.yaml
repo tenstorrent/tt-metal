@@ -25,7 +25,6 @@ jobs:
     name: ${{ inputs.arch }} fabric cpu unit tests (${{ matrix.shard.name }})
     runs-on: tt-ubuntu-2204-medium-stable
     strategy:
-      # Keep every shard running even if another shard fails or times out.
       fail-fast: false
       matrix:
         shard:

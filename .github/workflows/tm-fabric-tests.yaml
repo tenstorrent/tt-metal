@@ -3,11 +3,6 @@ name: "(TM-Fabric) Fabric Tests"
 on:
   workflow_dispatch:
     inputs:
-      run-fabric-cpu-only-unit-tests:
-        description: "Run fabric CPU-only unit tests (no hardware needed)"
-        required: false
-        default: true
-        type: boolean
       run-wh-n300-fabric-tests:
         description: 'Run Wormhole N300 fabric tests'
         required: false
@@ -91,17 +86,6 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
-
-permissions:
-  contents: read
-  packages: write
-
-run-name: >-
-  (TM-Fabric) Fabric Tests${{ github.event_name == 'schedule' && ' [CPU-only scheduled]' || '' }}
-
-concurrency:
-  group: tm-fabric-tests-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   build-artifact:
