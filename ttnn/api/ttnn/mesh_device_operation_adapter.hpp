@@ -841,16 +841,26 @@ public:
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            // Metal 2.0's MakeProgramFromSpec needs a MeshDevice; pull from the
-            // first device tensor reachable from tensor_args. Op factories
-            // satisfying this concept are tensor-driven, so first_tensor is
-            // always populated for current callers.
-            auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+            // Metal 2.0's MakeProgramFromSpec needs a MeshDevice. Most ops are tensor-driven, so pull
+            // it from the first device tensor in tensor_args. Input-less ops (e.g. rand) have no input
+            // tensor, so fall back to the output tensor (tensor_return_value, allocated on the device)
+            // and then to a MeshDevice* carried in operation_attributes.
+            tt::tt_metal::distributed::MeshDevice* mesh_device = nullptr;
+            if (auto in = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+                in.has_value()) {
+                mesh_device = in.value().device();
+            } else if (auto out = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_return_value);
+                       out.has_value()) {
+                mesh_device = out.value().device();
+            } else if (auto dev =
+                           ttsl::reflection::get_first_object_of_type<tt::tt_metal::distributed::MeshDevice*>(attrs);
+                       dev.has_value()) {
+                mesh_device = dev.value();
+            }
             TT_FATAL(
-                first_tensor.has_value(),
-                "MetalV2 factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");
-            auto* mesh_device = first_tensor.value().device();
-            TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
+                mesh_device != nullptr,
+                "MetalV2 factory adapter could not source a MeshDevice from tensor_args, the output tensor, or "
+                "operation_attributes (need at least one Tensor or a MeshDevice* attribute)");
 
             // The factory produces a single ProgramArtifacts; the adapter stamps it
             // across all coordinate ranges. Bindings derive from the (single) set of
@@ -893,9 +903,34 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            // Per-enqueue run args (the correct-by-construction path for hash-excluded scalars).
+            //
+            // If the op declares create_program_run_args(), it re-derives the FULL ProgramRunArgs
+            // from the LIVE operation_attributes on every dispatch. We re-apply them on each cache
+            // hit via SetProgramRunArgs, which validates that every named runtime arg declared in the
+            // ProgramSpec's RuntimeArgSchema is set (completeness by construction) and also refreshes
+            // tensor args. This is how a value the op deliberately kept out of the program-cache key
+            // (an RNG seed, a pad value, an [from,to) range) gets re-applied instead of frozen at the
+            // first miss — the Metal 2.0-native successor to the descriptor shim's get_dynamic_*
+            // hooks, using only the existing SetProgramRunArgs API. Ops without the hook compile this
+            // away and keep the tensor-only UpdateTensorArgs fast path below.
+            //
+            // NOTE: create_program_run_args must reference the same op-owned tensors the miss parked
+            // (stable addresses); ops that allocate op-owned tensors are not yet supported on this
+            // path (none of the current per-enqueue-scalar ops do).
+            if constexpr (requires {
+                              MetalV2Factory::create_program_run_args(attrs, tensor_args, tensor_return_value);
+                          }) {
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    auto run_args = MetalV2Factory::create_program_run_args(attrs, tensor_args, tensor_return_value);
+                    tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
+                }
+                return;
+            }
+
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
