@@ -14,6 +14,7 @@
 // this repo root (see README). Build: self-contained CMake (find_package TT-Metalium).
 
 #include <chrono>
+#include <cstdlib>  // std::_Exit
 #include <iostream>
 #include <thread>
 
@@ -74,14 +75,17 @@ int main(int argc, char** argv) {
 
     std::cout << "BH.0: kernel dispatched to RISC1. Observe from another terminal:\n"
               << "  erisc_ports.sh <X-Y>   (port_status stays UP)\n"
-              << "  tt-exalens brxy <X-Y> 0x" << std::hex << TT_RDMA_RCB_ADDR << std::dec
-              << " 1   (heartbeat advances)\n";
+              << "  tt-exalens brxy <X-Y> 0x" << std::hex << TT_RDMA_RCB_ADDR << std::dec << " 1   (heartbeat advances)"
+              << std::endl;  // endl = flush (SIGTERM-safe)
 
     std::this_thread::sleep_for(std::chrono::seconds(hold_s));
 
     // The kernel is still running (persistent). Stop it by resetting the chip
     // (sudo reboot, or tt-smi -r --eth_train_skip). We intentionally do NOT
     // Finish()/close() cleanly here — a never-returning kernel can't be reaped.
-    std::cout << "BH.0: hold elapsed. Kernel still resident; reset the chip to stop.\n";
-    return 0;
+    std::cout << "BH.0: hold elapsed. Kernel still resident; reset the chip to stop." << std::endl;
+    // Skip C++ destructors: a clean MeshDevice close_device() HANGS waiting for the never-returning
+    // persistent kernel (observed: process hung at teardown). Reset the chip (tt-smi -r / reboot)
+    // to actually stop the kernel + free the device.
+    std::_Exit(0);
 }
