@@ -398,7 +398,7 @@ class TTVibeVoiceGenerator:
         # Software-pipelined: each frame's batched forward computes pos-LM(k) [row0, → cond_pos(k+1)]
         # and neg-LM(k+1) [row1, → cond_neg(k+1)]; the diffusion runs FIRST from cond buffers the
         # PREVIOUS frame's forward wrote.  A once-per-segment eager boot seeds neg-LM(0).  Proven
-        # byte-identical per row to the two B=1 forwards (test_cfg_batch2_byteident.py) => Tier-0.
+        # byte-identical per row to the two B=1 forwards => Tier-0.
         # Requires cap-split token semantics (in-trace constrained argmax).
         self._sf_cfg_b2 = self._sf_cap_split and os.environ.get("VV_CFG_BATCH2", "1") == "1"
         self._sf_dp2trace_tid = None

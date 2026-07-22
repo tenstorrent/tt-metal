@@ -656,7 +656,7 @@ class TTVibeVoiceLM:
             # bf16 vs the fp32 CPU reference, it flips a few *greedy near-ties* among the
             # constrained tokens (free-running token_match ~0.977).  For this generative
             # TTS that is a different-but-valid generation, not degraded audio — validated
-            # by the forced-token audio-parity gate (test_e2e_generate_pcc.py).  A grouped
+            # by a forced-token audio-parity check.  A grouped
             # fp32 manual decode matches tokens exactly but measured 358 ms/step (slower
             # than the old 202 ms), so it is not used.  See PERF_OPTIMIZATION_NOTES.md.
             assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
