@@ -95,12 +95,10 @@ private:
         // (+RTT/2), and half of it is the reported sync uncertainty (clock_sync.sync_error_ns).
         int64_t sync_rtt_ticks = 0;
         uint32_t sync_host_ts_addr = 0;
-        // L1 address of the device's published WALL_CLOCK [lo, hi]; the host reads it on the fast ACK path to
-        // re-anchor.
-        uint32_t sync_device_time_addr = 0;
         uint32_t sync_seq = 0;  // monotonic per-handshake token (never 0); distinct so a stale ACK can't false-match
-        // Pinned host word the device NOC-writes the token into (device->host, bypassing the record FIFO); the host
-        // polls it locally to time the handshake round trip. Backing + PinnedMemory held for the manager's lifetime.
+        // Host-memory sync-ACK buffer (kSyncAckWords words: [token, device_time_lo, device_time_hi]) the device
+        // NOC-writes into (device->host, bypassing the record FIFO); the host polls the token locally to time the round
+        // trip, then reads device_time from the same buffer. Backing + PinnedMemory held for the manager's lifetime.
         std::shared_ptr<uint32_t[]> ack_host_backing;
         std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> ack_pinned;
         volatile uint32_t* ack_host_ptr = nullptr;
@@ -180,6 +178,9 @@ private:
         uint32_t lo_addr,
         uint32_t hi_addr);
     uint32_t read_sync_ack(const DeviceState& dev_state) const;
+    // Device WALL_CLOCK the servicing kernel pushed into the ACK buffer alongside the token; valid only once
+    // read_sync_ack has observed the current handshake's token.
+    uint64_t read_sync_device_time(const DeviceState& dev_state) const;
     void start_finish_syncs(std::chrono::steady_clock::time_point now);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
