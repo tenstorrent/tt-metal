@@ -262,8 +262,8 @@ public:
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
+    std::unordered_set<tt::tt_metal::CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<tt::tt_metal::CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
@@ -457,7 +457,7 @@ private:
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
 
     void assign_direction_to_fabric_eth_core(
-        const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);
+        const FabricNodeId& fabric_node_id, const tt::tt_metal::CoreCoord& eth_core, RoutingDirection direction);
 
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context

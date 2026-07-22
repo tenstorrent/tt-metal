@@ -39,11 +39,11 @@ public:
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
     virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
-    virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
-    virtual CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const = 0;
-    virtual CoreCoord get_worker_grid_size() const = 0;
-    virtual std::vector<CoreCoord> get_available_worker_cores() const = 0;
-    virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
+    virtual uint32_t get_worker_noc_encoding(tt::tt_metal::CoreCoord logical_core) const = 0;
+    virtual tt::tt_metal::CoreCoord get_virtual_core_from_logical_core(tt::tt_metal::CoreCoord logical_core) const = 0;
+    virtual tt::tt_metal::CoreCoord get_worker_grid_size() const = 0;
+    virtual std::vector<tt::tt_metal::CoreCoord> get_available_worker_cores() const = 0;
+    virtual uint32_t get_worker_id(const FabricNodeId& node_id, tt::tt_metal::CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
     virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
     virtual bool is_local_fabric_node_id(const FabricNodeId& id) const = 0;
@@ -60,19 +60,19 @@ public:
     virtual uint32_t get_max_connections_per_device() const = 0;
 
     // Data reading helpers
-    virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+    virtual std::unordered_map<tt::tt_metal::CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
         const MeshCoordinate& device_coord,
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
     virtual void zero_out_buffer_on_cores(
         const MeshCoordinate& device_coord,
-        const std::vector<CoreCoord>& cores,
+        const std::vector<tt::tt_metal::CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const = 0;
     virtual void write_data_to_core(
         const MeshCoordinate& device_coord,
-        const CoreCoord& cores,
+        const tt::tt_metal::CoreCoord& cores,
         uint32_t local_args_address,
         const std::vector<uint32_t>& args) const = 0;
 };

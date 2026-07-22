@@ -41,14 +41,14 @@ static inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> deter
 }
 
 // Build a linear order of cores along one axis for data movement, plus index of the current core
-static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
-    const CoreCoord& core,
+static inline std::pair<std::vector<tt::tt_metal::CoreCoord>, uint32_t> build_core_order_for_axis(
+    const tt::tt_metal::CoreCoord& core,
     bool transpose_core_grid,
     uint32_t axis_length,
     tt::tt_metal::NOC noc,
     bool axis_is_x_when_not_transposed,
-    const CoreCoord& initial_endpoint) {
-    std::vector<CoreCoord> order;
+    const tt::tt_metal::CoreCoord& initial_endpoint) {
+    std::vector<tt::tt_metal::CoreCoord> order;
     order.reserve(axis_length);
     order.push_back(initial_endpoint);
 
@@ -61,7 +61,7 @@ static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_a
 
     uint32_t index_of_current = 0;  // default to 0 if axis_length == 1
     for (uint32_t worker_idx = 1; worker_idx < axis_length; ++worker_idx) {
-        CoreCoord worker_core = core;
+        tt::tt_metal::CoreCoord worker_core = core;
         size_t& coord_to_modify = transpose_core_grid ? (axis_is_x_when_not_transposed ? worker_core.y : worker_core.x)
                                                       : (axis_is_x_when_not_transposed ? worker_core.x : worker_core.y);
 
@@ -74,11 +74,11 @@ static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_a
     return {order, index_of_current};
 }
 
-static inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32_t index) {
+static inline tt::tt_metal::CoreCoord clamped_prev(const std::vector<tt::tt_metal::CoreCoord>& order, uint32_t index) {
     return order.at(index == 0 ? 0 : index - 1);
 }
 
-static inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
+static inline tt::tt_metal::CoreCoord clamped_next(const std::vector<tt::tt_metal::CoreCoord>& order, uint32_t index) {
     const uint32_t last = static_cast<uint32_t>(order.size() - 1);
     return order.at(index >= last ? last : index + 1);
 }
@@ -101,12 +101,12 @@ void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const CoreCoord& mux_virtual_core,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
     const uint32_t worker_id,
-    const CoreCoord& worker_logical_core,
+    const tt::tt_metal::CoreCoord& worker_logical_core,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
-    CoreCoord termination_master_virtual_core,
+    tt::tt_metal::CoreCoord termination_master_virtual_core,
     uint32_t num_mux_clients,
     uint32_t termination_sync_id,
     std::vector<uint32_t>& worker_rt_args) {
@@ -392,16 +392,16 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
-    auto core_0_0 = CoreCoord{0, 0};
-    auto core_0_1 = CoreCoord{0, 1};
-    auto core_1_0 = CoreCoord{1, 0};
-    auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
-    auto core_0_endy = CoreCoord{0, grid_size.y - 1};
-    auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
-    auto core_endx_2_endy = CoreCoord{grid_size.x - 3, grid_size.y - 1};
-    auto core_endx_endy_2 = CoreCoord{grid_size.x - 1, grid_size.y - 3};
-    auto core_0_endy_1 = CoreCoord{0, grid_size.y - 2};
-    auto core_endx_1_0 = CoreCoord{grid_size.x - 2, 0};
+    auto core_0_0 = tt::tt_metal::CoreCoord{0, 0};
+    auto core_0_1 = tt::tt_metal::CoreCoord{0, 1};
+    auto core_1_0 = tt::tt_metal::CoreCoord{1, 0};
+    auto core_endx_0 = tt::tt_metal::CoreCoord{grid_size.x - 1, 0};
+    auto core_0_endy = tt::tt_metal::CoreCoord{0, grid_size.y - 1};
+    auto core_endx_endy = tt::tt_metal::CoreCoord{grid_size.x - 1, grid_size.y - 1};
+    auto core_endx_2_endy = tt::tt_metal::CoreCoord{grid_size.x - 3, grid_size.y - 1};
+    auto core_endx_endy_2 = tt::tt_metal::CoreCoord{grid_size.x - 1, grid_size.y - 3};
+    auto core_0_endy_1 = tt::tt_metal::CoreCoord{0, grid_size.y - 2};
+    auto core_endx_1_0 = tt::tt_metal::CoreCoord{grid_size.x - 2, 0};
 
     auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
     auto in0_receiver_cores_no_fabric =

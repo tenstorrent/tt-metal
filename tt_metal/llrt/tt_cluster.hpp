@@ -116,15 +116,15 @@ public:
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(ChipId chip) const;
-    CoreCoord get_virtual_coordinate_from_logical_coordinates(
-        ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type) const;
-    CoreCoord get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, CoreCoord physical_coord) const;
+    tt::tt_metal::CoreCoord get_virtual_coordinate_from_logical_coordinates(
+        ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type) const;
+    tt::tt_metal::CoreCoord get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, tt::tt_metal::CoreCoord physical_coord) const;
     tt_cxy_pair get_virtual_coordinate_from_logical_coordinates(
         tt_cxy_pair logical_coordinate, const CoreType& core_type) const;
-    CoreCoord get_physical_coordinate_from_logical_coordinates(
-        ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
-    const std::unordered_set<CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
-    const std::unordered_set<CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
+    tt::tt_metal::CoreCoord get_physical_coordinate_from_logical_coordinates(
+        ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
+    const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
 
     uint32_t get_harvesting_mask(ChipId chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
@@ -155,20 +155,20 @@ public:
     // Write to core without effects of write combining
     template <typename DType>
     void write_core_immediate(
-        ChipId device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+        ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
         write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
     // Write to core without effects of write combining
     template <typename DType>
     void write_core_immediate(
-        ChipId device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+        ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
         write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
     // Write span to core
     template <typename DType>
-    void write_core(ChipId device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+    void write_core(ChipId device_id, const tt::tt_metal::CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
         write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 

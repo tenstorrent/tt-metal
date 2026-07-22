@@ -30,7 +30,7 @@ size_t harvested_before(uint32_t dram_harvesting_mask, size_t channel) {
 }
 }  // namespace
 
-CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_worker_cores.size(),
         "dram_view={} must be within range of dram_view_worker_cores.size={}",
@@ -40,7 +40,7 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_
     return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
 
-bool metal_SocDescriptor::is_noc0_dram_endpoint(const CoreCoord& translated_coord) const {
+bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
     // dram_view_worker_cores (and thus get_preferred_worker_core_for_dram_view) holds TRANSLATED
     // coords, so this compares like-for-like against a TRANSLATED argument. See the header note.
     for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
@@ -51,12 +51,12 @@ bool metal_SocDescriptor::is_noc0_dram_endpoint(const CoreCoord& translated_coor
     return false;
 }
 
-std::vector<CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
+std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
     // Blackhole reserves each DRAM view's NOC0 worker endpoint for the syseng firmware; no other
     // architecture has that restriction (and future ones won't), so the exclusion is confined to this
     // one spot rather than every DRAM loop in Metal.
     const bool exclude_noc0_endpoints = (this->arch == tt::ARCH::BLACKHOLE);
-    std::vector<CoreCoord> dram_cores;
+    std::vector<tt::tt_metal::CoreCoord> dram_cores;
     for (const tt::umd::CoreCoord& core : get_cores(tt::CoreType::DRAM, coord_system)) {
         if (exclude_noc0_endpoints) {
             const tt::umd::CoreCoord translated = translate_coord_to(core, tt::CoordSystem::TRANSLATED);
@@ -69,7 +69,7 @@ std::vector<CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem
     return dram_cores;
 }
 
-CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_eth_cores.size(),
         "dram_view={} must be within range of dram_view_eth_cores.size={}",
@@ -79,14 +79,14 @@ CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_vie
     return this->dram_view_eth_cores.at(dram_view).at(noc);
 };
 
-CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
         dram_view < num_dram_views,
         "dram_view={} must be within range of num_dram_views={}",
         dram_view,
         num_dram_views);
-    return CoreCoord(dram_view, 0);
+    return tt::tt_metal::CoreCoord(dram_view, 0);
 }
 
 size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
@@ -120,7 +120,7 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
 
 size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
-int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const {
+int metal_SocDescriptor::get_dram_channel_from_logical_core(const tt::tt_metal::CoreCoord& logical_coord) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
         logical_coord.x < num_dram_views &&

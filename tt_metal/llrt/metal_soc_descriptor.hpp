@@ -24,24 +24,24 @@
 struct metal_SocDescriptor : public tt::umd::SocDescriptor {
 public:
     std::vector<size_t> dram_view_channels;
-    std::vector<std::vector<CoreCoord>>
+    std::vector<std::vector<tt::tt_metal::CoreCoord>>
         dram_view_worker_cores;                               // per dram view preferred worker endpoints for each noc
-    std::vector<std::vector<CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;            // starting address offset
 
     // Per bank, ordered endpoint translated coordinates.
     // Index 0 = preferred worker endpoint (NOC 0), indices 1..N = remaining endpoints on the same bank.
-    std::vector<std::vector<CoreCoord>> dram_bank_endpoint_coords;
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_bank_endpoint_coords;
 
     uint64_t dram_core_size{};
     uint64_t dram_view_size{};
 
-    std::map<CoreCoord, int> logical_eth_core_to_chan_map;
+    std::map<tt::tt_metal::CoreCoord, int> logical_eth_core_to_chan_map;
 
     metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& board_type);
 
-    CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
-    CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
+    tt::tt_metal::CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
+    tt::tt_metal::CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
 
     // The DRAM cores Metal may place kernels/firmware on, in the requested coordinate system. This is
     // the single source of truth for "usable DRAM cores": every DRAM loop in Metal (firmware init,
@@ -50,29 +50,29 @@ public:
     // endpoint, which is owned by the syseng firmware (CMFW DRAM telemetry, SYS-1419) and runs no
     // DRISC firmware. Hardware without that restriction returns all DRAM cores -- callers never need
     // to special-case it.
-    std::vector<CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
-    CoreCoord get_logical_core_for_dram_view(int dram_view) const;
+    std::vector<tt::tt_metal::CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
+    tt::tt_metal::CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
     size_t get_channel_for_dram_view(int dram_view) const;
     size_t get_num_dram_views() const;
 
-    int get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const;
+    int get_dram_channel_from_logical_core(const tt::tt_metal::CoreCoord& logical_coord) const;
 
-    CoreCoord get_physical_ethernet_core_from_logical(const CoreCoord& logical_coord) const;
-    CoreCoord get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const;
-    CoreCoord get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const;
-    CoreCoord get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const;
+    tt::tt_metal::CoreCoord get_physical_ethernet_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
+    tt::tt_metal::CoreCoord get_logical_ethernet_core_from_physical(const tt::tt_metal::CoreCoord& physical_coord) const;
+    tt::tt_metal::CoreCoord get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
+    tt::tt_metal::CoreCoord get_physical_dram_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     // Map a DRAM view + hardware subchannel to the logical CoreCoord used by CreateKernel(DramConfig).
     // logical.y indexes dram_bank_endpoint_coords (worker endpoint first), not the raw subchannel id.
-    CoreCoord get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const;
-    CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const tt::CoreType& core_type) const;
+    tt::tt_metal::CoreCoord get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const;
+    tt::tt_metal::CoreCoord get_physical_core_from_logical_core(const tt::tt_metal::CoreCoord& logical_coord, const tt::CoreType& core_type) const;
 
-    CoreCoord get_dram_grid_size() const;
-    CoreCoord get_dram_compute_grid_size() const;
+    tt::tt_metal::CoreCoord get_dram_grid_size() const;
+    tt::tt_metal::CoreCoord get_dram_compute_grid_size() const;
 
     // Number of cores per DRAM bank ceiled to nearest integer
     int profiler_ceiled_core_count_perf_dram_bank = 0;
-    std::map<CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
+    std::map<tt::tt_metal::CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
 
 private:
     // Physical DRAM channel (device-descriptor numbering, with harvested-channel gaps) for a dram
@@ -83,7 +83,7 @@ private:
     // True if `translated_coord` is any DRAM view's NOC0 worker endpoint (the subchannel a NOC0 DRAM
     // access routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole.
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
-    bool is_noc0_dram_endpoint(const CoreCoord& translated_coord) const;
+    bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
