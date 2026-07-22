@@ -77,6 +77,10 @@ For fabric send-slot, credit-return, TRID, or route-counter hangs, build a route
 
 Before finalizing a root cause or fix, verify that the behavior you would add is actually absent from the prepared source. If source already computes the destination, first hop, header, count, semaphore transition, or state update you planned to add, do not restate it as the fix. Move one ledger boundary outward to the producer or owner of that resource: host runtime args, object type, open/close API, connection manager, helper contract, or caller/callee ownership.
 
+### TRI-003: Record recurring signatures; never park on a hang
+
+When a hang or LLK/CCL assert matches a signature already seen on another model or stage (op family, topology, TP degree, shapes/dtype, packet/tile), record it and route around it with a model-side workaround instead of re-deriving it from scratch; do not classify a reproducible hang as a rejected candidate or a park. If the triage helper cannot read device state on the installed `tt_umd` build, say so and fall back — never report an all-pass that hides the real stop site.
+
 ## Report Format
 
 Write `AUTOTRIAGE.md` with these sections:

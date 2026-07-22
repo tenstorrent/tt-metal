@@ -104,6 +104,12 @@ Return `more-work-needed` when evidence shows one of these:
   under BFP8/HiFi while the final or mandatory policy is BFP4/LoFi. Geometry is
   not rejected until the material geometry candidates have been measured under
   the same dtype/fidelity policy, or an exact op-contract blocker is recorded.
+- a perf "winner" from a work log or README is accepted without re-measuring it
+  on device, or a decode/prefill/combined perf claim does not state which of the
+  three it covers.
+- a shipped precision silently diverges from the compiler-emitted precision (for
+  example a blanket low-precision override of a mixed emitted policy) without a
+  recorded, evidence-backed reason.
 - prompt-based quality evidence violates `$qualitative-check`, for example an
   instruct/chat model is judged only from raw completion prompts, a base model
   is judged through invented chat prompts, or prompt-format evidence is missing.

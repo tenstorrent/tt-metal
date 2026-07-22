@@ -85,8 +85,9 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - Start with `ttnn.bfloat16`, `ttnn.TILE_LAYOUT`, and `ttnn.DRAM_MEMORY_CONFIG` where that simplifies correctness; optimize memory layout after PCC is stable.
 - Transpose 2D PyTorch linear weights before `ttnn.linear` unless the local TTNN helper already does it.
 - Reshape norm weights so they broadcast over hidden width.
-- Derive Q/K/V head reshapes from config, including GQA/MQA KV expansion, before optimizing.
-- In `models/common` attention, Q/K weights may need HF-to-TTNN RoPE permutation handling such as `reverse_permute`; inspect the module contract and tests.
+- Derive Q/K/V head reshapes from config, including GQA/MQA KV expansion, before optimizing. When heads are tile-padded, slice back to the logical Q/KV head counts after RoPE so the GQA ratio is restored.
+- In `models/common` attention, Q/K weights may need HF-to-TTNN RoPE permutation handling such as `reverse_permute`; inspect the module contract and tests. Verify the built RoPE tables against the HF model's own rotary-embedding class (max-abs-diff), not a default `inv_freq` — scaled variants like long-context RoPE are easy to miss.
+- Keep distinct per-tensor memory placements distinct: do not homogenize one attention tensor's layout to match another's without a measurement, since a placement difference can be correctness-load-bearing, not just a perf choice.
 
 ## HF Reference And Synthetic Weights
 

@@ -112,3 +112,10 @@ and gaps on precision and the DRAM-sharded-weight strategy.
   working around it.
 - Read `report.json`; the CLI keeps stdout to a 5-line summary and routes all
   pipeline/device logging to `pipeline.log`.
+- `nlp_concat_heads_decode` needs a sharded input; the advisor marks it unfixable
+  instead of emitting the reshard. Insert the interleaved->sharded conversion (or a
+  valid sharded seed) yourself around it — the one op that needs hand-repair here.
+- Advisor geometry is batch-shaped: capture at the batch the downstream stage serves
+  (and a small batch when they differ), not only batch-1.
+- A first constraint failure is not a rejection — run the full legal layout family and
+  the matmul-only isolate, and preserve any spill recommendation (dropping one can break PCC).

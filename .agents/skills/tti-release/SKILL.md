@@ -296,7 +296,8 @@ Parse the final release report and report data. Classify every failed accuracy, 
 
 - `fixed`: the issue was fixed and the release report was regenerated;
 - `issue-waived`: a current linked issue or release note shows the same row fails for the correct canonical implementation, or proves the eval/benchmark target is invalid for reasons unrelated to this autoport;
-- `readiness-fail`: this autoport is below the expected release bar.
+- `readiness-fail`: this autoport is below the expected release bar;
+- `external-blocker`: a gated-dataset access/auth failure (for example a GPQA token) or a harness/spec mismatch (for example an eval `max_length` above the served context) — a config/environment issue, not this autoport's model quality. Record it distinctly and fix the config (clamp the request to the served context; supply the dataset token) rather than the model.
 
 Disclosure is not a waiver. A row is not `issue-waived` merely because it is called out in `RUN_NOTES.md`. Include the issue URL, affected rows, canonical/control behavior, and why the waiver applies.
 
