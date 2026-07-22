@@ -192,12 +192,13 @@ int main(int argc, char** argv) {
     int device_id = 0, l2cpu = 0, pll = 1000;
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
     uint64_t win_stride = DEFAULT_WIN_STRIDE;  // --winmb: host-ring budget (rings share it); capped by chan_sz/2
-    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 1048560, prod_delay = 0;  // 4 MiB-64/ring (nwin=2, 2 TLB windows).
+    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 1048576, prod_delay = 0;  // 4 MiB/ring (nwin=3: data spans 2
+    // windows, the +64 B SENT trailer spills into a 3rd -> 3 TLB windows/ring, so nread<=2 at the default).
     // Sized for LIVE TRACY capture, the production case: with a connected tracy-capture the Tracy serialize+send
     // is a slow/bursty sink that fills the host ring, so ring size sets the knee. Sweep (nread=2 dualrelay, capture
     // connected): 256 KB knee ~4400, 1 MB ~2800, 2 MiB ~1000, 4 MiB ~850 == the no-Tracy drain floor (~830) -> live
-    // Tracy is essentially free at 4 MiB. Uses 4 of 8 raw TLB windows [200,208) at nread=2 (so nread<=4). Below
-    // ~600 every size craters to the worker-L1-ring floor (total_markers/256) that no host buffer can beat.
+    // Tracy is essentially free at 4 MiB. Below ~600 every size craters to the worker-L1-ring floor
+    // (total_markers/256) that no host buffer can beat. (4 MiB-64 = 1048560 keeps it to nwin=2 -> nread<=4 if needed.)
     bool do_reset = false, direct = false;  // --direct: direct drain (no reader/relay split); --ndrain N: N drainers
     bool rr_consumer = false;  // --rrconsumer: one host thread round-robins all rings (else one thread per ring)
     bool split_noc = false;    // --splitnoc: drain hart h reads its slice over NoC (h&1) to relieve read contention
