@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    FILL_CONSTANT,
     IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
@@ -86,6 +87,18 @@ SFPU_COMP_EXTRA_FORMATS = input_output_formats(
         DataFormat.Int16,
         DataFormat.Int8,
         DataFormat.UInt16,
+        DataFormat.UInt8,
+    ],
+    same=True,
+)
+
+# Extra (integer) formats only Fill sweeps. calculate_fill's int path only supports
+# Int32/Int16/Int8/UInt8 — no UInt16, unlike the comp family above.
+SFPU_FILL_EXTRA_FORMATS = input_output_formats(
+    [
+        DataFormat.Int32,
+        DataFormat.Int16,
+        DataFormat.Int8,
         DataFormat.UInt8,
     ],
     same=True,
@@ -572,6 +585,7 @@ DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 
 OP_CONFIGS = [
     OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
+    OpConfig(MathOperation.Fill, TENSOR_DIMS, DEST_SYNC_MODES),
     OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES),
     OpConfig(MathOperation.Rsqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Nonlinear ops: identical [32,32]/[64,64] × Half/Full × uniform-spec sweep.
@@ -590,11 +604,13 @@ OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
 
 def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
-    """Float formats for every op, plus the integer/UInt16 formats only comp sweeps."""
+    """Float formats for every op, plus the integer formats comp/fill each sweep."""
     if cfg.mathop == MathOperation.Typecast:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
+    if cfg.mathop == MathOperation.Fill:
+        return SFPU_UNARY_FORMATS + SFPU_FILL_EXTRA_FORMATS
     return SFPU_UNARY_FORMATS
 
 
@@ -703,7 +719,7 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu, rsqrt,
-    square, typecast, and the six compare-to-zero modes), validated against the
+    square, typecast, fill, and the six compare-to-zero modes), validated against the
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
@@ -751,12 +767,16 @@ def test_eltwise_unary_sfpu_quasar(
             input_dimensions,
         )
     else:
-        # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
+        # Integer-input ops (Int32/Int16/UInt16/UInt8/Int8 — the comp family and Fill): apply the
         # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
         # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
         # the op per element keeps integers intact, and for an element-wise op row-major order
         # already matches the packed result. A non-element-wise integer op would need its own path.
-        ops = UnarySFPUGolden().ops
+        golden_gen = UnarySFPUGolden()
+        golden_gen.data_format = (
+            formats.input_format
+        )  # _fill needs this for its non-Tensor path
+        ops = golden_gen.ops
         op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
         golden_tensor = torch.tensor(op_res, dtype=format_dict[formats.output_format])
 
@@ -784,6 +804,9 @@ def test_eltwise_unary_sfpu_quasar(
                 if is_typecast
                 else TYPECAST_FORMATS()
             ),
+            # fill_value_quasar() in the shared C++ source references the non-dependent
+            # global FILL_CONSTANT, so every build that includes it must define it.
+            FILL_CONSTANT(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

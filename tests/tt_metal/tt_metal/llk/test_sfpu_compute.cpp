@@ -72,6 +72,15 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
+    // fill overwrites the whole tile with a constant, ignoring the input. The 5.0f here must match
+    // the constant returned by sfpu_function() for "fill".
+    {"fill", {{"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile(0, 5.0f);"}}},
+    // fill_bitcast broadcasts a float given as its raw bit pattern. 0x40c00000 == 6.0f; must match
+    // the constant returned by sfpu_function() for "fill_bitcast".
+    {"fill_bitcast", {{"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile_bitcast(0, 0x40c00000u);"}}},
+    // fill_int broadcasts an integer constant into an Int32 tile. 42 must match sfpu_function()'s
+    // "fill_int" constant. Runs on an Int32-format tile (set by the fixture); see run_sfpu_all_same_buffer.
+    {"fill_int", {{"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile_int<DataFormat::Int32>(0, 42u);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -168,6 +177,21 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "square") {
         return bfloat16(static_cast<float>(input) * static_cast<float>(input));
+    }
+    if (op_name == "fill") {
+        // sfpu_op_to_op_name's
+        // "fill" chain (fill_tile(0, 5.0f)).
+        return bfloat16(5.0f);
+    }
+    if (op_name == "fill_bitcast") {
+        // param0 is the bit-cast float 0x40c00000 == 6.0f; output is that value in every element.
+        // "fill_bitcast" chain.
+        return bfloat16(std::bit_cast<float>(uint32_t{0x40c00000}));
+    }
+    if (op_name == "fill_int") {
+        // Integer fill constant (input-independent)
+        // "fill_int" chain (fill_tile_int<Int32>(0, 42u))
+        return 42.0f;
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -831,12 +855,41 @@ std::vector<uint32_t> run_sfpu_pipeline(
 bool run_sfpu_all_same_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-
-    // Input
-    const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
+    const tt::DataFormat fmt = test_config.l1_input_data_format;
+    const bool is_fp32 = (fmt == tt::DataFormat::Float32);
+    // Integer L1 tile (e.g. fill_int): int golden + exact compare instead of the bf16/fp32 float path.
+    const bool is_int = (fmt == tt::DataFormat::Int32);
     // The Float32 device path only wires up relu in v1; the golden/input/check helpers below are
     // format-generic, so this is the single place that pins the supported-op set for Float32.
     TT_FATAL(!is_fp32 || test_config.sfpu_op == "relu", "Float32 SFPU path supports relu only in v1");
+
+    // Kernel defines (op chain + the op-include flags), shared by every format path.
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_UNARY_OP"] = "1";
+    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_FILL_INCLUDE"] = "1";
+
+    if (is_int) {
+        const size_t numel = byte_size / sizeof(uint32_t);
+        const std::vector<float> golden(numel, sfpu_util::sfpu_function(test_config.sfpu_op, 0.0f));
+        const auto packed_input = sfpu_util::typecast_pack(fmt, std::vector<float>(numel, 0.0f));
+        const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
+        const auto got = sfpu_util::typecast_decode(fmt, dest_buffer_data);
+        return sfpu_util::typecast_compare(fmt, got, golden);
+    }
+
+    // Float paths (bf16 / fp32).
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -863,21 +916,6 @@ bool run_sfpu_all_same_buffer(
         });
         packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     }
-
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
-    sfpu_defines["SFPU_UNARY_OP"] = "1";
-    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
     return is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
@@ -1508,6 +1546,11 @@ inline bool is_unary_sfpu_op_unsupported_on_quasar(const std::string& sfpu_op) {
     return sfpu_op == "log" || sfpu_op == "sign";
 }
 
+// Unary ops that fill an integer-format tile (fill_tile_int). The parameterized fixture gives these an
+// Int32 tile so run_sfpu_all_same_buffer takes its int golden + exact-compare path, keeping all fill
+// variants in the one unary bucket.
+inline bool is_int_fill_sfpu_op(const std::string& sfpu_op) { return sfpu_op == "fill_int"; }
+
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
@@ -1519,16 +1562,23 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
     }
 
+    // Integer fill ops run on an Int32 tile end-to-end; every other unary op runs on a bf16 tile.
+    // run_sfpu_all_same_buffer keys its golden/compare off l1_*_data_format, so selecting the format
+    // here is all that's needed to route the op through the matching path.
+    const bool is_int_op = is_int_fill_sfpu_op(sfpu_op);
+    const tt::DataFormat fmt = is_int_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
+
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .num_tiles = num_tiles,
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .tile_byte_size = static_cast<size_t>(is_int_op ? 4 : 2) * 32 * 32,
+        .l1_input_data_format = fmt,
+        .l1_output_data_format = fmt,
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
-        .approx_mode = false};
+        .approx_mode = false,
+        .unpack_to_dest_fp32 = is_int_op};  // Int32 reaches Dest via unpack-to-dest (matches typecast Int32 path)
     log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
@@ -1553,6 +1603,12 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "lez"),
         std::make_tuple(1, "square"),
         std::make_tuple(4, "square"),
+        std::make_tuple(1, "fill"),
+        std::make_tuple(4, "fill"),
+        std::make_tuple(1, "fill_bitcast"),
+        std::make_tuple(4, "fill_bitcast"),
+        std::make_tuple(1, "fill_int"),
+        std::make_tuple(4, "fill_int"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
