@@ -91,10 +91,8 @@ private:
         // Device cycle at host time 0: device_cycle = sync_frequency * host_ns + device_cycle_offset. Set from the fit
         // in run_sync and re-anchored (slope held fixed) by the servo every kServoInterval so its motion tracks drift.
         int64_t device_cycle_offset = 0;
-        // Drift since the last re-anchor (host_real - host_predicted), ns; the drift term of clock_sync.sync_error_ns.
-        int64_t sync_tracking_error_ns = 0;
         // Round trip of the most recent handshake, host ticks; the re-anchor places device_time at the midpoint
-        // (+RTT/2).
+        // (+RTT/2), and half of it is the reported sync uncertainty (clock_sync.sync_error_ns).
         int64_t sync_rtt_ticks = 0;
         uint32_t sync_host_ts_addr = 0;
         // L1 address of the device's published WALL_CLOCK [lo, hi]; the host reads it on the fast ACK path to
@@ -106,6 +104,9 @@ private:
         std::shared_ptr<uint32_t[]> ack_host_backing;
         std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> ack_pinned;
         volatile uint32_t* ack_host_ptr = nullptr;
+        // True when ack_host_ptr is a CQ-sysmem (hugepage-fallback) word rather than a coherent host-pinned buffer;
+        // device PCIe writes to it may be non-snooped, so the poll in measure_sync_rtt_ticks must evict the line first.
+        bool ack_host_is_hugepage = false;
         int64_t sync_host_time_before = 0;
         // Cached UMD TLB window to this device's profiler core, resolved once at init on architectures that map L1
         // statically (Blackhole). When set, the sync timestamp is written with a single MMIO store instead of
@@ -130,9 +131,8 @@ private:
     void run_init_sync();
 
     // Re-anchor dev_state.device_cycle_offset from a fresh (host_anchor, device_anchor) sync point, holding the fitted
-    // slope fixed. Sets sync_tracking_error_ns to the pre-update residual (host_real - host_predicted). Run every servo
-    // tick; a plain offset re-anchor beat a 2-state Kalman on the p99 tail in ablation (the filter rang on AICLK
-    // excursions), so the mapping tracks drift purely by re-anchoring often.
+    // slope fixed. Run every servo tick; a plain offset re-anchor beat a 2-state Kalman on the p99 tail in ablation
+    // (the filter rang on AICLK excursions), so the mapping tracks drift purely by re-anchoring often.
     void reanchor_device_cycle_offset(DeviceState& dev_state, int64_t host_anchor, uint64_t device_anchor);
 
     // Round trip of a sync handshake: after write_sync_timestamp(host_time_id), busy-poll the pinned host word the
@@ -167,7 +167,19 @@ private:
     // Writes the 32-bit host timestamp to the profiler core for a sync handshake, via the cached TLB window when
     // available (one MMIO store) or WriteToDeviceL1 otherwise. The host->device latency of this write is the
     // sync-error floor, so the fast path measurably tightens it (~3x lower jitter on Blackhole).
-    static void write_sync_timestamp(DeviceState& dev_state, uint32_t value);
+    void write_sync_timestamp(DeviceState& dev_state, uint32_t value);
+    // Arch/IOMMU-specific host<->device sync transport, established at init and used per handshake. Grouped so
+    // every "differs by arch/IOMMU" branch lives in one place, keyed off dev_state.sync_tlb and
+    // dev_state.ack_host_is_hugepage.
+    void configure_sync_write_path(DeviceState& dev_state, IDevice* device);
+    void configure_sync_ack_word(
+        DeviceState& dev_state,
+        IDevice* device,
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        uint32_t enc_addr,
+        uint32_t lo_addr,
+        uint32_t hi_addr);
+    uint32_t read_sync_ack(const DeviceState& dev_state) const;
     void start_finish_syncs(std::chrono::steady_clock::time_point now);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default

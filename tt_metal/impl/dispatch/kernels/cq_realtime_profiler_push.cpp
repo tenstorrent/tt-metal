@@ -117,11 +117,18 @@ __attribute__((noinline)) void realtime_profiler_service_sync() {
     if (rt_profiler_msg->sync_ack_pcie_xy_enc != 0) {
         const uint64_t ack_pcie_addr = (static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_hi) << 32) |
                                        static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_lo);
+#ifdef RT_PROFILER_PCIE_NOC_X
+        // WH: the NCRISC is on NOC 1, so re-encode the PCIe core the same way the record path does. The host-stored
+        // sync_ack_pcie_xy_enc is the NOC-0 encoding (used only as an "ACK word exists" flag here) and would not route.
+        const uint32_t ack_pcie_xy_enc = pcie_xy_enc_noc1;
+#else
+        const uint32_t ack_pcie_xy_enc = rt_profiler_msg->sync_ack_pcie_xy_enc;
+#endif
         noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
             noc_index,
             reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
-            rt_profiler_msg->sync_ack_pcie_xy_enc,
+            ack_pcie_xy_enc,
             ack_pcie_addr,
             sizeof(uint32_t),
             1);
