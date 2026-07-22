@@ -255,9 +255,11 @@ TEST_F(RegimeADiagFixture, RScatterGeneral) {
         const char* tag;
     };
     const std::vector<Cfg> cfgs = {
-        {32, 2048, 2048, 2, 2, 1, 4, 4, "pk2_chunk2"},    // Pk=2, T=4, chunk=2
-        {128, 15360, 768, 1, 6, 1, 2, 3, "pk6_chunk2"},   // Pk=6, T=12, chunk=2, Mt=4
-        {256, 2048, 1024, 1, 4, 2, 2, 4, "pk4_rowpart"},  // Pk=4, T=16, chunk=4==N_block (row-partition)
+        {32, 2048, 2048, 2, 2, 1, 4, 4, "pk2_chunk2"},      // Pk=2, T=4, chunk=2, N_bpc=1
+        {128, 15360, 768, 1, 6, 1, 2, 3, "pk6_chunk2"},     // Pk=6, T=12, chunk=2, Mt=4, N_bpc=1
+        {256, 2048, 1024, 1, 4, 2, 2, 4, "pk4_rowpart"},    // Pk=4, T=16, chunk=4==N_block (row-partition), N_bpc=1
+        {128, 2048, 1536, 3, 4, 1, 2, 1, "pk4_nbpc2"},      // Pk=4, T=4, chunk=1, N_bpc=2 (multi-subblock)
+        {256, 2048, 2048, 1, 4, 3, 2, 4, "pk4_nbpc2_sm3"},  // Pk=4, T=12, chunk=3, N_bpc=2, Sm=3 (M-split + multi-sub)
     };
     auto* device = device_;
     std::normal_distribution<float> dist(0.0f, 1.0f);
