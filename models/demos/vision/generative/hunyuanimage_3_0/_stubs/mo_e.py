@@ -321,6 +321,7 @@ class _TtMoE:
         # top-C routed tokens. <C routed -> padding tokens (weight 0 -> contribute 0);
         # >C routed -> DROP (PCC risk). topi [1, C] (uint).
         _tv, topi = ttnn.topk(tok_w, C, dim=-1, largest=True, sorted=False)  # VERIFY topk sig
+        topi = ttnn.typecast(topi, ttnn.uint32)  # topk idx is uint16; reshape/gather need uint32/int32
         ttnn.deallocate(tok_w)
         ttnn.deallocate(_tv)
 
