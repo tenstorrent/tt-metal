@@ -395,3 +395,74 @@ def test_all_gather_broken(
         num_buffers_per_channel=2,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim",
+    [
+        (2, [1, 1, 256, 256], 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_input_dtype, layout, pcc_threshold",
+    [
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT, 1.0),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1.0),
+        (ttnn.float32, ttnn.TILE_LAYOUT, 1.0),
+        (ttnn.uint32, ttnn.TILE_LAYOUT, 1.0),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 0.9999),
+        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT, 0.985),
+        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, 0.999),
+    ],
+    ids=[
+        "bfloat16_tile",
+        "bfloat16_rm",
+        "float32_tile",
+        "uint32_tile",
+        "bfloat8_b_tile",
+        "bfloat4_b_tile",
+        "fp8_e4m3_rm",
+    ],
+)
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("cluster_axis", [0])
+def test_all_gather_dtype_nightly(
+    bh_1d_mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    pcc_threshold,
+    mem_config_input,
+    mem_config_ag,
+    cluster_axis,
+):
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    if cluster_axis == 0:
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=3,
+        cluster_axis=cluster_axis,
+        allowed_pcc=pcc_threshold,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)

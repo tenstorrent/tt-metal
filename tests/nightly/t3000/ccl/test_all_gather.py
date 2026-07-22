@@ -26,8 +26,10 @@ def is_unsupported_case(
     num_l1_banks=64,
     mem_config_input=None,
 ):
-    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        return True, "Row-major layout with bfloat8_b datatype is an invalid combination"
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return True, "Row-major layout with block-float datatype is an invalid combination"
+    if layout == ttnn.TILE_LAYOUT and input_dtype == ttnn.fp8_e4m3:
+        return True, "Tile layout with fp8_e4m3 datatype is an invalid combination"
 
     if output_shape[dim] % num_devices != 0:
         return True, f"Output shape {output_shape} dim{dim} must be a multiple of num devices {num_devices}"
@@ -36,11 +38,21 @@ def is_unsupported_case(
 
     ## Check that we can readback results
     fast_dispatch_page_size_limit = 55 * 1024
-    elem_size_map = {
+    # Row-major: bytes/element is exact
+    rm_elem_size_map = {
         ttnn.uint32: 4,
         ttnn.bfloat16: 2,
-        ttnn.bfloat8_b: 1,
+        ttnn.fp8_e4m3: 1,
     }
+    # Tile-layout bytes/element are averages that include the shared exponent block
+    tile_elem_size_map = {
+        ttnn.uint32: 4,
+        ttnn.bfloat16: 2,
+        ttnn.bfloat8_b: 1088 / 1024,
+        ttnn.bfloat4_b: 576 / 1024,
+        ttnn.fp8_e4m3: 1,
+    }
+    elem_size_map = tile_elem_size_map if layout == ttnn.TILE_LAYOUT else rm_elem_size_map
     elem_size = elem_size_map.get(input_dtype, 4)
     if layout == ttnn.ROW_MAJOR_LAYOUT and (output_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
@@ -448,6 +460,67 @@ def test_all_gather(
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_persistent_buffers=use_persistent_buffers,
+        allowed_pcc=pcc_threshold,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim",
+    [
+        ([1, 1, 1024, 5120], 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_input_dtype, layout, pcc_threshold",
+    [
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT, 1.0),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1.0),
+        (ttnn.float32, ttnn.TILE_LAYOUT, 1.0),
+        (ttnn.uint32, ttnn.TILE_LAYOUT, 1.0),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 0.9999),
+        (ttnn.bfloat4_b, ttnn.TILE_LAYOUT, 0.985),
+    ],
+    ids=[
+        "bfloat16_tile",
+        "bfloat16_rm",
+        "float32_tile",
+        "uint32_tile",
+        "bfloat8_b_tile",
+        "bfloat4_b_tile",
+    ],
+)
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+    ],
+    indirect=True,
+    ids=["fabric_ring"],
+)
+def test_all_gather_dtype(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    pcc_threshold,
+    mem_config_input,
+    mem_config_ag,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=1,
+        use_persistent_buffers=True,
         allowed_pcc=pcc_threshold,
     )
 
