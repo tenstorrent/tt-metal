@@ -514,6 +514,21 @@ void ControlPlane::init_control_plane(
     this->initialize_distributed_contexts();
     this->generate_intermesh_connectivity();
 
+    // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
+    // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
+    {
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+                                                       "fabric" /
+                                                       ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
+                                                        "_of_" + std::to_string(world_size) + ".yaml");
+        try {
+            tt::tt_fabric::serialize_intermesh_port_assignment_to_file(
+                this->exit_node_directions_, this->intermesh_chan_to_peer_, intermesh_mapping_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export inter-mesh port assignment: {}", e.what());
+        }
+    }
+
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
 }
@@ -614,6 +629,21 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
     this->generate_intermesh_connectivity();
+
+    // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
+    // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
+    {
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+                                                       "fabric" /
+                                                       ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
+                                                        "_of_" + std::to_string(world_size) + ".yaml");
+        try {
+            tt::tt_fabric::serialize_intermesh_port_assignment_to_file(
+                this->exit_node_directions_, this->intermesh_chan_to_peer_, intermesh_mapping_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export inter-mesh port assignment: {}", e.what());
+        }
+    }
 
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
@@ -2293,7 +2323,10 @@ void sort_intermesh_exit_peer_fabric_node_id_pairs(
     for (auto& src_entry : m) {
         for (auto& dst_entry : src_entry.second) {
             auto& pairs = dst_entry.second;
-            std::sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            // Sort on the full (exit, peer) pair, not just .first: an exit chip with multiple peers would
+            // otherwise be left in unspecified (unordered_map-merge-dependent) order, giving host-/run-dependent
+            // peer assignments downstream.
+            std::sort(pairs.begin(), pairs.end());
         }
     }
 }
@@ -2605,9 +2638,40 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 
 // Intermesh Connectivity Generation Functions
 
-void ControlPlane::generate_intermesh_connectivity() {
-    intermesh_exit_fabric_node_ids_.clear();
+void ControlPlane::rebuild_intermesh_exit_maps_from_connections(
+    const AnnotatedIntermeshConnections& intermesh_connections) {
+    // Finding A fix (intermesh_dual_galaxy_asymmetry_findings.md): derive both inter-mesh exit maps directly from
+    // intermesh_connections instead of from per-rank apply pushes + a bespoke cross-host merge. intermesh_connections
+    // is produced on rank 0 and broadcast verbatim to every rank (multi-host) or generated wholesale on the single
+    // host, so it is IDENTICAL on every rank; deriving from it yields the same set on every rank (no merge, no dedup
+    // ambiguity). The old path pushed one pair per channel locally then merged across hosts with dedup applied only to
+    // remote contributions, so a boundary split across hosts resolved e.g. 3 on some ranks and 4 on others -- strict
+    // validation then threw on a subset of ranks and deadlocked MPI. Parity verified across the drop-heavy tests
+    // (Dual4x16 relaxed, Z-fallback, SC20 relaxed): the derived sets equal the old cross-host merge on every rank.
     intermesh_exit_peer_fabric_node_id_pairs_.clear();
+    intermesh_exit_fabric_node_ids_.clear();
+
+    const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
+    auto to_fabric_node_id = [&](std::uint32_t mesh_raw, const auto& port_id) {
+        return FabricNodeId(MeshId{mesh_raw}, mesh_edge_ports_to_chip_id.at(mesh_raw).at(port_id));
+    };
+
+    for (const auto& connection : intermesh_connections) {
+        const auto& [exit_mesh_raw, exit_port_id] = std::get<0>(connection);
+        const auto& [peer_mesh_raw, peer_port_id] = std::get<1>(connection);
+        const MeshId exit_mesh{exit_mesh_raw};
+        const MeshId peer_mesh{peer_mesh_raw};
+        const FabricNodeId exit_fn = to_fabric_node_id(exit_mesh_raw, exit_port_id);
+        intermesh_exit_peer_fabric_node_id_pairs_[exit_mesh][peer_mesh].emplace_back(
+            exit_fn, to_fabric_node_id(peer_mesh_raw, peer_port_id));
+        intermesh_exit_fabric_node_ids_[exit_mesh][peer_mesh].insert(exit_fn);
+    }
+    sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
+}
+
+void ControlPlane::generate_intermesh_connectivity() {
+    // The exit maps (intermesh_exit_fabric_node_ids_, intermesh_exit_peer_fabric_node_id_pairs_) are cleared and
+    // rebuilt from intermesh_connections in rebuild_intermesh_exit_maps_from_connections() below.
     intermesh_chan_to_peer_.clear();  // Repopulated from PSD in both single- and multi-host paths.
     AnnotatedIntermeshConnections intermesh_connections;
 
@@ -2627,7 +2691,7 @@ void ControlPlane::generate_intermesh_connectivity() {
 
     if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
-        auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
+        auto exit_node_port_descriptors = this->generate_port_descriptor_table();
         intermesh_connections = this->convert_port_descriptors_to_intermesh_connections(exit_node_port_descriptors);
     } else {
         // Intermesh Connectivity generation for the single-host case
@@ -2644,254 +2708,45 @@ void ControlPlane::generate_intermesh_connectivity() {
         num_assigned_intermesh_connections,
         get_num_requested_intermesh_connections());
 
+    // Validate (placement invariants + per-mesh-pair counts, both derived directly from intermesh_connections) first,
+    // so an invalid pairing fails fast before we rebuild the query maps or mutate any downstream routing state.
+    this->validate_requested_intermesh_connections(intermesh_connections);
+    this->rebuild_intermesh_exit_maps_from_connections(intermesh_connections);
+
     this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
-    this->collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
-    this->collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
-    sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
 }
 
-void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
-
-    auto serialize_local_map =
-        [](const std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& m) {
-            std::vector<uint8_t> buf;
-            auto append_u32 = [&buf](uint32_t v) {
-                buf.insert(buf.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
-            };
-            append_u32(static_cast<uint32_t>(m.size()));
-            for (const auto& [src_mesh, inner] : m) {
-                append_u32(*src_mesh);
-                append_u32(static_cast<uint32_t>(inner.size()));
-                for (const auto& [dst_mesh, fn_set] : inner) {
-                    append_u32(*dst_mesh);
-                    append_u32(static_cast<uint32_t>(fn_set.size()));
-                    for (const auto& fn : fn_set) {
-                        append_u32(*fn.mesh_id);
-                        append_u32(fn.chip_id);
-                    }
-                }
-            }
-            return buf;
-        };
-
-    auto merge_from_serialized =
-        [](std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& into,
-           const std::vector<uint8_t>& data) {
-            std::size_t off = 0;
-            auto read_u32 = [&data, &off](uint32_t& out) {
-                TT_FATAL(off + 4 <= data.size(), "collect_intermesh_exit_fab: truncated");
-                std::memcpy(&out, data.data() + off, sizeof(uint32_t));
-                off += sizeof(uint32_t);
-            };
-            uint32_t n_src = 0;
-            read_u32(n_src);
-            for (uint32_t si = 0; si < n_src; si++) {
-                uint32_t src_raw = 0;
-                uint32_t n_dst = 0;
-                read_u32(src_raw);
-                read_u32(n_dst);
-                MeshId src_mesh{src_raw};
-                for (uint32_t di = 0; di < n_dst; di++) {
-                    uint32_t dst_raw = 0;
-                    uint32_t n_fn = 0;
-                    read_u32(dst_raw);
-                    read_u32(n_fn);
-                    MeshId dst_mesh{dst_raw};
-                    auto& into_set = into[src_mesh][dst_mesh];
-                    for (uint32_t fi = 0; fi < n_fn; fi++) {
-                        uint32_t mesh_raw = 0;
-                        uint32_t chip_id = 0;
-                        read_u32(mesh_raw);
-                        read_u32(chip_id);
-                        into_set.insert(FabricNodeId(MeshId{mesh_raw}, chip_id));
-                    }
-                }
-            }
-            TT_FATAL(off == data.size(), "collect_intermesh_exit_fab: size mismatch");
-        };
-
-    std::vector<uint8_t> serialized_local = serialize_local_map(intermesh_exit_fabric_node_ids_);
-    std::vector<uint8_t> serialized_remote;
-    auto my_rank = *(distributed_context.rank());
-
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == static_cast<int>(bcast_root)) {
-            int local_data_size_bytes = static_cast<int>(serialized_local.size());
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
-                distributed_context.rank());
-
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
-                distributed_context.rank());
-        } else {
-            int remote_data_size_bytes = 0;
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-            serialized_remote.clear();
-            serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-
-            merge_from_serialized(intermesh_exit_fabric_node_ids_, serialized_remote);
-        }
-        distributed_context.barrier();
-    }
-}
-
-void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
-
-    auto serialize_local_pair_map =
-        [](const std::unordered_map<
-            MeshId,
-            std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>& m) {
-            std::vector<uint8_t> buf;
-            auto append_u32 = [&buf](uint32_t v) {
-                buf.insert(buf.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
-            };
-            append_u32(static_cast<uint32_t>(m.size()));
-            for (const auto& [src_mesh, inner] : m) {
-                append_u32(*src_mesh);
-                append_u32(static_cast<uint32_t>(inner.size()));
-                for (const auto& [dst_mesh, pairs] : inner) {
-                    append_u32(*dst_mesh);
-                    append_u32(static_cast<uint32_t>(pairs.size()));
-                    for (const auto& pr : pairs) {
-                        append_u32(*pr.first.mesh_id);
-                        append_u32(pr.first.chip_id);
-                        append_u32(*pr.second.mesh_id);
-                        append_u32(pr.second.chip_id);
-                    }
-                }
-            }
-            return buf;
-        };
-
-    auto merge_pair_vectors = [](std::vector<std::pair<FabricNodeId, FabricNodeId>>& into,
-                                 const std::vector<std::pair<FabricNodeId, FabricNodeId>>& from) {
-        into.reserve(into.size() + from.size());
-        for (const auto& p : from) {
-            if (std::find(into.begin(), into.end(), p) == into.end()) {
-                into.push_back(p);
-            }
-        }
-    };
-
-    auto merge_from_serialized =
-        [&merge_pair_vectors](
-            std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>&
-                into,
-            const std::vector<uint8_t>& data) {
-            std::size_t off = 0;
-            auto read_u32 = [&data, &off](uint32_t& out) {
-                TT_FATAL(off + 4 <= data.size(), "collect_intermesh_exit_peer_pairs: truncated");
-                std::memcpy(&out, data.data() + off, sizeof(uint32_t));
-                off += sizeof(uint32_t);
-            };
-            uint32_t n_src = 0;
-            read_u32(n_src);
-            for (uint32_t si = 0; si < n_src; si++) {
-                uint32_t src_raw = 0;
-                uint32_t n_dst = 0;
-                read_u32(src_raw);
-                read_u32(n_dst);
-                MeshId src_mesh{src_raw};
-                for (uint32_t di = 0; di < n_dst; di++) {
-                    uint32_t dst_raw = 0;
-                    uint32_t n_pr = 0;
-                    read_u32(dst_raw);
-                    read_u32(n_pr);
-                    MeshId dst_mesh{dst_raw};
-                    std::vector<std::pair<FabricNodeId, FabricNodeId>> remote_pairs;
-                    remote_pairs.reserve(n_pr);
-                    for (uint32_t pi = 0; pi < n_pr; pi++) {
-                        uint32_t a_m = 0, a_c = 0, b_m = 0, b_c = 0;
-                        read_u32(a_m);
-                        read_u32(a_c);
-                        read_u32(b_m);
-                        read_u32(b_c);
-                        remote_pairs.emplace_back(FabricNodeId(MeshId{a_m}, a_c), FabricNodeId(MeshId{b_m}, b_c));
-                    }
-                    auto& into_vec = into[src_mesh][dst_mesh];
-                    if (into_vec.empty()) {
-                        into_vec = std::move(remote_pairs);
-                    } else {
-                        merge_pair_vectors(into_vec, remote_pairs);
-                    }
-                }
-            }
-            TT_FATAL(off == data.size(), "collect_intermesh_exit_peer_pairs: size mismatch");
-        };
-
-    std::vector<uint8_t> serialized_local = serialize_local_pair_map(intermesh_exit_peer_fabric_node_id_pairs_);
-    std::vector<uint8_t> serialized_remote;
-    auto my_rank = *(distributed_context.rank());
-
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == static_cast<int>(bcast_root)) {
-            int local_data_size_bytes = static_cast<int>(serialized_local.size());
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
-                distributed_context.rank());
-
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
-                distributed_context.rank());
-        } else {
-            int remote_data_size_bytes = 0;
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-            serialized_remote.clear();
-            serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-
-            merge_from_serialized(intermesh_exit_peer_fabric_node_id_pairs_, serialized_remote);
-        }
-        distributed_context.barrier();
-    }
-}
-
-// Propose PortDescriptors for neighbor cables (rank 0 pairs). One RoutingDirection per physical link; Z/NESW order from
-// MGD.
-std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_nodes(
+// Gather physical cable facts toward one neighbor; no logical port/direction is chosen here (rank 0 pairs later).
+std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes(
     const std::string& my_host,
     const std::string& neighbor_host,
     bool strict_binding,
-    const std::unordered_set<FabricNodeId>& requested_exit_nodes,
-    std::unordered_set<port_id_t>& assigned_port_ids) {
+    const std::unordered_set<FabricNodeId>& requested_exit_nodes) {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
     const auto& neighbor_binding = this->global_logical_bindings_.at(
         tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
     const auto neighbor_mesh_id = neighbor_binding.first;
 
-    const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
-    const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
+    // Copy + stably sort the exit-node cables by a logical key (src chip, then src/dst channel) so the
+    // gathered record order is independent of get_connecting_exit_nodes()'s discovery order (which comes
+    // from a hostname-keyed unordered_map and therefore varies by physical host).
+    auto exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+    std::sort(exit_nodes.begin(), exit_nodes.end(), [this](const auto& a, const auto& b) {
+        auto ca = this->get_fabric_node_id_from_asic_id(*a.src_exit_node).chip_id;
+        auto cb = this->get_fabric_node_id_from_asic_id(*b.src_exit_node).chip_id;
+        if (ca != cb) {
+            return ca < cb;
+        }
+        if (a.eth_conn.src_chan != b.eth_conn.src_chan) {
+            return a.eth_conn.src_chan < b.eth_conn.src_chan;
+        }
+        return a.eth_conn.dst_chan < b.eth_conn.dst_chan;
+    });
 
-    bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
-
-    std::vector<PortDescriptor> ports_to_neighbor;
-
-    std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;  // One RoutingDirection per physical link.
-    std::size_t z_fallback_count = 0;
-
+    // A single src chip may cable to at most one dst chip on a given neighbor mesh. The routing table
+    // is per (chip, direction): a direction's channel pool is one routing resource and cannot
+    // disambiguate two different destination chips. Enforce this invariant at gather time.
     std::unordered_map<uint64_t, std::unordered_map<ChipId, std::size_t>> cables_per_src_chip_per_dst_chip;
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId dst_fn = this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
@@ -2907,18 +2762,11 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
             *neighbor_mesh_id);
     }
 
-    // Build once outside the per-exit-node loop: mesh_edge_ports_to_chip_id[my_mesh_id] is
-    // constant throughout this function, so there is no need to re-sort on every iteration.
-    std::vector<std::pair<port_id_t, ChipId>> sorted_edge_ports(
-        mesh_edge_ports_to_chip_id[*my_mesh_id].begin(),
-        mesh_edge_ports_to_chip_id[*my_mesh_id].end());
-    std::sort(sorted_edge_ports.begin(), sorted_edge_ports.end(), [](const auto& a, const auto& b) {
-        if (a.first.first != b.first.first) {
-            return static_cast<int>(a.first.first) < static_cast<int>(b.first.first);
-        }
-        return a.first.second < b.first.second;
-    });
-
+    // Gather physical cable facts only. No logical direction / channel is chosen here: the rank-0
+    // round-robin allocator (pair_logical_intermesh_ports) sees every cable from both endpoint meshes
+    // and assigns the port_id on each side. This avoids the per-host greedy port exhaustion where a
+    // host that processed a shared exit chip first could strand a later ring-closing boundary.
+    std::vector<PortDescriptor> gathered_cables;
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2929,7 +2777,7 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
             }
         }
 
-        // Skip PSD cables whose ETH link is not up (don't consume mesh edge ports).
+        // Skip PSD cables whose ETH link is not up.
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(exit_node_fabric_node_id);
         const auto& soc_desc = this->cluster_.get().get_soc_desc(physical_chip_id);
@@ -2939,65 +2787,14 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         }
 
         auto assoc_connection_hash = std::hash<tt::tt_metal::ExitNodeConnection>{}(exit_node);
-        auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
-        auto exit_node_chip = exit_node_fabric_node_id.chip_id;
-
-        // Deferred intermesh_* updates until after rank-0 pairing (Z/NESW may change).
-        // sorted_edge_ports is computed once before this loop (mesh_edge_ports_to_chip_id[my_mesh_id]
-        // is constant for the lifetime of this function).
-        auto try_assign_port = [&](bool use_z_direction) -> bool {
-            for (const auto& [port_id_pair, port_chip_id] : sorted_edge_ports) {
-                if (exit_node_chip != port_chip_id) {
-                    continue;
-                }
-                auto port_direction = port_id_pair.first;
-                auto logical_chan_id = port_id_pair.second;
-
-                bool is_z_direction = (port_direction == RoutingDirection::Z);
-                if (use_z_direction != is_z_direction) {
-                    continue;
-                }
-
-                RoutingDirection final_direction = use_z_direction ? RoutingDirection::Z : port_direction;
-                port_id_t port_id = {final_direction, logical_chan_id};
-
-                bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
-                                       curr_exit_node_direction.at(exit_node_hash) == final_direction;
-                if (!assigned_port_ids.contains(port_id) && valid_direction) {
-                    assigned_port_ids.insert(port_id);
-                    ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    curr_exit_node_direction[exit_node_hash] = final_direction;
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        // Try the preferred direction class first, then fall back to Z if NESW is exhausted
-        bool assigned = try_assign_port(should_assign_z);
-        if (!assigned && !should_assign_z) {
-            if (z_fallback_count++ == 0) {
-                log_warning(
-                    tt::LogFabric,
-                    "Ran out of NESW ports for mesh {} -> {}, falling back to Z direction",
-                    *my_mesh_id,
-                    *neighbor_mesh_id);
-            }
-            assigned = try_assign_port(true);
-        }
-        if (!assigned) {
-            log_warning(
-                tt::LogFabric,
-                "No ports available for exit node {} on mesh {} -> {}; skipping connection",
-                exit_node_fabric_node_id,
-                *my_mesh_id,
-                *neighbor_mesh_id);
-        }
+        FabricNodeId dst_fn = this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
+        gathered_cables.push_back(
+            PortDescriptor{assoc_connection_hash, static_cast<ChipId>(exit_node_fabric_node_id.chip_id), dst_fn});
     }
-    return ports_to_neighbor;
+    return gathered_cables;
 }
 
-PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
+PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
     const auto& mesh_graph = *this->mesh_graph_;
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
@@ -3010,23 +2807,30 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
 
     bool strict_binding = !requested_intermesh_ports.empty();
 
-    // Track the Logical Ethernet Ports connecting to all neighbors of my_mesh
+    // Track the gathered inter-mesh cables toward all neighbors of my_mesh.
     PortDescriptorTable port_descriptors;
-    // Track Direction and Logical Ports already assigned for intermesh links
-    std::unordered_set<port_id_t> assigned_port_ids;
     port_descriptors[my_mesh_id] = {};
 
+    // Iterate neighbors in a stable (neighbor mesh_id, hostname) order rather than get_host_neighbors()'s
+    // hostname-keyed unordered_map order, so the gathered record order is host-independent.
+    std::vector<std::pair<MeshId, std::string>> sorted_neighbors;
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-        // Skip if neighbor host is not in our global logical bindings
-        if (!this->global_logical_bindings_.contains(
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})) {
+        auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
+        // Skip if neighbor host is not in our global logical bindings.
+        if (!this->global_logical_bindings_.contains(neighbor_rank)) {
             continue;
         }
-        auto neighbor_mesh_id =
-            this->global_logical_bindings_
-                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                .first;
+        sorted_neighbors.emplace_back(this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host);
+    }
+    std::sort(sorted_neighbors.begin(), sorted_neighbors.end(), [](const auto& a, const auto& b) {
+        if (*a.first != *b.first) {
+            return *a.first < *b.first;
+        }
+        return a.second < b.second;
+    });
+
+    for (const auto& [neighbor_mesh_id, neighbor_host] : sorted_neighbors) {
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {
@@ -3041,8 +2845,8 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
             });
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
-        auto neighbor_ports = this->propose_port_descriptors_for_exit_nodes(
-            my_host, neighbor_host, strict_binding, requested_exit_nodes, assigned_port_ids);
+        auto neighbor_ports =
+            this->gather_intermesh_cables_for_exit_nodes(my_host, neighbor_host, strict_binding, requested_exit_nodes);
         // A host may connect to multiple neighbor hosts on the same logical mesh (e.g. pod
         // boundary spanning several machines). Append per-neighbor discoveries instead of
         // overwriting the previous neighbor's ports.
@@ -3056,42 +2860,139 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
 }
 
 void ControlPlane::validate_requested_intermesh_connections(
-    const RequestedIntermeshConnections& requested_intermesh_connections, const PortDescriptorTable& port_descriptors) {
-    bool strict_binding = requested_intermesh_connections.empty();
-    if (strict_binding) {
-        return;
+    const AnnotatedIntermeshConnections& intermesh_connections) const {
+    // Runs on every rank (single- and multi-host) over the broadcast-identical annotated intermesh_connections,
+    // so every rank reaches the same verdict -- no rank-divergent throw that could deadlock MPI.
+    //
+    // Part 1: placement invariants derivable from the annotated connections (they still carry per-endpoint
+    // direction/port info, unlike the resolved FabricNodeId maps):
+    //   R1  assign_z (marked) boundaries are Z-only -- every placed channel sits on a Z lane on both endpoints.
+    //   R2  each chip owns at most one peer per direction (a direction on a chip faces a single neighbor chip;
+    //       see RouterEdge "all ports in one direction connect to the same chip").
+    //   R3/R4  both endpoints of a channel (and thus its cable) share the same Z-ness: Z<->Z or NESW<->NESW.
+    const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
+    auto is_z = [](RoutingDirection d) { return d == RoutingDirection::Z; };
+    using Boundary = std::pair<uint32_t, uint32_t>;
+    auto node_of = [&](uint32_t mesh_raw, const port_id_t& port) {
+        return FabricNodeId(MeshId{mesh_raw}, mesh_edge_ports_to_chip_id.at(mesh_raw).at(port));
+    };
+    std::map<std::pair<FabricNodeId, RoutingDirection>, FabricNodeId> dir_peer;  // R2: (node, dir) -> peer node
+    std::map<Boundary, std::size_t> resolved_between;  // Part 2: directed (src_mesh, dst_mesh) -> #channels placed
+    for (const auto& connection : intermesh_connections) {
+        const auto& [src_mesh_raw, src_port] = std::get<0>(connection);
+        const auto& [dst_mesh_raw, dst_port] = std::get<1>(connection);
+        const RoutingDirection src_dir = src_port.first;
+        const RoutingDirection dst_dir = dst_port.first;
+        const FabricNodeId src_node = node_of(src_mesh_raw, src_port);
+        const FabricNodeId dst_node = node_of(dst_mesh_raw, dst_port);
+        resolved_between[{src_mesh_raw, dst_mesh_raw}]++;
+
+        // R3/R4: endpoints must agree on Z-ness.
+        TT_FATAL(
+            is_z(src_dir) == is_z(dst_dir),
+            "Inter-mesh placement invariant violated (R3/R4): channel {}({}) <-> {}({}) mixes Z and NESW lanes; "
+            "both endpoints of a channel must share the same Z-ness.",
+            src_node,
+            create_port_tag(src_port),
+            dst_node,
+            create_port_tag(dst_port));
+
+        // R1: assign_z boundaries are Z-only.
+        const Boundary boundary =
+            src_mesh_raw < dst_mesh_raw ? Boundary{src_mesh_raw, dst_mesh_raw} : Boundary{dst_mesh_raw, src_mesh_raw};
+        if (this->mesh_graph_->should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second})) {
+            TT_FATAL(
+                is_z(src_dir) && is_z(dst_dir),
+                "Inter-mesh placement invariant violated (R1): assign_z boundary M{}<->M{} placed channel {}({}) <-> "
+                "{}({}) on a non-Z lane; marked boundaries take Z channels exclusively.",
+                boundary.first,
+                boundary.second,
+                src_node,
+                create_port_tag(src_port),
+                dst_node,
+                create_port_tag(dst_port));
+        }
+
+        // R2: a (node, direction) may face only one peer node.
+        auto [it, inserted] = dir_peer.try_emplace({src_node, src_dir}, dst_node);
+        TT_FATAL(
+            inserted || it->second == dst_node,
+            "Inter-mesh placement invariant violated (R2): chip {} owns direction {} toward both {} and {}; each chip "
+            "may own only one link (peer) per direction.",
+            src_node,
+            enchantum::to_string(src_dir),
+            it->second,
+            dst_node);
     }
-    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
-    for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
-        auto src_mesh_id = MeshId(src_mesh);
-        for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
-            auto dst_mesh_id = MeshId(dst_mesh);
-            const auto& ports = port_descriptors.at(src_mesh_id).at(dst_mesh_id);
-            if (num_channels > ports.size()) {
-                std::string port_directions_str;
-                for (size_t i = 0; i < ports.size(); ++i) {
-                    if (i > 0) {
-                        port_directions_str += ", ";
-                    }
-                    port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
-                                           std::to_string(ports[i].port_id.second);
+
+    // Part 2: per-mesh-pair counts against the Mesh Graph Descriptor. Counted directly from intermesh_connections
+    // (above) rather than from the resolved exit/peer maps, so this validation does not depend on those maps having
+    // been rebuilt first.
+    //
+    // The aggregate connection count check in generate_intermesh_connectivity can pass even when an
+    // individual mesh boundary resolved zero routers (e.g. every candidate channel was dropped by a
+    // Z/non-Z direction mismatch). Fail here at control-plane init instead of surfacing later in a
+    // downstream consumer (e.g. generate_blitz_decode_pipeline).
+    auto num_resolved_between = [&resolved_between](uint32_t src_mesh, uint32_t dst_mesh) -> std::size_t {
+        auto it = resolved_between.find({src_mesh, dst_mesh});
+        return it == resolved_between.end() ? 0 : it->second;
+    };
+    const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
+    if (!requested_intermesh_ports.empty()) {
+        // Strict mode (device-level MGD): exact channel count per mesh pair.
+        for (const auto& [src_mesh, dst_to_ports] : requested_intermesh_ports) {
+            for (const auto& [dst_mesh, port_specs] : dst_to_ports) {
+                std::size_t requested = 0;
+                for (const auto& port_spec : port_specs) {
+                    requested += std::get<2>(port_spec);
                 }
-                const std::string msg = fmt::format(
-                    "Requested {} channels between {} and {}, but only have {} physical links. "
-                    "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
-                    "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
-                    "generate_rank_bindings does not yet validate Z vs non-Z port capacity. "
-                    "Available port directions: {}.",
-                    num_channels,
+                const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
+                TT_FATAL(
+                    resolved == requested,
+                    "Inter-mesh routing validation failed (strict): the Mesh Graph Descriptor requests {} "
+                    "connection(s) between mesh {} and mesh {}, but {} were resolved during control plane "
+                    "initialization. Every requested inter-mesh connection must resolve routers on both ends.",
+                    requested,
                     src_mesh,
                     dst_mesh,
-                    ports.size(),
-                    port_directions_str);
-                if (inter_mesh_relaxed) {
-                    log_warning(
-                        tt::LogFabric, "Inter-mesh channel request exceeds physical links (policy relaxed): {}", msg);
-                } else {
-                    TT_THROW("{}", msg);
+                    resolved);
+            }
+        }
+    } else {
+        // Relaxed mode (graph-level MGD): at least one connection per mesh pair; warn or throw when
+        // fewer channels resolve than requested.
+        const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
+        for (const auto& [src_mesh, dst_to_channels] : this->mesh_graph_->get_requested_intermesh_connections()) {
+            for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
+                const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
+                if (resolved == 0) {
+                    TT_THROW(
+                        "Inter-mesh routing validation failed (relaxed): the Mesh Graph Descriptor requests a "
+                        "connection ({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved "
+                        "during control plane initialization (all candidate channels were dropped, e.g. by a Z/non-Z "
+                        "direction mismatch). Every requested inter-mesh connection must resolve at least one router.",
+                        requested_channels,
+                        src_mesh,
+                        dst_mesh);
+                }
+                if (requested_channels > resolved) {
+                    const std::string msg = fmt::format(
+                        "Requested {} channels between {} and {}, but only {} were resolved. "
+                        "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
+                        "the physical link capacity (e.g. 4 for torus wrap-around). "
+                        "Pairing may also drop links due to Z/non-Z direction mismatches.",
+                        requested_channels,
+                        src_mesh,
+                        dst_mesh,
+                        resolved);
+                    if (inter_mesh_relaxed) {
+                        log_warning(
+                            tt::LogFabric,
+                            "Inter-mesh channel request exceeds resolved links (policy relaxed): {}",
+                            msg);
+                    } else {
+                        TT_THROW("{}", msg);
+                    }
                 }
             }
         }
@@ -3246,8 +3147,16 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
     distributed_context.barrier();
 }
 
-// Rank 0: match cables across hosts by connection_hash, reconcile Z vs NESW (demote/promote),
-// keep <=1 Z destination mesh per chip, and emit a symmetric AnnotatedIntermeshConnections list.
+// Rules:
+//   - One neighbor mesh per (node, direction), for NESW and Z alike.
+//   - count is both a target the allocator fills and a cap it will not exceed.
+// Phases:
+//   Phase 1a  marked (assign_z) boundaries are Z-only: they claim Z here and are excluded from all later
+//             phases. Hard-fatal only if a marked boundary cannot secure even one channel on Z; channels
+//             that do not fit on Z are dropped (never fall back to NESW).
+//   Phase 1b  round-robin over unmarked boundaries, placing one link each on NESW.
+//   Phase 2   round-robin placing leftover (NESW-overflow) links from unmarked boundaries on remaining Z.
+//   The full requested count is enforced afterwards by the direction-agnostic validation step.
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
     AnnotatedIntermeshConnections annotated_intermesh;
 
@@ -3255,190 +3164,327 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
     const auto& mesh_edge_ports_to_chip_id = mesh_graph.get_mesh_edge_ports_to_chip_id();
+    // NOTE: strict (device-level, per-exit-chip) and relaxed (mesh-pair count) binding cannot currently be
+    // mixed within one Mesh Graph Descriptor - it must specify either Graph or RelaxedGraph connections, not
+    // both (enforced by the TT_FATAL in generate_intermesh_connectivity). The whole allocation therefore runs
+    // in a single mode, and only that mode's budget/placed maps are ever touched. Mixing is tracked by
+    // https://github.com/tenstorrent/tt-metal/issues/49960.
     const bool strict_intermesh_port_binding = !requested_intermesh_ports.empty();
-    validate_requested_intermesh_connections(requested_intermesh_connections, port_descriptors);
 
-    // Per-pair state, persisted across all (src_mesh, dest_mesh) iterations.
-    std::set<std::pair<uint32_t, uint32_t>> processed_neighbor_pair_keys;  // skip when reverse (dst, src) is done
-    std::unordered_map<uint32_t, std::unordered_set<port_id_t, hash_pair>>
-        occupied_nesw_port_ids;                                                   // NESW slots taken or in play
-    std::unordered_map<uint32_t, std::unordered_set<port_id_t>> used_z_port_ids;  // Z ports already committed
-    std::map<std::pair<uint32_t, ChipId>, uint32_t> chip_to_z_neighbor_mesh_id;  // at most one Z neighbor mesh per chip
-    for (const auto& [src_mesh, dest_mesh_to_proposals] : port_descriptors) {
-        for (const auto& [dest_mesh, proposals] : dest_mesh_to_proposals) {
-            for (const auto& proposal : proposals) {
-                if (proposal.port_id.first != RoutingDirection::Z) {
-                    occupied_nesw_port_ids[*src_mesh].insert(proposal.port_id);
-                }
-            }
-        }
-    }
+    auto is_z = [](RoutingDirection d) { return d == RoutingDirection::Z; };
 
-    auto is_nesw = [](RoutingDirection d) {
-        return d == RoutingDirection::N || d == RoutingDirection::E || d == RoutingDirection::S ||
-               d == RoutingDirection::W;
+    // Canonical boundary (min, max) mesh id pair; links are gathered with src on `first`, dst on `second`.
+    using Boundary = std::pair<uint32_t, uint32_t>;
+    struct Link {
+        FabricNodeId src_node;
+        FabricNodeId dst_node;
+        std::vector<std::size_t> connection_hashes;  // one channel per hash (a cable is 2 channels)
+        bool placed = false;
     };
-    auto chip_id_for_port = [&](uint32_t mesh_id, port_id_t port) {
-        return mesh_edge_ports_to_chip_id.at(mesh_id).at(port);
-    };
-    auto z_neighbor_mesh_is_allowed = [&](uint32_t mesh_id, ChipId chip, uint32_t neighbor_mesh_id) {
-        auto it = chip_to_z_neighbor_mesh_id.find({mesh_id, chip});
-        return it == chip_to_z_neighbor_mesh_id.end() || it->second == neighbor_mesh_id;
-    };
-    // Free port on (mesh, chip) with the requested Z-ness: Z is tracked in used_z_port_ids, NESW in
-    // occupied_nesw_port_ids.
-    auto find_free_port = [&](uint32_t mesh_id, ChipId chip, bool want_z) -> std::optional<port_id_t> {
-        for (const auto& [port_id, port_chip] : mesh_edge_ports_to_chip_id.at(mesh_id)) {
-            if (port_chip != chip || (port_id.first == RoutingDirection::Z) != want_z) {
+
+    // --- Allocation state (populated below, captured by reference by the helper lambdas) -----------
+    // Per-node ports grouped by direction (channel-sorted within each direction); prepopulated for every
+    // link endpoint once links_by_boundary is built.
+    std::map<FabricNodeId, std::map<RoutingDirection, std::vector<port_id_t>>> dir_ports_by_node;
+    std::map<FabricNodeId, std::set<port_id_t>> occupied;                   // ports already taken per node
+    std::map<std::pair<FabricNodeId, RoutingDirection>, MeshId> dir_owner;  // neighbor a (node, dir) serves
+    std::map<Boundary, std::vector<Link>> links_by_boundary;
+    std::map<Boundary, std::size_t> placed_channels;          // relaxed accounting
+    std::map<Boundary, std::size_t> budget_channels;          // relaxed cap/target
+    std::map<FabricNodeId, std::size_t> placed_per_src_node;  // strict accounting
+    std::map<FabricNodeId, std::size_t> budget_per_src_node;  // strict cap/target
+
+    // Find `need` free channels on `node` within a single direction of the requested Z-ness, owned by
+    // (or free to be owned by) `neighbor`. Returns the chosen port_ids (all in one direction) or none.
+    auto find_free_dir =
+        [&](FabricNodeId node, MeshId neighbor, uint32_t need, bool want_z) -> std::optional<std::vector<port_id_t>> {
+        for (const auto& [dir, ports] : dir_ports_by_node.at(node)) {
+            if (is_z(dir) != want_z) {
                 continue;
             }
-            if (!(want_z ? used_z_port_ids[mesh_id].contains(port_id)
-                         : occupied_nesw_port_ids[mesh_id].contains(port_id))) {
-                return port_id;
+            auto owner_it = dir_owner.find({node, dir});
+            const bool owner_ok = (owner_it == dir_owner.end() || owner_it->second == neighbor);
+            if (!owner_ok) {
+                continue;
+            }
+            std::vector<port_id_t> free_here;
+            for (const auto& p : ports) {
+                if (!occupied[node].contains(p)) {
+                    free_here.push_back(p);
+                }
+            }
+            if (free_here.size() >= need) {
+                free_here.resize(need);
+                return free_here;
             }
         }
         return std::nullopt;
     };
-    // Replace port_id on mesh_id with a free port of the opposite Z-ness on the same chip; update pools.
-    auto reassign_port = [&](uint32_t mesh_id,
-                             port_id_t from_port,
-                             bool reassign_to_z,
-                             uint32_t neighbor_mesh_id) -> std::optional<port_id_t> {
-        ChipId chip = chip_id_for_port(mesh_id, from_port);
-        if (reassign_to_z && !z_neighbor_mesh_is_allowed(mesh_id, chip, neighbor_mesh_id)) {
-            return std::nullopt;
+
+    // Place both endpoints of a link into one direction of the requested Z-ness; on success, occupy the
+    // ports, record direction ownership, and emit symmetric annotated entries (one pair per channel).
+    auto place_link = [&](Link& link, bool want_z) -> bool {
+        const uint32_t need = static_cast<uint32_t>(link.connection_hashes.size());
+        auto src_ports = find_free_dir(link.src_node, link.dst_node.mesh_id, need, want_z);
+        if (!src_ports) {
+            return false;
         }
-        auto to_port = find_free_port(mesh_id, chip, reassign_to_z);
-        if (!to_port) {
-            return std::nullopt;
+        auto dst_ports = find_free_dir(link.dst_node, link.src_node.mesh_id, need, want_z);
+        if (!dst_ports) {
+            return false;
         }
-        occupied_nesw_port_ids[mesh_id].insert(*to_port);
-        occupied_nesw_port_ids[mesh_id].erase(from_port);
-        if (reassign_to_z) {
-            used_z_port_ids[mesh_id].insert(*to_port);
-            chip_to_z_neighbor_mesh_id[{mesh_id, chip}] = neighbor_mesh_id;
+        const RoutingDirection src_dir = src_ports->front().first;
+        const RoutingDirection dst_dir = dst_ports->front().first;
+        for (const auto& p : *src_ports) {
+            occupied[link.src_node].insert(p);
         }
-        return to_port;
+        for (const auto& p : *dst_ports) {
+            occupied[link.dst_node].insert(p);
+        }
+        dir_owner.insert_or_assign({link.src_node, src_dir}, link.dst_node.mesh_id);
+        dir_owner.insert_or_assign({link.dst_node, dst_dir}, link.src_node.mesh_id);
+        for (std::size_t k = 0; k < link.connection_hashes.size(); ++k) {
+            const port_id_t sp = (*src_ports)[k];
+            const port_id_t dp = (*dst_ports)[k];
+            annotated_intermesh.emplace_back(
+                std::pair<uint32_t, port_id_t>{*link.src_node.mesh_id, sp},
+                std::pair<uint32_t, port_id_t>{*link.dst_node.mesh_id, dp},
+                link.connection_hashes[k]);
+            annotated_intermesh.emplace_back(
+                std::pair<uint32_t, port_id_t>{*link.dst_node.mesh_id, dp},
+                std::pair<uint32_t, port_id_t>{*link.src_node.mesh_id, sp},
+                link.connection_hashes[k]);
+        }
+        link.placed = true;
+        return true;
     };
 
-    for (const auto& [src_mesh, dest_mesh_to_proposals] : port_descriptors) {
-        for (const auto& [dst_mesh, src_side_proposals] : dest_mesh_to_proposals) {
-            if (processed_neighbor_pair_keys.contains({*dst_mesh, *src_mesh})) {
-                continue;  // Reverse pair already processed.
+    // count budget: a link fits if placing all its channels stays within the boundary's target/cap
+    // (relaxed: per boundary; strict: per pinned src exit node).
+    auto account_placed = [&](const Boundary& boundary, const Link& link) {
+        const std::size_t n = link.connection_hashes.size();
+        if (strict_intermesh_port_binding) {
+            placed_per_src_node[link.src_node] += n;
+        } else {
+            placed_channels[boundary] += n;
+        }
+    };
+
+    // relaxed count lookup; requested_intermesh_connections may be stored one-directional in the MGD.
+    auto requested_count = [&](uint32_t x, uint32_t y) -> std::size_t {
+        auto it = requested_intermesh_connections.find(x);
+        if (it != requested_intermesh_connections.end()) {
+            auto jt = it->second.find(y);
+            if (jt != it->second.end()) {
+                return jt->second;
             }
+        }
+        return 0;
+    };
 
-            // Quotas: strict mode per src exit node; relaxed mode total inter-mesh channel count.
-            std::unordered_map<FabricNodeId, uint32_t> requested_ports_for_src_node;
-            std::unordered_map<FabricNodeId, uint32_t> assigned_ports_for_src_node;
-            std::size_t assigned_cable_count = 0;
-            std::size_t requested_cable_count = 0;
-            if (strict_intermesh_port_binding) {
-                for (const auto& [exit_chip, _, count] : requested_intermesh_ports.at(*src_mesh).at(*dst_mesh)) {
-                    auto fn = FabricNodeId(src_mesh, exit_chip);
-                    requested_ports_for_src_node[fn] += count;
-                    assigned_ports_for_src_node[fn] = 0;
-                }
-            } else {
-                requested_cable_count = requested_intermesh_connections.at(*src_mesh).at(*dst_mesh);
-            }
-
-            // Match src proposals to the dst-side proposal with the same connection_hash.
-            std::unordered_map<std::size_t, port_id_t> dst_port_id_by_cable_hash;
-            for (const auto& dst_proposal : port_descriptors.at(dst_mesh).at(src_mesh)) {
-                dst_port_id_by_cable_hash.emplace(dst_proposal.connection_hash, dst_proposal.port_id);
-            }
-
-            for (const auto& src_proposal : src_side_proposals) {
-                FabricNodeId src_exit_node(src_mesh, chip_id_for_port(*src_mesh, src_proposal.port_id));
-                if (strict_intermesh_port_binding) {
-                    if (assigned_ports_for_src_node.at(src_exit_node) >=
-                        requested_ports_for_src_node.at(src_exit_node)) {
-                        continue;
-                    }
-                } else if (assigned_cable_count == requested_cable_count) {
-                    break;
-                }
-                auto dst_match = dst_port_id_by_cable_hash.find(src_proposal.connection_hash);
-                if (dst_match == dst_port_id_by_cable_hash.end()) {
-                    continue;  // No matching cable on the destination host for this hash.
-                }
-
-                port_id_t src_port_id = src_proposal.port_id;
-                port_id_t dst_port_id = dst_match->second;
-                const bool src_is_z = (src_port_id.first == RoutingDirection::Z);
-                const bool dst_is_z = (dst_port_id.first == RoutingDirection::Z);
-
-                // Reconcile Z vs NESW: demote Z to NESW when allowed; else promote NESW to Z; else drop.
-                if (src_is_z != dst_is_z) {
-                    port_id_t& z_side_port = src_is_z ? src_port_id : dst_port_id;
-                    port_id_t& nesw_side_port = src_is_z ? dst_port_id : src_port_id;
-                    const uint32_t z_side_mesh = src_is_z ? *src_mesh : *dst_mesh;
-                    const uint32_t nesw_side_mesh = src_is_z ? *dst_mesh : *src_mesh;
-                    bool z_mismatch_resolved = false;
-                    if (!mesh_graph.should_assign_z_direction(src_mesh, dst_mesh) && is_nesw(nesw_side_port.first)) {
-                        if (auto demoted = reassign_port(z_side_mesh, z_side_port, false, nesw_side_mesh); demoted) {
-                            z_side_port = *demoted;
-                            z_mismatch_resolved = true;
-                        }
-                    }
-                    if (!z_mismatch_resolved) {
-                        if (auto promoted = reassign_port(nesw_side_mesh, nesw_side_port, true, z_side_mesh);
-                            promoted) {
-                            nesw_side_port = *promoted;
-                            z_mismatch_resolved = true;
-                        }
-                    }
-                    if (!z_mismatch_resolved) {
-                        log_warning(
-                            tt::LogFabric,
-                            "Z/non-Z mismatch M{}<->M{} (hash={}); no swap possible, dropping",
-                            *src_mesh,
-                            *dst_mesh,
-                            src_proposal.connection_hash);
-                        continue;
-                    }
-                }
-
-                // Enforce at most one Z neighbor mesh per chip on each side; verify before recording.
-                auto chip_allows_z_to_neighbor = [&](uint32_t mesh_id, port_id_t port, uint32_t neighbor_mesh_id) {
-                    return port.first != RoutingDirection::Z ||
-                           z_neighbor_mesh_is_allowed(mesh_id, chip_id_for_port(mesh_id, port), neighbor_mesh_id);
-                };
-                if (!chip_allows_z_to_neighbor(*src_mesh, src_port_id, *dst_mesh) ||
-                    !chip_allows_z_to_neighbor(*dst_mesh, dst_port_id, *src_mesh)) {
-                    log_warning(
-                        tt::LogFabric,
-                        "Chip already has Z to another mesh M{}<->M{} (hash={}); dropping",
-                        *src_mesh,
-                        *dst_mesh,
-                        src_proposal.connection_hash);
-                    continue;
-                }
-                auto record_z_port_commit = [&](uint32_t mesh_id, port_id_t port, uint32_t neighbor_mesh_id) {
-                    if (port.first == RoutingDirection::Z) {
-                        used_z_port_ids[mesh_id].insert(port);
-                        chip_to_z_neighbor_mesh_id[{mesh_id, chip_id_for_port(mesh_id, port)}] = neighbor_mesh_id;
-                    }
-                };
-                record_z_port_commit(*src_mesh, src_port_id, *dst_mesh);
-                record_z_port_commit(*dst_mesh, dst_port_id, *src_mesh);
-
-                // Bi-directional entries share connection_hash (PSD cable key) for downstream mapping.
-                auto append_annotated_pair =
-                    [&](uint32_t from_mesh, port_id_t from_port, uint32_t to_mesh, port_id_t to_port) {
-                        annotated_intermesh.emplace_back(
-                            std::pair<uint32_t, port_id_t>{from_mesh, from_port},
-                            std::pair<uint32_t, port_id_t>{to_mesh, to_port},
-                            src_proposal.connection_hash);
-                    };
-                append_annotated_pair(*src_mesh, src_port_id, *dst_mesh, dst_port_id);
-                append_annotated_pair(*dst_mesh, dst_port_id, *src_mesh, src_port_id);
-                assigned_cable_count++;
-                assigned_ports_for_src_node[src_exit_node]++;
-            }
-            processed_neighbor_pair_keys.insert({*src_mesh, *dst_mesh});
+    // --- Build links_by_boundary (both-sides join by connection_hash) ----------------------------
+    std::set<Boundary> boundaries;
+    for (const auto& [src_mesh, dst_map] : port_descriptors) {
+        for (const auto& [dst_mesh, _proposals] : dst_map) {
+            const uint32_t s = *src_mesh;
+            const uint32_t d = *dst_mesh;
+            boundaries.insert(s < d ? Boundary{s, d} : Boundary{d, s});
         }
     }
+    for (const auto& boundary : boundaries) {
+        const MeshId a{boundary.first};   // canonical src side
+        const MeshId b{boundary.second};  // canonical dst side
+        auto a_it = port_descriptors.find(a);
+        auto b_it = port_descriptors.find(b);
+        if (a_it == port_descriptors.end() || b_it == port_descriptors.end()) {
+            continue;
+        }
+        auto a_side_it = a_it->second.find(b);
+        auto b_side_it = b_it->second.find(a);
+        if (a_side_it == a_it->second.end() || b_side_it == b_it->second.end()) {
+            continue;  // a channel must be gathered from both endpoints to be eligible
+        }
+        std::unordered_set<std::size_t> dst_side_hashes;
+        for (const auto& d : b_side_it->second) {
+            dst_side_hashes.insert(d.connection_hash);
+        }
+        std::map<std::pair<FabricNodeId, FabricNodeId>, std::vector<std::size_t>> link_hashes;
+        for (const auto& c : a_side_it->second) {
+            if (!dst_side_hashes.contains(c.connection_hash)) {
+                continue;
+            }
+            FabricNodeId src_node(a, c.src_chip);
+            link_hashes[{src_node, c.dst_node}].push_back(c.connection_hash);
+        }
+        auto& links = links_by_boundary[boundary];
+        for (auto& [nodes, hashes] : link_hashes) {
+            std::sort(hashes.begin(), hashes.end());
+            links.push_back(Link{nodes.first, nodes.second, std::move(hashes), false});
+        }
+    }
+
+    // Prepopulate the per-node direction->ports map for every link endpoint so the phases below can read
+    // dir_ports_by_node directly.
+    for (const auto& [boundary, links] : links_by_boundary) {
+        for (const auto& link : links) {
+            for (const FabricNodeId& node : {link.src_node, link.dst_node}) {
+                if (dir_ports_by_node.contains(node)) {
+                    continue;
+                }
+                auto& dir_ports = dir_ports_by_node[node];
+                for (const auto& [port_id, chip] : mesh_edge_ports_to_chip_id.at(*node.mesh_id)) {
+                    if (chip == node.chip_id) {
+                        dir_ports[port_id.first].push_back(port_id);
+                    }
+                }
+                for (auto& [dir, ports] : dir_ports) {
+                    std::sort(
+                        ports.begin(), ports.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+                }
+            }
+        }
+    }
+
+    // --- Compute per-boundary / per-src-node budgets ----------------------------------------------
+    for (const auto& [boundary, links] : links_by_boundary) {
+        if (!strict_intermesh_port_binding) {
+            budget_channels[boundary] = std::max(
+                requested_count(boundary.first, boundary.second), requested_count(boundary.second, boundary.first));
+        } else {
+            auto it = requested_intermesh_ports.find(boundary.first);
+            if (it != requested_intermesh_ports.end()) {
+                auto jt = it->second.find(boundary.second);
+                if (jt != it->second.end()) {
+                    for (const auto& [exit_chip, _dst, count] : jt->second) {
+                        budget_per_src_node[FabricNodeId(MeshId{boundary.first}, exit_chip)] += count;
+                    }
+                }
+            }
+        }
+    }
+
+    // A boundary is "marked for Z" when the MGD requests assign_z_direction: it is placed Z-only in Phase 1a
+    // and excluded from the NESW / leftover-Z phases.
+    auto is_marked_z = [&](const Boundary& boundary) {
+        return mesh_graph.should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second});
+    };
+
+    // Remaining budget for placing (more of) a link: strict counts per src exit node, relaxed per boundary.
+    // Counts are size_t (unsigned) and a missing key reads as 0, so guard the subtraction against underflow.
+    // NOTE: strict (device-level, per-exit-chip) and relaxed (mesh-pair count) binding cannot currently be
+    // mixed within one Mesh Graph Descriptor - it must specify either Graph or RelaxedGraph connections, not
+    // both (enforced by the TT_FATAL in generate_intermesh_connectivity). The whole allocation therefore runs
+    // in a single mode, and only that mode's budget/placed maps are ever touched. Mixing is tracked by
+    // https://github.com/tenstorrent/tt-metal/issues/49960.
+    auto budget_remaining = [&](const Boundary& boundary, const Link& link) -> std::size_t {
+        if (strict_intermesh_port_binding) {
+            const std::size_t cap = budget_per_src_node[link.src_node];
+            const std::size_t used = placed_per_src_node[link.src_node];
+            return used >= cap ? 0 : cap - used;
+        }
+        const std::size_t cap = budget_channels[boundary];
+        const std::size_t used = placed_channels[boundary];
+        return used >= cap ? 0 : cap - used;
+    };
+
+    // A physical cable can expose more channels than the count the MGD requested (e.g. a 4-channel cable
+    // with count:2). Cap the link to the remaining budget so it places exactly the requested count instead
+    // of being rejected wholesale when its channel count exceeds the per-src-node / per-boundary budget
+    // (the strict device-level 6u-split "0 resolved" bug). Returns false when no budget remains (caller skips
+    // the link); true when there is room to place (the link has been capped to the remaining budget).
+    auto has_budget_after_trim = [&](const Boundary& boundary, Link& link) -> bool {
+        const std::size_t rem = budget_remaining(boundary, link);
+        if (rem == 0) {
+            return false;
+        }
+        if (link.connection_hashes.size() > rem) {
+            link.connection_hashes.resize(rem);
+        }
+        return true;
+    };
+
+    // Placement work-list, built ONCE. The build order is the policy:
+    //   strict  -> boundary-major (greedy: all of boundary A's links, then all of B's, ...); a pinned
+    //              connection is satisfied in full before the next boundary is considered.
+    //   relaxed -> round-major   (round-robin: link 0 of every boundary, then link 1 of every boundary, ...)
+    //              so a shared exit chip is not drained by whichever boundary is processed first.
+    // Each entry pairs a link with its boundary (needed for budget / accounting / conflict reporting).
+    std::vector<std::pair<Boundary, Link*>> order;
+    if (strict_intermesh_port_binding) {
+        for (auto& [boundary, links] : links_by_boundary) {
+            for (auto& link : links) {
+                order.push_back({boundary, &link});
+            }
+        }
+    } else {
+        std::size_t max_links = 0;
+        for (auto& [boundary, links] : links_by_boundary) {
+            max_links = std::max(max_links, links.size());
+        }
+        for (std::size_t round = 0; round < max_links; ++round) {
+            for (auto& [boundary, links] : links_by_boundary) {
+                if (round < links.size()) {
+                    order.push_back({boundary, &links[round]});
+                }
+            }
+        }
+    }
+
+    // The work-list is iterated three times, one per phase. A link is placed at most once; later phases skip
+    // links already placed. The phase order (claim Z, then NESW, then NESW-overflow onto leftover Z) reserves
+    // the Z lane for assign_z boundaries and for NESW overflow only.
+
+    // Phase 1a: assign_z (marked) boundaries claim the Z lane; they are excluded from the NESW phases below.
+    for (auto& [boundary, link] : order) {
+        if (!is_marked_z(boundary)) {
+            continue;  // Phase 1a is Z-only -- skip unmarked boundaries here
+        }
+        if (link->placed) {
+            continue;  // a link is placed at most once
+        }
+        if (!has_budget_after_trim(boundary, *link)) {
+            continue;  // no count budget left for this link
+        }
+        if (place_link(*link, /*want_z=*/true)) {
+            account_placed(boundary, *link);
+        }
+    }
+
+    // Phase 1b: unmarked boundaries take NESW.
+    for (auto& [boundary, link] : order) {
+        if (is_marked_z(boundary)) {
+            continue;  // assign_z boundaries never take an NESW port
+        }
+        if (link->placed) {
+            continue;
+        }
+        if (!has_budget_after_trim(boundary, *link)) {
+            continue;
+        }
+        if (place_link(*link, /*want_z=*/false)) {
+            account_placed(boundary, *link);
+        }
+    }
+
+    // Phase 2: unmarked NESW-overflow spills onto any leftover Z lanes.
+    for (auto& [boundary, link] : order) {
+        if (is_marked_z(boundary)) {
+            continue;
+        }
+        if (link->placed) {
+            continue;  // already took an NESW port in Phase 1b
+        }
+        if (!has_budget_after_trim(boundary, *link)) {
+            continue;
+        }
+        if (place_link(*link, /*want_z=*/true)) {
+            account_placed(boundary, *link);
+        }
+    }
+
+    // NOTE: placement invariants (assign_z Z-only, one peer per direction, matching Z-ness on both endpoints) are
+    // validated in validate_requested_intermesh_connections, which runs on every rank over the broadcast-identical
+    // intermesh_connections -- so a violation throws symmetrically rather than only here on rank 0.
     return annotated_intermesh;
 }
 
@@ -3541,12 +3587,9 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
             continue;
         }
 
-        // Committed inter-mesh state for this host: direction per physical chan, per-chan peer, exit-node bookkeeping.
+        // Committed inter-mesh state for this host: direction per physical chan, per-chan peer.
         exit_node_directions_[my_fn][info.my_chan] = new_port_id.first;
         intermesh_chan_to_peer_[my_fn].insert_or_assign(info.my_chan, std::make_pair(info.peer_fn, info.peer_chan));
-        intermesh_exit_fabric_node_ids_[my_mesh_id][peer_mesh_id].insert(my_fn);
-        intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id][peer_mesh_id].emplace_back(my_fn, info.peer_fn);
-        intermesh_exit_peer_fabric_node_id_pairs_[peer_mesh_id][my_mesh_id].emplace_back(info.peer_fn, my_fn);
     }
 
     return intermesh_connections;
@@ -3600,7 +3643,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
             auto asic_id = this->cluster_.get().get_unique_chip_ids().at(physical_chip_id);
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
-            // Same rule as propose_port_descriptors_for_exit_nodes: one dst chip per (src, neighbor mesh) on same-host
+            // Same rule as gather_intermesh_cables_for_exit_nodes: one dst chip per (src, neighbor mesh) on same-host
             // PSD.
             std::unordered_map<MeshId, std::unordered_map<ChipId, std::size_t>> cables_per_neighbor_mesh_per_chip;
             for (const auto& asic_neighbor : asic_neighbors) {
@@ -3733,15 +3776,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                         // Update exit node directions
                         exit_node_directions_[node][current_eth_conn.src_chan] = local_port_id.first;
                         exit_node_directions_[neighbor_node][current_eth_conn.dst_chan] = neighbor_port_id.first;
-                        intermesh_exit_fabric_node_ids_[local_mesh_id][neighbor_node.mesh_id].insert(node);
                         const FabricNodeId peer_fabric_node_id =
                             this->topology_mapper_->get_fabric_node_id_from_asic_id(
                                 this->topology_mapper_->get_asic_id_from_fabric_node_id(
                                     FabricNodeId(neighbor_node.mesh_id, static_cast<std::uint32_t>(neighbor_chip_id))));
-                        intermesh_exit_peer_fabric_node_id_pairs_[local_mesh_id][neighbor_node.mesh_id].emplace_back(
-                            node, peer_fabric_node_id);
-                        intermesh_exit_peer_fabric_node_id_pairs_[neighbor_node.mesh_id][local_mesh_id].emplace_back(
-                            peer_fabric_node_id, node);
 
                         // Per-channel peer info, recorded for both directions of the cable.
                         // Used by get_connected_mesh_chip_chan_ids without going through the
