@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -31,6 +33,95 @@ struct RSqrtPolicy {
     uint32_t eps = 0;      // If compute is true, this is the epsilon value
                            // to add to the variance
 };
+
+struct WelfordMergeScaleBits {
+    uint32_t accumulated_weight;
+    uint32_t new_set_weight;
+    uint32_t cross_weight;
+};
+
+/**
+ * @brief Combine Welford partials using host-precomputed merge scales.
+ *
+ * This follows the general combiner's device instruction sequence, but consumes IEEE-754
+ * scalar bits supplied as kernel compile-time arguments instead of dividing on the device.
+ */
+template <uint32_t num_sets>
+inline void combine_welford_partials_precomputed(
+    CircularBuffer& cb_partials,
+    CircularBuffer& cb_combined,
+    const std::array<WelfordMergeScaleBits, num_sets>& merge_scales,
+    uint32_t set_size_bits,
+    uint32_t final_scale_bits,
+    RSqrtPolicy rsqrt_policy = RSqrtPolicy{}) {
+    static_assert(num_sets > 0, "At least one Welford partial is required");
+
+    constexpr uint32_t tmp_dst0 = 0;
+    constexpr uint32_t tmp_dst1 = 1;
+    constexpr uint32_t mean_acc_dst = 2;
+    constexpr uint32_t m2_acc_dst = 3;
+    constexpr uint32_t mean_cb_idx = 0;
+    constexpr uint32_t var_cb_idx = 1;
+
+    reconfig_data_format(cb_partials.get_cb_id(), cb_partials.get_cb_id());
+    pack_reconfig_data_format(cb_combined.get_cb_id());
+    tile_regs_acquire();
+
+    fill_tile_init();
+    fill_tile(tmp_dst0, 0.f);
+    fill_tile(tmp_dst1, 0.f);
+    fill_tile(mean_acc_dst, 0.f);
+    fill_tile(m2_acc_dst, 0.f);
+    for (uint32_t b = 0; b < num_sets; ++b) {
+        cb_partials.wait_front(2);
+        const auto& scales = merge_scales[b];
+
+        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
+        copy_tile(cb_partials.get_cb_id(), mean_cb_idx, tmp_dst1);
+        sub_binary_tile_init();
+        sub_binary_tile(tmp_dst1, mean_acc_dst, tmp_dst0);
+
+        binop_with_scalar_tile_init();
+        mul_unary_tile(mean_acc_dst, scales.accumulated_weight);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(tmp_dst1, scales.new_set_weight);
+        add_binary_tile_init();
+        add_binary_tile(mean_acc_dst, tmp_dst1, mean_acc_dst);
+
+        square_tile_init();
+        square_tile(tmp_dst0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(tmp_dst0, scales.cross_weight);
+        add_binary_tile_init();
+        add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
+
+        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
+        copy_tile(cb_partials.get_cb_id(), var_cb_idx, tmp_dst0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(tmp_dst0, set_size_bits);
+        add_binary_tile_init();
+        add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
+
+        cb_partials.pop_front(2);
+    }
+
+    binop_with_scalar_tile_init();
+    mul_unary_tile(m2_acc_dst, final_scale_bits);
+
+    if (rsqrt_policy.compute) {
+        binop_with_scalar_tile_init();
+        add_unary_tile(m2_acc_dst, rsqrt_policy.eps);
+        rsqrt_tile_init();
+        rsqrt_tile(m2_acc_dst);
+    }
+
+    tile_regs_commit();
+    cb_combined.reserve_back(2);
+    tile_regs_wait();
+    pack_tile(mean_acc_dst, cb_combined.get_cb_id());
+    pack_tile(m2_acc_dst, cb_combined.get_cb_id());
+    tile_regs_release();
+}
 
 /**
  * @brief Combine partial mean and variance results for
