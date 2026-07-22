@@ -252,6 +252,9 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
  * Special ALU data format config state used for: transpose dest.
  * Disables implied math format due to MOV op quirks. Sets en_int32_dest_format = false because ALU_ACC_CTRL_INT8_math_enabled
  * does not work with MOVD2A/B. When unpacking Int32 or Fp32 to dest, the ALU_FORMAT_SPEC SrcA/B cfg registers are set to Int32/Fp32.
+ * @note For EN_32BIT_DEST, this forces the dest-format override (ALU_FORMAT_SPEC_REG_Dstacc_override -> Float32) so MOVD2B/MOVB2D
+ * read DEST via the current 32b path instead of a stale saved dest format (e.g. Int32 left by a prior compute), which would
+ * otherwise select the wrong hi16 datum mux and corrupt face 0. For 16-bit dest no override is applied (DataFormat::Invalid).
  */
 template <bool EN_32BIT_DEST>
 inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
