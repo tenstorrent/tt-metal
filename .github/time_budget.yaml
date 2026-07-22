@@ -317,7 +317,7 @@ models:
     bh_quietbox_2: 186
   e2e_tier3:
     wh_llmbox_perf: 64
-    wh_n150: 55 # +13 for llama3.2-3b TTTv2 cold weight-cache generation (lower to ~42 once cache is populated)
+    wh_n150: 42
     wh_n300: 15
     bh_p150: 7
     bh_p300: 8
