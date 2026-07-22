@@ -4,6 +4,8 @@
 
 #include "tilize_with_val_padding.hpp"
 
+#include <tt_stl/reflection.hpp>
+
 #include "device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"

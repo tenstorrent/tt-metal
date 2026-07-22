@@ -54,7 +54,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
             std::optional<DataType>,
             bool,
             const std::optional<CoreRangeSet>&,
-            tt::tt_metal::Tile>(&ttnn::operations::experimental::quasar::tilize_with_val_padding),
+            const tt::tt_metal::Tile&>(&ttnn::operations::experimental::quasar::tilize_with_val_padding),
         nb::arg("input_tensor"),
         nb::arg("output_tensor_shape"),
         nb::arg("pad_value"),

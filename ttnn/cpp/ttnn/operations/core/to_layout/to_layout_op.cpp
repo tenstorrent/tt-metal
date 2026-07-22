@@ -8,6 +8,8 @@
 #include <limits>
 #include <string_view>
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
