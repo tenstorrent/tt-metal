@@ -1075,6 +1075,85 @@ void validate_dram_sender_global_cb_mcast_in0_geometry(
         2 * in1_block_size_bytes);
 }
 
+void validate_dram_sender_global_cb_mcast_in1_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(gcb) == tt::tt_metal::experimental::SenderCoreType::Dram,
+        "mcast-in1 global_cb requires programmable DRAM senders");
+    TT_FATAL(
+        program_config.out_block_h == program_config.per_core_M &&
+            program_config.out_block_w == program_config.per_core_N,
+        "mcast-in1 global_cb requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
+        "and out_block_w ({}) must equal per_core_N ({})",
+        program_config.out_block_h,
+        program_config.per_core_M,
+        program_config.out_block_w,
+        program_config.per_core_N);
+
+    // Own the weight/GCB page contract in one shared helper: one full-K, N/num_banks WIDTH_SHARDED
+    // stripe per relay, one relay per dense bank, exact K blocking, and a two-page FIFO window.
+    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
+
+    const uint32_t M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+    const uint32_t num_workers = tt::div_up(M, static_cast<uint32_t>(program_config.per_core_M));
+    TT_FATAL(num_workers > 1, "bank-striped mcast-in1 requires at least two active matmul workers");
+    const auto& grid = program_config.compute_with_storage_grid_size;
+    const uint32_t grid_capacity = grid.x * grid.y;
+    TT_FATAL(
+        num_workers <= grid_capacity,
+        "mcast-in1 requires {} workers for M={} and per_core_M={}, but compute grid {}x{} has capacity {}",
+        num_workers,
+        M,
+        program_config.per_core_M,
+        grid.x,
+        grid.y,
+        grid_capacity);
+
+    CoreCoord start_core = {0, 0};
+    if (sub_device_id.has_value()) {
+        const auto sub_device_workers =
+            input_tensor_a.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        start_core = sub_device_workers.bounding_box().start_coord;
+    }
+    const CoreRangeSet matmul_rect(
+        CoreRange(start_core, CoreCoord(start_core.x + grid.x - 1, start_core.y + grid.y - 1)));
+    const auto active_workers = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        start_core, num_workers, matmul_rect, /*row_wise=*/true);
+    const auto active_bbox = active_workers.bounding_box();
+    TT_FATAL(
+        active_workers.num_cores() == active_bbox.size(),
+        "bank-striped mcast-in1 requires the active worker set to fill one rectangle; {} workers in grid {}x{} "
+        "produce a partial rectangle {}",
+        num_workers,
+        grid.x,
+        grid.y,
+        active_bbox);
+    TT_FATAL(
+        active_workers.contains(gcb.receiver_cores()),
+        "Every mcast-in1 GCB relay must be an active matmul worker. Active workers: {}; GCB relays: {}",
+        active_workers,
+        gcb.receiver_cores());
+    TT_FATAL(
+        gcb.receiver_cores().num_cores() <= num_workers,
+        "mcast-in1 has {} relay workers but only {} active matmul workers",
+        gcb.receiver_cores().num_cores(),
+        num_workers);
+
+    const uint32_t weight_N_tiles = static_cast<uint32_t>(input_tensor_b.padded_shape()[-1]) / in1_tile.get_width();
+    TT_FATAL(
+        program_config.per_core_N == weight_N_tiles,
+        "mcast-in1 per_core_N ({}) must equal full weight N ({} tiles)",
+        program_config.per_core_N,
+        weight_N_tiles);
+}
+
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
 // allowed_worker_cores on a program_config variant that supports the field. ttnn::prim::matmul()
 // normalizes its attributes before launch, but direct callers (e.g. CCL fused ops in
@@ -1761,15 +1840,24 @@ void validate_matmul_mcast1d_config(
         config_name);
 
     if (attributes.global_cb.has_value() && !program_config.gather_in0) {
-        TT_FATAL(
-            program_config.mcast_in0,
-            "{}: global_cb without gather_in0 is supported only for mcast_in0=true",
-            config_name);
-        validate_dram_sender_global_cb_mcast_in0_geometry(
-            attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        if (program_config.mcast_in0) {
+            validate_dram_sender_global_cb_mcast_in0_geometry(
+                attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        } else {
+            TT_FATAL(!attributes.transpose_b, "{}: mcast-in1 global_cb does not support transpose_b", config_name);
+            validate_dram_sender_global_cb_mcast_in1_geometry(
+                attributes.global_cb.value(),
+                input_tensor_a,
+                input_tensor_b,
+                a_shape_padded,
+                in0_tile,
+                in1_tile,
+                program_config,
+                attributes.sub_device_id);
+        }
         TT_FATAL(
             program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
-            "{}: mcast_in0 global_cb requires one effective activation batch, but fuse_batch={} and "
+            "{}: GCB-backed multicast requires one effective activation batch, but fuse_batch={} and "
             "activation batch size={}",
             config_name,
             program_config.fuse_batch,
@@ -2052,11 +2140,21 @@ void validate_matmul_mcast1d_config(
                 program_config.out_block_h,
                 per_core_N);
         }
-        TT_FATAL(
-            input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "{}: input B must be INTERLEAVED, got: {}",
-            config_name,
-            input_tensor_b.memory_config().memory_layout());
+        if (attributes.global_cb.has_value()) {
+            TT_FATAL(
+                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM &&
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                "{}: GCB-backed mcast-in1 requires a WIDTH_SHARDED DRAM input B, got buffer type {} and layout {}",
+                config_name,
+                input_tensor_b.buffer()->buffer_type(),
+                input_tensor_b.memory_config().memory_layout());
+        } else {
+            TT_FATAL(
+                input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "{}: input B must be INTERLEAVED, got: {}",
+                config_name,
+                input_tensor_b.memory_config().memory_layout());
+        }
     }
 }
 

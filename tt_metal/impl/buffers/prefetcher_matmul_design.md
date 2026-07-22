@@ -1,8 +1,8 @@
 # Matmul + DRAM Prefetcher Design
 
-This document describes the contract between the gather-in0 matmul receiver
-and the two DRAM prefetcher implementations that feed it: the worker-core
-prefetcher (`ttnn.dram_prefetcher`) and the Tensor prefetcher
+This document describes the contract between 1D matmul consumers and the two
+DRAM prefetcher implementations that feed them: the worker-core prefetcher
+(`ttnn.dram_prefetcher`) and the Tensor prefetcher
 (`ttnn.experimental.start_tensor_prefetcher`). It exists so that a future maintainer
 touching either side can read one file and learn what is invariant across the
 two paths, without having to reverse-engineer the kernels.
@@ -409,6 +409,30 @@ For both contracts one page contains
 `(K_tiles / block_count) * per_core_N` weight tiles for one receiver. The GCB receiver set must
 exactly match the matmul output workers, and the receiver-contiguous NdShardSpec must provide one
 full-K, `per_core_N`-wide shard per receiver.
+
+#### Bank-striped worker relay for mcast-in1
+
+The `mcast_in0=false, gather_in0=false` consumer uses the legacy K-row-major WIDTH_SHARDED
+weight layout differently. Each DRAM bank owns a full-K, `N/num_banks` stripe and the GCB maps
+that bank to exactly one relay worker. The Tensor prefetcher still performs its normal unicast:
+
+```
+DRAM bank b -> relay worker b: in0_block_w x (N/num_banks) tiles
+relay workers -> every matmul worker: parallel multicast into disjoint N offsets
+```
+
+All matmul workers first reserve the same full-width local in1 CB block and announce readiness to
+the bank-0 relay. The coordinator releases all relays together. Relay `b` then multicasts each
+K row into column offset `b * (N/num_banks)` on every worker, including itself. A relay executes
+`noc.async_write_barrier()` before returning the source page's remote-CB credit or publishing its
+completion increment. Workers push the local in1 block to compute only after all bank completions
+arrive, so compute never observes a partially assembled weight block.
+
+This mode uses `block_count = K_tiles / in0_block_w`, natural FIFO order, and a two-page GCB
+window per relay. It initially requires one relay per dense DRAM bank, one full output block per
+worker, `per_core_N == N_tiles`, one effective activation batch, and a full rectangular active
+worker set. Bias remains a full-width multicast from the bank-0 relay after the striped weight
+blocks. No DRISC multicast support is added.
 
 #### Fit ladder (receiver-contiguous)
 

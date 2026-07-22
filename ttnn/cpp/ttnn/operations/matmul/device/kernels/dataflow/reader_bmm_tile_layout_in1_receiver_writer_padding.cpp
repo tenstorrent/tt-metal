@@ -100,6 +100,9 @@ void kernel_main() {
     CircularBuffer cb_out(cb_id_out0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+    constexpr uint32_t num_relay_cores = get_named_compile_time_arg_val("mcast_in1_num_relays");
+#endif
 #ifdef FUSE_BIAS
     CircularBuffer cb_in3(cb_id_in3);
 #endif
@@ -119,6 +122,14 @@ void kernel_main() {
                     // Operand 1
                     cb_in1.reserve_back(in1_block_num_tiles);
 
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                    // Announce that this worker has reserved the full in1 destination block.
+                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+                    // Every relay writes one disjoint N stripe and increments this counter only
+                    // after its writes have landed on all workers.
+                    receiver_sem.wait_min(num_relay_cores);
+                    receiver_sem.set(0);
+#else
                     // Set in1 semaphore value to INVALID
                     receiver_sem.set(INVALID);
 
@@ -127,6 +138,7 @@ void kernel_main() {
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
+#endif
 
                     cb_in1.push_back(in1_block_num_tiles);
                 }
@@ -137,6 +149,11 @@ void kernel_main() {
                     // Operand 2
                     cb_in3.reserve_back(in3_block_w);
 
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+                    receiver_sem.wait(VALID);
+                    receiver_sem.set(INVALID);
+#else
                     // Set in1 semaphore value to INVALID
                     receiver_sem.set(INVALID);
 
@@ -145,6 +162,7 @@ void kernel_main() {
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
+#endif
 
                     cb_in3.push_back(in3_block_w);
                 }
