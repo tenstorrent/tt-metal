@@ -33,7 +33,7 @@ import pytest
 import torch
 import ttnn
 
-from models.experimental.vibevoice.tests.pcc.lm_pcc_common import PREFILL_CHUNK_SIZE, build_tt_lm
+from models.experimental.vibevoice.tests.pcc.lm_pcc_helpers import PREFILL_CHUNK_SIZE, build_tt_lm
 
 
 def _env_int(name: str, default: int) -> int:

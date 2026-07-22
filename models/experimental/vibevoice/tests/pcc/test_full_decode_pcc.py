@@ -19,7 +19,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH, TEXT_EXAMPLES_DIR, VOICES_DIR
 from models.experimental.vibevoice.common.resource_utils import load_script
-from models.experimental.vibevoice.tests.pcc.lm_pcc_common import PCC_THRESHOLD
+from models.experimental.vibevoice.tests.pcc.lm_pcc_helpers import PCC_THRESHOLD
 from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     TTDPMSolverMultistepScheduler,
     sample_speech_latents,

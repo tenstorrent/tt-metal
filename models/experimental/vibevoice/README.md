@@ -36,7 +36,7 @@ vibevoice/
 ├── tests/
 │   ├── conftest.py            # pytest: reference/ on PYTHONPATH + shared fixtures
 │   └── pcc/
-│   ├── lm_pcc_common.py       # shared LM PCC helpers, probes, diagnostics
+│   ├── lm_pcc_helpers.py      # shared LM PCC helpers (HF ref, TT LM builder, PCC utils)
 │   ├── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
 │   ├── test_full_prefill_pcc.py   # full prefill chain vs HF reference
 │   └── test_full_decode_pcc.py    # post-diffusion decode chain vs pinned ref conditions
@@ -130,7 +130,7 @@ threshold.
 
 The LM prefill and decode paths are validated as part of the **full prefill / decode chain** PCC
 tests (vs a bf16 HuggingFace Qwen2 reference), plus a standalone decoder-layer regression. Shared
-helpers live in `tests/pcc/lm_pcc_common.py`; fixtures (`vv_config`, `lm_state`) are in
+helpers live in `tests/pcc/lm_pcc_helpers.py`; fixtures (`vv_config`, `lm_state`) are in
 `tests/conftest.py`.
 
 - **Decoder layer (regression):** `test_decoder_layer_pcc.py::test_decoder_layer_decode_pcc` —
