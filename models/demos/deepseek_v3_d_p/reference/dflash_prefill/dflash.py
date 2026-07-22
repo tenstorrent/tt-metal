@@ -1,6 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright (c) 2026 Z Lab
+# SPDX-License-Identifier: MIT
 
 from typing import Callable, Optional
 
