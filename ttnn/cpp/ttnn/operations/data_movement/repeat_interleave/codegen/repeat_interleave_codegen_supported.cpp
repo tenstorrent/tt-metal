@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::data_movement {
 
