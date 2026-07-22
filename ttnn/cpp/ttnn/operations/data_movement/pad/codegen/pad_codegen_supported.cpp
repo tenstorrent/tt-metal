@@ -5,6 +5,7 @@
 #include "pad_codegen_supported.hpp"
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 
 #include <tt-metalium/constants.hpp>
@@ -110,58 +111,42 @@ bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenIn
     };
     const std::initializer_list<DataType> kAllFourDtypes = {
         DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32, DataType::UINT32};
+    // known_bad_golden (manifest): native's RM pad-value packing switch has no FLOAT32 case and
+    // silently reuses BFLOAT16, corrupting any nonzero float32 fill -- these points are dropped
+    // from correctness measurement entirely (no reliable native golden), so they never reach a
+    // generic-vs-native device comparison and can never appear in the demoted ledger.
+    const std::initializer_list<DataType> kNonzeroDemotableDtypes = {
+        DataType::BFLOAT16, DataType::INT32, DataType::UINT32};
 
-    // [1, 1, 32, 32]|padding=[[0,0],[0,0],[0,32],[0,32]]&value=3|{bfloat16,int32}|row_major
-    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 64, 64) && value_is(3) &&
-        dtype_in({DataType::BFLOAT16, DataType::INT32})) {
-        return true;
-    }
-    // [1, 1, 32, 32]|padding=[[0,0],[0,0],[3,25],[4,6]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 32, 32, 0, 0, 3, 4, 1, 1, 60, 42) && value_is(0) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [1, 1, 32, 32]|padding=[[0,0],[0,0],[3,25],[4,6]]&value=3|{fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 32, 32, 0, 0, 3, 4, 1, 1, 60, 42) && value_is(3) &&
-        dtype_in({DataType::FLOAT32, DataType::INT32, DataType::UINT32})) {
-        return true;
-    }
-    // [1, 1, 64, 64]|padding=[[0,0],[0,0],[0,15],[0,31]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 79, 95) && value_is(0) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [1, 1, 64, 64]|padding=[[0,0],[0,0],[0,15],[0,31]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 79, 95) && value_is(3) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]]&value=0|{bf16,fp32,int32,uint32}|row_major (3D:
-    // unsqueeze_to_4D prepends N=1, dim0=1 becomes C)
-    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41) && value_is(0) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41) && value_is(3) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [32, 32]|padding=[[0,32],[0,32]]&value=0|{float32}|row_major (2D: unsqueeze_to_4D prepends
-    // N=1, C=1)
-    if (shape_is(1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 64, 64) && value_is(0) && dtype_in({DataType::FLOAT32})) {
-        return true;
-    }
-    // [32, 32]|padding=[[4,2],[0,6]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 32, 32, 0, 0, 4, 0, 1, 1, 38, 38) && value_is(0) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [32, 32]|padding=[[4,2],[0,6]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 32, 32, 0, 0, 4, 0, 1, 1, 38, 38) && value_is(3) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [64, 64]|padding=[[0,31],[0,15]]&value=0|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 95, 79) && value_is(0) && dtype_in(kAllFourDtypes)) {
-        return true;
-    }
-    // [64, 64]|padding=[[0,31],[0,15]]&value=3|{bf16,fp32,int32,uint32}|row_major
-    if (shape_is(1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 95, 79) && value_is(3) && dtype_in(kAllFourDtypes)) {
-        return true;
+    // Four back-only-pad row_major shapes, each demoted at value=0 for all four dtypes and at
+    // value=3 for all dtypes except float32 (see kNonzeroDemotableDtypes above). Transcribed
+    // verbatim from the phase-7 perf-demoted ledger (measurements.demoted), not from any sweep --
+    // see porting-guide.md's "Deriving is_demoted()".
+    struct DemotedShape {
+        uint32_t n, c, h, w, front_n, front_c, front_h, front_w, n_out, c_out, h_out, w_out;
+    };
+    constexpr std::array<DemotedShape, 4> kDemotedShapes{{
+        // [1, 1, 64, 64]|padding=[[0,0],[0,0],[0,15],[0,31]]
+        {1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 79, 95},
+        // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]] (3D: unsqueeze_to_4D prepends N=1)
+        {1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41},
+        // [32, 32]|padding=[[4,2],[0,6]] (2D: unsqueeze_to_4D prepends N=1, C=1)
+        {1, 1, 32, 32, 0, 0, 4, 0, 1, 1, 38, 38},
+        // [64, 64]|padding=[[0,31],[0,15]] (2D: unsqueeze_to_4D prepends N=1, C=1)
+        {1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 95, 79},
+    }};
+
+    for (const auto& s : kDemotedShapes) {
+        if (!shape_is(
+                s.n, s.c, s.h, s.w, s.front_n, s.front_c, s.front_h, s.front_w, s.n_out, s.c_out, s.h_out, s.w_out)) {
+            continue;
+        }
+        if (value_is(0) && dtype_in(kAllFourDtypes)) {
+            return true;
+        }
+        if (value_is(3) && dtype_in(kNonzeroDemotableDtypes)) {
+            return true;
+        }
     }
     return false;
 }
