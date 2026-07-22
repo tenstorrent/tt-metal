@@ -19,6 +19,9 @@
 //   [0] y_addr, [1] u_addr, [2] v_addr, [3] unit_start, [4] unit_count
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 
 constexpr uint32_t TILE_H = 32;
 constexpr uint32_t TILE_W = 32;
@@ -47,6 +50,7 @@ void kernel_main() {
     const auto sy = TensorAccessor(y_args, y_addr);
     const auto su = TensorAccessor(u_args, u_addr);
     const auto sv = TensorAccessor(v_args, v_addr);
+    const Noc noc;
 
     // Drain `ntiles` output pages, writing `sticks_total` sticks starting at
     // output page `base_spatial`, at T-column offset `byte_off_out` (n_elems wide).
@@ -65,8 +69,13 @@ void kernel_main() {
             for (uint32_t s = 0; s < sticks; s++) {
                 uint32_t spatial = base_spatial + base + s;
                 uint32_t stick_l1 = page_l1 + s * TILE_W;
-                noc_async_write(stick_l1, dst.get_noc_addr(spatial, byte_off_out), n_elems);
-                noc_async_writes_flushed();
+                noc.async_write(
+                    CoreLocalMem<uint8_t>(stick_l1),
+                    dst,
+                    n_elems,
+                    {},
+                    {.page_id = spatial, .offset_bytes = byte_off_out});
+                noc.async_writes_flushed();
             }
             cb_pop_front(cb_out_rm, 1);
         }
@@ -84,5 +93,5 @@ void kernel_main() {
         write_plane(sv, g * W2, W2, uv_tiles, byte_off_out, n_elems);          // Cr
     }
 
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

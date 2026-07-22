@@ -34,6 +34,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 constexpr uint32_t TILE_H = 32;
@@ -52,8 +55,14 @@ FORCE_INLINE void zero_page(const Noc& noc, uint32_t cb_id) {
 
 // Local L1->L1 copy via the NOC DMA engine (async; caller barriers before use).
 // Scalar RISC copies here are far too slow and make the reader the bottleneck.
-FORCE_INLINE void local_read(uint32_t src_l1, uint32_t dst_l1, uint32_t nbytes) {
-    noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], src_l1), dst_l1, nbytes);
+// Source is this core's own L1, expressed as a unicast NOC endpoint.
+FORCE_INLINE void local_read(const Noc& noc, uint32_t src_l1, uint32_t dst_l1, uint32_t nbytes) {
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint8_t>(dst_l1),
+        nbytes,
+        {.noc_x = my_x[noc_index], .noc_y = my_y[noc_index], .addr = src_l1},
+        {});
 }
 
 void kernel_main() {
@@ -104,10 +113,11 @@ void kernel_main() {
                 uint32_t spatial = 2 * g * W + s;
                 uint32_t src_row = c * HW + spatial;
                 uint32_t dst = scratch_base + (c * y_sticks + s) * FULL_TILE_BYTES;
-                noc_async_read(src.get_noc_addr(src_row, byte_off), dst, read_bytes);
+                noc.async_read(
+                    src, CoreLocalMem<uint8_t>(dst), read_bytes, {.page_id = src_row, .offset_bytes = byte_off}, {});
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // ---- 2. Y sub-pass: emit flat 32-stick tiles from scratch ----
         // A full tile (32 sticks, full T) is 32 contiguous 64-byte sticks in
@@ -122,14 +132,14 @@ void kernel_main() {
                 uint32_t l1 = get_write_ptr(cb_ids[c]);
                 uint32_t src_base = scratch_base + (c * y_sticks + base) * FULL_TILE_BYTES;
                 if (full) {
-                    local_read(src_base, l1, PAGE_BYTES);
+                    local_read(noc, src_base, l1, PAGE_BYTES);
                 } else {
                     zero_page(noc, cb_ids[c]);
                     for (uint32_t s = 0; s < sticks; s++) {
-                        local_read(src_base + s * FULL_TILE_BYTES, l1 + s * FULL_TILE_BYTES, read_bytes);
+                        local_read(noc, src_base + s * FULL_TILE_BYTES, l1 + s * FULL_TILE_BYTES, read_bytes);
                     }
                 }
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 cb_push_back(cb_ids[c], 1);
             }
         }
@@ -157,9 +167,9 @@ void kernel_main() {
                             uint32_t col = 2 * w_uv + woff;
                             uint32_t scratch_idx = row * W + col;  // spatial within the 2 rows
                             uint32_t src_stick = scratch_base + (c * y_sticks + scratch_idx) * FULL_TILE_BYTES;
-                            local_read(src_stick, l1 + s * FULL_TILE_BYTES, read_bytes);
+                            local_read(noc, src_stick, l1 + s * FULL_TILE_BYTES, read_bytes);
                         }
-                        noc_async_read_barrier();
+                        noc.async_read_barrier();
                         cb_push_back(cb_ids[c], 1);
                     }
                 }
