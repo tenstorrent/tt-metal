@@ -345,11 +345,12 @@ def test_all_to_all(
 )
 @pytest.mark.parametrize(
     (
-        "cluster_axis,logical_shape,in_dim,out_dim,topology,input_mem_config,"
+        "cluster_axis,num_links,logical_shape,in_dim,out_dim,topology,input_mem_config,"
         "output_mem_config,trace_mode,reuse_inputs"
     ),
     [
         pytest.param(
+            1,
             1,
             [1, 32, 128, 576],
             2,
@@ -359,10 +360,11 @@ def test_all_to_all(
             ttnn.DRAM_MEMORY_CONFIG,
             False,
             False,
-            id="axis1-auto-2to1-dram",
+            id="axis1-link1-auto-2to1-dram",
         ),
         pytest.param(
             1,
+            2,
             [1, 128, 128, 512],
             1,
             2,
@@ -371,10 +373,11 @@ def test_all_to_all(
             ttnn.DRAM_MEMORY_CONFIG,
             True,
             True,
-            id="axis1-linear-1to2-dram-trace",
+            id="axis1-link2-linear-1to2-dram-trace",
         ),
         pytest.param(
             0,
+            2,
             [1, 2, 256, 768],
             3,
             2,
@@ -399,13 +402,14 @@ def test_all_to_all(
             ),
             False,
             False,
-            id="axis0-linear-3to2-l1-width-sharded",
+            id="axis0-link2-linear-3to2-l1-width-sharded",
         ),
     ],
 )
 def test_all_to_all_fabric_2d(
     mesh_device,
     cluster_axis,
+    num_links,
     logical_shape,
     in_dim,
     out_dim,
@@ -421,7 +425,7 @@ def test_all_to_all_fabric_2d(
         logical_shape=logical_shape,
         in_dim=in_dim,
         out_dim=out_dim,
-        num_links=2,
+        num_links=num_links,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         topology=topology,
