@@ -113,13 +113,17 @@ def test_send_recv_multi_link(
 
     sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
     receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(1, 0))
-    run_send_recv_test(
-        sender_mesh_device,
-        receiver_mesh_device,
-        socket_storage_type,
-        socket_fifo_size,
-        per_chip_shape,
-        mem_config,
-        dtype,
-        layout,
-    )
+    try:
+        run_send_recv_test(
+            sender_mesh_device,
+            receiver_mesh_device,
+            socket_storage_type,
+            socket_fifo_size,
+            per_chip_shape,
+            mem_config,
+            dtype,
+            layout,
+        )
+    finally:
+        ttnn.close_mesh_device(sender_mesh_device)
+        ttnn.close_mesh_device(receiver_mesh_device)
