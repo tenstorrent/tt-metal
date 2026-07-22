@@ -90,6 +90,58 @@ def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
     assert seed_manager.seed_counters == [6, 0, 0, 0]
 
 
+def test_slot_remap_repeated_steady_state_preserves_seeds():
+    """A non-identity remap re-emitted verbatim every decode step (a steady-state
+    replication/layout map, not a condense) must not corrupt per-user seeds.
+
+    Regression for the Galaxy determinism failures: vLLM replicated rank 0's
+    requests across DP ranks and re-emitted the same remap every token. The old
+    code cleared the (still-active) source slots to None each step, so seeded
+    requests silently became unseeded and lost reproducibility.
+    """
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 43], [0, 1])  # slots 0,1 seeded; 2,3 unseeded
+    assert seed_manager.seeds == [42, 43, None, None]
+
+    # remap[2]=0, remap[3]=1: slots 2,3 replicate slots 0,1 (sources stay active).
+    remap = torch.tensor([0, 1, 0, 1], dtype=torch.int32)
+    for _ in range(50):  # the bug applied this 1400+ times
+        seed_manager.apply_slot_remap(remap)
+
+    # Source slots keep their real seeds; replicas mirror them.
+    assert seed_manager.seeds[0] == 42
+    assert seed_manager.seeds[1] == 43
+    assert seed_manager.seeds[2] == 42
+    assert seed_manager.seeds[3] == 43
+    assert seed_manager._seed_active is True
+
+
+def test_slot_remap_genuine_condense_relabels_and_repeats_when_spaced():
+    """A real one-shot condense still relabels, and an identity step in between
+    re-arms the dedupe so a later same-shape condense is applied again."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 99], [0, 3])  # slot0=42, slot3=99
+    assert seed_manager.seeds == [42, None, None, 99]
+
+    # Condense: request leaves slot1; slot3 moves into slot1. remap[1]=3.
+    condense = torch.tensor([0, 3, 2, 3], dtype=torch.int32)
+    seed_manager.apply_slot_remap(condense)
+    assert seed_manager.seeds[1] == 99  # relabelled
+
+    # Verbatim repeat is ignored (no re-relabel needed, state already correct).
+    seed_manager.apply_slot_remap(condense)
+    assert seed_manager.seeds[1] == 99
+
+    # An identity remap clears the dedupe guard...
+    identity = torch.tensor([0, 1, 2, 3], dtype=torch.int32)
+    seed_manager.apply_slot_remap(identity)
+    # ...so a genuinely new condense with the same shape applies again.
+    seed_manager.seeds[1] = None  # pretend slot1 emptied again
+    seed_manager._seed_active = any(s is not None for s in seed_manager.seeds)
+    seed_manager.apply_slot_remap(condense)
+    assert seed_manager.seeds[1] == 99
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
