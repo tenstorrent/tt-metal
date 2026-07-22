@@ -73,6 +73,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
+    {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -172,6 +173,9 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "negative") {
         return -input;
+    }
+    if (op_name == "clamp") {
+        return std::clamp(input, -1.0f, 1.0f);
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -285,6 +289,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         // Include exact zeros so the eqz/nez/lez/gez at-zero branches are exercised.
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.0f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+    }
+    if (op_name == "clamp") {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
@@ -878,6 +885,7 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_CLAMP_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
@@ -1559,6 +1567,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "square"),
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
+        std::make_tuple(1, "clamp"),
+        std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
@@ -1684,6 +1694,8 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
+        std::make_tuple(1, "clamp"),
+        std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
