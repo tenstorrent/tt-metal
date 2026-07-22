@@ -53,6 +53,37 @@ Caption / text conditioning uses a **local copy** of the TTNN Qwen3-Embedding st
 
 This code is replicated from the work in [tt-metal PR #42463](https://github.com/tenstorrent/tt-metal/pull/42463) ([`ign/qwen3-embedding-4b-optimizations`](https://github.com/tenstorrent/tt-metal/tree/ign/qwen3-embedding-4b-optimizations)). Once that PR is merged, this demo can switch to importing the shared implementation from `tt-metal` instead of maintaining duplicate modules here.
 
+## Tensor parallelism & mesh parallelism (optional)
+
+Beyond the stock replicate pipeline, the DiT and VAE can shard work across the BH_QB 2×2 mesh. **Every feature here is flag-gated and byte-identical to the replicate path when off.** The library default is OFF; the demo (`demo/run_prompt_to_wav.py`) additionally defaults `ACE_STEP_TP=2` on a BH_QB mesh when `--use-trace` is active (set `ACE_STEP_TP=off` to opt out). The full implementation matrix, PCC tables, per-duration benchmark matrix (P150 / repl / TP2 / TP4), and key findings are in [`perf/ACE_STEP_TP_FINAL_REPORT.md`](perf/ACE_STEP_TP_FINAL_REPORT.md).
+
+| Feature | Flag | Status | Headline |
+|---------|------|--------|----------|
+| **DiT tensor-parallel** (MLP col/row + head-parallel attention, all-reduce) | `ACE_STEP_TP=on` (2-way) / `=4` (4-way) | Done, PCC-validated (full block PCC 0.999) | Latency-neutral with `--use-trace`; ~27% faster DiT at 60s (TP2); halves (TP2) / quarters (TP4) DiT weights per chip |
+| **VAE time-parallel decode** (batch tiles, shard batch across mesh) | `ACE_STEP_VAE_TIME_PARALLEL=1` | Done, PCC 1.0, bit-identical audio | **4.3× VAE decode, −32% wall at 60s** — the biggest throughput win |
+| **Encoder tensor-parallel** (shared Qwen3 encoder layer: detok + caption + condition) | `ACE_STEP_TP` | Code done, isolated PCC 1.0 | Inert until Phase-A-on-mesh lands |
+| **Phase-A-on-mesh** (run preprocess + DiT on one mesh, skip re-exec) | `ACE_STEP_PREPROCESS_ON_MESH=1` | Wiring done | Blocked — module tuned configs assume non-TP dims |
+
+**Enable (compose freely, always with `--use-trace`):**
+
+```bash
+# DiT tensor-parallel — recommended: 2-way + trace = parity + half DiT weights/chip
+ACE_STEP_TP=on ... --mesh-device BH_QB --use-trace ...
+ACE_STEP_TP=4  ... --mesh-device BH_QB --use-trace ...     # 4-way: quarter weights, slower
+
+# VAE time-parallel decode (the 4.3× win) — composes with the above
+ACE_STEP_VAE_TIME_PARALLEL=1 ...
+```
+
+**Notes and trade-offs:**
+
+- **Always run DiT TP with `--use-trace`.** Eager TP is ~2.5× slower (un-amortised collective launch); trace replay recovers it.
+- **DiT TP has a duration crossover** (base/sft, trace): 15s slower → 30s ~break-even → **60s TP2 ~27% faster DiT, ~4–5% faster wall**. Longer sequences amortise the collectives, so TP's main value on short clips is **memory** (½ or ¼ weights/chip), not latency.
+- **4-way < 2-way on latency** (more collective traffic) but gives ¼ weights/chip.
+- The mesh (even replicate) already beats P150 by ~2.5–3× at 30/60s because P150's single-chip DiT/VAE scale badly with sequence length.
+
+**Deferred / blocked (documented):** 5 Hz LM on mesh (stock `tt_transformers` shard-grid `TT_FATAL` on BH 2×2), Phase-A modules under TP (tuned sharded configs assume non-TP dims), and VAE tensor-parallel conv (`prepare_conv_weights` has no cross-mesh shard — time-parallel decode replaces it).
+
 ## This repo folder
 
 This folder provides:

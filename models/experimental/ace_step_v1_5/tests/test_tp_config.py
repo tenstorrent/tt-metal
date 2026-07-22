@@ -52,7 +52,7 @@ def test_off_path_collectives_are_passthrough():
     assert tp.tp_all_gather(sentinel, None, dim=-1) is sentinel
 
 
-@pytest.mark.parametrize("flag", ["on", "1", "true", "yes", "auto"])
+@pytest.mark.parametrize("flag", ["on", "1", "2", "true", "yes", "auto"])
 def test_enabled_flags_turn_on_for_multichip(monkeypatch, flag):
     monkeypatch.setenv("ACE_STEP_TP", flag)
     cfg = tp.resolve_tp_config(_FakeMesh(2, 2))

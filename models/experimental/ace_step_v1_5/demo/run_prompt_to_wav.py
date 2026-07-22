@@ -1041,6 +1041,19 @@ def main() -> None:
         )
         args.use_trace = False
 
+    # Default 2-way DiT tensor-parallel on BH_QB when trace is active. TP2 + trace is the
+    # recommended config: replicate-parity latency plus half the DiT weights per chip. Only
+    # fills the default when ACE_STEP_TP is unset — an explicit value (including off/0, or 4
+    # for 4-way) always wins. Gated on --use-trace because eager TP is ~2.5× slower (un-amortised
+    # collective launch); the long-clip paths above force --no-use-trace, so TP stays off there.
+    if mesh_sku == "BH_QB" and bool(args.use_trace) and os.environ.get("ACE_STEP_TP", "").strip() == "":
+        os.environ["ACE_STEP_TP"] = "2"
+        print(
+            "[ace_step_v1_5] BH_QB + trace: defaulting ACE_STEP_TP=2 (2-way DiT tensor-parallel). "
+            "Set ACE_STEP_TP=off to disable, or ACE_STEP_TP=4 for 4-way.",
+            flush=True,
+        )
+
     perf_log_enabled = ace_step_mesh_perf_log_default(mesh_sku=mesh_sku)
     vae_chunk_latents = 32
     vae_overlap_latents = 4

@@ -21,8 +21,15 @@ tt_transformers shards heads / w1w3-N across ``cluster_shape[1]`` (cols) and the
 with that stack; override with ``ACE_STEP_TP_AXIS``.
 
 Environment:
-    ACE_STEP_TP        off|0 (default) | on|1 | auto   — enable TP; ``auto`` = on iff mesh>1 chip
+    ACE_STEP_TP        off|0 | on|1|2 | 4|full | auto  — enable TP; ``on``/``1``/``2`` = 2-way
+                                                          (per-axis), ``4``/``full`` = all-chip,
+                                                          ``auto`` = on iff mesh>1 chip
     ACE_STEP_TP_AXIS   0|1 (default 1 = cols)          — which mesh axis carries the TP shards
+
+Default: unset behaves as OFF *here*. The demo (``demo/run_prompt_to_wav.py``) defaults
+``ACE_STEP_TP=2`` on a **BH_QB** mesh when ``--use-trace`` is active (2-way + trace = replicate-
+parity latency + half the DiT weights/chip); it only fills the default when the var is unset, so
+an explicit ``off``/``0``/``4`` always wins.
 
 NOTE: the collective wrappers below are written against the ttnn API verified present in this
 build (``ttnn.all_reduce`` / ``ttnn.all_gather`` / ``ShardTensor2dMesh`` / ``ConcatMesh2dToTensor``).
@@ -71,7 +78,7 @@ def _env_tp_axis() -> int:
     return 0 if raw == "0" else 1
 
 
-_TP_ON_VALUES = ("on", "1", "true", "yes", "auto")
+_TP_ON_VALUES = ("on", "1", "2", "true", "yes", "auto")
 _TP_FULL_VALUES = ("4", "full", "all")  # 4-way: shard one dim across ALL chips (cluster_axis=None)
 
 
