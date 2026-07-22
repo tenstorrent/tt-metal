@@ -997,6 +997,26 @@ class EMA_ALPHA_BETA(TemplateParameter):
 
 
 @dataclass
+class O_NORM_CONFIG(TemplateParameter):
+    """Compile-time config for the fused o_norm SFPU entry.
+
+    ``NUM_REDUCE_TILES`` sets the head-dim (= 32 * this) that RMSNorm reduces
+    over; ``eps_bits`` is the RMSNorm epsilon as a raw fp32 bit pattern so the
+    C++ kernel and the torch golden stay exactly aligned.
+    """
+
+    num_reduce_tiles: int = 1
+    eps_bits: int = 0x358637BD  # 1e-6f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr int NUM_REDUCE_TILES = {self.num_reduce_tiles};",
+            f"constexpr std::uint32_t O_NORM_EPS_BITS = {self.eps_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 
