@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
@@ -125,10 +126,12 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             .set_page_size(cb_input_e4m3_idx, input_e4m3_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_input_e4m3_cfg);
 
-    make_fp32_tile_cb(cb_in_rm_idx, tiles_per_block);     // input_e4m3 -> fp32 RM
-    make_fp32_tile_cb(cb_in_tile_idx, tiles_per_block);   // tilized fp32 input
-    make_fp32_tile_cb(cb_scale_bcast_idx, 2 * block_ht);  // col0 = scale
-    make_fp32_tile_cb(cb_out_tile_idx, tiles_per_block);  // divided tiles -> untilize
+    // Double-buffered so the reader/compute/writer (and the compute UNPACK/MATH/PACK sub-threads) can
+    // run one block ahead of each other without stalling.
+    make_fp32_tile_cb(cb_in_rm_idx, 2 * tiles_per_block);     // input_e4m3 -> fp32 RM
+    make_fp32_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);   // tilized fp32 input
+    make_fp32_tile_cb(cb_scale_bcast_idx, 2 * block_ht);      // col0 = scale
+    make_fp32_tile_cb(cb_out_tile_idx, 2 * tiles_per_block);  // multiplied tiles -> untilize
 
     // cb_out: row-major output (bf16/fp32), one tile per page; tiles_per_block pages = one block,
     // double-buffered.
@@ -188,13 +191,17 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         tile_h,
         tile_w};
     // fp32_dest_acc_en=True required (input_e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
-    // broadcast multiply precise.
+    // broadcast multiply precise. Skip trip through srcA register. fp8 goes straight to the DEST.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest_mode[cb_input_e4m3_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/device/kernels/compute/"
         "compute_per_token_cast_back.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = true, .unpack_to_dest_mode = unpack_to_dest_mode, .compile_args = compute_ct_args});
 
     // Each core's rows form a flat stream of 128-element scale blocks read/written in tile_h-block batches.
     const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128
