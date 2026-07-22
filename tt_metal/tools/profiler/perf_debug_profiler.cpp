@@ -260,6 +260,8 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
     // context origin (host_start) instead of ~device-wall-clock ticks into the timeline (a "multi-hour"
     // offset that renders zones off-screen). Matches test_x280_realprof / the RT handler's anchoring.
     uint64_t ts_base = 0;
+    static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
+    uint64_t dbg_iters = 0, dbg_pages = 0, dbg_emit = 0;
 
     while (!stop_.load(std::memory_order_acquire)) {
         uint32_t np = sock->pages_available();
@@ -270,6 +272,11 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
         if (np >= fifo_pages) {
             np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
         }
+        if (ddbg && dbg_iters < 40) {
+            log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, dbg_iters, np, fifo_pages);
+        }
+        dbg_iters++;
+        dbg_pages += np;
         buf.resize(static_cast<size_t>(np) * page_words);
         sock->read(buf.data(), np);  // auto-acks the sender
 
@@ -297,6 +304,7 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 if (type != kernel_profiler::ZONE_START && type != kernel_profiler::ZONE_END) {
                     return;  // only START/END for now (DeviceZoneScopedN)
                 }
+                dbg_emit++;
                 const uint32_t ci = lane / kNRisc, risc = lane % kNRisc;
                 if (ci >= ctx.core_virt.size()) {
                     return;
@@ -345,6 +353,15 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 pkt.is_start = (type == kernel_profiler::ZONE_START);
                 tracy_->HandleWorkerZone(pkt);
             });
+    }
+    if (ddbg) {
+        log_info(
+            tt::LogMetal,
+            "[drain sock={} EXIT] iters={} pages_read={} markers_emitted={}",
+            sock_idx,
+            dbg_iters,
+            dbg_pages,
+            dbg_emit);
     }
 }
 

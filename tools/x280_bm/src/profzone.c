@@ -263,6 +263,14 @@ static void reader_run(
                 for (uint32_t r = 0; r < NRISC; r++) {
                     uint32_t head = heads[c * NRISC + r], tail = tails[r];
                     uint32_t run = tail - head;
+                    /* The worker re-inits its ring on every kernel launch (init_profiler resets TAIL below our
+                     * stale HEAD), so tail-head underflows to a huge value. Detect that (run > RING_CAP is
+                     * impossible under worker flow control) and ship NOTHING this frame -- head resyncs to tail
+                     * below, so the launch's subsequent markers drain normally. Without this the host wraps the
+                     * 512-slot ring ~124x and emits ~30x duplicate zones. */
+                    if (run > RING_CAP) {
+                        run = 0;
+                    }
                     w32(sbase + (uint64_t)(prod & swm) * 4, ((head % RING_CAP) << 16) | (run & 0xFFFFu));
                     prod += 1;
                 }
@@ -316,6 +324,13 @@ static void reader_run(
                         continue;
                     }
                     run = tail - head; /* <= RING_CAP (worker flow control) */
+                    if (run > RING_CAP) {
+                        /* worker re-init'd its ring (TAIL reset below our stale HEAD -> underflow). Resync HEAD
+                         * to the fresh TAIL and skip; the launch's next markers drain normally. (See bulk path.) */
+                        heads[L] = tail;
+                        w32(cbase + r * 4, tail);
+                        continue;
+                    }
                 }
                 pending = 1;
                 visits++;
