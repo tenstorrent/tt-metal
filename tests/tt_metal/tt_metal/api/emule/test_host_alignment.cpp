@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Host_Alignment_*"
+// To run (from the tt-metal repo root, after an emule build):
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Host_Alignment_*"
 
 // Coverage for the host-side L1/DRAM alignment sanitizer (host_sanitizers.hpp
 // check_host_l1_alignment / check_host_dram_alignment). These checks fire only

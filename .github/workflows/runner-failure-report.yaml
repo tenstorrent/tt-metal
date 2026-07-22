@@ -1,0 +1,143 @@
+name: "(triage) Runner Failure Report"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_name:
+        description: "Runner/host name to report on"
+        required: true
+      hours:
+        description: "Number of hours to look back"
+        required: false
+        default: "24"
+      post_to_slack:
+        description: "Post the report to Slack"
+        required: false
+        type: boolean
+        default: true
+      triggering_failures_json:
+        description: "Optional JSON array of triggering failures from the scan workflow."
+        required: false
+  workflow_call:
+    inputs:
+      runner_name:
+        required: true
+        type: string
+      hours:
+        required: false
+        type: string
+        default: "24"
+      post_to_slack:
+        required: false
+        type: boolean
+        default: true
+      triggering_failures_json:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      DATA_API_ROLE:
+        required: true
+      DATA_API_ROUTE_BASE:
+        required: true
+      SLACK_BOT_TOKEN:
+        required: false
+      RUNNER_FAILURE_SCAN_CHANNEL:
+        required: false
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/scripts/runner_failure_report_requirements.txt
+
+      - name: Install scanner dependencies
+        run: python3 -m pip install -r .github/scripts/runner_failure_report_requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.DATA_API_ROLE }}
+          aws-region: us-east-2
+
+      - name: Build runner report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
+          HOURS: ${{ inputs.hours || '24' }}
+          RUNNER_FAILURE_API_BASE_URL: ${{ secrets.DATA_API_ROUTE_BASE }}
+        run: |
+          mkdir -p out
+          python3 .github/scripts/runner_failure_report.py \
+            --hours "$HOURS" \
+            --runner-name "$TARGET_RUNNER_NAME" \
+            --report-json out/runner_failure_report.json \
+            --report-md out/runner_failure_report.md
+
+      - name: Post Slack notification
+        if: always() && hashFiles('out/runner_failure_report.json') != ''
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          DEFAULT_SLACK_CHANNEL: ${{ secrets.RUNNER_FAILURE_SCAN_CHANNEL }}
+          POST_TO_SLACK: ${{ inputs.post_to_slack }}
+          TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
+          TRIGGERING_FAILURES_JSON: ${{ inputs.triggering_failures_json }}
+        run: |
+          if [[ "$POST_TO_SLACK" != "true" ]]; then
+            echo "Slack posting was not requested."
+            exit 0
+          fi
+
+          if [[ -z "$DEFAULT_SLACK_CHANNEL" ]]; then
+            echo "Slack posting requested, but no Slack channel is configured."
+            exit 1
+          fi
+
+          if [[ -z "$SLACK_BOT_TOKEN" ]]; then
+            echo "Slack posting requested, but SLACK_BOT_TOKEN is not configured."
+            exit 1
+          fi
+
+          args=(
+            --runner-report-json out/runner_failure_report.json
+            --runner-name "$TARGET_RUNNER_NAME"
+            --slack-channel "$DEFAULT_SLACK_CHANNEL"
+          )
+          if [[ -n "$TRIGGERING_FAILURES_JSON" && "$TRIGGERING_FAILURES_JSON" != "[]" ]]; then
+            printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            args+=(
+              --triggering-failures-json out/triggering_failures.json
+            )
+          fi
+          python3 .github/scripts/runner_failure_post_slack.py "${args[@]}"
+
+      - name: Add report to step summary
+        if: always() && hashFiles('out/runner_failure_report.md') != ''
+        run: cat out/runner_failure_report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runner failure report
+        if: always() && hashFiles('out/runner_failure_report.*') != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: runner-failure-report-${{ inputs.runner_name }}-${{ github.run_id }}
+          path: |
+            out/runner_failure_report.json
+            out/runner_failure_report.md
+          retention-days: 14

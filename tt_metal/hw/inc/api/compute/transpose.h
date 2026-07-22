@@ -71,16 +71,10 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
 #else
-    // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559) and no int-FPU 8-bit integer
-    // reconstruct path; reject formats that would otherwise silently take the wrong path. UInt32 is
-    // treated as unpack-to-dest on WH/BH and Int8/UInt8 (low nibble 0xE) need the int-FPU path.
-    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
-    LLK_ASSERT(!is_8bit_int, "8-bit integer transpose not supported on Quasar");
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false /*acc_to_dest*/,
@@ -130,9 +124,8 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
     }
 #else
-    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
-                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    const bool enable_unpack_to_dest =
+        (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(
         !enable_unpack_to_dest, "32-bit (unpack-to-dest) transpose not supported on Quasar");  // TODO: tt-llk#1559
     UNPACK((llk_unpack_A<BroadcastType::NONE, false /*acc_to_dest*/>(icb, itile)));

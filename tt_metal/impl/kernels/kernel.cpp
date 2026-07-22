@@ -798,8 +798,12 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
         .programmable_core_type = get_kernel_programmable_core_type(),
     };
 
-    if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-        result.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
+    const auto& kernel_config = config();
+    if (const auto* compute_config = std::get_if<ComputeConfig>(&kernel_config)) {
+        result.math_fidelity = compute_config->math_fidelity;
+    } else if (
+        const auto* quasar_compute_config = std::get_if<experimental::quasar::QuasarComputeConfig>(&kernel_config)) {
+        result.math_fidelity = quasar_compute_config->math_fidelity;
     }
 
     if (device != nullptr) {
@@ -1368,8 +1372,25 @@ std::string_view QuasarComputeKernel::get_linker_opt_level() const { return this
 
 std::string QuasarComputeKernel::config_hash() const {
     // QuasarComputeProcessor values must be sorted to ensure consistent ordering for hash generation
-    TT_ASSERT(std::is_sorted(this->compute_processors_.begin(), this->compute_processors_.end()));
-    return fmt::format("{}", fmt::join(this->compute_processors_, "_"));
+    TT_ASSERT(std::is_sorted(compute_processors_.begin(), compute_processors_.end()));
+
+    std::string unpack_mode_descriptor = "default";
+    const auto& unpack_modes = config_.unpack_to_dest_mode;
+    if (std::ranges::any_of(unpack_modes, [](auto v) { return v != UnpackToDestMode::Default; })) {
+        unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
+    }
+
+    return fmt::format(
+        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        fmt::join(compute_processors_, "_"),
+        enchantum::to_string(config_.math_fidelity),
+        config_.fp32_dest_acc_en,
+        config_.math_approx_mode,
+        config_.dst_full_sync_en,
+        config_.bfp8_pack_precise,
+        config_.enable_2x_src_format,
+        config_.unpack_to_dest_en,
+        unpack_mode_descriptor);
 }
 
 uint8_t QuasarComputeKernel::expected_num_binaries() const {

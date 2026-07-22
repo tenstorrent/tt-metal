@@ -115,7 +115,9 @@ class GLM52Adapter(MLAPrefillAdapter):
     mla_pcc_threshold = 0.995
     moe_pcc_threshold = 0.971
     prefill_trace_layout = "chunked_group_a_v1"
-    test_prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
+    # Default trace must carry the DSA indexer-K cache (dsa/indexer_k_layer_*); the older
+    # golden/structured_traces/glm_52_55k_vllm omits it, so the indexer-K PCC checks would silently skip.
+    test_prefill_trace_default = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
 
     @property
     def config_builder(self) -> Callable:

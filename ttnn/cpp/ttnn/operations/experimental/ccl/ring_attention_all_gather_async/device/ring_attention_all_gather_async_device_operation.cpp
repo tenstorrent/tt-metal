@@ -117,12 +117,12 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensors = tensor_args.input_tensor;
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
-    std::vector<ttnn::TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
     for (const auto& input_item : input_tensors) {
         auto shape = input_item.logical_shape();
         shape[operation_attributes.dim] *= operation_attributes.ring_size;
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             shape,
             TensorLayout(
                 input_tensor.dtype(),

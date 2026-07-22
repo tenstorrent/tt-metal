@@ -1,1 +1,0 @@
-../../../../../models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py

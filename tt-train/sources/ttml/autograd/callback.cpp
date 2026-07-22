@@ -19,7 +19,7 @@ TensorPtr autograd_callback(const TensorPtr& input, std::function<void()> callba
         callback();
         if (out->is_grad_initialized()) {
             input->add_grad(out->get_grad());
-            out->set_grad(tt::tt_metal::Tensor{});  // release our pin; input owns it now
+            out->set_grad(ttnn::Tensor{});  // release our pin; input owns it now
         }
     };
 

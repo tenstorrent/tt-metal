@@ -30,7 +30,7 @@
  * Tests that sweep all ~65,000 BF16 values use batched tensor operations:
  *   1. Collect all valid BF16 values into a vector
  *   2. Pad to tile boundary (multiple of 32x32=1024)
- *   3. Create single tensor: Tensor::from_vector(data, TensorSpec).to_device(device)
+ *   3. Create single tensor: Tensor::from_vector(data, tt::tt_metal::TensorSpec).to_device(device)
  *   4. Call operation ONCE on the entire tensor
  *   5. Process results from output vector
  *
@@ -242,8 +242,8 @@ std::vector<::bfloat16> run_tanh_bw_batched(
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
 
-    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device);
-    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device);
+    auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device);
+    auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device);
 
     auto results = ttnn::tanh_bw(grad_tensor, input_tensor);
     auto result = results[0].value();

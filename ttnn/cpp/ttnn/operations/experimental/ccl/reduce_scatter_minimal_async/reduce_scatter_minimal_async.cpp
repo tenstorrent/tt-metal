@@ -48,6 +48,9 @@ ttnn::Tensor reduce_scatter_minimal_async(
         num_devices,
         usable_topology);
 
+    auto resolved_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
+
     // Use composite reduce scatter for edge cases (e.g., tile dimensions not evenly divisible)
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter");
@@ -61,7 +64,8 @@ ttnn::Tensor reduce_scatter_minimal_async(
             cluster_axis,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            resolved_compute_kernel_config);
     }
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
@@ -77,18 +81,6 @@ ttnn::Tensor reduce_scatter_minimal_async(
         if (buffers.size() >= 2) {
             optional_output_tensor = buffers[1];
         }
-    }
-
-    // For fp32 inputs without an explicit compute_kernel_config, enable fp32 dest accumulation
-    // so the line_reduction sum runs at fp32 precision in dst (Tf32 unpack-dst). Without this,
-    // the JIT data-format selection picks a 7-bit-mantissa dst, silently truncating the
-    // cross-device sum.
-    auto resolved_compute_kernel_config = compute_kernel_config;
-    if (!resolved_compute_kernel_config.has_value() && input_tensor.dtype() == DataType::FLOAT32) {
-        resolved_compute_kernel_config = ttnn::DeviceComputeKernelConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-        };
     }
 
     // Call the prim operation

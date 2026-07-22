@@ -22,7 +22,7 @@ namespace ttnn::prim {
 struct UpdateKVCacheOperation {
     using operation_attributes_t = KvCacheParams;
     using tensor_args_t = KvCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<UpdateCacheMultiCoreProgramFactory, FillCacheMultiCoreProgramFactory>;
 
