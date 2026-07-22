@@ -136,7 +136,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<MeshCoordinateRangeSet>(mod, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
     nb::class_<SystemMeshDescriptor>(mod, "SystemMeshDescriptor");
     nb::class_<DistributedHostBuffer>(mod, "DistributedHostBuffer");
-    nb::class_<TensorTopology>(mod, "TensorTopology");
+    nb::class_<tt::tt_metal::TensorTopology>(mod, "TensorTopology");
 }
 // NOLINTEND(misc-redundant-expression)
 // NOLINTEND(bugprone-unused-raii)
@@ -776,7 +776,7 @@ void py_module(nb::module_& mod) {
             Returns the HostBuffer shard at the given coordinate, or None if not local/populated.
         )doc");
 
-    auto py_tensor_topology = static_cast<nb::class_<TensorTopology>>(mod.attr("TensorTopology"));
+    auto py_tensor_topology = static_cast<nb::class_<tt::tt_metal::TensorTopology>>(mod.attr("TensorTopology"));
     py_tensor_topology
         .def(
             nb::init<
@@ -787,12 +787,20 @@ void py_module(nb::module_& mod) {
             nb::arg("placements"),
             nb::arg("mesh_coords"),
             "Constructor for TensorTopology")
-        .def("distribution_shape", &TensorTopology::distribution_shape, nb::rv_policy::reference_internal)
-        .def("placements", &TensorTopology::placements, nb::rv_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, nb::rv_policy::reference_internal)
-        .def("__eq__", [](const TensorTopology& self, const TensorTopology& other) { return self == other; })
-        .def("__ne__", [](const TensorTopology& self, const TensorTopology& other) { return self != other; })
-        .def("__repr__", [](const TensorTopology& self) {
+        .def("distribution_shape", &tt::tt_metal::TensorTopology::distribution_shape, nb::rv_policy::reference_internal)
+        .def("placements", &tt::tt_metal::TensorTopology::placements, nb::rv_policy::reference_internal)
+        .def("mesh_coords", &tt::tt_metal::TensorTopology::mesh_coords, nb::rv_policy::reference_internal)
+        .def(
+            "__eq__",
+            [](const tt::tt_metal::TensorTopology& self, const tt::tt_metal::TensorTopology& other) {
+                return self == other;
+            })
+        .def(
+            "__ne__",
+            [](const tt::tt_metal::TensorTopology& self, const tt::tt_metal::TensorTopology& other) {
+                return self != other;
+            })
+        .def("__repr__", [](const tt::tt_metal::TensorTopology& self) {
             std::ostringstream oss;
             oss << self;
             return oss.str();

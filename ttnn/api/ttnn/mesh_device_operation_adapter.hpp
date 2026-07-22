@@ -63,9 +63,9 @@ inline void extract_tensor_buffers_into(const T& obj, Out& out) {
 
 // Tensor leaf — push the buffer.
 template <>
-struct extract_tensor_buffers_t<tt::tt_metal::Tensor, void> {
+struct extract_tensor_buffers_t<ttnn::Tensor, void> {
     template <typename Out>
-    static void call(const tt::tt_metal::Tensor& t, Out& out) {
+    static void call(const ttnn::Tensor& t, Out& out) {
         out.push_back(t.buffer());
     }
 };
@@ -94,8 +94,7 @@ template <typename T>
 struct extract_tensor_buffers_t<
     T,
     std::enable_if_t<
-        ttsl::concepts::Reflectable<T> and not std::is_same_v<T, tt::tt_metal::Tensor> and
-        not is_handled_container_v<T>>> {
+        ttsl::concepts::Reflectable<T> and not std::is_same_v<T, ttnn::Tensor> and not is_handled_container_v<T>>> {
     template <typename Out>
     static void call(const T& obj, Out& out) {
         reflect::for_each([&obj, &out](auto I) { extract_tensor_buffers_into(reflect::get<I>(obj), out); }, obj);
@@ -822,11 +821,9 @@ public:
         static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_mesh_tensors(
             const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
             std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
-            const auto visit = [&result](const tt::tt_metal::Tensor& t) {
-                result.push_back(std::cref(t.mesh_tensor()));
-            };
-            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_args);
-            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_return_value);
+            const auto visit = [&result](const ttnn::Tensor& t) { result.push_back(std::cref(t.mesh_tensor())); };
+            ttsl::reflection::visit_object_of_type<ttnn::Tensor>(visit, tensor_args);
+            ttsl::reflection::visit_object_of_type<ttnn::Tensor>(visit, tensor_return_value);
             return result;
         }
 
@@ -873,7 +870,7 @@ public:
             // first device tensor reachable from tensor_args. Op factories
             // satisfying this concept are tensor-driven, so first_tensor is
             // always populated for current callers.
-            auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+            auto first_tensor = ttsl::reflection::get_first_object_of_type<ttnn::Tensor>(tensor_args);
             TT_FATAL(
                 first_tensor.has_value(),
                 "MetalV2 factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");

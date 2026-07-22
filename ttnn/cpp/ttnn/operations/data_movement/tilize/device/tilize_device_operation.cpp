@@ -191,7 +191,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             operation_attributes.output_mem_config.buffer_type(),
             input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
                                                          // factory, the output has the same shard spec as the input.
-        return {TensorSpec(
+        return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
@@ -203,7 +203,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};

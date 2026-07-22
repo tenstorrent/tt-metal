@@ -36,11 +36,11 @@ void BroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout());
 }
 
-TensorSpec BroadcastDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec BroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));

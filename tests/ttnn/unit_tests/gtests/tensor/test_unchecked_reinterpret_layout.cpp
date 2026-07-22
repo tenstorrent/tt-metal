@@ -27,9 +27,9 @@ class UncheckedReinterpretLayoutDeviceTest
 TEST_F(UncheckedReinterpretLayoutDeviceTest, TileToRowMajorPreservesShapeAndDtype) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor tile_tensor = create_device_tensor(spec, device_);
+    Tensor tile_tensor = ttnn::create_device_tensor(spec, device_);
     ASSERT_EQ(tile_tensor.layout(), Layout::TILE);
 
     Tensor rm_tensor = unchecked_reinterpret_layout(tile_tensor, Layout::ROW_MAJOR);
@@ -43,9 +43,9 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, TileToRowMajorPreservesShapeAndDtyp
 TEST_F(UncheckedReinterpretLayoutDeviceTest, RowMajorToTilePreservesShapeAndDtype) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), mem_cfg));
 
-    Tensor rm_tensor = create_device_tensor(spec, device_);
+    Tensor rm_tensor = ttnn::create_device_tensor(spec, device_);
     ASSERT_EQ(rm_tensor.layout(), Layout::ROW_MAJOR);
 
     Tensor tile_tensor = unchecked_reinterpret_layout(rm_tensor, Layout::TILE);
@@ -59,9 +59,9 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, RowMajorToTilePreservesShapeAndDtyp
 TEST_F(UncheckedReinterpretLayoutDeviceTest, AliasesTheSameDeviceAddress) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    Tensor original = ttnn::create_device_tensor(spec, device_);
     Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
 
     EXPECT_EQ(
@@ -72,9 +72,9 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, AliasesTheSameDeviceAddress) {
 TEST_F(UncheckedReinterpretLayoutDeviceTest, SameLayoutIsIdentity) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    Tensor original = ttnn::create_device_tensor(spec, device_);
     Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::TILE);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::TILE);
@@ -87,9 +87,9 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, SameLayoutIsIdentity) {
 TEST_F(UncheckedReinterpretLayoutDeviceTest, OriginalTensorStaysAliveAfterReinterpretedDeallocated) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    Tensor original = ttnn::create_device_tensor(spec, device_);
     {
         Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
         ASSERT_TRUE(reinterpreted.is_allocated());
@@ -105,7 +105,7 @@ class UncheckedReinterpretLayoutHostTest : public ::testing::Test {};
 
 TEST_F(UncheckedReinterpretLayoutHostTest, TileToRowMajorOnHost) {
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
 
     auto num_elements = shape.volume();
     std::vector<bfloat16> data(num_elements, bfloat16(1.0f));
@@ -122,7 +122,8 @@ TEST_F(UncheckedReinterpretLayoutHostTest, TileToRowMajorOnHost) {
 
 TEST_F(UncheckedReinterpretLayoutHostTest, RowMajorToTileOnHost) {
     ttnn::Shape shape({1, 1, 32, 32});
-    TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    tt::tt_metal::TensorSpec spec(
+        shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     auto num_elements = shape.volume();
     std::vector<bfloat16> data(num_elements, bfloat16(2.0f));
