@@ -46,6 +46,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
+            else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+            {
+                // L1_TO_L1 leaves UNPACK waiting for DEST ownership. Isolate
+                // modes have no consumer pulse, so clear the persistent wait.
+                volatile std::uint32_t* cfg                      = (volatile std::uint32_t*)TENSIX_CFG_BASE;
+                cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            }
         }
         else
         {
@@ -121,6 +128,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
 
+                // After datacopy consumes SrcA and clears its dvalid, provide
+                // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_unpack_set_srcB_dummy_valid_();
@@ -141,6 +150,45 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "params.h"
 
 using namespace ckernel;
+
+template <bool set_dvalid>
+inline void run_datacopy_transpose_loop(
+    const DataFormat math_format,
+    const std::uint32_t loop_factor,
+    const std::uint32_t tile_cnt,
+    const std::uint32_t num_faces,
+    const std::uint32_t face_r_dim,
+    const int dst_index)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; loop++)
+    {
+        if constexpr (!unpack_to_dest)
+        {
+            // Datacopy and transpose both use bank0's instruction buffer, so
+            // each operation must program its MOP immediately before execution.
+            _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+            _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+            for (std::uint32_t i = 0; i < tile_cnt; ++i)
+            {
+                _llk_math_eltwise_unary_datacopy_(dst_index + i);
+            }
+        }
+
+        // Int32/Float32 transpose dest requires non-default SrcA/SrcB format
+        // settings and disables implied math format.
+        _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+        for (std::uint32_t i = 0; i < tile_cnt; ++i)
+        {
+            _llk_math_transpose_dest_(dst_index + i);
+        }
+
+        if constexpr (set_dvalid)
+        {
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        }
+    }
+}
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -211,51 +259,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                if constexpr (!unpack_to_dest)
-                {
-                    // Datacopy and transpose both use bank0's instruction
-                    // buffer, so each operation must program its MOP before
-                    // execution. Initializing both in INIT overwrites datacopy.
-                    _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-                    _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
-                        num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                    {
-                        _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
-                    }
-                }
-                _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
-                _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                {
-                    _llk_math_transpose_dest_(DST_INDEX + i);
-                }
-            }
+            run_datacopy_transpose_loop<false>(math_format, LOOP_FACTOR, TILE_CNT, num_faces, TEST_FACE_R_DIM, DST_INDEX);
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                if constexpr (!unpack_to_dest)
-                {
-                    _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-                    _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
-                        num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                    {
-                        _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
-                    }
-                }
-                _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
-                _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                {
-                    _llk_math_transpose_dest_(DST_INDEX + i);
-                }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-            }
+            run_datacopy_transpose_loop<true>(math_format, LOOP_FACTOR, TILE_CNT, num_faces, TEST_FACE_R_DIM, DST_INDEX);
         }
         PROFILER_SYNC();
     }
@@ -292,7 +300,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+            auto cfg                                    = (volatile std::uint32_t*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

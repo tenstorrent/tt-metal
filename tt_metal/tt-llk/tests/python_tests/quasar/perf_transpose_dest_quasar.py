@@ -19,9 +19,7 @@ from quasar.test_transpose_dest_quasar import (
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_transpose_dims=PERF_TRANSPOSE_DEST_COMBINATIONS,
-    implied_math_format=lambda formats_dest_acc_sync_transpose_dims: transpose_dest_implied_math_formats(
-        is_perf=True
-    ),
+    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
