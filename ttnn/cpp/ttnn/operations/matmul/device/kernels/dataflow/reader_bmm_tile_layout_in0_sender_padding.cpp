@@ -270,7 +270,7 @@ void kernel_main() {
                                 if constexpr (in0_last_ktile_w > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                         noc.async_read_barrier();
-                                        const DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(
                                             dfb_in0.get_write_ptr() + in0_write_offset);
                                     }
@@ -278,7 +278,7 @@ void kernel_main() {
                                 if constexpr (in0_last_ktile_h > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                         noc.async_read_barrier();
-                                        const DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
                                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
                                             dfb_in0.get_write_ptr() + in0_write_offset);
                                     }
