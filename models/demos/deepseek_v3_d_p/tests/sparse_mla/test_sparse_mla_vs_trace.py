@@ -303,7 +303,7 @@ def _skip_unsupported(model: str, mesh_device) -> None:
         pytest.skip(f"GLM sparse_sdpa needs per-chip H=64/tp≥32 → tp≤2 (mesh tp={mesh_device.shape[1]})")
 
 
-def _make_mla(model, config, layer, mesh_device, is_chunked=False):
+def _make_mla(model, config, layer, mesh_device):
     config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model / test_mla)
     weights = _weights_for(model, config, layer)  # canonical dict — same tensors the CPU truth uses
     return ttMLA(
@@ -314,7 +314,6 @@ def _make_mla(model, config, layer, mesh_device, is_chunked=False):
         seq_len=SEQ_LEN,
         sp_axis=0,
         tp_axis=1,
-        is_chunked=is_chunked,
         layer_num=1,
     )
 
@@ -371,7 +370,7 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
-    idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
+    idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
     idx = mla._indexer.forward(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
@@ -424,7 +423,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
 

@@ -293,15 +293,12 @@ class TtMoEGatePrefill(LightweightModule):
         fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
-        is_balanced: bool = False,
         hash_table: torch.Tensor = None,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
-            is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
-                Affects per-device real token count computation for padding awareness.
             hash_table: DeepSeek-V4 hash routing tid2eid table, shape (vocab_size, n_activated_experts).
                 Required for GateComputeMode.HASH_HOST and GateComputeMode.HASH_DEVICE; ignored otherwise.
         """
@@ -312,7 +309,6 @@ class TtMoEGatePrefill(LightweightModule):
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
-        self.is_balanced = is_balanced
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
@@ -599,11 +595,9 @@ class TtMoEGatePrefill(LightweightModule):
         the identity exactly when actual_start is slab-aligned, so actual_start=0 reproduces the
         sequential result bit-for-bit and every pre-existing caller is unaffected.
 
-        When is_balanced=True, the sequence uses zigzag placement: the original sequence
-        is split into 2*sp_factor chunks and device d holds chunks d and (2*sp_factor-1-d),
-        early chunk first. Padding remains contiguous on the expected side within each
-        device's local buffer because early chunks always precede late chunks locally.
-        Only the per-device real token count changes relative to the sequential case.
+        The non-rotated (actual_start == 0) case is plain sequential SP placement: the original
+        sequence is split into sp_factor contiguous chunks and device d holds chunk d, so only the
+        per-device real token count varies.
         """
         if padding_side not in ("right", "left"):
             raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
@@ -616,13 +610,10 @@ class TtMoEGatePrefill(LightweightModule):
         padding_config = []
 
         if actual_start:
-            # Rotated chunked prefill. Both branches below assume the sequential layout, so neither
-            # is valid here; fail loudly rather than silently drop tokens. Rotation implies
-            # is_balanced=False (ttMLA._chunked_attn asserts it) and produces right-padding WITHIN
-            # each chip by construction, so those two combinations are unreachable, not merely
-            # unsupported.
-            if self.is_balanced:
-                raise ValueError("rotated chunked prefill (actual_start != 0) does not support is_balanced=True")
+            # Rotated chunked prefill. The sequential branch below assumes the non-rotated layout,
+            # so it is not valid here; fail loudly rather than silently drop tokens. Rotation
+            # produces right-padding WITHIN each chip by construction, so non-right padding is
+            # unreachable, not merely unsupported.
             if padding_side != "right":
                 raise ValueError(
                     f"rotated chunked prefill (actual_start != 0) is right-padded by construction; "
@@ -632,25 +623,6 @@ class TtMoEGatePrefill(LightweightModule):
                 actual_start, actual_isl, sp_factor, seq_len_per_chip
             ):
                 padding_config.append([local_real_tokens, pad_side])
-        elif self.is_balanced:
-            num_chunks = 2 * sp_factor
-            chunk_size = total_tokens // num_chunks
-
-            for sp_idx in range(sp_factor):
-                chunk_a = sp_idx
-                chunk_b = num_chunks - 1 - sp_idx
-
-                if padding_side == "right":
-                    real_a = min(chunk_size, max(0, actual_isl - chunk_a * chunk_size))
-                    real_b = min(chunk_size, max(0, actual_isl - chunk_b * chunk_size))
-                else:
-                    total_padded = max(0, total_tokens - actual_isl)
-                    pad_a = min(chunk_size, max(0, total_padded - chunk_a * chunk_size))
-                    pad_b = min(chunk_size, max(0, total_padded - chunk_b * chunk_size))
-                    real_a = chunk_size - pad_a
-                    real_b = chunk_size - pad_b
-
-                padding_config.append([real_a + real_b, pad_side])
         else:
             for sp_idx in range(sp_factor):
                 if padding_side == "right":

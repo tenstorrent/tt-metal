@@ -6,8 +6,8 @@
 Chunked-prefill test for TtPrefillBlock (DeepSeek V3, first MoE layer = layer 3).
 
 Processes a long sequence in chunks of 5*1024 = 5120 tokens, writing into a KV cache
-allocated for ONE user of sequence length 55*1024 = 56320. The MoE path is identical to
-test_prefill_block; only the MLA path runs the chunked-prefill code (is_chunked=True).
+allocated for ONE user of sequence length 55*1024 = 56320. The MoE path is orthogonal to
+attention; only the MLA path exercises the chunked-prefill code.
 
 Validates against the precomputed golden DeepSeek-R1 trace (variant.prefill_trace_default; override
 with PREFILL_TRACE_DIR). For an N-chunk run we compare the first N*5120 tokens of the trace.
@@ -212,9 +212,7 @@ def run_chunked_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         weight_cache_path=effective_cache_path,
-        is_chunked=True,
         slot_num=1,
         layer_num=1,
     )
@@ -226,7 +224,7 @@ def run_chunked_block(
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
 
     tt_kvpe_cache = init_mla_kv_cache(
@@ -459,9 +457,7 @@ def run_chunked_block_multiuser(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         weight_cache_path=effective_cache_path,
-        is_chunked=True,
         slot_num=num_users,
         layer_num=1,
     )
@@ -470,7 +466,7 @@ def run_chunked_block_multiuser(
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
 
     # num_users-slot cache (batch = num_users * 1 layer); only target_slot is written below.
@@ -676,9 +672,7 @@ def run_chunked_block_padded(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         weight_cache_path=effective_cache_path,
-        is_chunked=True,
         slot_num=1,
         layer_num=1,
     )
@@ -690,7 +684,7 @@ def run_chunked_block_padded(
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=CHUNK)
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -1045,17 +1039,15 @@ def run_chunked_block_glm_indexer(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        is_balanced=False,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         weight_cache_path=effective_cache_path,
-        is_chunked=True,
         slot_num=1,
         layer_num=1,
         routing_use_l1_small_for_semaphores=True,
     )
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,

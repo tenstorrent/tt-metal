@@ -126,8 +126,8 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
-        # FABRIC_2D variants — shared list defined in conftest.py (also used by
-        # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+        # FABRIC_2D variants — shared list defined in conftest.py. Covers (4,2) BH
+        # LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
         *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
     ],
     indirect=["mesh_device", "device_params"],
@@ -490,7 +490,6 @@ def test_prefill_block_loop(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
     )
-    block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
         if not skip_reference:
@@ -506,7 +505,7 @@ def test_prefill_block_loop(
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
     # Shard initial input to device
