@@ -37,15 +37,10 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
 #ifndef ARCH_QUASAR
-    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (is_int32) {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
-    } else {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
-    }
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
