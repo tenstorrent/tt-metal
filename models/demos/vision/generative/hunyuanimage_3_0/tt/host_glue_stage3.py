@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Stage 3 of the host-glue port: keep the transformer hidden ON-DEVICE across the
+whole diffusion loop (the #1 T2I perf lever, ~57% host-glue).
+
+Today per step the HF path runs patch_embed + final_layer on host CPU and round-trips
+the [cfg,~4116,4096] inputs_embeds (up) + hidden (down) every step. This module does it
+all on-device:
+
+  setup (once):   base = wte(input_ids) [static]; find the contiguous image block
+                  [start:end]; pre-upload RoPE cos/sin + attn mask + the static suffix;
+                  build PatchEmbedTT + FinalLayerTT.
+  per step:       img = PatchEmbedTT(latent, time_embed(t)) on-device; assemble
+                  inputs_embeds on-device via ROW_MAJOR concat([prefix, img, suffix])
+                  (image block is contiguous) with the per-step timestep_emb(t) token
+                  patched into the tiny prefix; -> tilize -> run decoder layers (hidden
+                  stays on device) -> slice the image-position hidden -> FinalLayerTT
+                  (+time_embed_2(t)) -> download ONLY the velocity [cfg,32,64,64].
+
+Removes host patch_embed + final_layer + the two ~68 MB/step transfers. Correctness:
+test_host_glue_stage3.py compares this velocity vs the existing host-reference path
+(PatchEmbedTT/FinalLayerTT each already PCC 0.9997 standalone).
+
+NOTE embedders: patch_embed uses `time_embed(t)`, the <timestep> meta-token uses a
+SEPARATE `timestep_emb(t)`, and final_layer uses `time_embed_2(t)` — three distinct heads.
+"""
+from __future__ import annotations
+
+import torch
+
+import ttnn
+
+from .host_glue_tt import _repl, build_final_layer, build_patch_embed
+from .pipeline import _mesh_to_torch
+
+
+def _forward_image_device(tt_pipe, inputs_embeds_tt, cos_tt, sin_tt, mask_tt):
+    """Run the N graduated decoder layers on an ALREADY-on-device inputs_embeds and
+    return the DEVICE hidden [1,S,hidden] (no embed upload, no download)."""
+    hidden = inputs_embeds_tt
+    for layer in tt_pipe.layers:
+        hidden = layer(hidden, custom_pos_emb=(cos_tt, sin_tt), return_l_aux=False, attn_mask=mask_tt)
+    return hidden
+
+
+def _rm_upload(tt_pipe, t):
+    """Upload a host [1,n,hidden] slice as ROW_MAJOR bf16 (replicated) for on-device concat."""
+    return ttnn.from_torch(
+        t.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=tt_pipe.device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **tt_pipe._mesh_kw(),
+    )
+
+
+def setup_ondevice_headglue(model, tt_pipe, kwargs, attn_mask, token_h=64, token_w=64):
+    """Precompute the static gen_image sequence pieces + build the on-device conv heads.
+    Returns a ctx dict consumed by run_velocity_once_ondevice."""
+    input_ids = kwargs["input_ids"]  # [cfg, S]
+    image_mask = kwargs["image_mask"]  # [cfg, S] bool (contiguous <img> run)
+    cos, sin = kwargs["custom_pos_emb"]  # [cfg, S, head_dim]
+    ts_idx = kwargs["gen_timestep_scatter_index"]  # [cfg, n_ts]
+    cfg, S = int(input_ids.shape[0]), int(input_ids.shape[1])
+    with torch.no_grad():
+        base = model.model.wte(input_ids).to(torch.float32)  # [cfg, S, hidden] static base embeds
+    ctx = {
+        "cfg": cfg,
+        "S": S,
+        "token_h": token_h,
+        "token_w": token_w,
+        "patch_embed_tt": build_patch_embed(tt_pipe.device, model, token_h, token_w),
+        "final_layer_tt": build_final_layer(tt_pipe.device, model, token_h, token_w),
+        "rows": [],
+    }
+    for i in range(cfg):
+        m = image_mask[i].reshape(-1).bool()
+        idx = torch.nonzero(m).flatten()
+        start, end = int(idx[0]), int(idx[-1]) + 1  # contiguous image block [start:end], end-start=token_h*token_w
+        cos_i, sin_i = cos[i].to(torch.float32), sin[i].to(torch.float32)
+        cos_tt, sin_tt = tt_pipe._upload_pos_img(cos_i, sin_i, S)
+        mask_tt = tt_pipe._upload_mask(attn_mask[i] if attn_mask is not None else None, S)
+        suffix_tt = _rm_upload(tt_pipe, base[i : i + 1, end:])  # static, resident
+        ctx["rows"].append(
+            {
+                "start": start,
+                "end": end,
+                "prefix_base": base[i : i + 1, :start].clone(),  # host; <timestep> slot patched per step
+                "ts_pos": int(ts_idx[i].reshape(-1)[0]),
+                "cos": cos_tt,
+                "sin": sin_tt,
+                "mask": mask_tt,
+                "suffix": suffix_tt,
+            }
+        )
+    return ctx
+
+
+def run_velocity_once_ondevice(model, ctx, tt_pipe, latents, t, cfg_factor):
+    """One denoising step, fully on-device head-glue. latents: host [1,32,H,W] (single;
+    same for all CFG). Returns velocity [cfg,32,H,W] (only tensor downloaded)."""
+    dev = tt_pipe.device
+    pe_tt, fl_tt = ctx["patch_embed_tt"], ctx["final_layer_tt"]
+    th, tw = ctx["token_h"], ctx["token_w"]
+    with torch.no_grad():
+        te = model.time_embed(t.reshape(-1)[:1]).to(torch.float32)  # patch_embed emb
+        te2 = model.time_embed_2(t.reshape(-1)[:1]).to(torch.float32)  # final_layer emb
+        ts_tok = model.timestep_emb(t.reshape(-1)[:1]).to(torch.float32)[0]  # <timestep> meta-token embed
+    emb_pe, emb_fl = _repl(dev, te), _repl(dev, te2)
+    img_embeds = pe_tt(latents.to(torch.float32), emb_pe)  # [1,H*W,hidden] TILE (same for all CFG)
+    img_rm = ttnn.to_layout(img_embeds, ttnn.ROW_MAJOR_LAYOUT)
+    vels = []
+    for i in range(cfg_factor):
+        r = ctx["rows"][i]
+        pref = r["prefix_base"].clone()
+        pref[0, r["ts_pos"]] = ts_tok.to(pref.dtype)  # patch the per-step <timestep> token
+        pref_rm = _rm_upload(tt_pipe, pref)
+        seq_rm = ttnn.concat([pref_rm, img_rm, r["suffix"]], dim=1)  # [1,S,hidden] ROW_MAJOR
+        seq_tt = ttnn.to_layout(seq_rm, ttnn.TILE_LAYOUT)
+        hidden = _forward_image_device(tt_pipe, seq_tt, r["cos"], r["sin"], r["mask"])  # device [1,S,hidden]
+        hidden_rm = ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT)
+        hid_img_rm = ttnn.slice(hidden_rm, [0, r["start"], 0], [1, r["end"], int(hidden.shape[-1])])
+        hid_img = ttnn.to_layout(hid_img_rm, ttnn.TILE_LAYOUT)  # [1,H*W,hidden]
+        vel = fl_tt(hid_img, emb_fl)  # [1,1,H*W,32] device
+        vt = _mesh_to_torch(vel, dev).to(torch.float32).reshape(1, th, tw, 32).permute(0, 3, 1, 2).contiguous()
+        vels.append(vt)  # [1,32,H,W]
+        for x in (pref_rm, seq_rm, seq_tt, hidden, hidden_rm, hid_img_rm, hid_img, vel):
+            ttnn.deallocate(x)
+    for x in (emb_pe, emb_fl, img_embeds, img_rm):
+        ttnn.deallocate(x)
+    return torch.cat(vels, dim=0)  # [cfg,32,H,W]
