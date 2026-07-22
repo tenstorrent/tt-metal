@@ -88,6 +88,24 @@ inline void profzone_decode(ProfzoneDecodeState& st, const uint32_t* in, size_t 
             for (uint32_t r = 0; r < kProfzoneNRiscDecode; r++) {
                 const uint32_t head_mod = pp_bulk_head(meta[r]);
                 const uint32_t run = pp_bulk_run(meta[r]);
+                // DIAG (TT_PROFZONE_OVERFLOW_DIAG=1): a run exceeding the ring depth means the producer
+                // TAIL passed the reader HEAD (overflow) or tail<head underflowed -> the `% kProfzoneRingCap`
+                // walk below re-reads stale slots, duplicating/reordering markers (consecutive STARTs ->
+                // improper Tracy nesting). This is the smoking gun for that failure mode.
+                if (run > kProfzoneRingCap) {
+                    static const bool ovdbg = std::getenv("TT_PROFZONE_OVERFLOW_DIAG") != nullptr;
+                    static uint64_t n_over = 0;
+                    if (ovdbg && n_over++ < 60) {
+                        std::fprintf(
+                            stderr,
+                            "[profzone-decode] OVERFLOW core=%u risc=%u run=%u > RING_CAP=%u (head=%u)\n",
+                            core,
+                            r,
+                            run,
+                            kProfzoneRingCap,
+                            head_mod);
+                    }
+                }
                 const uint32_t lane = core * kProfzoneNRiscDecode + r;
                 const uint32_t* ring = raw + (size_t)r * kProfzoneRingCap;
                 uint32_t i = 0;
