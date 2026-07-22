@@ -87,7 +87,11 @@ class TtXttsGenerator:
         def _pick(logits, n_done):
             return pick(ttnn.add(logits, stop_mask) if (stop_mask is not None and n_done < min_new_tokens) else logits)
 
-        kv = self.model.prefill(text_ids, cond_latents)
+        # Fixed-size KV cache: size it for the prompt + the whole decode budget (mel token i sits
+        # at cache position prompt_len + i; +1 for the start_audio step), rounded to a tile.
+        prompt_len = cond_latents.shape[1] + text_ids.shape[1]
+        max_seq = -(-(prompt_len + max_new_tokens + 1) // 32) * 32
+        kv = self.model.prefill(text_ids, cond_latents, max_seq)
         logits, _, kv = self.model.decode(START_AUDIO_TOKEN, 0, kv)  # start -> c0
         c = _pick(logits, 0)
 
@@ -121,7 +125,9 @@ class TtXttsGenerator:
                 should equal ``codes`` when numerics agree).
             latents: ttnn ``[1, T, hidden]`` latents aligned to ``codes``.
         """
-        kv = self.model.prefill(text_ids, cond_latents)
+        prompt_len = cond_latents.shape[1] + text_ids.shape[1]
+        max_seq = -(-(prompt_len + len(codes) + 2) // 32) * 32
+        kv = self.model.prefill(text_ids, cond_latents, max_seq)
         logits, _, kv = self.model.decode(START_AUDIO_TOKEN, 0, kv)
         preds = [self._argmax(logits)]  # predicted c_0
 

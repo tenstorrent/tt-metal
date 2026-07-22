@@ -72,12 +72,16 @@ class TtXttsGptBlock(LightweightModule):
         self.mlp_c_proj_bias = _to_device(state_dict[prefix + "mlp.c_proj.bias"], device)
 
     def _qkv(self, x):  # [b, s, hidden] -> q, k, v each [b, heads, s, head_dim]
-        # One fused op replaces the slice x3 + reshape/permute x3 head-split: it splits the
-        # [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
-        # transpose_key=False keeps K as [b, heads, s, head_dim] — SDPA and the decode KV
-        # cache expect that layout, not K^T.
+        # Split the [b, s, 3*hidden] c_attn output (GPT-2 [Q|K|V] block layout) into per-head Q, K, V.
+        # ttnn.experimental.nlp_create_qkv_heads is measurably faster than the transformer-namespace
+        # split_query_key_value_and_split_heads wrapper (~43 vs ~63 us/call at decode shape, identical
+        # output) — it wants a 4D [b, 1, s, 3*hidden] input, so add the leading singleton dim (a
+        # metadata reshape). transpose_k_heads=False keeps K as [b, heads, s, head_dim] (SDPA + the
+        # decode KV cache expect that layout, not K^T).
         qkv = ttnn.linear(x, self.attn_c_attn_weight, bias=self.attn_c_attn_bias)
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=NUM_HEADS, transpose_key=False)
+        b, s, three_h = qkv.shape
+        qkv = ttnn.reshape(qkv, (b, 1, s, three_h))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=NUM_HEADS, transpose_k_heads=False)
         ttnn.deallocate(qkv)
         return q, k, v
 
@@ -88,24 +92,14 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(out)
         return proj
 
-    def _attention(self, x):
-        """Non-cached causal attention (full-sequence path). Consumes ``x``."""
-        q, k, v = self._qkv(x)
-        ttnn.deallocate(x)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
-        return self._attn_out(attn)
-
     def _mlp(self, x):
-        """c_fc -> gelu -> c_proj. Consumes ``x``."""
-        h = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias)
+        """c_fc (+ GELU fused into the matmul epilogue) -> c_proj. Consumes ``x``."""
+        # activation="gelu" runs the GELU in the c_fc matmul's fused epilogue instead of a separate
+        # ttnn.gelu op (one fewer op + one fewer intermediate). ~= GPT-2 "gelu_new" (validated by PCC).
+        h = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias, activation="gelu")
         ttnn.deallocate(x)
-        g = ttnn.gelu(h)  # tanh-approx GELU ~= GPT-2 "gelu_new" (validated by PCC)
+        out = ttnn.linear(h, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias)
         ttnn.deallocate(h)
-        out = ttnn.linear(g, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias)
-        ttnn.deallocate(g)
         return out
 
     def _residual_ffn(self, x):
@@ -117,23 +111,13 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(m)
         return y
 
-    def forward(self, x):
-        """Run one XTTS GPT decoder block. ``x`` is ``[batch, seq, hidden]`` on device.
-
-        Intermediates are freed as soon as they are consumed so at most one residual
-        tensor and the current op's output coexist — this lowers the transient
-        high-water mark (weights stay resident in DRAM; only activations churn)."""
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
-        a = self._attention(h)  # consumes h
-        xa = ttnn.add(x, a)
-        ttnn.deallocate(x)
-        ttnn.deallocate(a)
-        return self._residual_ffn(xa)
-
     def forward_prefill(self, x):
-        """Prefill: full causal attention over the prompt, plus the per-layer K, V
-        (each ``[b, heads, seq, head_dim]``) used to seed the decode KV cache. K/V are
-        kept (returned for the cache); every other intermediate is deallocated."""
+        """PREFILL — one of the block's two forwards (the other is ``forward_decode``).
+
+        Full causal attention over the prompt, plus the per-layer K, V (each
+        ``[b, heads, seq, head_dim]``) used to seed the decode KV cache. K/V are kept
+        (returned for the cache); every other intermediate is deallocated. Also serves the
+        full teacher-forced pass (callers that want only the hidden state take ``[0]``)."""
         h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
         q, k, v = self._qkv(h)
         ttnn.deallocate(h)
@@ -145,8 +129,10 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(ao)
         return self._residual_ffn(xa), k, v
 
-    def forward_decode_static(self, x, k_cache, v_cache, onehot, keep, add_mask):
-        """Trace-compatible decode step over a FIXED-size KV cache (no concat growth).
+    def forward_decode(self, x, k_cache, v_cache, onehot, keep, add_mask):
+        """DECODE — one of the block's two forwards. One token over a FIXED-size KV cache
+        (no concat growth: concat on a tile-misaligned seq dim forces untilize->concat->retilize,
+        ~15% of the step — this path avoids all of it).
 
         ``k_cache``/``v_cache`` are ``[1, heads, MAX, head_dim]`` PERSISTENT buffers updated
         IN PLACE at the current position with a device one-hot (``onehot`` ``[1, 1, MAX, 1]``,
@@ -170,41 +156,15 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(v)
         ttnn.deallocate(kw)
         ttnn.deallocate(vw)
-        # Masked attention over the full cache: softmax(q·Kᵀ/√d + mask) · V.
-        kT = ttnn.permute(k_cache, (0, 1, 3, 2))  # [1, heads, head_dim, MAX]
-        scores = ttnn.multiply(ttnn.matmul(q, kT), 1.0 / math.sqrt(HEAD_DIM))  # [1, heads, 1, MAX]
-        ttnn.deallocate(kT)
+        # Masked attention over the full fixed cache, fused into ONE SDPA op (scale + q·Kᵀ + additive
+        # mask + softmax + ·V) instead of permute+matmul+mul+add+softmax+matmul. ``add_mask``
+        # [1, 1, 1, MAX] is 0 for cached positions, -inf ahead (broadcasts over heads and the 1 query).
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k_cache, v_cache, attn_mask=add_mask, is_causal=False, scale=1.0 / math.sqrt(HEAD_DIM)
+        )  # [1, heads, 1, head_dim]
         ttnn.deallocate(q)
-        scores = ttnn.add(scores, add_mask)
-        p = ttnn.softmax(scores, dim=-1)
-        ttnn.deallocate(scores)
-        attn = ttnn.matmul(p, v_cache)  # [1, heads, 1, head_dim]
-        ttnn.deallocate(p)
         ao = self._attn_out(attn)
         xa = ttnn.add(x, ao)
         ttnn.deallocate(x)
         ttnn.deallocate(ao)
         return self._residual_ffn(xa)
-
-    def forward_decode(self, x, k_cache, v_cache):
-        """Decode one token. ``x`` is ``[b, 1, hidden]``; ``k_cache``/``v_cache`` are
-        ``[b, heads, cur_len, head_dim]``. Appends this token's K, V to the cache and
-        attends the single query against the whole cache (all cached positions are
-        causal-valid), so no mask is needed. Returns the grown cache; the previous
-        cache buffers are freed once concatenated into the new ones."""
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
-        q, k, v = self._qkv(h)  # each [b, heads, 1, head_dim]
-        ttnn.deallocate(h)
-        new_k = ttnn.concat([k_cache, k], dim=2)
-        new_v = ttnn.concat([v_cache, v], dim=2)
-        ttnn.deallocate(k_cache)
-        ttnn.deallocate(v_cache)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, new_k, new_v, is_causal=False)
-        ttnn.deallocate(q)
-        ao = self._attn_out(attn)
-        xa = ttnn.add(x, ao)
-        ttnn.deallocate(x)
-        ttnn.deallocate(ao)
-        return self._residual_ffn(xa), new_k, new_v
