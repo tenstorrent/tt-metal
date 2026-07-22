@@ -260,20 +260,20 @@ def test_std_var_hw_reduce_batch_crosses_tree_block(device):
 
 
 @pytest.mark.parametrize("width", [96, 128], ids=["Wt3_retained", "Wt4_replay"])
-def test_std_var_bfp8_two_pass_w_replay(device, monkeypatch, width):
+def test_std_var_bfp8_two_pass_w_replay(device, width):
     torch.manual_seed(20260722)
     source = torch.randn((1, 1, 32, width), dtype=torch.float32) * 3.0 + 100.0
     tt_input = ttnn.from_torch(source, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized = ttnn.to_torch(ttnn.from_device(tt_input)).to(torch.float64)
 
-    for operation in (ttnn.var, ttnn.std):
-        monkeypatch.setenv("TTNN_STD_VAR_USE_WELFORD", "1")
-        welford = ttnn.to_torch(ttnn.from_device(operation(tt_input, dim=-1, keepdim=True, correction=True)))
+    for torch_op, ttnn_op, atol in ((torch.var, ttnn.var, 0.125), (torch.std, ttnn.std, 0.03125)):
+        reference = torch_op(quantized, dim=-1, keepdim=True, correction=1)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True))).to(
+            torch.float64
+        )
 
-        monkeypatch.delenv("TTNN_STD_VAR_USE_WELFORD")
-        two_pass = ttnn.to_torch(ttnn.from_device(operation(tt_input, dim=-1, keepdim=True, correction=True)))
-
-        assert torch.isfinite(two_pass).all()
-        torch.testing.assert_close(two_pass, welford, rtol=0, atol=0)
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0, atol=atol)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor

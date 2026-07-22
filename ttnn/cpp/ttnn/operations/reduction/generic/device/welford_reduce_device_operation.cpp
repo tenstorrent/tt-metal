@@ -4,7 +4,6 @@
 
 #include "welford_reduce_device_operation.hpp"
 
-#include <cstdlib>
 #include <cstdint>
 
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -103,11 +102,6 @@ ttnn::Tensor welford_reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
-    const bool sfpu_two_pass =
-        (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
-         input_tensor.dtype() == DataType::BFLOAT8_B) &&
-        std::getenv("TTNN_STD_VAR_USE_WELFORD") == nullptr;
-
     return ttnn::device_operation::launch<WelfordReduceDeviceOperation>(
         WelfordReduceParams{
             reduce_math,
@@ -118,8 +112,7 @@ ttnn::Tensor welford_reduce(
             config,
             sub_core_grids,
             correction,
-            reduce_batch_size,
-            sfpu_two_pass},
+            reduce_batch_size},
         input_tensor);
 }
 

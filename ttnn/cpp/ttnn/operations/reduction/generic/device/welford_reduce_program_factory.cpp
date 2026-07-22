@@ -47,8 +47,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     const bool reduce_w = (operation_attributes.reduce_dim == ReduceOpDim::W);
     const bool reduce_h = (operation_attributes.reduce_dim == ReduceOpDim::H);
     const bool reduce_hw = (operation_attributes.reduce_dim == ReduceOpDim::HW);
-    const bool sfpu_two_pass = operation_attributes.sfpu_two_pass;
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tensor_arg.device()->arch(), operation_attributes.compute_kernel_config);
 
@@ -61,7 +59,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // is selected below after work has been split across cores.
     constexpr std::uint32_t two_pass_l1_replay_max_bytes = 512 * 1024;
 
-    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // Float32 input on the statistics path requires fp32_dest_acc_en=true as a prerequisite for
     // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
     // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
     // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
@@ -182,7 +180,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         num_work_units_per_core_group_1 > 1 || num_work_units_per_core_group_2 > 1;
     const std::uint32_t two_pass_l1_replay_min_tiles = multiple_work_units_per_core ? 8 : 24;
     const bool two_pass_l1_replay =
-        sfpu_two_pass && reduce_w && Wt >= two_pass_l1_replay_min_tiles &&
+        reduce_w && Wt >= two_pass_l1_replay_min_tiles &&
         static_cast<std::uint64_t>(Wt) * input_single_tile_size <= two_pass_l1_replay_max_bytes;
 
     ProgramDescriptor desc;
@@ -267,7 +265,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (reduce_hw) {
         CBIndex partial_cb_index = CBIndex::c_21;
         tt::DataFormat partial_cb_data_format = tt::DataFormat::Float32;
-        uint32_t partial_single_tile_size = tt::tile_size(partial_cb_data_format);
+        std::uint32_t partial_single_tile_size = tt::tile_size(partial_cb_data_format);
         // Reserve space for 4 tiles to enable double buffering (since compute kernel packs 2 tiles at a time).
         desc.cbs.push_back(CBDescriptor{
             .total_size = 4 * partial_single_tile_size,
@@ -317,24 +315,14 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (two_pass_l1_replay) {
         reduce_defines["WELFORD_TWO_PASS_L1_REPLAY"] = "1";
     }
-    if (sfpu_two_pass && input_cb_data_format == tt::DataFormat::Bfp8_b) {
+    if (input_cb_data_format == tt::DataFormat::Bfp8_b) {
         reduce_defines["WELFORD_TWO_PASS_BFP8_INPUT"] = "1";
     }
 
-    // welford_fp32_input gates the transpose re-init / welford PreserveStats recovery in the
-    // W-reduce compute kernel's wt-inner loop, needed because transpose_tile's UnpackToDestFp32
-    // path clobbers the welford SFPU replay buffer on FP32 input. H- and HW-reduce kernels read
-    // the input via copy_tile (no transpose) and don't need this flag.
-    std::vector<std::pair<std::string, uint32_t>> welford_named_args;
-    if (reduce_w) {
-        welford_named_args.push_back(
-            {"welford_fp32_input",
-             static_cast<uint32_t>(input_cb_data_format == tt::DataFormat::Float32 ? 1 : 0)});
-    }
+    std::vector<std::pair<std::string, std::uint32_t>> welford_named_args;
     const std::uint32_t two_pass_reduce_size = reduce_w ? W : H;
     const std::uint32_t two_pass_variance_divisor =
         reduce_hw ? H : (operation_attributes.correction ? two_pass_reduce_size - 1 : two_pass_reduce_size);
-    welford_named_args.push_back({"sfpu_two_pass", static_cast<std::uint32_t>(sfpu_two_pass)});
     welford_named_args.push_back(
         {"two_pass_mean_reciprocal", std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(two_pass_reduce_size))});
     welford_named_args.push_back(
@@ -351,17 +339,15 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
 
     if (reduce_h || reduce_hw) {
         // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
-        // Welford processes one column at a time (SFPU can only track one running
-        // mean/M2 state), so the reader must deliver tiles in strict column-major
+        // Two-pass statistics processes one column at a time, so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
-        // enable_fp32_sfpu=0: Welford never uses the fp32-SFPU reduce path (use_welford=1 forces
-        // row_chunk=1). The slot keeps this reader's CT-arg layout in lockstep with the reduce factories.
+        // The final slot keeps this reader's CT-arg layout in lockstep with the reduce factories.
         std::vector<std::uint32_t> reader_compile_time_args = {
             Ht,
             Wt,
             HtWt,
             scaler_bits,
-            /*stats_mode=*/sfpu_two_pass ? 2u : 1u,
+            /*sfpu_two_pass=*/1u,
             /*enable_fp32_sfpu=*/0u};
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
@@ -371,15 +357,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     } else {
         // W-reduce: sequential reader reads tiles row by row.
         std::vector<std::uint32_t> reader_compile_time_args = {scaler_bits};
-        if (sfpu_two_pass) {
-            reader_compile_time_args.push_back(Wt);
-        }
+        reader_compile_time_args.push_back(Wt);
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
-        reader_desc.kernel_source = sfpu_two_pass
-                                        ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-                                          "reader_unary_reduce_universal_twopass_start_id.cpp"
-                                        : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-                                          "reader_unary_reduce_universal_start_id.cpp";
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "reader_unary_reduce_universal_twopass_start_id.cpp";
         reader_desc.compile_time_args = reader_compile_time_args;
     }
 
@@ -447,15 +429,14 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
                 reduce_size);
         }
 
-        // W-reduce compile args: {Wt, W, tile_width, post_mul_scaler_bits, correction, is_std}
-        // H-reduce compile args: {Ht, H, tile_height, post_mul_scaler_bits, correction, is_std}
+        // W-reduce compile args: {Wt, W, tile_width, post_mul_scaler_bits, is_std}
+        // H-reduce compile args: {Ht, H, tile_height, post_mul_scaler_bits, is_std}
         compute_compile_args = {
             reduce_w ? Wt : Ht,
             reduce_w ? W : H,
             reduce_w ? tile_width : tile_height,
             post_mul_scaler_bits,
-            static_cast<uint32_t>(operation_attributes.correction),
-            static_cast<uint32_t>(is_std),
+            static_cast<std::uint32_t>(is_std),
         };
         compute_kernel = reduce_w
                              ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_w.cpp"

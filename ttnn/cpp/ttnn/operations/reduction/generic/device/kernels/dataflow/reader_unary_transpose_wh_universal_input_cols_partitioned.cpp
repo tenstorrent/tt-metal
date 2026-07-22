@@ -24,22 +24,21 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr uint32_t stats_mode = get_compile_time_arg_val(4);
-    constexpr bool use_welford = stats_mode != 0;
-    constexpr bool sfpu_two_pass = stats_mode == 2;
+    constexpr bool sfpu_two_pass = get_compile_time_arg_val(4) != 0;
     constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
 
-    // Welford must process one column at a time because the SFPU can only maintain
-    // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
-    // per chunk, which would feed the Welford kernel tiles from the wrong columns.
+    // Two-pass statistics must process one column at a time. DEST_AUTO_LIMIT
+    // interleaves multiple columns per chunk, which would feed the statistics
+    // kernel tiles from the wrong columns.
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
     constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t row_chunk = use_welford ? 1
-                                                    : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                            : compute_kernel_lib::DEST_AUTO_LIMIT);
+    constexpr uint32_t row_chunk =
+        sfpu_two_pass
+            ? 1
+            : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
 

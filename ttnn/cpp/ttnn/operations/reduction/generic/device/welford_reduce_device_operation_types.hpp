@@ -23,7 +23,6 @@ struct WelfordReduceParams {
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     bool correction{true};
     std::uint32_t reduce_batch_size{1};
-    bool sfpu_two_pass{false};
 };
 
 }  // namespace ttnn::prim
