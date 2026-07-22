@@ -83,15 +83,11 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             freq = 1.0;
         }
         tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
-        std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
-        worker_noc0.reserve(ctx.core_virt.size());
-        for (const auto& [vx, vy] : ctx.core_virt) {
-            auto it = ctx.virt_to_noc0.find((static_cast<uint64_t>(vx) << 32) | vy);
-            if (it != ctx.virt_to_noc0.end()) {
-                worker_noc0.emplace_back(it->second.first, it->second.second);
-            }
-        }
-        tracy_->PreCreateContexts(ctx.chip_id, worker_noc0);
+        // NOTE: per-core Tracy contexts are created LAZILY on each core's first zone (HandleWorkerZone ->
+        // GetOrCreateContext). We deliberately do NOT pre-create the full worker grid here: only ~16 of
+        // ~110 cores typically run the workload, and pre-creating all of them litters the capture with
+        // empty (count=0) contexts that read as "cores not showing up". The per-zone mutex+lookup cost is
+        // identical either way; lazy creation just avoids minting dead contexts.
         ctx.active = true;
         devices_.push_back(std::move(ctx));
     }
