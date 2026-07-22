@@ -155,32 +155,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            if (is_int_fpu_en)
-            {
-                if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
-                {
-                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-                    {
-                        for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                        {
-                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(i, tensor_shape_A);
-                        }
-                    }
-                }
-            }
-            else
-            {
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-                {
-                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                    {
-                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(i, tensor_shape_A);
-                    }
-                }
-            }
-        }
         else
         {
             if (is_int_fpu_en)
@@ -193,7 +167,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(i, tensor_shape_A);
                         }
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                        {
+                            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        }
                     }
                 }
             }
@@ -205,7 +182,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(i, tensor_shape_A);
                     }
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    {
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
                 }
             }
         }
@@ -262,17 +242,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
-                {
-                    _llk_pack_(i, i, tensor_shape_A);
-                }
-            }
-        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -281,7 +250,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_(i, i, tensor_shape_A);
                 }
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                {
+                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
             }
         }
         _llk_pack_reduce_mask_clear_();

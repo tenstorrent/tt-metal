@@ -25,6 +25,7 @@ from quasar.test_reduce_quasar import (
 
 @pytest.mark.perf
 @pytest.mark.quasar
+@pytest.mark.nightly
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=[(32, 32)],
