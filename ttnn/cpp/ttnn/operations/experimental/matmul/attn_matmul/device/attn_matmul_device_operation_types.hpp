@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct AttnMatmulParams {
     const std::optional<const uint32_t> num_tokens;
     const std::optional<const bool> transpose_hw;
-    const CoreCoord compute_with_storage_grid_size;
+    const tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const tt::tt_metal::DataType output_dtype;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
