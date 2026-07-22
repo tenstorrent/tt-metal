@@ -6,19 +6,16 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    auto num_tiles = get_arg(args::num_tiles);
+    auto start_id = get_arg(args::start_id);
 
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
-
-    DataflowBuffer src_dfb(src_cb_id);
+    DataflowBuffer src_dfb(dfb::src);
     Noc noc;
-    const auto s = TensorAccessor(src_args, input_buffer_address);
-    const uint32_t tile_bytes = get_tile_size(src_cb_id);
+    const auto s = TensorAccessor(tensor::input);
+    const uint32_t tile_bytes = src_dfb.get_tile_size();
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
