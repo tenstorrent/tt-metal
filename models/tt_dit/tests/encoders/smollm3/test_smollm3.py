@@ -60,74 +60,6 @@ def _load_hf_smollm3():
     return model.eval()
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-def test_smollm3_mlp(*, mesh_device):
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3Context, SmolLM3Mlp
-
-    torch.manual_seed(0)
-    hf = _load_hf_smollm3()
-    hf_mlp = hf.model.layers[0].mlp
-    cfg = hf.config
-    ctx = SmolLM3Context(device=mesh_device, tp_axis=None, ccl_manager=None)
-
-    mlp = SmolLM3Mlp(cfg.hidden_size, cfg.intermediate_size, cfg.hidden_act, ctx)
-    mlp.load_torch_state_dict(hf_mlp.state_dict())
-
-    x = torch.randn(1, 128, cfg.hidden_size)
-    with torch.no_grad():
-        ref = hf_mlp(x)
-    tt_x = tt_tensor.from_torch(x, device=mesh_device)
-    tt_out = mlp.forward(tt_x)
-    assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-@pytest.mark.parametrize("use_rope", [pytest.param(True, id="rope"), pytest.param(False, id="nope")])
-def test_smollm3_attention(*, mesh_device, use_rope):
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3Attention, SmolLM3Context, create_rope_tensors
-
-    torch.manual_seed(0)
-    hf = _load_hf_smollm3()
-    cfg = hf.config
-    seq = 128
-
-    # Pick a reference layer whose HF use_rope matches, then force it to be safe.
-    hf_attn = hf.model.layers[0].self_attn
-    hf_attn.use_rope = use_rope
-
-    ctx = SmolLM3Context(device=mesh_device, tp_axis=None, ccl_manager=None)
-    attn = SmolLM3Attention(
-        hidden_size=cfg.hidden_size,
-        num_heads=cfg.num_attention_heads,
-        num_key_value_heads=cfg.num_key_value_heads,
-        use_rope=use_rope,
-        ctx=ctx,
-    )
-    attn.load_torch_state_dict(hf_attn.state_dict())
-
-    head_dim = cfg.hidden_size // cfg.num_attention_heads
-    rope_theta = cfg.rope_parameters["rope_theta"]
-
-    x = torch.randn(1, seq, cfg.hidden_size)
-    cos, sin = create_rope_tensors(1, seq, head_dim, rope_theta)
-
-    # HF reference: pure-causal (all real tokens), so device is_causal path matches.
-    with torch.no_grad():
-        ref, _ = hf_attn(
-            x,
-            position_embeddings=(cos[:, 0], sin[:, 0]),  # HF expects (B, seq, head_dim)
-            attention_mask=None,
-        )
-
-    tt_x = tt_tensor.from_torch(x, device=mesh_device)
-    tt_cos = tt_tensor.from_torch(cos, device=mesh_device)
-    tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
-    tt_out = attn.forward(tt_x, attention_bias=None, pos_embeds=(tt_cos, tt_sin))
-    assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99, relative_rmse=0.2)
-
-
 def test_smollm3_config_from_hf():
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     from transformers import AutoConfig
@@ -143,227 +75,6 @@ def test_smollm3_config_from_hf():
     assert cfg.hidden_size == 2048
     assert len(cfg.no_rope_layers) == 36 and sum(cfg.no_rope_layers) == 27
     assert cfg.attention_bias is False
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-def test_smollm3_decoder_layer(*, mesh_device):
-    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3Context, SmolLM3DecoderLayer, create_rope_tensors
-
-    torch.manual_seed(0)
-    hf = _load_hf_smollm3()
-    cfg = hf.config
-    seq = 128
-    hf_layer = hf.model.layers[0]  # layer 0 is a RoPE layer
-
-    sm_cfg = SmolLM3Config.from_hf_config(cfg)
-
-    ctx = SmolLM3Context(device=mesh_device, tp_axis=None, ccl_manager=None)
-
-    # layer 0 has no_rope_layers[0] == 1 → use_rope=True
-    use_rope = bool(sm_cfg.no_rope_layers[0])
-
-    layer = SmolLM3DecoderLayer(
-        hidden_size=cfg.hidden_size,
-        num_attention_heads=cfg.num_attention_heads,
-        num_key_value_heads=cfg.num_key_value_heads,
-        intermediate_size=cfg.intermediate_size,
-        hidden_act=cfg.hidden_act,
-        rms_norm_eps=cfg.rms_norm_eps,
-        use_rope=use_rope,
-        ctx=ctx,
-    )
-    layer.load_torch_state_dict(hf_layer.state_dict())
-
-    x = torch.randn(1, seq, cfg.hidden_size)
-    cos, sin = create_rope_tensors(1, seq, sm_cfg.head_dim, sm_cfg.rope_theta)
-
-    # HF reference: attention_mask=None → SDPA uses is_causal=True (module.is_causal=True),
-    # matching the TT layer's is_causal=attention_bias is None path.
-    with torch.no_grad():
-        ref = hf_layer(
-            x,
-            position_embeddings=(cos[:, 0], sin[:, 0]),  # HF expects (B, seq, head_dim)
-            attention_mask=None,
-        )
-        ref = ref[0] if isinstance(ref, tuple) else ref
-
-    tt_x = tt_tensor.from_torch(x, device=mesh_device)
-    tt_cos = tt_tensor.from_torch(cos, device=mesh_device)
-    tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
-    tt_out = layer.forward(
-        tt_x,
-        attention_bias=None,
-        pos_embeds=(tt_cos, tt_sin),
-    )
-    assert_quality(ref, tt_tensor.to_torch(tt_out), pcc=0.99, relative_rmse=0.2)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-def test_smollm3_encoder_all_layers(*, mesh_device):
-    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
-
-    torch.manual_seed(0)
-    n_layers = int(os.environ.get("N_LAYERS", "6"))
-    seq = 128
-    hf = _load_hf_smollm3()
-    hf.model.layers = hf.model.layers[:n_layers]
-    hf.config.num_hidden_layers = n_layers
-
-    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
-    with torch.no_grad():
-        ref = hf.model(input_ids=tokens, output_hidden_states=True)
-    ref_hs = [h.float() for h in ref.hidden_states]  # length n_layers + 1
-
-    cfg = SmolLM3Config.from_hf_config(hf.config)
-    cfg.num_hidden_layers = n_layers
-    cfg.no_rope_layers = cfg.no_rope_layers[:n_layers]
-
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=1))
-    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
-    enc.load_torch_state_dict(hf.model.state_dict())
-
-    cos, sin = enc.create_rope_tensors(1, seq)
-    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-    hs = enc.forward(
-        tt_ids,
-        attention_mask=None,
-        pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
-    )
-    assert len(hs) == len(ref_hs), f"got {len(hs)} states, expected {len(ref_hs)}"
-    for i, (r, d) in enumerate(zip(ref_hs, hs)):
-        try:
-            assert_quality(r, tt_tensor.to_torch(d), pcc=0.99)
-        except Exception as e:
-            raise Exception(f"state {i}: {e}") from e
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-def test_smollm3_encode_contract(*, mesh_device):
-    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
-
-    torch.manual_seed(0)
-    n_layers = int(os.environ.get("N_LAYERS", "6"))
-    seq = 128
-    hf = _load_hf_smollm3()
-    hf.model.layers = hf.model.layers[:n_layers]
-    hf.config.num_hidden_layers = n_layers
-    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
-    with torch.no_grad():
-        ref = hf.model(input_ids=tokens, output_hidden_states=True)
-    ref_prompt = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
-
-    cfg = SmolLM3Config.from_hf_config(hf.config)
-    cfg.num_hidden_layers = n_layers
-    cfg.no_rope_layers = cfg.no_rope_layers[:n_layers]
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=1))
-    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
-    enc.load_torch_state_dict(hf.model.state_dict())
-
-    cos, sin = enc.create_rope_tensors(1, seq)
-    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-    prompt_embeds, hs = enc.encode(
-        tt_ids,
-        attention_mask=None,
-        pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
-    )
-    out = tt_tensor.to_torch(prompt_embeds)
-    assert out.shape[-1] == 2 * cfg.hidden_size
-    assert_quality(ref_prompt, out, pcc=0.99)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-def test_smollm3_encoder_masked(*, mesh_device):
-    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
-
-    torch.manual_seed(0)
-    n_layers = int(os.environ.get("N_LAYERS", "6"))
-    seq = 128
-    n_real = 100  # right-padding: real tokens first, padding after
-
-    hf = _load_hf_smollm3()
-    hf.model.layers = hf.model.layers[:n_layers]
-    hf.config.num_hidden_layers = n_layers
-
-    tokens = torch.randint(1, hf.config.vocab_size, (1, seq))
-    attn = torch.zeros(1, seq, dtype=torch.long)
-    attn[:, :n_real] = 1
-
-    # HF reference with attention_mask
-    with torch.no_grad():
-        ref = hf.model(input_ids=tokens, attention_mask=attn, output_hidden_states=True)
-    ref_hs = [h.float() for h in ref.hidden_states]
-
-    cfg = SmolLM3Config.from_hf_config(hf.config)
-    cfg.num_hidden_layers = n_layers
-    cfg.no_rope_layers = cfg.no_rope_layers[:n_layers]
-
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=1))
-    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
-    enc.load_torch_state_dict(hf.model.state_dict())
-
-    cos, sin = enc.create_rope_tensors(1, seq)
-
-    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-    # attention_mask: numeric (B, seq) float tensor — prepare_attention_bias does (mask - 1.0) * inf
-    tt_mask = tt_tensor.from_torch(attn.float(), device=mesh_device)
-    tt_cos = tt_tensor.from_torch(cos, device=mesh_device)
-    tt_sin = tt_tensor.from_torch(sin, device=mesh_device)
-
-    hs = enc.forward(tt_ids, attention_mask=tt_mask, pos_embeds=(tt_cos, tt_sin))
-
-    assert len(hs) == len(ref_hs), f"got {len(hs)} states, expected {len(ref_hs)}"
-    for i, (r, d) in enumerate(zip(ref_hs, hs)):
-        # Compare only real (non-padding) positions; padding positions are undefined.
-        try:
-            assert_quality(r[:, :n_real, :], tt_tensor.to_torch(d)[:, :n_real, :], pcc=0.99)
-        except Exception as e:
-            raise Exception(f"state {i}: {e}") from e
-
-
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
-    indirect=["device_params"],
-)
-@pytest.mark.parametrize("seq", [128, 2048])
-def test_smollm3_encoder_full_mesh(*, mesh_device, seq):
-    from models.tt_dit.encoders.smollm3.config import SmolLM3Config
-    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
-
-    torch.manual_seed(0)
-    tp_axis = 1
-    hf = _load_hf_smollm3()
-    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
-    with torch.no_grad():
-        ref = hf.model(input_ids=tokens, output_hidden_states=True)
-    ref_prompt = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
-
-    cfg = SmolLM3Config.from_hf_config(hf.config)
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    pc = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis))
-    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
-    enc.load_torch_state_dict(hf.model.state_dict())
-
-    cos, sin = enc.create_rope_tensors(1, seq)
-    tt_ids = tt_tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-    prompt_embeds, _ = enc.encode(
-        tt_ids,
-        attention_mask=None,
-        pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
-    )
-    assert_quality(ref_prompt, tt_tensor.to_torch(prompt_embeds), pcc=0.99)
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
@@ -406,7 +117,7 @@ def test_smollm3_encoder_sp(*, mesh_device, seq, sp_axis):
     )
     tt_cos = tt_tensor.from_torch(cos, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
     tt_sin = tt_tensor.from_torch(sin, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
-    prompt_embeds, _ = enc.encode(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+    prompt_embeds, _ = enc.encode(tt_ids, pos_embeds=(tt_cos, tt_sin))
     out = tt_tensor.to_torch(prompt_embeds, mesh_axes=[None, sp_axis, None], composer_device=mesh_device)
     assert_quality(ref_prompt, out, pcc=0.99, relative_rmse=0.2)
 
@@ -451,10 +162,10 @@ def test_smollm3_sp_bias_cached(*, mesh_device):
     tt_cos = tt_tensor.from_torch(cos, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
     tt_sin = tt_tensor.from_torch(sin, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
 
-    enc.encode(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+    enc.encode(tt_ids, pos_embeds=(tt_cos, tt_sin))
     assert len(enc._sp_bias_cache) == 1
     first = next(iter(enc._sp_bias_cache.values()))
-    enc.encode(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+    enc.encode(tt_ids, pos_embeds=(tt_cos, tt_sin))
     assert len(enc._sp_bias_cache) == 1
     assert next(iter(enc._sp_bias_cache.values())) is first  # same tensor object reused
 
