@@ -75,6 +75,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,6 +83,35 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..matmul_utils import l1_sharded_linear, l1_sharded_matmul, to_interleaved_if_sharded
+
+# Explicit flash-attention chunking for SDPA — the default auto-chunker is ~3-8x
+# slower at this sequence length (same finding as tt/attention/attention.py's masked
+# prefill SDPA; SigLIP2 attention is likewise masked/non-causal, S=1024).
+_SDPA_Q_CHUNK = int(os.environ.get("HY_VIT_SDPA_Q_CHUNK", "256"))
+_SDPA_K_CHUNK = int(os.environ.get("HY_VIT_SDPA_K_CHUNK", "256"))
+
+# A/B: LoFi math fidelity for the attention/MLP matmuls (weight dtype is already a
+# constructor param — pass weight_dtype=ttnn.bfloat8_b to pair with this). Default
+# stays HiFi2 (accuracy-safe); set HY_VIT_LOFI=1 to test the bf8+LoFi combination.
+_MATMUL_MATH_FIDELITY = (
+    ttnn.MathFidelity.LoFi
+    if os.environ.get("HY_VIT_LOFI", "0").strip().lower() in ("1", "true", "yes")
+    else ttnn.MathFidelity.HiFi2
+)
+
+
+# A/B: bf8 weights for the MLP fc1/fc2 matmuls only. fc1/fc2 need no head-dim padding
+# (unlike Q/K/V/out_proj, which pad head_dim 72->96 via an on-device ROW_MAJOR
+# round-trip that BFLOAT8_B tensors cannot go through — TT_FATAL if attempted), so
+# bf8 is safe here specifically. Measured (isolated) fc1 90.9->71.3us (1.28x, bf8+LoFi,
+# wide_mm's own program_config — custom grids didn't meaningfully beat it) with
+# PCC~1.0; fc2 nearly flat (~3%). Default stays bf16 (matches weight_dtype); set
+# HY_VIT_MLP_BF8=1 to test bf8 fc1/fc2 weights (pair with HY_VIT_LOFI=1).
+def _mlp_weight_dtype(weight_dtype):
+    if os.environ.get("HY_VIT_MLP_BF8", "0").strip().lower() in ("1", "true", "yes"):
+        return ttnn.bfloat8_b
+    return weight_dtype
+
 
 # Defaults from ref/tokenizer/assets/config.json -> "vit" + "vit_aligner"
 VIT_CONFIG = {
@@ -463,7 +493,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         self.scale = self.head_dim**-0.5
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=_MATMUL_MATH_FIDELITY,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -479,12 +509,20 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         seq_len = hidden_states.shape[1]
 
         # ---- 1. Q/K/V projections: [B, S, H] each ----
+        # L1-resident: attention (QKV/heads/SDPA/out_proj, N<=1536) is measured safe and
+        # ~1.15-1.65x faster (test_siglip2_matmul_sweep.py, test_siglip2_misc_op_sweep.py).
+        # MLP (fc1/fc2, N/K=4320) is deliberately EXCLUDED — measured 5-12x SLOWER in the
+        # full 27-layer model despite being faster in isolation: the wider fc1/fc2 CBs
+        # compete with this still-L1-resident residual/hidden_states for the same
+        # per-core L1 budget, unlike an isolated microbenchmark where nothing else is
+        # L1-resident. See the L1-residency-regression investigation in conversation.
         q = l1_sharded_linear(
             hidden_states,
             self.q_proj_w,
             bias=self.q_proj_b,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
+            out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         k = l1_sharded_linear(
             hidden_states,
@@ -492,6 +530,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
             bias=self.k_proj_b,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
+            out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         v = l1_sharded_linear(
             hidden_states,
@@ -499,16 +538,17 @@ class HunyuanTtSiglip2Attention(LightweightModule):
             bias=self.v_proj_b,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
+            out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        q = to_interleaved_if_sharded(q)
-        k = to_interleaved_if_sharded(k)
-        v = to_interleaved_if_sharded(v)
+        q = to_interleaved_if_sharded(q, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = to_interleaved_if_sharded(k, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = to_interleaved_if_sharded(v, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # ---- 2. Split into heads: [B, num_heads, S, padded_head_dim] ----
         # Each proj already outputs num_heads*padded_head_dim (head-major, pad zeros),
         # so the fused [B,1,S,3*padded_qkv_dim] splits into clean tile-aligned heads.
         # num_kv_heads == num_heads (no GQA).
-        qkv = ttnn.concat([q, k, v], dim=-1)
+        qkv = ttnn.concat([q, k, v], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -518,11 +558,17 @@ class HunyuanTtSiglip2Attention(LightweightModule):
             num_heads=self.num_heads,
             num_kv_heads=self.num_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qkv_4d.deallocate(True)
 
         # ---- 3. SDPA (bidirectional, explicit scale) ----
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+            q_chunk_size=_SDPA_Q_CHUNK,
+            k_chunk_size=_SDPA_K_CHUNK,
+            exp_approx_mode=False,
+        )
         attn = ttnn.transformer.scaled_dot_product_attention(
             qh,
             kh,
@@ -530,14 +576,16 @@ class HunyuanTtSiglip2Attention(LightweightModule):
             is_causal=False,
             attn_mask=attention_mask,
             scale=self.scale,
+            program_config=sdpa_program_config,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qh.deallocate(True)
         kh.deallocate(True)
         vh.deallocate(True)
 
         # ---- 4. Merge heads: [B, S, H] ----
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = _ensure_bsh(attn)
 
         # ---- 5. Output projection ----
@@ -547,6 +595,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
             bias=self.out_proj_b,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
+            out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         out = to_interleaved_if_sharded(out)
         ttnn.deallocate(attn)
@@ -572,13 +621,14 @@ class HunyuanTtSiglip2MLP(LightweightModule):
         b0 = state_dict[f"{prefix}.fc1.bias"].reshape(1, -1).contiguous()
         w1 = state_dict[f"{prefix}.fc2.weight"].transpose(0, 1).contiguous()
         b1 = state_dict[f"{prefix}.fc2.bias"].reshape(1, -1).contiguous()
-        self.fc1_w = ttnn.from_torch(w0, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        mlp_weight_dtype = _mlp_weight_dtype(weight_dtype)
+        self.fc1_w = ttnn.from_torch(w0, dtype=mlp_weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         self.fc1_b = ttnn.from_torch(b0, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.fc2_w = ttnn.from_torch(w1, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.fc2_w = ttnn.from_torch(w1, dtype=mlp_weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         self.fc2_b = ttnn.from_torch(b1, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=_MATMUL_MATH_FIDELITY,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -651,6 +701,10 @@ class HunyuanTtSiglip2EncoderLayer(LightweightModule):
         hidden_states = _ensure_bsh(hidden_states)
         # ---- attention sub-block ----
         residual = hidden_states
+        # Tried ln1 output in L1 (feeds Q/K/V proj input) per the advisor's "input 0 in
+        # DRAM" hint — no crash, PCC unchanged, but wall-clock was flat/noise (23.86ms
+        # vs 23.83ms baseline): this matmul's input-side DRAM read wasn't the actual
+        # bottleneck. Reverted to keep the surgical fix minimal.
         normed = ttnn.layer_norm(
             hidden_states,
             weight=self.ln1_weight,
