@@ -33,6 +33,7 @@
 //   [13] unit_start, [14] unit_count
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 constexpr uint32_t TILE_H = 32;
@@ -40,12 +41,13 @@ constexpr uint32_t TILE_W = 32;
 constexpr uint32_t FULL_TILE_BYTES = TILE_W * 2;      // 64 bytes: one stick's T-tile (32 bf16)
 constexpr uint32_t PAGE_BYTES = TILE_H * TILE_W * 2;  // 2048: one row-major channel tile
 
-// Zero a full 2048-byte channel page (pads partial spatial/T).
-FORCE_INLINE void zero_page(uint32_t l1_base) {
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base);
-    for (uint32_t i = 0; i < PAGE_BYTES / 4; i++) {
-        p[i] = 0;
-    }
+// Zero a full channel page (pads partial spatial/T) via a NOC L1->L1 copy from
+// the local MEM_ZEROS region -- far cheaper than a scalar RISC memset.  Barriers
+// before returning so the page is ready for the subsequent stick reads (and so
+// the zero-mode command buffer is restored before any further NOC op).
+FORCE_INLINE void zero_page(const Noc& noc, uint32_t cb_id) {
+    noc.async_write_zeros(CircularBuffer(cb_id), PAGE_BYTES);
+    noc.write_zeros_l1_barrier();
 }
 
 // Local L1->L1 copy via the NOC DMA engine (async; caller barriers before use).
@@ -86,6 +88,7 @@ void kernel_main() {
     const auto src = TensorAccessor(src_tensor_args, src_addr);
     const uint32_t scratch_base = get_write_ptr(cb_scratch);
     const uint32_t cb_ids[3] = {cb_R_rm, cb_G_rm, cb_B_rm};
+    const Noc noc;
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; u++) {
         const uint32_t g = u / num_t_tiles;
@@ -121,7 +124,7 @@ void kernel_main() {
                 if (full) {
                     local_read(src_base, l1, PAGE_BYTES);
                 } else {
-                    zero_page(l1);
+                    zero_page(noc, cb_ids[c]);
                     for (uint32_t s = 0; s < sticks; s++) {
                         local_read(src_base + s * FULL_TILE_BYTES, l1 + s * FULL_TILE_BYTES, read_bytes);
                     }
@@ -145,7 +148,7 @@ void kernel_main() {
                         cb_reserve_back(cb_ids[c], 1);
                         uint32_t l1 = get_write_ptr(cb_ids[c]);
                         if (pad) {
-                            zero_page(l1);
+                            zero_page(noc, cb_ids[c]);
                         }
                         uint32_t row = corner >> 1;  // local H-row within the 2-row group (0 or 1)
                         uint32_t woff = corner & 1;  // W offset within the 2x2 block (0 or 1)
