@@ -15,6 +15,7 @@
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
@@ -185,6 +186,14 @@ tt::tt_metal::Tensor reduce_scatter(
         topology,
         /* subdevice_id */ std::nullopt,
         /* cluster_axis */ cluster_axis);
+}
+
+tt::tt_metal::Tensor mesh_partition(
+    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+    // Purely local slice keyed on each device's mesh coordinate — no CCL/fabric.
+    // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
+    // so no single-device guard is needed here.
+    return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
 }
 
 tt::tt_metal::Tensor ring_shift(

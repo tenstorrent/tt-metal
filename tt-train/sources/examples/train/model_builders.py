@@ -14,6 +14,7 @@ from ttml.common.utils import round_up_to_tile
 from ttml.models.deepseek import DeepSeek, DeepSeekConfig
 from ttml.models.deepseek.flops import calculate_flops_per_token as _deepseek_flops
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
+from ttml.parallel import TPStrategy
 from ttml.models.llama.flops import calculate_flops_per_token as _llama_flops
 from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, NanoGPTExperimentalConfig, create_nanogpt
 from ttml.models.nanogpt.flops import calculate_flops_per_token as _gpt2_flops
@@ -50,6 +51,7 @@ class _LlamaSpec:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0
+    embedding_parallel: ttml.models.EmbeddingParallelType = ttml.models.EmbeddingParallelType.FeatureParallel
 
 
 @dataclass
@@ -124,8 +126,8 @@ def _parse_gpt2(tc: dict) -> _GPT2Spec:
     return spec
 
 
-def _build_gpt2(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
+def _build_gpt2(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
+    if tp_strategy.tensor_parallel:
         raise ValueError("model_type=gpt2 has no TP path; use model_type=llama for DP+TP")
     assert isinstance(cfg.spec, _GPT2Spec)
     spec = cfg.spec
@@ -158,10 +160,12 @@ def _parse_llama(tc: dict) -> _LlamaSpec:
         spec.high_freq_factor = rope.get("high_freq_factor", spec.high_freq_factor)
         spec.low_freq_factor = rope.get("low_freq_factor", spec.low_freq_factor)
         spec.original_context_length = rope.get("original_context_length", spec.original_context_length)
+    if "embedding_parallel" in tc:
+        spec.embedding_parallel = ttml.models.EmbeddingParallelType.from_string(tc["embedding_parallel"])
     return spec
 
 
-def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
+def _build_llama(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
     assert isinstance(cfg.spec, _LlamaSpec)
     spec = cfg.spec
     if spec.num_groups <= 0:
@@ -188,7 +192,8 @@ def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
                 low_freq_factor=spec.low_freq_factor,
                 original_context_length=spec.original_context_length,
             ),
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
+            embedding_parallel=spec.embedding_parallel,
         )
     )
 
@@ -214,8 +219,8 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
     return spec
 
 
-def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
+def _build_deepseek(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
+    if tp_strategy.tensor_parallel:
         raise ValueError("model_type=deepseek has no TP path; use model_type=llama for DP+TP")
     assert isinstance(cfg.spec, _DeepSeekSpec)
     spec = cfg.spec
@@ -264,8 +269,8 @@ def _parse_qwen3(tc: dict) -> _Qwen3Spec:
     return spec
 
 
-def _build_qwen3(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
+def _build_qwen3(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
+    if tp_strategy.tensor_parallel:
         raise ValueError("model_type=qwen3 has no TP path; use model_type=llama for DP+TP")
     assert isinstance(cfg.spec, _Qwen3Spec)
     spec = cfg.spec
@@ -298,12 +303,12 @@ def _build_qwen3(cfg: ModelConfig, use_tp: bool) -> Model:
 
 
 ParseFn = Callable[[dict], ModelSpec]
-BuildFn = Callable[[ModelConfig, bool], Model]
+BuildFn = Callable[[ModelConfig, TPStrategy], Model]
 
 
 class ModelAdapter(NamedTuple):
-    # parse builds a spec from YAML; build consumes `cfg` + `cfg.spec`
-    # and returns the constructed model.
+    # parse builds a spec from YAML; build consumes `cfg` + `cfg.spec` + the
+    # tensor-parallel strategy and returns the model.
     parse: ParseFn
     build: BuildFn
 
@@ -342,19 +347,23 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     return cfg
 
 
-def create_model(cfg: ModelConfig, use_tp: bool = False) -> Model:
+def create_model(cfg: ModelConfig, tp_strategy: TPStrategy = TPStrategy.NONE) -> Model:
     """Dispatch on `cfg.model_type` to the registered builder.
 
     `cfg.vocab_size` is the raw (unpadded) vocab; each builder tile-pads it to a 32-multiple
     for the model, since the embedding/LM-head weights must be tile-aligned.
+
+    ``tp_strategy`` selects tensor / sequence parallelism (llama only; see ``TPStrategy``).
     """
     adapter = MODEL_ADAPTERS.get(cfg.model_type)
     if adapter is None:
         raise ValueError(f"Unsupported model type: {cfg.model_type}")
-    return adapter.build(cfg, use_tp)
+    return adapter.build(cfg, tp_strategy)
 
 
-def instantiate_model_from_config(cfg: ModelConfig, lazy_init: bool, *, use_tp: bool = False) -> Model:
+def instantiate_model_from_config(
+    cfg: ModelConfig, lazy_init: bool, *, tp_strategy: TPStrategy = TPStrategy.NONE
+) -> Model:
     """Create the model, deferring Parameter allocation when ``lazy_init`` is True.
 
     With ``lazy_init`` the returned model holds ``TensorMetadata`` for every parameter; the caller
@@ -364,5 +373,5 @@ def instantiate_model_from_config(cfg: ModelConfig, lazy_init: bool, *, use_tp: 
     """
     if lazy_init:
         with ttml.lazy_init():
-            return create_model(cfg, use_tp=use_tp)
-    return create_model(cfg, use_tp=use_tp)
+            return create_model(cfg, tp_strategy=tp_strategy)
+    return create_model(cfg, tp_strategy=tp_strategy)

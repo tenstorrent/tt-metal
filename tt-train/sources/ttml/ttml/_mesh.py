@@ -186,6 +186,32 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
     _mesh = mesh
 
 
+def close_device_mesh() -> None:
+    """Tear down the global device mesh opened by :func:`open_device_mesh`.
+
+    Reverses, in opposite order, the state ``open_device_mesh`` installs:
+
+      1. ``_mesh = mesh``            -> ``_mesh = None`` (this function)
+      2. ``AutoContext.open_device`` -> ``AutoContext.close_device``
+      3. ``enable_fabric``           -> ``disable_fabric``
+
+    Steps 2 and 3 are both handled by a single ``close_device()`` call:
+    ``AutoContext::close_device`` drops the ``MeshDevice`` *and* calls
+    ``disable_fabric()`` (see auto_context.cpp), which is exactly the
+    process-global fabric config ``open_device_mesh`` arms via
+    ``enable_fabric`` for multi-device meshes. That call is idempotent — it is
+    safe when no device is open and when fabric was never enabled (a
+    single-device mesh) — so this function needs no bookkeeping of what open
+    actually did, and is itself safe to call repeatedly or when nothing is
+    open.
+    """
+    global _mesh
+    try:
+        ttml.autograd.AutoContext.get_instance().close_device()
+    finally:
+        _mesh = None
+
+
 def maybe_mesh() -> Mesh | None:
     """Return the active device mesh, or ``None`` if no mesh has been opened."""
     global _mesh
@@ -262,3 +288,48 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
     if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
         return True
     return False
+
+
+def _param_is_sharded_on_axis(param, axis_index: int) -> bool:
+    """True if ``param``'s tensor is Shard (not Replicate) on the given mesh axis."""
+    placements = ttml.Sharding.from_tensor(param).placements
+    if placements is None or axis_index >= len(placements):
+        return False
+    return isinstance(placements[axis_index], ttnn.PlacementShard)
+
+
+def sync_sequence_parallel_gradients(parameters, axis_name: str = "tp"):
+    """Sum the gradients of TP-replicated parameters across the tensor-parallel axis.
+
+    Under Megatron sequence parallelism the residual stream is sharded along the
+    sequence across ``axis_name`` (the TP axis), so a parameter that is *replicated*
+    on that axis -- the RMSNorm ``gamma`` weights, and any bias added in a
+    sequence-sharded region -- only accumulates the gradient from its rank's slice of
+    the sequence. The full gradient is the SUM over ranks, so we all-reduce with **no
+    averaging** (unlike :func:`sync_gradients`, which means-reduces over the data
+    axes).
+
+    Parameters that are TP-*sharded* (Column/RowParallel weights, the vocab-parallel
+    embedding / LM-head weight) are skipped: each rank already holds the correct grad
+    for its shard.
+
+    This is orthogonal to :func:`sync_gradients` (which handles dp/fsdp) and both may
+    be called -- the reductions are over disjoint axes and commute. It is a no-op when
+    the mesh has no ``axis_name`` axis of size > 1.
+
+    Args:
+        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
+        axis_name: The tensor-parallel mesh axis name (default ``"tp"``).
+    """
+    m = maybe_mesh()
+    if m is None or not m.has_axis(axis_name) or m.axis_size(axis_name) == 1:
+        return
+    axis = m.axis_index(axis_name)
+
+    for _, param in parameters.items():
+        if not param.is_grad_initialized():
+            continue
+        if _param_is_sharded_on_axis(param, axis):
+            continue
+        # SUM across TP (no division): reconstruct the full-sequence gradient.
+        param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))

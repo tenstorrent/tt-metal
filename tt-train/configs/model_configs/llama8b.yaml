@@ -7,6 +7,8 @@ transformer_config:
   dropout_prob: 0.0
   num_blocks: 32
   vocab_size: 128256
+  embedding_parallel: "vocab_parallel"
+  weight_tying: "enabled"
   max_sequence_length: 2048
   runner_type: default
   theta: 500000.0
