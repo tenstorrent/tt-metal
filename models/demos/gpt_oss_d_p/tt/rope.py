@@ -47,8 +47,13 @@ def yarn_inv_freq(
     def find_correction_dim(num_rotations):
         return (head_dim * math.log(orig_max_pos / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
 
-    low = max(math.floor(find_correction_dim(beta_fast)), 0)
-    high = min(math.ceil(find_correction_dim(beta_slow)), head_dim - 1)
+    # gpt-oss sets rope_scaling.truncate=False, so HF keeps the correction dims as FLOATS (no
+    # floor/ceil). Truncating shifts the interpolation<->extrapolation ramp and injects a per-freq
+    # inv_freq error that grows linearly with position: invisible at short seq (~0.02 rad by pos 100,
+    # so the unit test passes) but ~1.1 rad phase drift by pos 5000 -> long-context K PCC collapse
+    # (layer-0 K fell to ~0.69 at the tail). Match HF exactly: no floor/ceil (verified inv_freq to 1e-7).
+    low = max(find_correction_dim(beta_fast), 0.0)
+    high = min(find_correction_dim(beta_slow), head_dim - 1)
 
     pos_freqs = base ** (torch.arange(0, head_dim, 2).float() / head_dim)
     inv_freq_extrapolation = 1.0 / pos_freqs
