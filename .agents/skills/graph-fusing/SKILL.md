@@ -7,6 +7,8 @@ description: Fuse a TTNN op graph into a faster numerically-equivalent one by (1
 
 This is a correctness-preserving transform. Every rewrite must be proven numerically equivalent to the graph it replaces — see **Verify every rewrite** below. Do not land a rewrite you have not PCC-checked on real shapes and dtypes.
 
+Fusing recurs per stage on the structure that stage introduces: the fused-decoder pass covers the single-device layer, but collectives (fused matmul+reduce-scatter, all-gather+matmul, CCL placement) are only assessable at optimized-multichip, and the full-stack ops (residual→norm across layers, LM-head/sampler) only at optimized-full-model. "No remaining fusing" is always scoped to the current graph, never global.
+
 
 ## Steps to execute graph fusion
 
@@ -67,6 +69,12 @@ Patterns of this kind (light list — see examples for the unfused→fused form)
 - Concatenate heads (prefill): `permute([0,2,1,3]) → reshape` → `ttnn.transformer.concatenate_heads`.
 - RoPE: `x·cos + rotate_half(x)·sin` → `ttnn.experimental.rotary_embedding` (rotate-half) or `rotary_embedding_llama` (interleaved); decode via `token_index`.
 - TopK: `sort → slice[:k]` → `ttnn.topk`.
+- Fused residual-add + RMSNorm: `add(residual) → rms_norm` → `ttnn.rms_norm(..., residual_input_tensor=…)`.
+- Fused matmul + collective (multi-device): local-matmul→all-reduce, matmul→reduce-scatter, or all-gather→matmul → the fused CCL-matmul variant when the op contract allows it.
+- MoE experts: routed `ttnn.sparse_matmul` (+ score-weight + reduce), and `ttnn.experimental.moe_compute` where it fits the routing.
+- Paged KV-cache update: fold the separate write into the fused cache-update op — but validate it under the watcher NoC sanitizer (a fused update can pass the functional check yet trip a NoC fault).
+
+Fusing caveats: do not fold a bias into a low-precision (e.g. BFP8) linear — keep it a separate higher-precision add (folding can damage Q/K/V PCC); fold an activation into the elementwise op that consumes it (`multiply(..., activations=[SILU])`), not into the upstream matmul.
 
 ### Graph rewrites — structural / algebraic rewrite and peer merge  (SECOND PRIORITY)
 

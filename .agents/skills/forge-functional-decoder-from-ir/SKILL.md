@@ -86,10 +86,18 @@ scripts/ir_to_emit.sh <IR_DIR>/<decode-graph>.mlir  /tmp/<model>/decode
 This runs tt-mlir's `--ttnn-common-to-emitpy-pipeline` + `ttmlir-translate --mlir-to-python` (with the
 known schema-skew normalizations baked in; if the converter reports a new `failed to satisfy
 constraint: NN-bit {signed,signless} integer attribute` error, add a scoped sed for that op in
-`ir_to_emit.sh` — it is an attribute-signedness skew, not a semantic change). Read **both** the emit
-(`.py`, for op semantics + weight names) and the raw `.mlir` (for exact tensor shapes and layouts).
-The emit's weights are synthetic `ttnn.ones` — it is a structure/math reference only; real weights are
-loaded from HF in `from_state_dict`.
+`ir_to_emit.sh` — it is an attribute-signedness skew, not a semantic change; note the direction is
+build-vs-producer dependent, so only add a sed when the *current* build actually rejects the attribute).
+Read **both** the emit (`.py`, for op semantics + weight names) and the raw `.mlir` (for exact tensor
+shapes and layouts). The emit's weights are synthetic `ttnn.ones` — it is a structure/math reference
+only; real weights are loaded from HF in `from_state_dict`.
+
+**Pre-generated emit shortcut.** If a runnable EmitPy emit for this model already exists, read it directly
+and **skip `ir_to_emit.sh`** (e.g. the `qb2-ttnn-to-emitpy/<model>/` packages: a `g0_prefill/` and a
+`g1_decode/`, each self-contained with `main.py` = flat emitted forward + synthetic `ttnn.ones` weights,
+`consteval.py` = weight-prep, `utils.py` = PCC/`load_tensor` helpers, `ttir_cpu.py` = cpu-hoisted-op impls).
+`g0` = prefill (`fill_cache`), `g1` = decode (`paged_update_cache` + decode SDPA). It is the same
+full-model, often tensor-parallel graph the converter would produce, so everything below applies unchanged.
 
 The emit differs from a forge `model_ttnn.py` in two ways you must handle. Everything else about the
 translation — dropping layout specialization, correctness-first defaults, per-layer semantics read

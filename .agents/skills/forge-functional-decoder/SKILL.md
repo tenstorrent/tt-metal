@@ -99,6 +99,18 @@ FORGE_DIR/model/graph_0/
   main.py         # end-to-end harness (open 1x1 mesh, run, PCC vs model_pt)
 ```
 
+> **Emit variants.** The tree above is the tt-forge / tt-torch shape. If your input is instead an
+> **EmitPy emit** (a flat `main.py` + `consteval.py` package from tt-mlir's TTNN→EmitPy — e.g. the
+> `qb2-ttnn-to-emitpy/` packages), it is a full-model, often tensor-parallel graph that is **not**
+> modularized into per-layer classes: use **`$forge-functional-decoder-from-ir`**, which documents
+> segmenting one layer from the flat graph. And whatever the source, if the emit is **tensor-parallel**
+> (weights sharded across a mesh + `all_reduce` / `all_gather` / `reduce_scatter` / `mesh_shard`),
+> collapse it to single-device dense math in the runtime — drop the collectives and matmul the **full**
+> HF weight (the state_dict is already un-sharded; use the shard/collective structure only to learn each
+> projection's parallel axis and fusion order) — and record the distribution facts as
+> `doc/functional_decoder/multichip_provenance.json` (mesh axes/sizes; per sharded tensor and collective
+> its axis, `cluster_axis`, `reduce_type`, and emitted dtype) for the multichip stage to consume.
+
 Read `model_ttnn.py` first — it is typically modularized into clean per-layer classes (a post-codegen
 refactor) and is your semantic ground truth. Start from it and take its math and structure as-is — op
 sequence, fusion order, eps, scale, residual wiring — do not re-derive them. The one thing you keep out

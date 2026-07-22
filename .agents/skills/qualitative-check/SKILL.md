@@ -57,3 +57,4 @@ More work is required if:
 - a stage from full-model onward skips the shared qualitative suite without a concrete capability blocker;
 - generated text shows wrong language, prompt echo, mechanical repetition, doubled subwords, control-token leakage, cross-request leakage, repeated or corrupt first token, or gibberish and no matching HF/control behavior explains it;
 - a runner, API endpoint, or eval harness cannot send the correct prompt format and the stage uses its output anyway.
+- the verdict includes stale or pre-fix debug captures instead of only current post-fix outputs.

@@ -22,7 +22,7 @@ Implement the model-specific pieces around the working block stack:
 - full on-device traced decode from token in to sampled token out, implemented as model decode trace plus a traced sampling path.
 - a generator that owns high-level token-in/token-out generation and exposes a clean low-level prefill/decode API for external callers.
 
-Use the strongest correct implementation available as your block stack. If there are several candidates, choose the one with the best evidence for the target mesh and explain the choice.
+Use the strongest correct implementation available as your block stack. If there are several candidates, choose the one with the best evidence for the target mesh and explain the choice. Before assembling all layers, stand up a reduced 1-layer full model end to end (embedding prologue → one decoder layer → norm/LM-head/sampling epilogue → the real generator loop) and validate it on the target mesh; per-layer cost scales ~linearly, so this surfaces integration, terminal-path, and trace-lifecycle bugs in minutes before the expensive all-layer build.
 
 ## Capability And Context Contract
 
@@ -53,6 +53,7 @@ The full-model stage owns sampling. A full model is complete only when token-out
 - current-position/RoPE position state advances coherently with token feedback on device inside the trace for fixed-step decode loops; do not refresh positions from host every token;
 - page-table trace inputs are refreshed only when the page table changes, with no per-token page-table copy in the unchanged-page-table case;
 - greedy decode stays on device and uses the fastest correct on-device sampling strategy for the target mesh. Force-argmax is optional. Benchmark it against the normal top-k/top-p-capable sampling path when terminal sampling is material.
+- the split-sampling shape/layout contract holds: each rank's local candidate tensor is a complete tile before the candidate all-gather, and the CCL/`ttnn.sampling` innermost dim is tile-aligned. A one-tile-per-packet candidate gather and a post-gather `ttnn.pad` are known device-hang hazards; keep the sampler/gather choice open and prefer a variant that avoids them (reducing the candidate-gather payload to a bf16/multi-tile packet so it never takes the one-tile path is a first-class fix, not only an accuracy knob);
 
 The same path supports top-k/top-p sampling. Do not complete the full model with a one-off greedy-only path and leave sampled serving to be invented in vLLM.
 
@@ -63,6 +64,7 @@ Some shared tests require host-side sampling. Support that as an explicit compat
 Build decode around persistent device state:
 
 - allocate stable token, current-position/RoPE, page-table, KV-cache, sampler, output, and any CCL buffers before capture;
+- release captured decode/sampling traces before allocating for the next request's prefill; traces held live across a reset make the next prefill's allocations unsafe (host-side dispatch stalls), so `reset()`/request-teardown must free them first and recapture per request;
 - capture model decode and sampling traces over those stable tensors;
 - feed the next token through `tt_out_tok`, not a host reconstruction path;
 - advance current-position/RoPE state on device for each replay when the decode step is a simple increment;
@@ -98,7 +100,7 @@ The exact arguments can vary by model, but keep them keyword-friendly and explic
 
 Make cache ownership explicit. Standalone generation often owns its cache internally; serving or other external callers may need to pass an already-allocated cache and page table. Do not bake in assumptions that prevent either mode unless the project contract intentionally does so.
 
-Preserve the decoder's inter-layer data layout unless changing it is faster end to end (and measured evidence proves it). If the optimized multichip decoder keeps the residual stream sharded/fractured across devices, do not force every layer to all-gather back to a replicated full hidden state simply because that is easier for the wrapper. Prefer the same layout contract and fused collective/matmul patterns used by the mature implementation; if a final gather is needed for norm, LM head, or sampling, localize it to the terminal path and measure it separately.
+Preserve the decoder's inter-layer data layout unless changing it is faster end to end (and measured evidence proves it). If the optimized multichip decoder keeps the residual stream sharded/fractured across devices, do not force every layer to all-gather back to a replicated full hidden state simply because that is easier for the wrapper. Prefer the same layout contract and fused collective/matmul patterns used by the mature implementation; if a final gather is needed for norm, LM head, or sampling, localize it to the terminal path and measure it separately. Carry one decode tensor layout across the whole stack (avoid a per-layer tilize/untilize round-trip), and use causal SDPA with shared per-model RoPE tables rather than a materialized context×context mask or per-layer RoPE duplication.
 
 ## Validation
 

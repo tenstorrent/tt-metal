@@ -64,6 +64,7 @@ This is OK because vLLM expects the model to not read the inputs, and instead ha
 Make sure to not read from host in such case, and instead use the inputs already on device.
 To allow this, always update the device copy of inputs, such as token/current-position/RoPE-position-state when sampling on device and do it exactly once per emitted token.
 Make sure to account for different traces within a model.
+When reducing sampled results across devices, compute the per-row stride from the gathered tensor's aligned page size, not the unpadded active-batch stride, or the reducer can select the wrong row.
 To validate, run a focus overlap test under `--async-scheduling` and `sample_on_device_mode=all` checking tha the output passes the degenerate-output check, with no doubled subwords or repeated control tokens.
 
 Leave prefix caching `False` unless it is implemented and tested.

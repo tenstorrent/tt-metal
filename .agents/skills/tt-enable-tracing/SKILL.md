@@ -25,6 +25,8 @@ Trace capture records a static command sequence on a device or mesh device. Repl
 
 The traced region should be device work over stable device tensors. Host-originated input changes happen before replay by copying into those stable tensors. Outputs that are produced by TTNN ops inside capture are fine; host writes, host reads, and host synchronization while the trace is open are not.
 
+Traced warmed replay is the only valid perf-decision metric here; eager/untraced timings can invert the sign of a comparison, so never select a config on them.
+
 When opening the device, reserve trace space:
 
 ```python
@@ -107,7 +109,7 @@ Implement token-out traced decode with two cooperating traces:
 3. Pass `tt_out_tok=<persistent decode token input tensor>` when calling the sampler, so the sampled token is written directly into the tensor consumed by the next decode replay.
 4. Keep current-position/RoPE position state coherent with that token feedback by advancing it on device inside the trace when the model has a fixed-step decode loop. A completed trace does not use host-originated position refresh in the per-token loop.
 5. Refresh page-table trace inputs only when the page table changes, and test both unchanged and changed page-table cases. The unchanged-page-table case should perform no per-token page-table copies after setup.
-6. For greedy decode, keep the sampled token on device and benchmark the available on-device greedy strategies on the target mesh. Force-argmax is only a candidate. Do not select it by default.
+6. For greedy decode, keep the sampled token on device and benchmark the available on-device greedy strategies on the target mesh. Force-argmax is only a candidate. Do not select it by default. On a sharded LM head it can also be trace-unsafe (an output-tensor argmax that races replay and returns wrong tokens); validate any greedy choice with a clean same-logits decision probe.
 
 The canonical pattern is in `models/tt_transformers/tt/generator.py`: capture decode once, bind the model to the same persistent trace inputs that replay refreshes, trace the chosen sampler path, and call sampling with `tt_out_tok` pointing at the decode token input. Untraced sampling hidden inside the model trace is not the canonical token-feedback path.
 

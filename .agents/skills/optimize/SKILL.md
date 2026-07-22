@@ -525,6 +525,7 @@ When you see signatures such as `Timeout waiting for Ethernet core service remot
 ```bash
 timeout 60 tt-smi -ls --local
 timeout 180 tt-smi -r
+sleep 20  # let fabric/Ethernet re-establish before re-listing (else a spurious recheck forces an extra reset)
 timeout 60 tt-smi -ls --local
 ```
 

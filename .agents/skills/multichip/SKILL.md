@@ -23,7 +23,7 @@ The next step will stack decoders together, so we should ensure that the decoder
 
 Before committing to a hand-written attention, MLP, expert, or residual path, compare the model's dataflow to the reusable modules listed below. If a common module cannot be used directly, write down the exact contract mismatch and still reproduce the relevant optimization family in model-local code. A first import error, shape error, or helper API mismatch is not enough to discard a topology-critical optimization; adapt shapes, layouts, padding, weight packing, or the residual contract and retry, or use `$autofix`.
 
-For row-parallel output projections and other "local result then collective" boundaries, make a small topology table before coding the final path. Include at least: local matmul plus all-reduce/full gather, reduce-scatter plus delayed gather, fused all-gather-matmul where the next matmul consumes gathered input, fused matmul plus reduce-scatter/all-reduce where supported, and a residual-sharded variant. For each row record the residual layout before/after, the next op that consumes it, expected collective bytes, activation/CCL dtype, persistent-buffer plan, and why it should or should not win.
+For row-parallel output projections and other "local result then collective" boundaries, make a small topology table before coding the final path. Include at least: local matmul plus all-reduce/full gather, reduce-scatter plus delayed gather, fused all-gather-matmul where the next matmul consumes gathered input, fused matmul plus reduce-scatter/all-reduce where supported, and a residual-sharded variant. For each row record the residual layout before/after, the next op that consumes it, expected collective bytes, activation/CCL dtype, persistent-buffer plan, and why it should or should not win. Rank these candidates on traced decode latency, not eager: eager gains routinely mask large trace regressions for collectives and fused matmul+CCL.
 
 Do not make the current replicated residual contract the only measured contract. A path that does `reduce-scatter -> all-gather` immediately may be correct, but it mostly recreates the communication the fused path was meant to avoid. If the candidate produces a sharded or fractured residual, adapt the next norm, residual add, attention input, MLP input, or test fixture so that layout can be consumed directly. For standalone decoder tests, it is fine to gather only at the test boundary to compare against the reference, but do not include that boundary gather inside the measured decoder layer unless the full stacked model would also pay it at every layer.
 
@@ -133,11 +133,11 @@ Use this when hidden activations are sharded across the normalized dimension and
 - `models/tt_transformers/tt/ccl.py::tt_distributed_rmsnorm`
 - `models/tt_transformers/tt/ccl.py::tt_sharded_distributed_rmsnorm`
 
-Do not phrase distributed RMSNorm as always mandatory. Correct RMSNorm is mandatory. A faster replicated-activation stream plus local RMSNorm is acceptable if it preserves the decoder chain layout and improves measured performance.
+Do not phrase distributed RMSNorm as always mandatory. Correct RMSNorm is mandatory. A faster replicated-activation stream plus local RMSNorm is acceptable if it preserves the decoder chain layout and improves measured performance. A third correct option is a full RMSNorm after an all-gather (gather → full norm → re-shard for the stacked handoff); measure it against the distributed pre/post-all-gather pair rather than assuming the pair is fastest.
 
 ## MoE And Expert Replication
 
-For TP up to 8 devices, the default is to run each active expert selected by the gate with tensor parallelism. Keep the gate-selected active-expert path from the single-chip baseline; do not run every expert densely as the final path unless there is no practical alternative.
+For TP up to 8 devices, the default is to run each active expert selected by the gate with tensor parallelism. Keep the gate-selected active-expert path from the single-chip baseline; do not run every expert densely as the final path unless there is no practical alternative. If the baseline uses expert parallelism, measure an EP baseline (the emitted `ep_degree` path rescaled to the host mesh) before adopting a TP-only expert fracture; do not drop EP analytically.
 
 For routed MoE decode on non-Galaxy systems, use the GPT-OSS generic experts path as the first reference. The important pattern is router/top-k scores as a sparsity tensor, `ttnn.sparse_matmul` for gate/up/down active-expert projections, score weighting, `ttnn.sum` or the model-appropriate reduce over experts, and only then any required TP/EP collective. Read these files first:
 
@@ -197,6 +197,7 @@ Check layouts and collectives before changing precision. Most multi-chip bringup
 - Target the full provenance mesh in both the multichip decoder and its test; do not inherit the functional stage's single-device setup (the `num_devices != 1` 1x1 guard, `mesh_device=[1]` test parametrization, or a `TT_VISIBLE_DEVICES` subset used for single-device bringup).
 - Before opening any TTNN mesh that will run CCL, configure the fabric that matches the intended mesh/topology; prefer repo pytest `device_params`, or call `ttnn.set_fabric_config(...)` before `ttnn.open_mesh_device(...)`.
     - For example, for 8-chip Wormhole/T3K 1D TP the expected setup is `FABRIC_1D_RING` before mesh open and `ttnn.Topology.Ring` for CCL ops.
+    - The physical wiring may be a Linear line even when the mesh looks ring-capable (e.g. a 4-chip box can be two Linear pairs with no wrap-around); confirm the physical topology and, when it differs from the logical mesh, microbenchmark Ring vs Linear rather than assuming a ring.
 - Treat CCL failures from raw `open_mesh_device` as setup evidence, not hardware evidence, until the same case fails with the correct fabric config and matching CCL topology.
 - Reset all devices after any failed run that uses multiple chips.
 - Bind static mode choices at construction time when possible; keep runtime forward paths straight-line.

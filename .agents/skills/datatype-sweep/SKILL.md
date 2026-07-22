@@ -59,7 +59,7 @@ Teacher-forcing decode performance is valid only when the measured path uses tra
 
 Use this coarse search first. It usually finds most of the available win with a small number of full-model runs.
 
-1. Evaluate the closest canonical performance and accuracy policies, if any.
+1. Evaluate the closest canonical performance and accuracy policies, if any. When the model carries compiler-emitted per-tensor precision (e.g. from an IR/provenance seed), start each group from that mixed policy rather than a uniform blanket dtype.
 2. Try BFP8 KV cache as a yes/no switch.
 3. Try BFP8 CCL or residual-transfer activations as a yes/no switch.
 4. Try BFP4 for eligible MLP/expert matmul groups, excluding the first and last layer by default unless the canonical policy says otherwise.
@@ -81,7 +81,9 @@ For every material matmul group tested with BFP4 weights, include a LoFi compute
 
 Sweep compute fidelity even when dtype is unchanged. For dominant decode projection groups, include BFP8+LoFi and BFP8+HiFi2 candidates when both are legal. Do not assume HiFi2 is fastest for BFP8, and do not assume LoFi is safe without full-model top-1/top-5 evidence. Record dtype and fidelity together in each candidate id so later stages can construct the exact policy.
 
-Note sometimes different datatypes require small semantic changes to the code. KV cache is a common example of this - `paged_fill_cache` requires tensors that are the same datatype as the cache but `paged_update_cache` requires update tensors in BF16/FLOAT32 even when the destination cache is e.g. BFP8. So when changing datatypes first run a quick one-decoder smoketest to check it works correctly and get that right before using it or rejecting it in a full model pareto sweep.
+Note sometimes different datatypes require small semantic changes to the code. KV cache is a common example of this - `paged_fill_cache` requires tensors that are the same datatype as the cache but `paged_update_cache` requires update tensors in BF16/FLOAT32 even when the destination cache is e.g. BFP8. So when changing datatypes first run a quick one-decoder smoketest to check it works correctly and get that right before using it or rejecting it in a full model pareto sweep. Also validate reduced-precision attention/KV at a representative long context and over a multi-step recurrent decode, not only short prompts: low-precision KV error accumulates with context, so a short-context PCC can pass while long-context degrades.
+
+Sweep attention and MLP precision independently, and never let a synthetic/artificial-distribution PCC stress veto a candidate that clears the real-weight full-model accuracy bar; keep synthetic PCC as a diagnostic only.
 
 ## MoE Policy
 
@@ -92,7 +94,7 @@ Treat expert matmuls like MLP matmuls:
 - shared experts follow dense MLP policy unless evidence says otherwise;
 - routed sparse expert matmuls should be swept with the active-expert path, not dense all-expert debug paths.
 
-Router and weighting numerics are expected to be more sensitive. Do not include router logits, top-k selection, routing scores, gate weighting, or expert reduction weighting in the coarse BFP4 sweep, perhaps in BFP8 but with somewhat low priority as they are not typically expected to be a performance bottleneck.
+Router and weighting numerics are expected to be more sensitive. Do not include router logits, top-k selection, routing scores, gate weighting, or expert reduction weighting in the coarse BFP4 sweep, perhaps in BFP8 but with somewhat low priority as they are not typically expected to be a performance bottleneck. More generally, selection boundaries (router top-k, and the sampler's argmax/top-k) are precision-fragile — a near-tie flips under low precision — so gate any reduction there on a selection-stability real-weight PCC check rather than a fixed dtype floor.
 
 For MoE sweeps, record route/top-k distribution or active expert count when model architecture allows this to vary, since the performance impact depends on how many experts actually run.
 

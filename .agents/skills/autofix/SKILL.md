@@ -46,9 +46,9 @@ For each proposed bug in turn:
 2. Design the smallest focused experiment that can verify or refute it. Prefer a narrow unit/component test, shape probe, instrumentation, lowered-argument check, or controlled A/B run over broad trial-and-error.
 3. Run the experiment and record the exact command, result, and interpretation.
 4. If the hypothesis is refuted, write down why and move to the next proposed bug.
-5. If the hypothesis is verified, implement the smallest fix at the right intervention boundary.
+5. If the hypothesis is verified, implement the smallest fix at the right intervention boundary. Prefer a fix inside `models/autoports/<model>/`; if the fault is in a shared tt-metal kernel outside it, first try a model-side dtype/shape/topology change that avoids the failing path, and only if none exists capture a minimal repro and file the framework bug rather than landing a core-kernel patch as the stage fix.
 6. Prove the fix works by rerunning the focused experiment and the original failing check, plus any nearby correctness or watcher/perf checks that the risk requires.
-7. Keep only changes with evidence. Revert speculative edits that did not verify the hypothesis or fix the failure.
+7. Keep only changes with evidence. Apply a verified fix to every occurrence of the flagged pattern, not just the one under review. Revert speculative edits that did not verify the hypothesis or fix the failure.
 
 Do not batch several unproven fixes together. The purpose of this skill is to connect each code change to a verified cause.
 
@@ -74,6 +74,7 @@ Stop only when the bug is fixed with evidence, the remaining blocker is outside 
 - Print or assert the lowered TTNN op inputs: logical shape, physical/padded shape, dtype, layout, memory config, program config, compute config, mesh mapper, and runtime args.
 - Add a temporary targeted test for a suspicious cache/page-table/current-position boundary, then keep it only if it belongs as a durable regression.
 - Run a minimal watcher check when the hypothesis involves CCL, async completion, semaphores, NOC/L1 bounds, cache updates, or trace replay.
+- For a wrong-output or low-PCC symptom in fused-QKV attention, test a QKV fused-order mismatch early, using the emit-driven order rather than assuming a fixed permutation.
 - Use profiler or `tt-perf-report` only when the hypothesis is performance-related or timing evidence is needed.
 
 ## Reporting
