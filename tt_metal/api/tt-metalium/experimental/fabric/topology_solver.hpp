@@ -389,6 +389,12 @@ public:
      * group; the solver chooses which group pairs with which (no index alignment). Apply required
      * constraints (e.g. rank must map to a specific host's ASICs) after this for explicit bindings.
      *
+     * @note Only a SINGLE same-rank groups constraint is supported. Calling this again REPLACES the
+     *       previous partition (target_groups + global_groups) rather than accumulating. The
+     *       set_max_same_rank_groups_used / set_minimize_same_rank_groups_used objectives below apply
+     *       to this one partition. Multiple simultaneous same-rank partitions are intentionally not
+     *       supported at this time.
+     *
      * @param target_groups Vector of sets; each set is target nodes (e.g. fabric nodes per rank)
      * @param global_groups Vector of sets; each set is global nodes (e.g. ASICs per host)
      * @return false if this would contradict required, forbidden, or same-rank feasibility (state unchanged)
@@ -422,6 +428,10 @@ public:
      * capacity lower bound (ceil(num_targets / max_group_size)) to force the minimum host count. If the cap is
      * unsatisfiable, the solver backs down to the soft minimize objective (set_minimize_same_rank_groups_used)
      * when that is also enabled, so requesting both gives "hard-if-possible, else minimize best-effort". 0 = no cap.
+     *
+     * Register the global groups via set_same_rank_groups_constraint first so the cap has a partition to bind.
+     * A capacity feasibility check (can k groups hold all targets?) runs at solve time using the target graph's
+     * node count; a provably infeasible cap is skipped there with a warning and the soft minimize fallback applies.
      */
     void set_max_same_rank_groups_used(std::size_t k) { max_same_rank_groups_used_ = k; }
     std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }

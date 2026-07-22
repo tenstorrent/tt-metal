@@ -1548,19 +1548,23 @@ inline bool topology_mapping_should_use_sat_engine(
         case TopologyMappingSolverEngine::Dfs:
             return false;
         case TopologyMappingSolverEngine::Auto: {
+            // Auto now defaults to SAT for ALL problem sizes. Rationale: the SAT backend is the only one that
+            // honors the same-rank-group host-count constraints (set_max_same_rank_groups_used /
+            // set_minimize_same_rank_groups_used); the DFS backend silently ignores them (see
+            // SearchHeuristic::compute_candidate_cost and the ConstraintIndexData ctor note). To avoid backend-
+            // dependent results we use SAT everywhere. The TT_TOPOLOGY_SOLVER_ENGINE=dfs env override still forces
+            // DFS for explicit debugging (with the caveat that host-count constraints won't be enforced there).
+            (void)n_target;
+            (void)n_global;
             const char* env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
             if (env != nullptr && env[0] != '\0') {
                 std::string s(env);
                 std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (s == "sat" || s == "1" || s == "true" || s == "yes") {
-                    return true;
-                }
                 if (s == "dfs" || s == "0" || s == "false" || s == "no") {
                     return false;
                 }
             }
-            static constexpr size_t kAutoSatMinAssignmentVars = 512;
-            return (n_target * n_global) >= kAutoSatMinAssignmentVars;
+            return true;  // SAT for everything (was: (n_target * n_global) >= 512)
         }
     }
     return false;
@@ -2054,6 +2058,13 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
         same_rank_groups.push_back(std::move(group_indices));
     }
 
+    // Both flags are now honored by BOTH backends:
+    //   - max_same_rank_groups_used (HARD "at most k host groups"): SAT via topology_sat_encode_at_most_k_groups;
+    //     DFS via a candidate prune in dfs_recursive (skip a candidate that would open a (k+1)th occupied group).
+    //   - minimize_same_rank_groups_used (SOFT minimize): SAT via topology_sat_solve_minimize_groups; DFS via the
+    //     host-affinity packing bias in SearchHeuristic::compute_candidate_cost (now gated on this flag / the cap).
+    // Caveat: the DFS "minimize" is a greedy best-effort bias, not a guaranteed minimum, and DFS does not implement
+    // the SAT soft-minimize fallback when a hard cap is infeasible (it simply fails the cap). Production uses SAT.
     minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
     max_same_rank_groups_used = constraints.max_same_rank_groups_used();
 }
@@ -2370,9 +2381,20 @@ int SearchHeuristic::compute_candidate_cost(
     // prefer to grow within the current host. This is pure value-ordering — it never changes which mappings are
     // valid, so it cannot introduce UNSAT or alter correctness. Inert when no same-rank global groups were
     // provided (global_to_same_rank_group empty / unlabeled).
+    //
+    // This packing bias is the DFS implementation of the SOFT "minimize host groups" objective. It is gated below
+    // on a host-count objective being requested (minimize flag or a hard cap). The HARD cap itself is enforced
+    // separately by a candidate prune in DFSSearchEngine::dfs_recursive (this cost function only ORDERS candidates;
+    // it never rejects one). Note this is greedy best-effort, not a guaranteed minimum.
+    // Gated on a host-count objective being requested: apply the packing bias only when the caller asked to
+    // minimize host groups OR set a hard cap (previously this bias was ALWAYS on whenever groups existed). Both
+    // objectives benefit from consolidating onto fewer hosts; when neither is set, host grouping is irrelevant to
+    // the objective and the bias is skipped.
     int host_affinity_score = 0;
     const auto& global_to_host = constraint_data.global_to_same_rank_group;
-    if (!global_to_host.empty() && global_idx < global_to_host.size()) {
+    const bool host_objective_active =
+        constraint_data.minimize_same_rank_groups_used || constraint_data.max_same_rank_groups_used > 0;
+    if (host_objective_active && !global_to_host.empty() && global_idx < global_to_host.size()) {
         const int candidate_host = global_to_host[global_idx];
         if (candidate_host >= 0) {
             for (size_t t = 0; t < mapping.size(); ++t) {
@@ -2783,8 +2805,35 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     size_t target_idx = selection.target_idx;
 
+    // Hard host-group cap (max_same_rank_groups_used): the mapping may occupy at most k distinct same-rank global
+    // groups (host partitions). Build the set of groups already occupied by the current partial mapping once per
+    // node; a candidate whose group is NEW is only allowed if that keeps the occupied count <= k. This mirrors the
+    // SAT backend's at-most-k occupancy constraint so both backends honor the cap. (Built only when the cap is
+    // active; empty otherwise.)
+    const size_t host_group_cap = constraint_data.max_same_rank_groups_used;
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    const bool host_cap_active = host_group_cap > 0 && !global_to_host.empty();
+    std::set<int> occupied_host_groups;
+    if (host_cap_active) {
+        for (int g : state_.mapping) {
+            if (g >= 0 && static_cast<size_t>(g) < global_to_host.size()) {
+                const int grp = global_to_host[static_cast<size_t>(g)];
+                if (grp >= 0) {
+                    occupied_host_groups.insert(grp);
+                }
+            }
+        }
+    }
+
     // Try each candidate in order (best first)
     for (size_t global_idx : selection.candidates) {
+        // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
+        if (host_cap_active && global_idx < global_to_host.size()) {
+            const int grp = global_to_host[global_idx];
+            if (grp >= 0 && occupied_host_groups.count(grp) == 0 && occupied_host_groups.size() >= host_group_cap) {
+                continue;  // would exceed at-most-k occupied host groups
+            }
+        }
         // Check local consistency (edges to already-mapped neighbors)
         if (!ConsistencyChecker::check_local_consistency(
                 target_idx, global_idx, graph_data, state_.mapping, validation_mode)) {

@@ -26,6 +26,10 @@ struct TopologySatSolver::Impl {
 
     void assume(int lit) { solver.assume(lit); }
 
+    void phase(int lit) { solver.phase(lit); }
+
+    void unphase(int lit) { solver.unphase(lit); }
+
     int solve() { return solver.solve(); }
 
     int solve_limited(int max_conflicts) {
@@ -68,9 +72,20 @@ int TopologySatSolver::declare_one_more_variable() {
     return next_var_;
 }
 
-void TopologySatSolver::add(int lit) { impl_->add(lit); }
+void TopologySatSolver::add(int lit) {
+    if (lit == 0) {
+        ++num_clauses_;
+    } else {
+        ++num_literals_;
+    }
+    impl_->add(lit);
+}
 
 void TopologySatSolver::assume(int lit) { impl_->assume(lit); }
+
+void TopologySatSolver::phase(int lit) { impl_->phase(lit); }
+
+void TopologySatSolver::unphase(int lit) { impl_->unphase(lit); }
 
 int TopologySatSolver::solve() { return impl_->solve(); }
 

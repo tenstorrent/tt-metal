@@ -1605,16 +1605,6 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 
 namespace {
 
-std::optional<std::string> hostname_for_asic_from_hostname_map(
-    tt::tt_metal::AsicID asic_id, const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
-    for (const auto& [hostname, asics] : hostname_to_asics) {
-        if (asics.contains(asic_id)) {
-            return hostname;
-        }
-    }
-    return std::nullopt;
-}
-
 // Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply preferred
 // constraints so unbound logical meshes tend to pack onto fewer hosts.
 // Only called when the physical graph is not already identity-bound via asic_id_to_mesh_rank (Phase 1).
@@ -1630,63 +1620,50 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         return;
     }
 
-    std::set<MeshId> logical_target_set(
-        mesh_logical_level_graph.get_nodes().begin(), mesh_logical_level_graph.get_nodes().end());
-    if (logical_target_set.size() <= 1) {
+    // get_nodes() are the adjacency-map keys (already unique), so this is exactly the logical mesh count.
+    const std::size_t num_targets = mesh_logical_level_graph.get_nodes().size();
+    if (num_targets <= 1) {
         return;
     }
 
-    // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
+    // Invert the PSD host map (config.hostname_to_asics, from the PhysicalSystemDescriptor) once so each ASIC's host
+    // is a direct lookup instead of a linear scan over every host.
+    const auto asic_to_host = [&config]() {
+        std::map<tt::tt_metal::AsicID, std::string> result;
+        for (const auto& [hostname, asics] : config.hostname_to_asics) {
+            for (const auto& asic_id : asics) {
+                result.emplace(asic_id, hostname);
+            }
+        }
+        return result;
+    }();
+
+    // Partition physical meshes into same-rank global groups: single-host meshes share their host's group, a
+    // multi-host mesh forms its own singleton group. The map keeps one group per host without index bookkeeping.
+    std::map<std::string, std::set<MeshId>> meshes_by_host;
     std::vector<std::set<MeshId>> global_mesh_groups;
-    std::map<std::string, std::size_t> host_group_index;
     for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
         if (adj.get_nodes().empty()) {
             continue;
         }
         std::set<std::string> hosts_for_mesh;
         for (const auto& asic_id : adj.get_nodes()) {
-            auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
-            if (hostname.has_value()) {
-                hosts_for_mesh.insert(*hostname);
+            if (auto it = asic_to_host.find(asic_id); it != asic_to_host.end()) {
+                hosts_for_mesh.insert(it->second);
             }
         }
         if (hosts_for_mesh.size() == 1) {
-            auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
-            if (inserted) {
-                global_mesh_groups.emplace_back();
-            }
-            global_mesh_groups[it->second].insert(phys_mesh_id);
+            meshes_by_host[*hosts_for_mesh.begin()].insert(phys_mesh_id);
         } else {
             global_mesh_groups.push_back({phys_mesh_id});
         }
     }
+    for (auto& [_, meshes] : meshes_by_host) {
+        global_mesh_groups.push_back(std::move(meshes));
+    }
     if (global_mesh_groups.empty()) {
         return;
     }
-
-    const auto [single_group_fits, preferred_globals] =
-        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
-            logical_target_set, global_mesh_groups);
-    if (single_group_fits) {
-        std::vector<std::set<MeshId>> target_groups;
-        target_groups.push_back(logical_target_set);
-        if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
-            return;
-        }
-        log_warning(
-            tt::LogFabric,
-            "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
-    }
-
-    // No single host covers all targets. Constrain the HOST COUNT (not a specific set of hosts): register the host
-    // partitions as same-rank global groups, then cap how many of them the mapping may occupy at the capacity lower
-    // bound k_min = ceil(num_targets / max host capacity). The solver enforces "at most k_min host groups occupied"
-    // as a hard cardinality constraint but is free to choose WHICH k_min hosts (any combination), so it picks a
-    // connectivity-feasible set instead of being pinned to one greedy cover. If that hard cap is unsatisfiable the
-    // SAT backend backs down to the soft minimize objective (best-effort fewest groups), so we still return a valid,
-    // near-minimal mapping.
-    (void)single_group_fits;
-    (void)preferred_globals;
 
     // Register the host partitions as same-rank GLOBAL groups (no target groups -> no hard co-location; this only
     // exposes per-mesh host membership so the occupancy cardinality can be built).
@@ -1703,7 +1680,7 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     if (max_group_capacity == 0) {
         return;
     }
-    const std::size_t k_min = (logical_target_set.size() + max_group_capacity - 1) / max_group_capacity;
+    const std::size_t k_min = (num_targets + max_group_capacity - 1) / max_group_capacity;
 
     inter_mesh_constraints.set_max_same_rank_groups_used(k_min);      // HARD: fit within k_min hosts (any k_min)
     inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT fallback: minimize if the cap is infeasible
@@ -1712,7 +1689,7 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         tt::LogFabric,
         "Inter-mesh host alignment: capping host-group usage at k_min={} (targets={}, max host capacity={})",
         k_min,
-        logical_target_set.size(),
+        num_targets,
         max_group_capacity);
 }
 
@@ -2970,7 +2947,9 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
         /*max_solutions=*/max_solutions,
         inter_mesh_validation_mode,
         /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Auto,
+        // SAT explicitly: only the SAT backend honors the same-rank-group host-count constraints (hard cap +
+        // minimize); DFS ignores them. (Auto now also resolves to SAT, but be explicit here.)
+        TopologyMappingSolverEngine::Sat,
         unique_shapes);
 
     log_info(
