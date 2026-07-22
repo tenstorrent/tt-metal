@@ -46,14 +46,14 @@ class TtXttsGptStack(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
         )
 
-    def forward_decode_static(self, x, kv, pos):
-        """Trace-compatible one-token decode over fixed-size caches.
+    def forward_decode(self, x, kv, pos):
+        """DECODE — one-token decode over FIXED-size caches (the stack's decode forward).
 
         ``kv`` is the per-layer ``[(k_cache, v_cache), ...]`` list of ``[1, heads, max_seq,
         head_dim]`` caches; ``pos`` is a ``[1, 1, 1, max_seq]`` tensor filled with the current
         absolute cache position. Builds the one-hot cache-write mask and the additive
         attention mask ONCE (shared across layers) from ``pos`` + the persistent arange, then
-        runs every block. Returns ``(ln_f hidden, grown kv)``; all shapes static."""
+        runs every block. Returns the ``ln_f`` hidden (caches updated in place); all shapes static."""
         onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16)  # [1,1,1,MAX] 1 at col=pos
         onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1))  # [1,1,MAX,1] cache-write selector
         keep = ttnn.add(ttnn.multiply(onehot, -1.0), 1.0)  # 1 - onehot
@@ -62,18 +62,16 @@ class TtXttsGptStack(LightweightModule):
             ttnn.add(ttnn.multiply(le, -1.0), 1.0), NEG_INF
         )  # (1-le)*(-1e30): 0 cached, -inf ahead
         for block, (k, v) in zip(self.blocks, kv):
-            x = block.forward_decode_static(x, k, v, onehot, keep, add_mask)  # k, v updated in place
+            x = block.forward_decode(x, k, v, onehot, keep, add_mask)  # k, v updated in place
         y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
         ttnn.deallocate(x)
         return y
 
     def forward(self, x):
-        """Run the full stack. ``x`` is ``[batch, seq, hidden]`` on device.
-
-        Each block frees its own input internally; here we free the final block
-        output once ``ln_f`` has consumed it."""
+        """Full teacher-forced pass (no cache kept). Routes through each block's PREFILL
+        forward and discards the returned K/V — the block has no separate full-forward."""
         for block in self.blocks:
-            x = block(x)
+            x, _, _ = block.forward_prefill(x)  # full causal block; drop the prompt K/V
         y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
         ttnn.deallocate(x)
         return y
@@ -88,14 +86,3 @@ class TtXttsGptStack(LightweightModule):
         y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
         ttnn.deallocate(x)
         return y, kv
-
-    def forward_decode(self, x, kv):
-        """Decode one token. ``kv`` is the per-layer cache list; returns the
-        ``ln_f`` hidden state and the grown cache."""
-        new_kv = []
-        for block, (k, v) in zip(self.blocks, kv):
-            x, k, v = block.forward_decode(x, k, v)
-            new_kv.append((k, v))
-        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
-        ttnn.deallocate(x)
-        return y, new_kv
