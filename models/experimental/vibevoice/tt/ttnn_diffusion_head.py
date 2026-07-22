@@ -228,6 +228,15 @@ class TTDiffusionHead:
         )
         return h  # [B, 1, 1, hidden_size]
 
+    def embed_timestep(self, t_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Public alias of ``_timestep_embedder``.
+
+        DPM inference timesteps are fixed for a schedule, so callers can precompute
+        ``embed_timestep(t)`` once per step-index and reuse every frame (byte-identical
+        to recomputing inside each head forward).
+        """
+        return self._timestep_embedder(t_tt)
+
     def _swiglu_ffn(self, x: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
         """SwiGLU FFN: gate * silu(gate) project → down."""
         w = self.w
@@ -288,11 +297,12 @@ class TTDiffusionHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # modulate: x_norm * (1 + scale) + shift
-        one = ttnn.ones_like(scale)
+        # Scalar +1.0 (not ones_like): same math, drops a host-alloc ones tensor per layer
+        # (illegal inside trace capture; validated bit-identical vs ones_like path).
         x_mod = ttnn.add(
             ttnn.mul(
                 x_norm,
-                ttnn.add(one, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.add(scale, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             shift,
@@ -327,11 +337,11 @@ class TTDiffusionHead:
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        one = ttnn.ones_like(scale)
+        # Scalar +1.0 (not ones_like) — see _head_layer.
         x_mod = ttnn.add(
             ttnn.mul(
                 x_norm,
-                ttnn.add(one, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.add(scale, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             shift,
@@ -362,13 +372,16 @@ class TTDiffusionHead:
         noisy_images: ttnn.Tensor,
         timesteps: ttnn.Tensor,
         cond_proj: ttnn.Tensor,
+        t_emb: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """Head forward given the ALREADY-projected condition (cond_proj = project_condition(cond)).
 
         Args:
             noisy_images: [B, 1, 1, latent_size] bfloat16 TILE
-            timesteps:    [B, 1, 1, 1] bfloat16 scalar per batch
+            timesteps:    [B, 1, 1, 1] bfloat16 scalar per batch (ignored when ``t_emb`` set)
             cond_proj:    [B, 1, 1, hidden_size]  = project_condition(condition)
+            t_emb:        optional precomputed ``embed_timestep(timesteps)``; when provided the
+                          embedder is skipped (byte-identical if ``t_emb`` came from the same op)
         """
         w = self.w
 
@@ -380,8 +393,9 @@ class TTDiffusionHead:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Timestep embedding
-        t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
+        # Timestep embedding (or reuse a schedule-constant precompute)
+        if t_emb is None:
+            t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
 
         # Combine: c = cond_proj + t_emb
         c = ttnn.add(cond_proj, t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)

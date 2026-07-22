@@ -11,8 +11,8 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.experimental.vibevoice.tt.load_weights import (
     load_vibevoice_state_dict,
     split_submodule_weights,
@@ -102,8 +102,16 @@ def test_connector_pcc(mesh_device, loaded_weights, vv_config, connector_name):
     tt_out_torch = tt_out_torch.squeeze(0)[:, :T, :]  # [1, T, hidden]
 
     ref_out_3d = ref_out[:, :T, :]
+    tt_cmp = tt_out_torch.squeeze(0) if tt_out_torch.dim() == 3 else tt_out_torch
+    # Align batch: ref is [1, T, H], TT after squeeze is [T, H].
+    ref_cmp = ref_out_3d.squeeze(0) if ref_out_3d.dim() == 3 and ref_out_3d.shape[0] == 1 else ref_out_3d
 
-    passed, pcc_val = comp_pcc(
-        ref_out_3d, tt_out_torch.squeeze(0) if tt_out_torch.dim() == 3 else tt_out_torch, pcc=0.99
+    # Measured on BH (seed 0): connector is near bit-exact; keep strict floor.
+    assert_numeric_metrics(
+        ref_cmp,
+        tt_cmp,
+        pcc_threshold=0.9994,
+        rtol=0.09,
+        atol=0.09,
+        frobenius_threshold=0.03,
     )
-    assert passed, f"[{connector_name}] PCC {pcc_val:.6f} < 0.99"

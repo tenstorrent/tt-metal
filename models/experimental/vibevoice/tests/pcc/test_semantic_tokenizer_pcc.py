@@ -14,8 +14,8 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.experimental.vibevoice.tt.load_weights import (
     load_vibevoice_state_dict,
     split_submodule_weights,
@@ -109,9 +109,12 @@ def test_semantic_tokenizer_pcc(mesh_device, vv_config, sem_tok_state):
     ref_compare = ref_out.to(torch.float32).permute(0, 2, 1)  # [1, T_enc, vae_dim]
     T_min = min(ref_compare.shape[1], tt_out_torch.shape[1])
 
-    passed, pcc_val = comp_pcc(
+    # Measured on BH: PCC≈0.9985, rel-Frob≈0.056, max|Δ|≈2.02.
+    assert_numeric_metrics(
         ref_compare[:, :T_min, :],
         tt_out_torch[:, :T_min, :],
-        pcc=0.99,
+        pcc_threshold=0.998,
+        rtol=0.09,
+        atol=2.1,
+        frobenius_threshold=0.06,
     )
-    assert passed, f"Semantic tokenizer encoder PCC {pcc_val:.6f} < 0.99"

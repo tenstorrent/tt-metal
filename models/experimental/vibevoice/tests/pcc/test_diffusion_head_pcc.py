@@ -4,7 +4,7 @@
 """Phase 1b — DiffusionHead PCC test.
 
 Loads real prediction_head weights, runs reference PyTorch forward and TT forward,
-asserts PCC >= 0.99.
+asserts numeric metrics (PCC / allclose / Frobenius).
 """
 
 import sys
@@ -14,8 +14,8 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.common.config import MODEL_PATH
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.experimental.vibevoice.tt.load_weights import (
     load_vibevoice_state_dict,
     split_submodule_weights,
@@ -136,5 +136,12 @@ def test_diffusion_head_pcc(mesh_device, loaded_weights, vv_config):
     out_tt = head_tt(x_tt, t_tt, cond_tt)
     out_torch = ttnn.to_torch(out_tt).to(torch.float32).view(B, latent_size)
 
-    passed, pcc_val = comp_pcc(ref_out.to(torch.float32), out_torch, pcc=0.99)
-    assert passed, f"DiffusionHead PCC {pcc_val:.6f} < 0.99"
+    # Measured on BH (seed 0): PCC≈0.9958, rel-Frob≈0.090, max|Δ|≈0.104.
+    assert_numeric_metrics(
+        ref_out.to(torch.float32),
+        out_torch,
+        pcc_threshold=0.995,
+        rtol=0.09,
+        atol=0.12,
+        frobenius_threshold=0.10,
+    )
