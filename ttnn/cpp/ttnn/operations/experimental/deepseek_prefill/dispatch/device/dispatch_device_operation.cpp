@@ -179,12 +179,12 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     // with detail::create_tensor_cb(output_tensor, ...) pick up the right dtype/page-size.
     auto dispatch_buffer_dtype = operation_attributes.fp8_output ? DataType::FP8_E4M3 : DataType::BFLOAT16;
 
-    // Create TensorSpec objects with correct dtypes
-    auto dispatch_buffer_spec = TensorSpec(
+    // Create tt::tt_metal::TensorSpec objects with correct dtypes
+    auto dispatch_buffer_spec = tt::tt_metal::TensorSpec(
         Shape(dispatch_buffer_shape),
         tt::tt_metal::TensorLayout(dispatch_buffer_dtype, tt::tt_metal::PageConfig(layout), mem_config));
 
-    auto dispatch_metadata_spec = TensorSpec(
+    auto dispatch_metadata_spec = tt::tt_metal::TensorSpec(
         Shape(dispatch_metadata_shape),
         tt::tt_metal::TensorLayout(DataType::INT32, tt::tt_metal::PageConfig(layout), mem_config));
 

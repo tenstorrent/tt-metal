@@ -34,6 +34,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    CLAMP_NEGATIVE,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
@@ -66,6 +67,7 @@ def _run(formats, mathop, dest_acc, input_dimensions):
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
+            CLAMP_NEGATIVE(False),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),

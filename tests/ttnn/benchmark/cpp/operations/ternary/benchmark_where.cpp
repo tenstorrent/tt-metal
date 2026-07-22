@@ -16,9 +16,10 @@ namespace {
 
 // Will be replaced with ttnn::rand
 template <typename ElemType>
-tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
+ttnn::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
     constexpr ttnn::DataType data_type = tt::tt_metal::convert_to_data_type<ElemType>();
-    ttnn::TensorSpec spec(shape, ttnn::TensorLayout(data_type, ttnn::PageConfig(layout), tt::tt_metal::MemoryConfig{}));
+    tt::tt_metal::TensorSpec spec(
+        shape, tt::tt_metal::TensorLayout(data_type, ttnn::PageConfig(layout), tt::tt_metal::MemoryConfig{}));
     auto output_buffer = std::vector<ElemType>(spec.padded_shape().volume());
 
     auto init_rand_elem = [](auto& elem) {
@@ -30,7 +31,7 @@ tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_meta
     const size_t total = output_buffer.size();
     if (total < 256 * 256) {
         std::ranges::for_each(output_buffer, init_rand_elem);
-        return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
+        return ttnn::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
     } else {
         tf::Executor executor;
         tf::Taskflow taskflow;
@@ -39,7 +40,7 @@ tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_meta
         executor.run(taskflow).wait();
     }
 
-    return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
+    return ttnn::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
 void BM_where_bf16_ttt(benchmark::State& state) {

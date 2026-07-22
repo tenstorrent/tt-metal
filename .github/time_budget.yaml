@@ -92,7 +92,7 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
-    bh_p100: 780
+    bh_p100: 805
     bh_p150b_civ2: 1045
     wh_n150_civ2: 1185
     wh_n300_civ2: 1175
@@ -138,7 +138,7 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 20
+    wh_n150_civ2: 30
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
@@ -162,15 +162,23 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  e2e_tier2:
+    wh_n150: 150
+    wh_n300: 30
+    bh_p150b_civ2: 120
   e2e_tier3:
     bh_p150b_civ2: 18
+  unit_tier2:
+    wh_n150: 220
+    wh_n300: 216
+    bh_p150: 100
+    bh_p150b_civ2: 90
   unit_tier3:
     bh_p150b_civ2: 20
     bh_p150: 2
-  unit:
-    wh_n150: 90
-    wh_n300: 115
-    bh_p150b_civ2: 125
+  device_perf:
+    wh_n150: 100
+    bh_p150: 60
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:

@@ -358,7 +358,21 @@ class ttMLA:
         self.sp_factor = mesh_device.shape[self.sp_axis]
 
         self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
-        self.ccl_topology = topology
+        # Per-axis CCL topology, named symmetrically by axis. The q/kv/wo collectives run on the TP
+        # axis (cluster_axis=tp_axis) and use tp_ccl_topology; the ring-attention SDPA (ring_mla /
+        # ring_joint_sdpa) runs on the SP axis (cluster_axis=sp_axis) and MUST use sp_ccl_topology.
+        # Conflating them deadlocks the SDPA when the two axes differ: e.g. under FABRIC_2D_TORUS_X the
+        # TP axis is Ring but the SP axis has no physical wrap, so a TP-Ring topology on the SP-axis
+        # SDPA waits forever on a missing wrap link. A scalar applies to both axes (preserves 1D-ring /
+        # non-torus behavior).
+        if isinstance(topology, tuple):
+            # The tuple is (dim0, dim1); unpacking as (sp, tp) is only correct when sp_axis=0/tp_axis=1.
+            # Guard it so a future sp_axis/tp_axis swap fails loudly here instead of silently cross-
+            # wiring Ring onto the wrong axis (a runtime deadlock). Mirrors the sparse-path assert below.
+            assert self.sp_axis == 0 and self.tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
+            self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
+        else:
+            self.sp_ccl_topology = self.tp_ccl_topology = topology
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -466,7 +480,8 @@ class ttMLA:
                     layer_idx=self.layer_idx,
                     tt_ccl=self.tt_ccl,
                     ccl_num_links=self.ccl_num_links,
-                    ccl_topology=self.ccl_topology,
+                    sp_ccl_topology=self.sp_ccl_topology,
+                    tp_ccl_topology=self.tp_ccl_topology,
                     seq_len=seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
@@ -755,7 +770,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
+            topology=self.sp_ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
@@ -800,7 +815,7 @@ class ttMLA:
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
             qr = ttnn.experimental.all_gather_async(
@@ -810,7 +825,7 @@ class ttMLA:
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
 
@@ -906,7 +921,7 @@ class ttMLA:
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
             tt_kv = ttnn.experimental.fast_reduce_nc(
@@ -1013,7 +1028,7 @@ class ttMLA:
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
         return v_out
@@ -1165,7 +1180,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
+            topology=self.sp_ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_causal=True,
@@ -1237,7 +1252,12 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx)
+        # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
+        # only needs that populated prefix (top-k indices never address the unwritten suffix).
+        populated_global = kv_actual_isl + seq_len_local * self.sp_factor
+        kvpe_dev = self._gather_kvpe_prefix(
+            kvpe_cache, cache_batch_idx, populated_global=populated_global, chunk_local=seq_len_local
+        )
         ttnn.deallocate(tt_kvpe)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
@@ -1280,7 +1300,7 @@ class ttMLA:
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
             tt_kv = ttnn.experimental.fast_reduce_nc(
@@ -1338,6 +1358,8 @@ class ttMLA:
         factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
         if factor == 1:
             return t
+        # Per-axis topology: match the ring/line topology to the axis this gather rides.
+        topology = self.sp_ccl_topology if cluster_axis == self.sp_axis else self.tp_ccl_topology
         return ttnn.experimental.all_gather_async(
             t,
             dim=dim,
@@ -1345,7 +1367,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=cluster_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
+            topology=topology,
             cluster_axis=cluster_axis,
         )
 
@@ -1447,37 +1469,58 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx):
+    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx, populated_global=None, chunk_local=None):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         ND-sharded / block-cyclic across SP, in the op's format (bf16 or fp8_e4m3, ROW_MAJOR — the
         sparse cache is uncompressed). sparse_sdpa consumes it replicated and remaps the
         natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
         LEFT in block-cyclic order — no host reorder.
 
-        SLOT SELECT BEFORE THE GATHER: the persistent cache is [B, 1, seq_len_cache, 576], B =
-        num_users*num_layers (user-major slots). Slice the active (user, layer) slot out of dim 0 FIRST,
-        then all-gather only that single [1, 1, seq_len_cache, 576] slot over SP — NOT the whole B-slot
-        cache. At 78 layers the full-cache gather is ~5 GB (×2 in-flight → OOM against the near-full
-        78-layer weights); the single-slot gather is B× smaller. The gathered kv is then batch-1, so
-        sparse_sdpa needs NO cache_batch_idx (the op requires B==1 when cache_batch_idx is unset). This
-        mirrors the dense ring_mla single-slot gather (kv_cache_batch_idx → batch-1 scratch).
+        SLOT SELECT BEFORE THE GATHER: the persistent cache's per-chip shape is [B, 1, seq_len_local,
+        576], B = num_users*num_layers (user-major slots), seq_len_local = seq_len_cache / sp. Slice the
+        active (user, layer) slot out of dim 0 FIRST, then all-gather only that single slot over SP (→
+        [1, 1, seq_len_cache, 576]) — NOT the whole B-slot cache. At 78 layers the full-cache gather is
+        ~5 GB (×2 in-flight → OOM against the near-full 78-layer weights); the single-slot gather is B×
+        smaller. The gathered kv is then batch-1, so sparse_sdpa needs NO cache_batch_idx (the op
+        requires B==1 when cache_batch_idx is unset). This mirrors the dense ring_mla single-slot gather
+        (kv_cache_batch_idx → batch-1 scratch).
 
-        Pipeline (all on device): ND→interleaved, slot slice (no-op for a single-slot cache), SP
-        all-gather to full-T (no-op at sp==1). The cache is already in the op format, so there is NO
-        read-back dtype/layout conversion. The unwritten suffix is never addressed since indices stay
-        < populated."""
+        POPULATED-WIDTH TRIM (``populated_global`` = written KV depth after this chunk, ``chunk_local`` =
+        per-chip slab width): trim the per-chip seq dim to only the populated SLABS BEFORE the gather
+        instead of gathering the full allocated cache width. The per-chip cache is slab-major (slab s at
+        local rows [s*chunk_local, (s+1)*chunk_local)) and ``populated_global`` can end mid-slab (padded /
+        rotated ``kv_actual_isl``). A partial boundary slab holds a NON-uniform valid-row count across
+        chips (low chips full, high chips none), and the block-cyclic index remap needs an integer slab
+        count -- so a uniform ``populated_global / sp`` width would drop valid rows on low chips AND slice
+        a fractional slab. Round the touched depth UP to a whole chunk: every valid slab is kept intact
+        and the pad tail is present but never addressed (top-k indices stay < valid). It shrinks the SP
+        all-gather (and the downstream sparse_sdpa buffer) to the populated slab count.
+
+        Pipeline (all on device): ND→interleaved, slot + populated-width slice (no-op for a single-slot,
+        full-width cache), SP all-gather (no-op at sp==1). The cache is already in the op format, so there
+        is NO read-back dtype/layout conversion."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
+
+        slot_lo = cache_batch_idx if cache_i.shape[0] > 1 else 0  # user-major slot select (single-slot → 0)
+        seq_hi = cache_i.shape[2]  # per-chip seq width to gather; default = full allocated cache
+        if populated_global is not None and chunk_local is not None:
+            # Round the populated depth UP to whole block-cyclic slabs (see docstring): a partial boundary
+            # slab is non-uniform across chips and fractional, so trim by slab count, not raw width.
+            chunk_size_global = chunk_local * self.sp_factor
+            num_slabs = -(-populated_global // chunk_size_global)  # ceil-div
+            seq_hi = min(num_slabs * chunk_local, seq_hi)
+
+        # Slice iff the cache is multi-slot (must select this slot even when it's slot 0) and/or the
+        # populated-width trim applies. A single-slot cache (shape[0]==1) is already batch-1.
+        if cache_i.shape[0] > 1 or seq_hi != cache_i.shape[2]:  # slot and/or populated-width trim BEFORE the gather
             sel = ttnn.slice(
                 cache_i,
-                [cache_batch_idx, 0, 0, 0],
-                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
+                [slot_lo, 0, 0, 0],
+                [slot_lo + 1, 1, seq_hi, cache_i.shape[3]],
             )
             ttnn.deallocate(cache_i)
             cache_i = sel
-        full = self._all_gather(
-            cache_i, dim=2, cluster_axis=self.sp_axis
-        )  # → [1,1,seq_len_cache,576] repl, block-cyclic
+        full = self._all_gather(cache_i, dim=2, cluster_axis=self.sp_axis)  # → [1,1,seq_hi*sp,576] repl, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full

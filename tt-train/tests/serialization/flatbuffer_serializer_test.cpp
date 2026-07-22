@@ -388,14 +388,14 @@ std::vector<T> make_serializer_fuzz_data(size_t size, uint32_t seed) {
 // storage_type: Storage type (HOST or DEVICE)
 // seed: Random seed for reproducibility
 // device: Target device for tensor creation
-tt::tt_metal::Tensor create_random_tensor(
+ttnn::Tensor create_random_tensor(
     const ttnn::Shape& shape,
     tt::tt_metal::DataType dtype,
     ttnn::Layout layout,
-    tt::tt_metal::StorageType storage_type,
+    ttnn::StorageType storage_type,
     uint32_t seed,
     ttnn::distributed::MeshDevice* device) {
-    tt::tt_metal::Tensor tensor;
+    ttnn::Tensor tensor;
 
     switch (dtype) {
         case tt::tt_metal::DataType::BFLOAT16: {
@@ -431,11 +431,9 @@ tt::tt_metal::Tensor create_random_tensor(
         default: throw std::runtime_error("Unsupported dtype for random tensor generation");
     }
 
-    if (storage_type == tt::tt_metal::StorageType::HOST && tensor.storage_type() != tt::tt_metal::StorageType::HOST) {
+    if (storage_type == ttnn::StorageType::HOST && tensor.storage_type() != ttnn::StorageType::HOST) {
         tensor = tensor.cpu();
-    } else if (
-        storage_type == tt::tt_metal::StorageType::DEVICE &&
-        tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+    } else if (storage_type == ttnn::StorageType::DEVICE && tensor.storage_type() != ttnn::StorageType::DEVICE) {
         tensor = tensor.to_device(device);
     }
 
@@ -445,7 +443,7 @@ tt::tt_metal::Tensor create_random_tensor(
 struct TensorTestCase {
     tt::tt_metal::DataType dtype;
     ttnn::Layout layout;
-    tt::tt_metal::StorageType storage_type;
+    ttnn::StorageType storage_type;
     std::string name;
 };
 
@@ -474,7 +472,7 @@ std::string to_string(const TensorTestCase& test_case) {
     result += "_";
 
     // Print storage type
-    result += (test_case.storage_type == tt::tt_metal::StorageType::DEVICE ? "DEVICE" : "HOST");
+    result += (test_case.storage_type == ttnn::StorageType::DEVICE ? "DEVICE" : "HOST");
 
     return result;
 }
@@ -533,7 +531,7 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     std::string tensor_filename = (temp_dir / (test_case.name + ".tensorbin")).string();
 
     // Use tt-metal's dump_tensor_flatbuffer to write tensor to file
-    tt::tt_metal::dump_tensor_flatbuffer(tensor_filename, tensor);
+    ttnn::dump_tensor_flatbuffer(tensor_filename, tensor);
 
     // Store metadata in FlatBufferFile for reference
     serializer.put(test_case.name + "/tensor_file", std::string_view(tensor_filename));
@@ -596,11 +594,11 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     std::string tensor_filename_read = tensor_filename;
     ASSERT_TRUE(std::filesystem::exists(tensor_filename_read)) << "Tensor file should exist: " << tensor_filename_read;
 
-    tt::tt_metal::Tensor read_tensor;
+    ttnn::Tensor read_tensor;
     // For HOST tensors, pass nullptr to load as CPU tensor
     // For DEVICE tensors, pass device to load and then move to device
-    auto* load_device = (test_case.storage_type == tt::tt_metal::StorageType::DEVICE) ? device : nullptr;
-    ASSERT_NO_THROW(read_tensor = tt::tt_metal::load_tensor_flatbuffer(tensor_filename_read, load_device));
+    auto* load_device = (test_case.storage_type == ttnn::StorageType::DEVICE) ? device : nullptr;
+    ASSERT_NO_THROW(read_tensor = ttnn::load_tensor_flatbuffer(tensor_filename_read, load_device));
 
     // Restore original layout if needed
     tt::tt_metal::Layout original_layout = test_case.layout;
@@ -610,12 +608,11 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
 
     // Restore storage type if needed
     // load_tensor_flatbuffer loads tensors as HOST by default, so we need to restore device storage type
-    if (test_case.storage_type == tt::tt_metal::StorageType::DEVICE &&
-        read_tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+    if (test_case.storage_type == ttnn::StorageType::DEVICE &&
+        read_tensor.storage_type() != ttnn::StorageType::DEVICE) {
         read_tensor = read_tensor.to_device(device);
     } else if (
-        test_case.storage_type == tt::tt_metal::StorageType::HOST &&
-        read_tensor.storage_type() != tt::tt_metal::StorageType::HOST) {
+        test_case.storage_type == ttnn::StorageType::HOST && read_tensor.storage_type() != ttnn::StorageType::HOST) {
         // Ensure HOST tensors are on CPU
         read_tensor = read_tensor.cpu();
     }
@@ -674,69 +671,38 @@ INSTANTIATE_TEST_SUITE_P(
     FlatBufferFileSerializationTest,
     ::testing::Values(
         TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT16,
-            ttnn::Layout::ROW_MAJOR,
-            tt::tt_metal::StorageType::DEVICE,
-            "bf16_row_device"},
+            tt::tt_metal::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::DEVICE, "bf16_row_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT16,
-            ttnn::Layout::TILE,
-            tt::tt_metal::StorageType::DEVICE,
-            "bf16_tile_device"},
+            tt::tt_metal::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::StorageType::DEVICE, "bf16_tile_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT16,
-            ttnn::Layout::ROW_MAJOR,
-            tt::tt_metal::StorageType::HOST,
-            "bf16_row_host"},
+            tt::tt_metal::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::HOST, "bf16_row_host"},
+        TensorTestCase{tt::tt_metal::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::StorageType::HOST, "bf16_tile_host"},
         TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT16, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "bf16_tile_host"},
+            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::DEVICE, "f32_row_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::FLOAT32,
-            ttnn::Layout::ROW_MAJOR,
-            tt::tt_metal::StorageType::DEVICE,
-            "f32_row_device"},
+            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, ttnn::StorageType::DEVICE, "f32_tile_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::DEVICE, "f32_tile_device"},
+            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::HOST, "f32_row_host"},
+        TensorTestCase{tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, ttnn::StorageType::HOST, "f32_tile_host"},
         TensorTestCase{
-            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::ROW_MAJOR, tt::tt_metal::StorageType::HOST, "f32_row_host"},
+            tt::tt_metal::DataType::UINT32, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::DEVICE, "u32_row_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "f32_tile_host"},
+            tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, ttnn::StorageType::DEVICE, "u32_tile_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::UINT32,
-            ttnn::Layout::ROW_MAJOR,
-            tt::tt_metal::StorageType::DEVICE,
-            "u32_row_device"},
+            tt::tt_metal::DataType::UINT32, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::HOST, "u32_row_host"},
+        TensorTestCase{tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, ttnn::StorageType::HOST, "u32_tile_host"},
         TensorTestCase{
-            tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::DEVICE, "u32_tile_device"},
+            tt::tt_metal::DataType::INT32, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::DEVICE, "i32_row_device"},
+        TensorTestCase{tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, ttnn::StorageType::DEVICE, "i32_tile_device"},
+        TensorTestCase{tt::tt_metal::DataType::INT32, ttnn::Layout::ROW_MAJOR, ttnn::StorageType::HOST, "i32_row_host"},
+        TensorTestCase{tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, ttnn::StorageType::HOST, "i32_tile_host"},
         TensorTestCase{
-            tt::tt_metal::DataType::UINT32, ttnn::Layout::ROW_MAJOR, tt::tt_metal::StorageType::HOST, "u32_row_host"},
+            tt::tt_metal::DataType::BFLOAT8_B, ttnn::Layout::TILE, ttnn::StorageType::DEVICE, "bf8_tile_device"},
+        TensorTestCase{tt::tt_metal::DataType::BFLOAT8_B, ttnn::Layout::TILE, ttnn::StorageType::HOST, "bf8_tile_host"},
         TensorTestCase{
-            tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "u32_tile_host"},
+            tt::tt_metal::DataType::BFLOAT4_B, ttnn::Layout::TILE, ttnn::StorageType::DEVICE, "bf4_tile_device"},
         TensorTestCase{
-            tt::tt_metal::DataType::INT32,
-            ttnn::Layout::ROW_MAJOR,
-            tt::tt_metal::StorageType::DEVICE,
-            "i32_row_device"},
-        TensorTestCase{
-            tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::DEVICE, "i32_tile_device"},
-        TensorTestCase{
-            tt::tt_metal::DataType::INT32, ttnn::Layout::ROW_MAJOR, tt::tt_metal::StorageType::HOST, "i32_row_host"},
-        TensorTestCase{
-            tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "i32_tile_host"},
-        TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT8_B,
-            ttnn::Layout::TILE,
-            tt::tt_metal::StorageType::DEVICE,
-            "bf8_tile_device"},
-        TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT8_B, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "bf8_tile_host"},
-        TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT4_B,
-            ttnn::Layout::TILE,
-            tt::tt_metal::StorageType::DEVICE,
-            "bf4_tile_device"},
-        TensorTestCase{
-            tt::tt_metal::DataType::BFLOAT4_B, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "bf4_tile_host"}),
+            tt::tt_metal::DataType::BFLOAT4_B, ttnn::Layout::TILE, ttnn::StorageType::HOST, "bf4_tile_host"}),
     [](const ::testing::TestParamInfo<TestParam>& info) {
         // Use pretty printer to generate test name from all parameters
         std::string name = to_string(info.param);
