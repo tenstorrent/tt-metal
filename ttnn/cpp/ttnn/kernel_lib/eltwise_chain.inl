@@ -432,6 +432,10 @@ struct DestOnlyTag {
     static constexpr bool is_upfront = false;
 };
 
+/// Marker mixed into runtime-conditional wrappers. It is orthogonal to the element-kind
+/// hierarchy so the wrapped element keeps its ordinary reader / DEST-only classification.
+struct RuntimeConditionalTag {};
+
 /// Pure CB → DEST move (no compute).
 struct CopyTileTag : CbReaderTag {};
 /// 2 CBs → DEST FPU compute (add/sub/mul + bcast variants).
@@ -481,6 +485,8 @@ template <class T>
 inline constexpr bool is_fill_tile_op_v = std::is_base_of_v<FillTileTag, T>;
 template <class T>
 inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
+template <class T>
+inline constexpr bool is_runtime_conditional_op_v = std::is_base_of_v<RuntimeConditionalTag, T>;
 
 /// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
 /// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`;
@@ -2732,6 +2738,10 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         "SetupOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
         "reconfig (the caller owns the setup), so the setting is inert and misleading. Disable "
         "reconfig in every input/output spec — the caller's manual setup owns the format.");
+    static_assert(
+        SO == SetupOwner::Chain || ((!is_runtime_conditional_op_v<Es>) && ...),
+        "SetupOwner::Caller cannot be used with runtime-conditional elements because their "
+        "selected init must execute inside each chain invocation.");
     // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
     // uniform; the SFPU side then re-inits per tile.
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;

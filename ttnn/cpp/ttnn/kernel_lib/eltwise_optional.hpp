@@ -3,7 +3,11 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <type_traits>
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 /**
  * @file eltwise_optional.hpp
@@ -15,20 +19,20 @@
  * swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
  * either COND.
  *
- * Runtime conditional: template the chain-running function on a `bool` and dispatch from
- * `kernel_main`:
+ * Runtime conditional: `runtime_conditional(cond0, cond1, ...)` selects the first true
+ * condition, like an ordered if / else-if / else chain. Its `when<I>(element)`,
+ * `when_any<Is...>(element)`, and `otherwise(element)` methods wrap individual elements
+ * while keeping the chain flat, so common prefix / suffix elements are instantiated once:
  *
- *     template <bool DO_MASK> inline void run_op(uint32_t n) {
- *         eltwise_chain(EltwiseShape::tiles(n), CopyTile<input(...)>{},
- *             OptionalChainElement<DO_MASK, MaskInject<...>>{}, SfpuOp<...>{}, PackTile<output(...)>{});
- *     }
- *     void kernel_main() {
- *         if (get_arg_val<uint32_t>(0) != 0) run_op<true>(n); else run_op<false>(n);
- *     }
+ *     const auto branch = runtime_conditional(use_a, use_b);
+ *     eltwise_chain(EltwiseShape::single(), CopyTile<input(...)>{},
+ *         branch.when<0>(OpA{}), branch.when<1>(OpB{}), branch.otherwise(DefaultOp{}),
+ *         PackTile<output(...)>{});
  *
- * Mid-loop per-iteration runtime conditions (`if (col == Wt-1) ...`) are NOT supported —
- * they need a per-iter runtime branch inside the chain, which collides with its
- * compile-time dispatch. Use a separate chain invocation for the conditional iteration.
+ * A condition is fixed for one `eltwise_chain` invocation, but may change between calls,
+ * including calls made once per loop iteration. Runtime-gated elements are deliberately
+ * limited to DEST-only operations and caller-managed CB readers. Writers and driver-managed
+ * waits/pops are rejected because their lifecycle must not run on a disabled arm.
  */
 
 namespace compute_kernel_lib {
@@ -47,4 +51,56 @@ struct DisabledChainElement {
 template <bool COND, class Inner>
 using OptionalChainElement = std::conditional_t<COND, Inner, DisabledChainElement>;
 
+namespace detail {
+
+template <class Inner>
+constexpr bool runtime_conditional_element_supported();
+
+}  // namespace detail
+
+/// Runtime-gated view of one ordinary chain element. Inheriting from Inner preserves
+/// its compile-time chain traits and resource description; init/exec are the only gated
+/// operations. Consequently, only elements with no driver-owned lifecycle are accepted.
+template <class Inner>
+struct RuntimeConditionalChainElement : Inner, RuntimeConditionalTag {
+    static_assert(
+        detail::runtime_conditional_element_supported<Inner>(),
+        "Runtime conditional elements must be DEST-only or use caller-managed input lifecycles");
+
+    bool enabled;
+
+    constexpr RuntimeConditionalChainElement(bool enabled_, Inner inner) noexcept;
+
+    ALWI void init() const;
+
+    template <class... Args>
+    ALWI void exec(Args... args) const;
+};
+
+/// Result of an ordered runtime condition selection. Arm `I` corresponds to condition `I`;
+/// the implicit default arm has index `ArmCount`.
+template <std::size_t ArmCount>
+struct RuntimeConditional {
+    uint32_t selected_arm;
+
+    template <std::size_t Arm, class Inner>
+    ALWI auto when(Inner inner) const;
+
+    template <std::size_t... Arms, class Inner>
+    ALWI auto when_any(Inner inner) const;
+
+    template <class Inner>
+    ALWI auto otherwise(Inner inner) const;
+};
+
+/// Select the first true condition. If none is true, select the implicit default arm.
+template <class... Conditions>
+ALWI auto runtime_conditional(Conditions... conditions);
+
+/// Shorthand for an if-with-empty-else runtime conditional.
+template <class Inner>
+ALWI auto runtime_optional(bool condition, Inner inner);
+
 }  // namespace compute_kernel_lib
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.inl"
