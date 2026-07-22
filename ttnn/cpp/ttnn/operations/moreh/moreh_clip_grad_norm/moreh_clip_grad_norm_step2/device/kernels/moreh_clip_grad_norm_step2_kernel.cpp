@@ -5,6 +5,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -53,20 +54,12 @@ void kernel_main() {
                 ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
         }
     }
-    if (p_is_negative) {
-        ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-            ckl::PowerIterative<ckl::Dst::D0>{p},
-            ckl::Recip<ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_xpow)>{});
-    } else {
-        ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-            ckl::PowerIterative<ckl::Dst::D0>{p},
-            ckl::PackTile<ckl::output(cb_xpow)>{});
-    }
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(onetile),
+        ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
+        ckl::PowerIterative<ckl::Dst::D0>{p},
+        ckl::runtime_if(p_is_negative, ckl::Recip<ckl::Dst::D0>{}),
+        ckl::PackTile<ckl::output(cb_xpow)>{});
 
     ckl::unary<
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,

@@ -8,8 +8,8 @@ Compile-time optional and runtime-conditional chain elements.
   - optional_unary.cpp: gate a Negative. ON -> out = -A, OFF -> out = A (inert marker).
   - optional_pack.cpp:  gate a second PackTile (fan-out). ON -> both cb_out0 and cb_out1 written;
     OFF -> only cb_out0, and the tag-less marker must remain neutral in pack planning and emission.
-  - runtime_conditional.cpp: exercise grouped when(...) and ordered
-    runtime_if(...).else_if(...).otherwise(...) branches.
+  - runtime_conditional.cpp: exercise bare runtime_if(...), bare
+    runtime_if(...).else_if(...), and explicit .otherwise(...) branches.
 """
 
 import torch
@@ -101,9 +101,9 @@ def test_optional_pack_off_inert_marker(device):
     assert ok, msg
 
 
-@pytest.mark.parametrize("mode", [0, 1, 2, 3])
+@pytest.mark.parametrize("mode", [0, 1, 2, 3, 4, 5, 6])
 def test_runtime_conditional(device, mode):
-    """The first matching runtime_if arm runs; when guards its whole two-element sequence."""
+    """The first matching runtime_if arm runs; an unmatched conditional is inert."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -119,7 +119,15 @@ def test_runtime_conditional(device, mode):
     output = ttnn.generic_op([tt_in, tt_out], program)
 
     a = torch_in.to(torch.float32)
-    golden = {0: -a, 1: -(a * a), 2: torch.abs(a), 3: torch.abs(-a)}[mode]
+    golden = {
+        0: -a,
+        1: -(a * a),
+        2: torch.abs(a),
+        3: torch.abs(-a),
+        4: a * a,
+        5: a * a,
+        6: -a,
+    }[mode]
     out = ttnn.to_torch(output).to(torch.float32)
     ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
     logger.info(f"runtime conditional mode={mode} | {msg}")

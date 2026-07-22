@@ -18,17 +18,17 @@
  *
  *     OptionalChainElement<COND, Op>
  *
- * Runtime conditionals have two surfaces:
+ * Runtime conditionals use one surface:
  *
- *     when(condition, OpA{}, OpB{})
- *
- *     runtime_if(condition_a, OpA{})
+ *     runtime_if(condition_a, OpA{}, OpB{})
  *         .else_if(condition_b, OpB{}, OpC{})
  *         .otherwise(DefaultOp{})
  *
- * `when` is an if with an empty else. `runtime_if` is an ordered, exclusive
- * if / else-if / else and selects the first true branch. Every branch is one
- * chain position, so one runtime decision guards the whole element sequence.
+ * `runtime_if(condition, ...)` and an if / else-if chain may be used directly;
+ * their unmatched case performs no element work. `.otherwise(...)` adds an
+ * explicit final else. Branch selection is ordered and exclusive: the first true
+ * branch wins. Every branch is one chain position, so one runtime decision guards
+ * the whole element sequence.
  *
  * Runtime-conditional sequences deliberately support only DEST-only operations
  * and caller-managed CB readers. Writers and driver-managed waits/pops are rejected:
@@ -115,7 +115,7 @@ struct RuntimeConditionalSequenceBase<true> : CbReaderTag {
 }  // namespace detail
 
 /// One runtime-selected chain position. `selected_branch == sizeof...(Branches)`
-/// means no branch is selected, which is how `when(false, ...)` becomes inert.
+/// means no branch is selected, which is how an unmatched `runtime_if(...)` becomes inert.
 template <class... Branches>
 struct RuntimeConditionalSequence
     : detail::RuntimeConditionalSequenceBase<detail::RuntimeConditionalSequenceTraits<Branches...>::any_reader>,
@@ -164,12 +164,11 @@ private:
         uint32_t Wt) const;
 };
 
-/// In-progress ordered conditional. It becomes a chain element when `.otherwise(...)`
-/// supplies the final branch.
+/// Open ordered conditional. It is already a valid chain element with an implicit
+/// empty else, and may be extended with `.else_if(...)` or `.otherwise(...)`.
 template <class... Branches>
-struct RuntimeIfBuilder : RuntimeIfBuilderTag {
-    uint32_t selected_branch;
-    std::tuple<Branches...> branches;
+struct RuntimeIfBuilder : RuntimeConditionalSequence<Branches...> {
+    using Base = RuntimeConditionalSequence<Branches...>;
 
     constexpr RuntimeIfBuilder(uint32_t selected_branch_, std::tuple<Branches...> branches_) noexcept;
 
@@ -180,11 +179,8 @@ struct RuntimeIfBuilder : RuntimeIfBuilderTag {
     ALWI auto otherwise(Elements... elements) const;
 };
 
-/// Guard one or more elements with one runtime condition (an if with an empty else).
-template <class... Elements>
-ALWI auto when(bool condition, Elements... elements);
-
-/// Start an ordered, exclusive runtime if / else-if / else chain.
+/// Start an ordered, exclusive runtime if / else-if / else chain. The result may
+/// be used directly, in which case an unmatched condition performs no element work.
 template <class... Elements>
 ALWI auto runtime_if(bool condition, Elements... elements);
 

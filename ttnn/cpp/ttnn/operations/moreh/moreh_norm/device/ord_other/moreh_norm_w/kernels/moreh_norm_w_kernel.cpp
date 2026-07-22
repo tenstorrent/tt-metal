@@ -55,29 +55,22 @@ void kernel_main() {
 #else
     constexpr bool is_zero = false;
 #endif
+    using MaskOp =
+        std::conditional_t<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>;
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             const bool mask_this = do_mask_w && (col_idx == Wt - 1);
-            if (mask_this) {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_x)>{},
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<ckl::input(cb_x)>{},
+                ckl::runtime_if(
+                    mask_this,
                     ckl::CopyTile<ckl::input(cb_mask_w, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
-                    ckl::OptionalChainElement<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>>{},
-                    ckl::OptionalChainElement<!minus_inf, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>{},
-                    ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
-                    ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
-                    ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                    ckl::PackTile<ckl::output(cb_val)>{});
-            } else {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_x)>{},
-                    ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
-                    ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
-                    ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                    ckl::PackTile<ckl::output(cb_val)>{});
-            }
+                    MaskOp{}),
+                ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
+                ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
+                ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(cb_val)>{});
 
             if (col_idx == 0) {
                 ckl::copy<ckl::input(cb_val), ckl::output(cb_cal)>(ckl::EltwiseShape::tiles(onetile));

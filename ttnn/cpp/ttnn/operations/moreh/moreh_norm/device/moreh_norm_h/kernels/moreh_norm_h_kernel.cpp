@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Abs
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -68,33 +69,23 @@ void kernel_main() {
 
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
-            if (do_mask_h && need_to_do_mask_h(row_idx, Ht)) {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_x)>{},
+            const bool mask_this = do_mask_h && need_to_do_mask_h(row_idx, Ht);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<ckl::input(cb_x)>{},
+                ckl::runtime_if(
+                    mask_this,
                     ckl::CopyTile<ckl::input(cb_mask_h, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
-                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-                    ckl::Abs<ckl::Dst::D0>{},
-                    ckl::PackTile<ckl::output(cb_xabs)>{});
-            } else {
-                ckl::unary<ckl::Abs<ckl::Dst::D0>, ckl::input(cb_x), ckl::output(cb_xabs)>(
-                    ckl::EltwiseShape::tiles(onetile));
-            }
+                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
+                ckl::Abs<ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(cb_xabs)>{});
 
-            if (p_is_negative) {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-                    ckl::PowerIterative<ckl::Dst::D0>{p},
-                    ckl::Recip<ckl::Dst::D0>{},
-                    ckl::PackTile<ckl::output(cb_xpow)>{});
-            } else {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-                    ckl::PowerIterative<ckl::Dst::D0>{p},
-                    ckl::PackTile<ckl::output(cb_xpow)>{});
-            }
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<ckl::input(cb_xabs, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
+                ckl::PowerIterative<ckl::Dst::D0>{p},
+                ckl::runtime_if(p_is_negative, ckl::Recip<ckl::Dst::D0>{}),
+                ckl::PackTile<ckl::output(cb_xpow)>{});
             ckl::unary<
                 ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
                 ckl::input(cb_xabs, ckl::InputLifecycle::NoWaitPop),
@@ -121,20 +112,12 @@ void kernel_main() {
 
         ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_xpowsum>(ckl::ReduceInputBlockShape::single());
 
-        if (recip_p_is_negative) {
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(cb_xpowsum, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-                ckl::PowerIterative<ckl::Dst::D0>{recip_p},
-                ckl::Recip<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_tmp0)>{});
-        } else {
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(cb_xpowsum, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
-                ckl::PowerIterative<ckl::Dst::D0>{recip_p},
-                ckl::PackTile<ckl::output(cb_tmp0)>{});
-        }
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::CopyTile<ckl::input(cb_xpowsum, ckl::InputLifecycle::HeldStream), ckl::Dst::D0>{},
+            ckl::PowerIterative<ckl::Dst::D0>{recip_p},
+            ckl::runtime_if(recip_p_is_negative, ckl::Recip<ckl::Dst::D0>{}),
+            ckl::PackTile<ckl::output(cb_tmp0)>{});
         ckl::unary<
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>,
             ckl::input(cb_xpowsum, ckl::InputLifecycle::NoWaitPop),
