@@ -93,6 +93,9 @@ void kernel_main() {
             output_mapping_page_size_bytes,
             {.offset_bytes = 0},
             {.page_id = bs, .offset_bytes = 0});
+        // Drain the mapping write's source read before the next iteration's fill_with_val
+        // reuses output_l1_addr (WAR); mirrors the reduced-buffer path below.
+        noc.async_write_barrier();
 
         if (found) {
             data_dfb.pop_front(1);
