@@ -39,8 +39,7 @@ vibevoice/
 │   ├── lm_pcc_common.py       # shared LM PCC helpers, probes, diagnostics
 │   ├── test_lm_prefill_pcc.py # prefill hidden-state PCC (+ ISL sweep)
 │   ├── test_lm_decode_pcc.py  # full-LM decode after prefill (+ diagnostics)
-│   ├── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
-│   └── test_lm_pcc.py         # basic prefill smoke test
+│   └── test_decoder_layer_pcc.py  # Devstral-style layer-0 decode (no prefill)
 └── tt/                      # TTNN layers (empty initially)
 ```
 
@@ -231,12 +230,6 @@ Run all LM prefill + decode tests (including diagnostics):
 ```bash
 pytest models/experimental/vibevoice/tests/pcc/test_lm_prefill_pcc.py \
        models/experimental/vibevoice/tests/pcc/test_lm_decode_pcc.py -v
-```
-
-Basic smoke test (prefill only, legacy entry point):
-
-```bash
-pytest models/experimental/vibevoice/tests/pcc/test_lm_pcc.py -v
 ```
 
 ## Porting notes
