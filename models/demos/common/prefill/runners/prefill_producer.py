@@ -40,7 +40,6 @@ Env — real KV migration issued BY the producer (needs a live migration_endpoin
   ack drain (Python client exposes no burst API, so no overlap with prefill like the C++ scheduler):
   PREFILL_PRODUCER_ISSUE_MIGRATION  "1" to attach a MigrationLayerClient and migrate each resident
                                     slot's KV after prefill (default 0 = no migration).
-  PREFILL_MIGRATION_LAYER_BY_LAYER  "1" (default) issues one migrate() per layer; "0" one over all layers.
   PREFILL_MIGRATION_DEST_ENDPOINT_ID  destination endpoint id for migrate() (default 1). Equal to the
                                     endpoint's OWN id => loopback (routed to the internal B worker);
                                     a different id => cross-endpoint (requires the pairing/connect).
@@ -94,9 +93,6 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 ISSUE_MIGRATION = os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "0") == "1"
 MIGRATION_DEST_ENDPOINT_ID = int(os.environ.get("PREFILL_MIGRATION_DEST_ENDPOINT_ID", "1"))
 MIGRATION_TIMEOUT_MS = int(os.environ.get("PREFILL_MIGRATION_TIMEOUT_MS", "3600000"))
-
-# Prefill migrations default to per-layer issuance (see _issue_migrations); set "0" for single-shot.
-MIGRATION_LAYER_BY_LAYER = os.environ.get("PREFILL_MIGRATION_LAYER_BY_LAYER", "1") == "1"
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -710,17 +706,12 @@ def _attach_migration_client():
     return ml
 
 
-def _issue_migrations(
-    ml, stats: "RunStats", *, dest_endpoint_id: int, dst_slot_offset: int, timeout_ms: int, layer_by_layer: bool = True
-) -> int:
+def _issue_migrations(ml, stats: "RunStats", *, dest_endpoint_id: int, dst_slot_offset: int, timeout_ms: int) -> int:
     """Migrate every resident source slot's KV to slot (src + dst_slot_offset), blocking on completion.
 
-    `layer_by_layer=True` (prefill default) issues one single-shot migrate() PER LAYER
-    ([L, L+1) x [0, real_len)) — the per-layer granularity the C++ PrefillScheduler streams into a
-    burst as each layer-ack lands. The Python client binds no burst API, so these are N independent
-    migrations rather than one aggregated burst, and (unlike the scheduler) they run after the ack
-    drain rather than overlapping prefill. `layer_by_layer=False` issues one migrate() over the whole
-    [0, NUM_LAYERS) rectangle (fewer round-trips; the decode default once wired).
+    Issues one single-shot migrate() over the whole [0, NUM_LAYERS) rectangle per slot. (The C++
+    PrefillScheduler streams per-layer migrations into a burst as each layer-ack lands, overlapping
+    prefill; the Python client binds no burst API, so this runs after the ack drain instead.)
 
     `real_len` is the slot's resident non-pad token count (min(chunks_pushed*CHUNK_SIZE, actual_isl)),
     matching the KV the runner wrote. dest_endpoint_id == the endpoint's own id => loopback (internal B
@@ -734,26 +725,23 @@ def _issue_migrations(
         if real_len <= 0:
             continue
         dst_slot = src_slot + dst_slot_offset
-        layer_ranges = [(layer, layer + 1) for layer in range(NUM_LAYERS)] if layer_by_layer else [(0, NUM_LAYERS)]
         logger.info(
-            f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} pos=[0,{real_len}) "
-            f"{'layer-by-layer' if layer_by_layer else 'single-shot'} ({len(layer_ranges)} migration(s))"
+            f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} pos=[0,{real_len}) single-shot"
         )
-        for layer_start, layer_end in layer_ranges:
-            uuid = next_uuid
-            next_uuid += 1
-            token = ml.migrate(
-                uuid=uuid,
-                remote_endpoint_id=dest_endpoint_id,
-                src_slot=src_slot,
-                dst_slot=dst_slot,
-                layer_start=layer_start,
-                layer_end_exclusive=layer_end,
-                pos_start=0,
-                pos_end_exclusive=real_len,
-            )
-            ml.wait_complete(token, timeout_ms)  # self-polls when no poll thread is running
-        logger.success(f"[producer] MIGRATE slot {src_slot} -> {dst_slot} complete ({len(layer_ranges)} migration(s))")
+        uuid = next_uuid
+        next_uuid += 1
+        token = ml.migrate(
+            uuid=uuid,
+            remote_endpoint_id=dest_endpoint_id,
+            src_slot=src_slot,
+            dst_slot=dst_slot,
+            layer_start=0,
+            layer_end_exclusive=NUM_LAYERS,
+            pos_start=0,
+            pos_end_exclusive=real_len,
+        )
+        ml.wait_complete(token, timeout_ms)  # self-polls when no poll thread is running
+        logger.success(f"[producer] MIGRATE slot {src_slot} -> {dst_slot} complete")
         migrated += 1
     logger.info(f"[producer] migrations complete: {migrated} slot(s)")
     return migrated
@@ -841,7 +829,6 @@ def main() -> None:
             dest_endpoint_id=MIGRATION_DEST_ENDPOINT_ID,
             dst_slot_offset=dst_slot_offset,
             timeout_ms=MIGRATION_TIMEOUT_MS,
-            layer_by_layer=MIGRATION_LAYER_BY_LAYER,
         )
         # Same handshake the llm-engine driver used: write the (src, dst) pairs; the runner validates.
         _write_migration_done_sentinel(stats, dst_slot_offset=dst_slot_offset)
