@@ -358,7 +358,7 @@ void kernel_main() {
                     mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
                 }
 
-                matmul_blocks(
+                matmul_blocks</*transpose=*/true>(
                     cb_q_in,
                     cb_k_in,
                     cb_qk_im,
@@ -371,7 +371,6 @@ void kernel_main() {
                     qk_in0_block_w,
                     qk_subblock_h_dynamic,
                     qk_subblock_w_dynamic,
-                    true,
                     add_mask_fusion,
                     mask_cb_to_use,
                     cb_zero_in);
@@ -449,7 +448,7 @@ void kernel_main() {
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_v_in, cb_qk_im);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
-                matmul_blocks(
+                matmul_blocks</*transpose=*/false>(
                     cb_qk_im,
                     cb_v_in,
                     cb_out_mm,
@@ -462,7 +461,6 @@ void kernel_main() {
                     out_in0_block_w_dynamic,
                     out_subblock_h,
                     out_subblock_w,
-                    false /*transpose*/,
                     false,
                     cb_mask_in,
                     cb_zero_in);

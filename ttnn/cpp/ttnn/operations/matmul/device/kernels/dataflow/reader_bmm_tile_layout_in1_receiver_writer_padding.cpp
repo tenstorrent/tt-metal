@@ -70,9 +70,15 @@ void kernel_main() {
     constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
     // Don't need batch; same as batch from READER args
 
+    // Output block width in tiles. Equals out_block_w / in1_per_core_w / the bias block
+    // width. Used by the FUSE_BIAS path for the in3 block, and by the TILE_PACK_ROW_MAJOR
+    // path to compute the row-group size. Always populated by the factory (no
+    // placeholder), so kernels can read it regardless of build flags.
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(17);
+
 #ifdef FUSE_BIAS
-    // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
+    // in3 block args — bias width equals in1_block_w.
+    constexpr uint32_t in3_block_w = in1_block_w;
 
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
@@ -151,7 +157,11 @@ void kernel_main() {
 #endif
 
 #ifndef OUT_SHARDED
-                // WRITER
+                // WRITER (interleaved output): compute packs sequentially per subblock;
+                // writer reads subblock-by-subblock and writes at subblock offsets.
+                // (tile_pack_row_major is guarded to sharded-output-only in
+                // matmul_device_operation.cpp, so there is no row-major branch for the
+                // interleaved writer.)
                 uint32_t num_blocks_h_dim_ = bh >= last_num_blocks_h_dim - 1 ? last_num_blocks_h_dim : num_blocks_h_dim;
                 uint32_t num_blocks_w_dim_ = bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
                 uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
