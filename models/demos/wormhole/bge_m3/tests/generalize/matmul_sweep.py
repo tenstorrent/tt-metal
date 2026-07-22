@@ -70,6 +70,24 @@ def divisors(n: int) -> list[int]:
     return [d for d in range(1, n + 1) if n % d == 0]
 
 
+def grid_for_cores(num_cores: int, max_x: int = 8, max_y: int = 8) -> tuple[int, int]:
+    """Pick a near-square (x, y) core grid with x*y == num_cores that fits the
+    device grid. Fewer cores enlarge each core's per-core K/M slice, which grows
+    in0_block_w and lifts DRAM bandwidth on memory-bound decode matmuls — so the
+    core count is a real tuning axis, not just 'use all 64'."""
+    best = None
+    for x in range(1, max_x + 1):
+        if num_cores % x:
+            continue
+        y = num_cores // x
+        if y > max_y:
+            continue
+        # prefer the most square factorization (smallest |x-y|)
+        if best is None or abs(x - y) < abs(best[0] - best[1]):
+            best = (x, y)
+    return best  # None if num_cores can't be tiled on the device grid
+
+
 def subblock_candidates(block_h: int, block_w: int, dst_cap: int) -> list[tuple[int, int]]:
     """(subblock_h, subblock_w) with h*w <= dst_cap, h | block_h, w | block_w.
 
@@ -129,7 +147,7 @@ def gen_minmatmul(M_t, K_t, N_t, grid, args, dtype_name, fid_name, fp32_dest, pa
             trials.append(
                 Trial(
                     "minmatmul",
-                    f"m{mb}k{kb}n{nb}_sb{sh}x{sw}",
+                    f"m{mb}k{kb}n{nb}_sb{sh}x{sw}_g{grid[0]*grid[1]}",
                     cfg,
                     "?",
                     dtype_name,
@@ -137,7 +155,16 @@ def gen_minmatmul(M_t, K_t, N_t, grid, args, dtype_name, fid_name, fp32_dest, pa
                     fp32_dest,
                     packer_l1,
                     est_out_cb_bytes=est,
-                    extra={"M_block": mb, "K_block": kb, "N_block": nb, "sbh": sh, "sbw": sw},
+                    extra={
+                        "M_block": mb,
+                        "K_block": kb,
+                        "N_block": nb,
+                        "sbh": sh,
+                        "sbw": sw,
+                        "grid_x": grid[0],
+                        "grid_y": grid[1],
+                        "cores": grid[0] * grid[1],
+                    },
                 )
             )
     return trials
@@ -180,7 +207,7 @@ def gen_matmul2d(M_t, K_t, N_t, grid, args, dtype_name, fid_name, fp32_dest, pac
                 trials.append(
                     Trial(
                         "matmul2d",
-                        f"pcM{per_core_M}pcN{per_core_N}_ib{in0_block_w}_sb{sh}x{sw}_t{int(transpose_mcast)}",
+                        f"pcM{per_core_M}pcN{per_core_N}_ib{in0_block_w}_sb{sh}x{sw}_t{int(transpose_mcast)}_g{grid[0]*grid[1]}",
                         cfg,
                         "?",
                         dtype_name,
@@ -194,6 +221,9 @@ def gen_matmul2d(M_t, K_t, N_t, grid, args, dtype_name, fid_name, fp32_dest, pac
                             "sbh": sh,
                             "sbw": sw,
                             "transpose_mcast": transpose_mcast,
+                            "grid_x": grid[0],
+                            "grid_y": grid[1],
+                            "cores": grid[0] * grid[1],
                         },
                     )
                 )
@@ -235,7 +265,7 @@ def gen_matmul1d(M_t, K_t, N_t, grid, args, dtype_name, fid_name, fp32_dest, pac
                 trials.append(
                     Trial(
                         "matmul1d",
-                        f"pcM{per_core_M}pcN{per_core_N}_ib{in0_block_w}_sb{sh}x{sw}_mc{int(mcast_in0)}",
+                        f"pcM{per_core_M}pcN{per_core_N}_ib{in0_block_w}_sb{sh}x{sw}_mc{int(mcast_in0)}_g{grid[0]*grid[1]}",
                         cfg,
                         "?",
                         dtype_name,
@@ -249,6 +279,9 @@ def gen_matmul1d(M_t, K_t, N_t, grid, args, dtype_name, fid_name, fp32_dest, pac
                             "sbh": sh,
                             "sbw": sw,
                             "mcast_in0": mcast_in0,
+                            "grid_x": grid[0],
+                            "grid_y": grid[1],
+                            "cores": grid[0] * grid[1],
                         },
                     )
                 )
@@ -403,7 +436,16 @@ def main():
         "--fp32-dest", nargs="+", type=int, default=[0], choices=[0, 1], help="fp32_dest_acc_en values to sweep (0/1)"
     )
     ap.add_argument("--packer-l1-acc", nargs="+", type=int, default=[1], choices=[0, 1])
-    ap.add_argument("--grid", type=int, nargs=2, default=[8, 8], help="core grid x y")
+    ap.add_argument("--grid", type=int, nargs=2, default=[8, 8], help="max device core grid x y")
+    ap.add_argument(
+        "--grids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="sweep these CORE COUNTS (e.g. 16 32 64); each maps to a near-square grid. "
+        "Fewer cores enlarge the per-core K slice -> bigger in0_block_w -> higher DRAM "
+        "bandwidth on memory-bound decode. Default: just the full --grid.",
+    )
     ap.add_argument("--iters", type=int, default=3, help="timing samples per config (median reported)")
     ap.add_argument("--max-configs", type=int, default=200, help="cap total trials")
     ap.add_argument("--pcc", type=float, default=0.99, help="PCC threshold to count as passing")
@@ -431,11 +473,28 @@ def main():
     b_t = torch.randn(args.K, args.N, dtype=torch.bfloat16)
     ref = a_t.to(torch.float32) @ b_t.to(torch.float32)
 
-    # Build the trial list across all axes.
+    # Resolve the set of core grids to sweep.
+    max_x, max_y = args.grid
+    if args.grids:
+        grids = []
+        for c in args.grids:
+            g = grid_for_cores(c, max_x, max_y)
+            if g is None:
+                print(f"# skip cores={c}: cannot tile on {max_x}x{max_y} device grid", flush=True)
+            else:
+                grids.append(g)
+        if not grids:
+            raise SystemExit("no valid --grids core counts fit the device grid")
+    else:
+        grids = [tuple(args.grid)]
+    print(f"# core-grid sweep: {[(g[0]*g[1], g) for g in grids]}", flush=True)
+
+    # Build the trial list across all axes (impl x dtype x fidelity x dest x grid).
     trials: list[Trial] = []
     for impl in args.impl:
         for dt, fid, fp32, pl1 in itertools.product(args.dtypes, args.fidelities, args.fp32_dest, args.packer_l1_acc):
-            trials += GENERATORS[impl](M_t, K_t, N_t, tuple(args.grid), args, dt, fid, bool(fp32), bool(pl1))
+            for grid in grids:
+                trials += GENERATORS[impl](M_t, K_t, N_t, grid, args, dt, fid, bool(fp32), bool(pl1))
     # Expand over output memcfgs (cheap axis, keep last so program configs cluster).
     expanded = []
     for t in trials:
