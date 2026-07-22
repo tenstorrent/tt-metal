@@ -490,8 +490,8 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 - **A distinct named field → NAMED.** You can point at it and give it one name (`get_arg(args::num_ranges)`). This holds **even if its legacy buffer offset is runtime-dependent** — e.g. a scalar read at `arg_index = 1 + count`, *after* a variable-count block. Metal 2.0 addresses named args **by name, in a section separate from and before the varargs** (`kernel_args.h`: *"byte_offset is measured from the start of the named section … varargs live after"*), so the legacy positional offset simply disappears: the kernel reads `get_arg(args::name)` no matter where the value sat in the legacy buffer.
 - **An element of an indexed collection → VARARG.** The source never names it — it reaches it through an index. A collection is un-nameable when:
   - its **count isn't a source literal** — a loop bound by a CTA *or* a runtime value (the dominant case), *or*
-  - even at a literal count, its elements carry **no distinct names** — `for (i<K) arr[i] = get(i)` is an indexed array, not K named fields, *or*
-  - an element is **data-selected** — `get(k)` where `k` was unpacked from the data picks *which* value at runtime; the identity read varies with the data.
+  - an element is **data-selected** — `get(k)` where `k` was unpacked from the data picks *which* value at runtime; the identity read varies with the data, *or*
+  - even at a **source-literal count**, the elements form **one homogeneous array** — read purely as `arr[i]`, no per-element identity, the index *is* the meaning (conceptually a single `std::array` argument, of which the vararg is the interim form). This case is **rare** and inverts easily: a fixed run of reads that are really **distinct fields** lazily looped are **named**, one name each — trap (1) below, not this.
 
 Shorthand: **read as an indexed-collection element → vararg; nameable as a distinct field → named.** (The dominant sub-case is the variable-count loop.)
 
