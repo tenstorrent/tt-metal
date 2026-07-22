@@ -53,6 +53,26 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
     return result;
 }
 
+tracy::TTDeviceMarker make_marker(
+    const tt::ProgramRealtimeRecord& record,
+    uint64_t timestamp,
+    tracy::TTDeviceMarkerType marker_type,
+    const std::string& file) {
+    tracy::TTDeviceMarker marker;
+    marker.runtime_host_id = record.runtime_id;
+    marker.chip_id = record.chip_id;
+    marker.core_x = 0;
+    marker.core_y = 0;
+    marker.risc = tracy::RiscType::BRISC;
+    marker.timestamp = timestamp;
+    marker.marker_name = "Program";
+    marker.marker_type = marker_type;
+    marker.file = file;
+    marker.line = 0;
+    marker.color = 0xee9a00;  // Orange2, matching the previous RT-profiler zone color
+    return marker;
+}
+
 }  // namespace
 
 void RealtimeProfilerTracyConsumer::on_records(const tt::ProgramRealtimeRecordBatch& batch) {
@@ -126,10 +146,9 @@ void RealtimeProfilerTracyConsumer::AddDevice(
     }
 
     TracyTTCtx ctx = TracyTTContext();
-    ctx->PopulateRtContext(host_anchor, device_anchor, frequency);
+    TracyTTContextPopulate(ctx, host_anchor, device_anchor, frequency);
     const std::string name = fmt::format("Device {}:", chip_id);
-    ctx->NameRt(name.c_str(), static_cast<uint16_t>(name.size()));
-    ctx->EmitRtRuntimeIdNoteName();
+    TracyTTContextName(ctx, name.c_str(), static_cast<uint16_t>(name.size()));
     tracy_contexts_[chip_id] = ctx;
 }
 
@@ -261,38 +280,27 @@ void RealtimeProfilerTracyConsumer::HandleRecord(const tt::ProgramRealtimeRecord
     if (!ctx) {
         return;
     }
-    const tracy::SourceLocationData* srcloc = GetOrCreateSrcLoc(record.kernel_sources);
-    ctx->PushRtZoneBegin(srcloc, static_cast<int64_t>(record.start_timestamp), static_cast<int64_t>(record.runtime_id));
-    ctx->PushRtZoneEnd(static_cast<int64_t>(record.end_timestamp));
-}
 
-const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::GetOrCreateSrcLoc(
-    std::span<const std::string_view> sources) {
-    auto [it, inserted] = srcloc_cache_.try_emplace(sources.data());
-    CachedZoneSrcLoc& entry = it->second;
-    if (inserted) {
-        for (size_t i = 0; i < sources.size(); i++) {
-            if (i > 0) {
-                entry.file += ",\n";
-            }
-            entry.file.append(sources[i].data(), sources[i].size());
+    std::string file;
+    for (size_t i = 0; i < record.kernel_sources.size(); i++) {
+        if (i > 0) {
+            file += ",\n";
         }
-        if (entry.file.empty()) {
-            entry.file = "realtime_profiler";
-        }
-        entry.srcloc.name = "Program";
-        entry.srcloc.function = "";
-        entry.srcloc.file = entry.file.c_str();
-        entry.srcloc.line = 0;
-        entry.srcloc.color = 0xee9a00;  // tracy::Color::Orange2, matching the previous BRISC zone color
+        file.append(record.kernel_sources[i].data(), record.kernel_sources[i].size());
     }
-    return &entry.srcloc;
+    if (file.empty()) {
+        file = "realtime_profiler";
+    }
+
+    TracyTTPushStartMarker(
+        ctx, make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file));
+    TracyTTPushEndMarker(ctx, make_marker(record, record.end_timestamp, tracy::TTDeviceMarkerType::ZONE_END, file));
 }
 
 void RealtimeProfilerTracyConsumer::CalibrateDevice(
     uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency) {
     if (auto it = tracy_contexts_.find(chip_id); it != tracy_contexts_.end()) {
-        it->second->CalibrateRt(host_anchor, static_cast<double>(device_anchor), frequency);
+        TracyTTContextCalibrate(it->second, host_anchor, static_cast<double>(device_anchor), frequency);
     }
 }
 
