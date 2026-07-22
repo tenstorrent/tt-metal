@@ -5,36 +5,15 @@
 General utilities for the Gemma4 demo.
 """
 
-from __future__ import annotations
-
-import glob
-import os
-
 
 def get_cache_file_name(tensor_cache_path, name):
     """Build a tensor-cache path prefix for ``ttnn.as_tensor``.
 
-    CI mounts ``/mnt/MLPerf/huggingface/tt_cache`` read-only. Existing
-    ``.tensorbin`` files are still readable; newly introduced names (e.g.
-    DRAM-sharded ``*.ws``) must not attempt to create files on that mount —
-    return ``None`` so the weight is tilized in-memory instead.
+    Always return the path when a cache root is configured so a writable CI
+    pass can populate new names (e.g. DRAM-sharded ``*.ws``); later read-only
+    CI then hits those cached tensorbins.
     """
-    if not tensor_cache_path:
-        return None
-    path = f"{tensor_cache_path}/{name}"
-    # as_tensor appends ``_dtype_*_layout_*.tensorbin``; any match means a hit.
-    if glob.glob(path + "*"):
-        return path
-    directory = os.path.dirname(path) or "."
-    probe = directory
-    while probe and not os.path.isdir(probe):
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            break
-        probe = parent
-    if probe and os.path.isdir(probe) and not os.access(probe, os.W_OK):
-        return None
-    return path
+    return f"{tensor_cache_path}/{name}" if tensor_cache_path else None
 
 
 def cast_host_for_ttnn(torch_tensor, ttnn_dtype):
