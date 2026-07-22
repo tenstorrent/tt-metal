@@ -1,0 +1,630 @@
+{
+  "schema_version": 2,
+  "hf_model": "openai/gpt-oss-20b",
+  "source": {
+    "kind": "pre_generated_tt_mlir_ttnn_emitpy",
+    "root": "/home/mvasiljevic/emit-gptoss",
+    "packages": {
+      "prefill": "/home/mvasiljevic/emit-gptoss/g0_prefill",
+      "decode": "/home/mvasiljevic/emit-gptoss/g1_decode"
+    },
+    "files_read": [
+      "g0_prefill/main.py",
+      "g0_prefill/consteval.py",
+      "g1_decode/main.py",
+      "g1_decode/consteval.py"
+    ],
+    "regeneration_performed": false
+  },
+  "segmentation": {
+    "representative_layer": 12,
+    "reason": "middle layer of 24; neither endpoint",
+    "prefill_main_py_lines": [3879, 4089],
+    "decode_main_py_lines": [3318, 3488],
+    "boundary_method": "the two RMSNorm sites and model.model.layers.12 weight keys bound the repeated decoder block",
+    "architecture_cross_check": "RMSNorm -> biased QKV attention with sinks -> biased O projection -> residual -> RMSNorm -> top-4 routed 32-expert SwiGLU MoE -> residual"
+  },
+  "mesh": {
+    "logical_shape": [1, 4],
+    "topology": "1D ring",
+    "tensor_parallel_degree": 4,
+    "axes": [
+      {
+        "index": 0,
+        "name": "mesh_row",
+        "size": 1,
+        "role": "degenerate"
+      },
+      {
+        "index": 1,
+        "name": "tensor_parallel",
+        "size": 4,
+        "role": "attention-head and expert parallel"
+      }
+    ],
+    "translation_shape": [1, 1],
+    "dense_collapse": "Full canonical Hugging Face tensors replace each emitted shard. Each partial-sum all-reduce and routing partition is removed from the single-device runtime."
+  },
+  "boundary_tensors": [
+    {
+      "name": "layer_input_hidden_and_first_residual",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 2880],
+        "decode": [1, 1, 1, 2880]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "name": "attention_o_projection_partial",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 2880],
+        "decode": [1, 1, 1, 2880]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "partial_sum",
+      "tensor_axes": [],
+      "mesh_axes": [1],
+      "consumer": "sum all_reduce before O bias and first residual"
+    },
+    {
+      "name": "post_attention_hidden_and_second_residual",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 2880],
+        "decode": [1, 1, 1, 2880]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "name": "local_expert_output_partial",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 2880],
+        "decode": [1, 1, 1, 2880]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "partial_sum",
+      "tensor_axes": [],
+      "mesh_axes": [1],
+      "consumer": "sum all_reduce before second residual"
+    },
+    {
+      "name": "layer_output_hidden",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 2880],
+        "decode": [1, 1, 1, 2880]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    }
+  ],
+  "representative_layer_tensors": [
+    {
+      "hf_suffix": "input_layernorm.weight",
+      "full_shape": [2880],
+      "emitted_local_shape": [2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "hf_suffix": "self_attn.q_proj.weight",
+      "full_shape": [4096, 2880],
+      "emitted_local_shape": [1024, 2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT8_B after consteval transpose/fusion",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.k_proj.weight",
+      "full_shape": [512, 2880],
+      "emitted_local_shape": [128, 2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT8_B after consteval transpose/fusion",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.v_proj.weight",
+      "full_shape": [512, 2880],
+      "emitted_local_shape": [128, 2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT8_B after consteval transpose/fusion",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.q_proj.bias",
+      "full_shape": [4096],
+      "emitted_local_shape": [1024],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.k_proj.bias",
+      "full_shape": [512],
+      "emitted_local_shape": [128],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.v_proj.bias",
+      "full_shape": [512],
+      "emitted_local_shape": [128],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.sinks",
+      "full_shape": [64],
+      "emitted_local_shape": [16],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "self_attn.o_proj.weight",
+      "full_shape": [2880, 4096],
+      "emitted_local_shape": [2880, 1024],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT8_B after consteval transpose",
+      "parallel_kind": "tensor_row",
+      "tensor_axes": [1],
+      "mesh_axes": [1],
+      "consumer": "sum all_reduce of the full-hidden partial output"
+    },
+    {
+      "hf_suffix": "self_attn.o_proj.bias",
+      "full_shape": [2880],
+      "emitted_local_shape": [2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": [],
+      "placement": "after attention all_reduce"
+    },
+    {
+      "hf_suffix": "post_attention_layernorm.weight",
+      "full_shape": [2880],
+      "emitted_local_shape": [2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "hf_suffix": "mlp.router.weight",
+      "full_shape": [32, 2880],
+      "emitted_local_shape": [32, 2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16; activation/result are FLOAT32 before BF16 top-k",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "hf_suffix": "mlp.router.bias",
+      "full_shape": [32],
+      "emitted_local_shape": [32],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "hf_suffix": "mlp.experts.gate_up_proj",
+      "full_shape": [32, 2880, 5760],
+      "emitted_local_shape": [8, 2880, 5760],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT8_B after consteval",
+      "parallel_kind": "expert",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "mlp.experts.gate_up_proj_bias",
+      "full_shape": [32, 5760],
+      "emitted_local_shape": [8, 5760],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "expert",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "mlp.experts.down_proj",
+      "full_shape": [32, 2880, 2880],
+      "emitted_local_shape": [8, 2880, 2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT8_B after consteval",
+      "parallel_kind": "expert",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    },
+    {
+      "hf_suffix": "mlp.experts.down_proj_bias",
+      "full_shape": [32, 2880],
+      "emitted_local_shape": [8, 2880],
+      "emitted_placeholder_dtype": "BFLOAT16",
+      "emitted_runtime_dtype": "BFLOAT16",
+      "parallel_kind": "expert",
+      "tensor_axes": [0],
+      "mesh_axes": [1]
+    }
+  ],
+  "activation_cache_and_constant_tensors": [
+    {
+      "name": "query_heads",
+      "paths": ["prefill", "decode"],
+      "full_shapes": {
+        "prefill": [1, 64, 17, 64],
+        "decode": [1, 1, 64, 64]
+      },
+      "emitted_local_shapes": {
+        "prefill": [1, 16, 17, 64],
+        "decode": [1, 1, 16, 64]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [1],
+      "mesh_axes": [1]
+    },
+    {
+      "name": "key_cache",
+      "paths": ["prefill", "decode"],
+      "full_shape": [1, 8, 128, 64],
+      "emitted_local_shape": [1, 2, 128, 64],
+      "emitted_dtype": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [1],
+      "mesh_axes": [1],
+      "placement": "persistent graph input/output; fill_cache in g0 and paged_update_cache in g1"
+    },
+    {
+      "name": "value_cache",
+      "paths": ["prefill", "decode"],
+      "full_shape": [1, 8, 128, 64],
+      "emitted_local_shape": [1, 2, 128, 64],
+      "emitted_dtype": "BFLOAT8_B",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [1],
+      "mesh_axes": [1],
+      "placement": "persistent graph input/output; fill_cache in g0 and paged_update_cache in g1"
+    },
+    {
+      "name": "rotary_cos",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 64],
+        "decode": [1, 1, 1, 64]
+      },
+      "emitted_dtype": "BFLOAT16 after FLOAT32 construction",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "name": "rotary_sin",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 64],
+        "decode": [1, 1, 1, 64]
+      },
+      "emitted_dtype": "BFLOAT16 after FLOAT32 construction",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "name": "attention_mask",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [1, 1, 17, 128],
+        "decode": [1, 1, 16, 128]
+      },
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": [],
+      "note": "decode head axis is local-head specialized but values are replicated, not a partition of distinct global values"
+    },
+    {
+      "name": "prefill_position_ids",
+      "paths": ["prefill"],
+      "emitted_shape": [1, 17],
+      "emitted_dtype": "INT32",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "name": "decode_cache_position",
+      "paths": ["decode"],
+      "emitted_shape": [1],
+      "emitted_dtype": "INT32",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    },
+    {
+      "name": "prefill_attention_sinks",
+      "paths": ["prefill"],
+      "full_shape": [1, 64, 17, 1],
+      "emitted_local_shape": [1, 16, 17, 1],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [1],
+      "mesh_axes": [1]
+    },
+    {
+      "name": "decode_attention_sinks",
+      "paths": ["decode"],
+      "full_shape": [64, 32],
+      "emitted_local_shape": [16, 32],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "tensor_column",
+      "tensor_axes": [0],
+      "mesh_axes": [1],
+      "note": "sink is divided by attention scale and padded to a tile in consteval"
+    },
+    {
+      "name": "prefill_routing_scatter_base",
+      "paths": ["prefill"],
+      "full_shape": [17, 32],
+      "emitted_local_shape_before_consteval_all_gather": [17, 8],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "expert",
+      "tensor_axes": [1],
+      "mesh_axes": [1],
+      "placement": "consteval all_gather produces the full zero scatter base before runtime routing mesh_partition"
+    },
+    {
+      "name": "decode_routing_scatter_base",
+      "paths": ["decode"],
+      "full_shape": [1, 32],
+      "emitted_local_shape_before_consteval_all_gather": [1, 8],
+      "emitted_dtype": "BFLOAT16",
+      "parallel_kind": "expert",
+      "tensor_axes": [1],
+      "mesh_axes": [1],
+      "placement": "consteval all_gather produces the full zero scatter base before runtime routing mesh_partition"
+    },
+    {
+      "name": "routing_flat_index_offsets",
+      "paths": ["prefill", "decode"],
+      "emitted_shapes": {
+        "prefill": [17, 4, 1],
+        "decode": [1, 4, 1]
+      },
+      "emitted_dtype": "INT32",
+      "parallel_kind": "replicated",
+      "tensor_axes": [],
+      "mesh_axes": []
+    }
+  ],
+  "collectives": [
+    {
+      "path": "prefill",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.q_proj.bias",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before Q-K-V bias fusion"
+    },
+    {
+      "path": "prefill",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.k_proj.bias",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before Q-K-V bias fusion"
+    },
+    {
+      "path": "prefill",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.v_proj.bias",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before Q-K-V bias fusion"
+    },
+    {
+      "path": "prefill",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.sinks",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before reshape/expand to local attention heads"
+    },
+    {
+      "path": "prefill",
+      "phase": "consteval",
+      "op": "all_gather",
+      "tensor": "prefill_routing_scatter_base",
+      "tensor_axis": 1,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "topology": "Ring",
+      "input_shape": [17, 8],
+      "output_shape": [17, 32],
+      "placement": "construct full routing scatter base before trace capture"
+    },
+    {
+      "path": "prefill",
+      "phase": "runtime",
+      "op": "all_reduce",
+      "tensor": "attention_o_projection_partial",
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": "sum",
+      "topology": "Ring",
+      "placement": "after local O projection and before O bias/first residual"
+    },
+    {
+      "path": "prefill",
+      "phase": "runtime",
+      "op": "mesh_partition",
+      "tensor": "full_top4_routing_matrix",
+      "tensor_axis": 1,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "input_shape": [17, 32],
+      "output_shape": [17, 8],
+      "placement": "after top-k scatter and before weighting eight local experts"
+    },
+    {
+      "path": "prefill",
+      "phase": "runtime",
+      "op": "all_reduce",
+      "tensor": "local_expert_output_partial",
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": "sum",
+      "topology": "Ring",
+      "placement": "after sum over eight local experts and before second residual"
+    },
+    {
+      "path": "decode",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.q_proj.bias",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before Q-K-V bias fusion"
+    },
+    {
+      "path": "decode",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.k_proj.bias",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before Q-K-V bias fusion"
+    },
+    {
+      "path": "decode",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.v_proj.bias",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before Q-K-V bias fusion"
+    },
+    {
+      "path": "decode",
+      "phase": "consteval",
+      "op": "mesh_partition",
+      "tensor": "self_attn.sinks",
+      "tensor_axis": 0,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "placement": "before scale adjustment and tile padding"
+    },
+    {
+      "path": "decode",
+      "phase": "consteval",
+      "op": "all_gather",
+      "tensor": "decode_routing_scatter_base",
+      "tensor_axis": 1,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "topology": "Ring",
+      "input_shape": [1, 8],
+      "output_shape": [1, 32],
+      "placement": "construct full routing scatter base before trace capture"
+    },
+    {
+      "path": "decode",
+      "phase": "runtime",
+      "op": "all_reduce",
+      "tensor": "attention_o_projection_partial",
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": "sum",
+      "topology": "Ring",
+      "placement": "after local O projection and before O bias/first residual"
+    },
+    {
+      "path": "decode",
+      "phase": "runtime",
+      "op": "mesh_partition",
+      "tensor": "full_top4_routing_matrix",
+      "tensor_axis": 1,
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": null,
+      "input_shape": [1, 32],
+      "output_shape": [1, 8],
+      "placement": "after top-k scatter and before weighting eight local experts"
+    },
+    {
+      "path": "decode",
+      "phase": "runtime",
+      "op": "all_reduce",
+      "tensor": "local_expert_output_partial",
+      "mesh_axis": 1,
+      "cluster_axis": 1,
+      "reduce_type": "sum",
+      "topology": "Ring",
+      "placement": "after sum over eight local experts and before second residual"
+    }
+  ],
+  "functional_translation_dtype_policy": {
+    "weights_activations_and_cache": "BFLOAT16",
+    "layout_and_memory": "TILE and DRAM by default",
+    "retained_exception": "router input and linear output are FLOAT32 before BFLOAT16 top-k",
+    "removed_parallelism": "No collective or mesh partition remains in runtime forwards."
+  }
+}

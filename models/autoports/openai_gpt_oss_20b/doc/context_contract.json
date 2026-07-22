@@ -1,0 +1,59 @@
+{
+  "hf_model": "openai/gpt-oss-20b",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 17,
+  "limiting_reason": "device_dram",
+  "capacity_evidence": {
+    "device": "one Blackhole chip from a P300c endpoint (TT_VISIBLE_DEVICES=0)",
+    "device_allocator_dram_banks": 8,
+    "device_allocator_bytes_per_bank": 4272341376,
+    "device_allocator_total_bytes": 34178731008,
+    "capacity_probe": "ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)",
+    "advertised_context_bf16_dense_attention_mask_bytes": 34359738368,
+    "advertised_context_bf16_input_bytes": 754974720,
+    "advertised_context_bf16_single_layer_kv_cache_bytes": 268435456,
+    "formula": "Mask: 1*1*131072*131072*2 bytes. Input: 1*1*131072*2880*2 bytes. KV: 1*8*131072*64*2(K,V)*2 bytes.",
+    "stage_scope": "The correctness-first translation preloads a dense causal mask. At the advertised length that mask alone exceeds allocator-reported DRAM, before the 1.6 GB BF16 decoder weights, input, KV cache, outputs, and temporaries.",
+    "validated_prefill_context": 17,
+    "configured_cache_and_mask_extent": 128,
+    "first_proven_infeasible_context_for_this_dense_mask_design": 131072,
+    "unprobed_interval": "18 through 131071; current_supported_context is a validation boundary, not a claimed physical maximum"
+  },
+  "notes": "This functional starting point validates prefill through the emitted sequence length 17 and decode at position 17. Its allocated cache/mask extent is 128, but prefill S=128 was not validated and 128 is not claimed as a physical limit. The dense-mask design is proven infeasible at the HF target; intermediate lengths were not capacity-probed. A different long-context memory policy is deferred.",
+  "paths": {
+    "prefill": {
+      "status": "translated",
+      "emit_package": "/home/mvasiljevic/emit-gptoss/g0_prefill",
+      "classification": {
+        "cache_op": "fill_cache",
+        "emitted_batch": 1,
+        "emitted_sequence": 17,
+        "cache_length": 128
+      }
+    },
+    "decode": {
+      "status": "translated",
+      "emit_package": "/home/mvasiljevic/emit-gptoss/g1_decode",
+      "classification": {
+        "cache_op": "paged_update_cache",
+        "attention_op": "scaled_dot_product_attention_decode",
+        "emitted_batch": 1,
+        "emitted_sequence": 1,
+        "cache_length": 128
+      }
+    }
+  },
+  "emit_provenance": {
+    "representative_layer": 12,
+    "captured_mesh": "1x4",
+    "tensor_parallel_degree": 4,
+    "translation_mesh": "1x1",
+    "regenerated_from_mlir": false,
+    "collective_collapse": "Full Hugging Face weights replace emitted shards; attention and expert all-reduces plus routing mesh partition are absent from runtime."
+  },
+  "dtype_policy": {
+    "functional_baseline": "BF16 weights, activations, and cache; TILE layout; DRAM by default",
+    "exception": "The emitted router promotes its activation and linear result to FP32 before BF16 top-k; decode heads use one workload-derived L1 height shard.",
+    "deferred": "Restoring emitted BF8 projection/cache precision belongs to a later datatype-selection stage."
+  }
+}
