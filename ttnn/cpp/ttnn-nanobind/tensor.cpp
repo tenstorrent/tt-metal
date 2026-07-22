@@ -120,7 +120,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
         Class defining tile dims
     )doc");
 
-    nb::class_<tt::tt_metal::TensorSpec>(m_tensor, "tt::tt_metal::TensorSpec", R"doc(
+    nb::class_<tt::tt_metal::TensorSpec>(m_tensor, "TensorSpec", R"doc(
         Class defining the specification of Tensor
     )doc");
 
@@ -282,7 +282,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             >>> ttnn.element_size(ttnn.float32)   # Returns 4
         )doc");
 
-    auto pyTensorSpec = static_cast<nb::class_<tt::tt_metal::TensorSpec>>(m_tensor.attr("tt::tt_metal::TensorSpec"));
+    auto pyTensorSpec = static_cast<nb::class_<tt::tt_metal::TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
         .def(
             "__init__",
