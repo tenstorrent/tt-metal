@@ -184,13 +184,20 @@ def _run_sparse_frames_op(
     pcc_threshold: float = 0.999,
     q_chunk_size_tokens: int | None = None,
     k_chunk_size_tokens: int | None = None,
+    sparse_frames_enabled: bool = True,
 ):
     """Build small Q/K/V, run the ring op with sparse-frames enabled, compare to a pytorch ref.
 
     q_chunk_size_tokens / k_chunk_size_tokens (in TOKENS — SDPAProgramConfig's chunk sizes are
     tokens, see sdpa_device_operation.cpp's `% TILE_WIDTH == 0` check) default to `frame_seqlen`
     so each SDPA chunk == one frame. Override with a divisor of frame_seqlen to exercise the
-    sub-frame chunk path (multiple chunks per frame — needed at large fsl to fit L1 CB budgets)."""
+    sub-frame chunk path (multiple chunks per frame — needed at large fsl to fit L1 CB budgets).
+
+    sparse_frames_enabled=False disables the sparse-frames extension: the op runs plain dense
+    ring_joint SDPA (no frame_allow bitmask, no frame_seqlen), and the golden reference uses an
+    all-ones allow (every Q attends every K). Diagnostic: if a sub-frame chunk test hangs with
+    sparse_frames_enabled=True but passes with False, the bug is in the sparse-frames overlay;
+    if it hangs both ways, the bug is in the general ring_joint path at sub-frame chunks."""
     assert num_frames_padded % sp_factor == 0, "num_frames_padded must be a multiple of sp_factor"
     assert frame_seqlen % ttnn.TILE_SIZE == 0, "frame_seqlen must be tile-aligned"
     n_pad = num_frames_padded * frame_seqlen
@@ -215,7 +222,13 @@ def _run_sparse_frames_op(
     padded_K = torch.cat([K, torch.zeros(b, nh, n_pad - real_n, d)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nh, n_pad - real_n, d)], dim=2)
 
-    allow = _frame_allow(num_frames_real, num_frames_padded, window, add_last_frame)
+    if sparse_frames_enabled:
+        allow = _frame_allow(num_frames_real, num_frames_padded, window, add_last_frame)
+    else:
+        # Dense reference: every Q attends every K (padded frames stay all-zero rows/cols so
+        # the additive-mask helper's padding logic still keeps softmax finite).
+        allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
+        allow[:num_frames_real, :num_frames_real] = 1
     gt = _torch_sdpa_ref(
         padded_Q,
         padded_K,
@@ -286,7 +299,9 @@ def _run_sparse_frames_op(
 
     # Bitpack frame_allow into up to 32 uint32 words — passed to the op as a plain host vector
     # (frame_allow_packed kwarg). No device tensor / no DMA / no CB required.
-    frame_allow_packed = _pack_frame_allow(allow)
+    # When sparse-frames is disabled, we pass an empty vector and None for the other extension
+    # kwargs, which routes the op through the plain (non-sparse) ring_joint SDPA path.
+    frame_allow_packed = _pack_frame_allow(allow) if sparse_frames_enabled else []
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -324,9 +339,10 @@ def _run_sparse_frames_op(
         subdevice_id=worker_sub_device_id,
         ccl_core_grid_offset=ccl_core_grid_offset,
         is_causal=False,
-        # The extension: enable frame-block-sparse pattern.
-        frame_seqlen=frame_seqlen,
-        num_frames_padded=num_frames_padded,
+        # The extension: enable frame-block-sparse pattern. sparse_frames_enabled=False routes
+        # through the plain ring_joint path by passing None + empty vector.
+        frame_seqlen=frame_seqlen if sparse_frames_enabled else None,
+        num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
         frame_allow_packed=frame_allow_packed,
     )
 
@@ -497,6 +513,10 @@ class TestSparseFramesRing:
 
     @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
+        "sparse_frames_enabled",
+        [pytest.param(True, id="sparse"), pytest.param(False, id="dense")],
+    )
+    @pytest.mark.parametrize(
         ("q_chunk_div", "k_chunk_div"),
         [
             pytest.param(2, 2, id="chunk_half_fsl"),
@@ -518,6 +538,7 @@ class TestSparseFramesRing:
         reset_seeds,
         q_chunk_div,
         k_chunk_div,
+        sparse_frames_enabled,
     ):
         """Sub-frame chunks: q_chunk_size = fsl/N (and k likewise). The device op requires each
         chunk to sit inside one frame (never straddle a boundary), so chunk sizes must divide
@@ -551,4 +572,5 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
             q_chunk_size_tokens=frame_seqlen // q_chunk_div,
             k_chunk_size_tokens=frame_seqlen // k_chunk_div,
+            sparse_frames_enabled=sparse_frames_enabled,
         )
