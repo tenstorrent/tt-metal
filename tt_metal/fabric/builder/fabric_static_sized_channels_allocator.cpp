@@ -468,8 +468,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             vc0_vc2_mesh_buffer_slot_options);
         static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_vc2_mesh_slots(
             vc0_vc1_vc2_mesh_buffer_slot_options);
-        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
-            other_buffer_slot_options);
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(other_buffer_slot_options);
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {
             // Select table based on which VCs are actually active
@@ -688,6 +687,32 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     num_remote_sender_buffer_slots_per_vc[2].fill(vc2_sender_buffer_slots);
     num_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
     num_remote_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
+
+    // Mesh allocation uses one conservative depth for every channel in a VC,
+    // which can leave whole packet slots unused. Give those slots to the live
+    // local-worker injection channel; forwarding and receive depths stay
+    // unchanged.
+    if ((topology == Topology::Mesh || topology == Topology::Torus) &&
+        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED &&
+        num_used_sender_channels_per_vc[0] > 0) {
+        size_t allocated_slots = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            allocated_slots += std::accumulate(
+                num_sender_buffer_slots_per_vc[vc].begin(),
+                num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
+                size_t{0});
+            allocated_slots += std::accumulate(
+                num_receiver_buffer_slots_per_vc[vc].begin(),
+                num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc],
+                size_t{0});
+        }
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        TT_FATAL(allocated_slots <= slot_capacity, "Fabric channel allocation exceeds its slot capacity");
+        const size_t spare_slots = slot_capacity - allocated_slots;
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        num_sender_buffer_slots_per_vc[0][worker_channel] += spare_slots;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] += spare_slots;
+    }
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
