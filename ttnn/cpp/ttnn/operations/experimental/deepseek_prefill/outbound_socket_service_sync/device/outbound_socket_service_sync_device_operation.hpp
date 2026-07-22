@@ -11,10 +11,14 @@
 #include "outbound_socket_service_sync_device_operation_types.hpp"
 #include "outbound_socket_service_sync_program_factory.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 class D2DStreamServiceSender;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using D2DStreamServiceSender = ttnn::D2DStreamServiceSender;
 class D2HStreamService;
-}
+}  // namespace tt::tt_metal
 
 namespace ttnn::experimental::prim {
 
@@ -23,7 +27,7 @@ struct OutboundSocketServiceSyncOperation {
     using tensor_args_t = OutboundSocketServiceSyncInputs;
     // The op fills the service-owned backing tensor in place; the (single) output IS
     // that backing tensor (no new allocation).
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<OutboundSocketServiceSyncProgramFactory>;
 
@@ -46,7 +50,7 @@ namespace ttnn::prim {
 //   * D2H: {backing+metadata, backing-only, metadata-only}; metadata-only has no payload or
 //     lease. Returns the backing tensor (the record stands in for it in metadata-only).
 ttnn::Tensor outbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceSender& service,
+    const ttnn::D2DStreamServiceSender& service,
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& metadata = std::nullopt);
 

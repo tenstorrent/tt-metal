@@ -34,7 +34,7 @@ MorehMeanBackwardOperation::spec_return_value_t MorehMeanBackwardOperation::comp
         return tensor_args.input_grad->tensor_spec();
     }
     auto input_grad_shape = operation_attributes.input_grad_shape.value();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_grad_shape,
         TensorLayout(tensor_args.output_grad.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
