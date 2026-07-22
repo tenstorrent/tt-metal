@@ -1052,19 +1052,34 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
         dst_full_sync_en=True,
     )
 
-    with tensor_prefetcher_session(device):
-        tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-            tt_act,
-            tt_weight,
-            global_cb=gcb,
-            program_config=program_config,
-            memory_config=output_mem_config,
-            compute_kernel_config=compute_kernel_config,
-            dtype=dtype,
-        )
-
     expected = pt_act.float() @ pt_weight.float()
-    out_torch = ttnn.to_torch(tt_out)
-    passing, output_str = comp_pcc(expected, out_torch, 0.999)
-    logger.info(f"[streaming_mcast_in0 {distribution_strategy}] {output_str}")
-    assert passing, f"streaming_mcast_in0 PCC failed: {output_str}"
+
+    # Run twice so the second invocation hits the program cache and exercises
+    # override_mcast_in0_program_parameters. The receiver-contiguous weight is
+    # ND-sharded, so a naive tensor-backed CB update would TT_FATAL on the
+    # GCB-backed in1 CB during the cache-hit path.
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(2):
+            tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act,
+                tt_weight,
+                global_cb=gcb,
+                program_config=program_config,
+                memory_config=output_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=dtype,
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+            out_torch = ttnn.to_torch(tt_out)
+            passing, output_str = comp_pcc(expected, out_torch, 0.999)
+            logger.info(f"[streaming_mcast_in0 {distribution_strategy} run={run}] {output_str}")
+            assert passing, f"streaming_mcast_in0 run={run} PCC failed: {output_str}"
+
+    # The second run must reuse the cached program (no new entries), i.e. it took
+    # the override path rather than rebuilding.
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second mcast_in0 invocation did not hit the program cache"
