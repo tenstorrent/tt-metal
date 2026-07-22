@@ -23,7 +23,7 @@ struct UntilizeCodegenOperationAttributes {
 };
 
 using UntilizeCodegenTensorReturnValue = Tensor;
-using UntilizeCodegenSpecReturnValue = ttnn::TensorSpec;
+using UntilizeCodegenSpecReturnValue = tt::tt_metal::TensorSpec;
 
 struct UntilizeCodegenDeviceOperation {
     using operation_attributes_t = UntilizeCodegenOperationAttributes;
