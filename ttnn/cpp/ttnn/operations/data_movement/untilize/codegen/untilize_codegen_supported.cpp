@@ -4,8 +4,6 @@
 
 #include "untilize_codegen_supported.hpp"
 
-#include <initializer_list>
-
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -109,33 +107,19 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     return true;
 }
 
-namespace {
-bool shape_equals(const ttnn::Shape& shape, std::initializer_list<uint32_t> dims) {
-    if (shape.rank() != dims.size()) {
-        return false;
-    }
-    uint32_t i = 0;
-    for (uint32_t d : dims) {
-        if (shape[i++] != d) {
-            return false;
-        }
-    }
-    return true;
-}
-}  // namespace
-
-// Perf-demote ledger (nightly/broaden_suite, device-measured): correct under codegen but does not
-// beat native. Every entry is a small tile-aligned bfloat8_b shape (both DRAM and L1) -- none match
-// a manifest scope:out condition (all tile-aligned, non-sharded), so they stay accepted by
-// supported_by_codegen() and are only routed away from codegen in the "auto" branch.
+// Perf-demote ledger: shapes that supported_by_codegen() already accepts (correct under codegen)
+// but that a device-measured (DEVICE KERNEL DURATION, not e2e_perf) comparison found do not beat
+// native. Currently empty: the previous entries here (nightly/broaden_suite's bfloat8_b shapes)
+// were re-measured under DEVICE KERNEL DURATION and found 20-55% AHEAD of native on every one --
+// the prior list came from codegen_untilize.py's e2e_perf, which is dispatch-overhead-dominated for
+// these single-digit-microsecond kernels and doesn't reflect actual device time. Only bfloat8_b has
+// ever produced a demotion candidate, so the dtype gate stays; re-populate from a device
+// kernel-duration comparison, never from e2e_perf, if a future case regresses.
 bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& /*output_mem_config*/) {
     if (input.dtype() != tt::tt_metal::DataType::BFLOAT8_B) {
         return false;
     }
-    const auto& s = input.logical_shape();
-    return shape_equals(s, {32, 32}) || shape_equals(s, {32, 64}) || shape_equals(s, {64, 64}) ||
-           shape_equals(s, {128, 256}) || shape_equals(s, {1, 32, 64}) || shape_equals(s, {2, 32, 32}) ||
-           shape_equals(s, {1, 1, 64, 64}) || shape_equals(s, {1, 1, 128, 256});
+    return false;
 }
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen
