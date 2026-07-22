@@ -723,8 +723,6 @@ const NodeCoord node{0, 0};
 KernelSpec reader{
     .unique_id = READER,
     .source = "kernels/reader.cpp",
-    .compile_time_args = {{"page_size", page_size}},
-    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "out_dfb",
@@ -734,14 +732,14 @@ KernelSpec reader{
         .tensor_parameter_name = INPUT,
         .accessor_name = "input",   // kernel accesses as `tensor::input`
     }},
+    .compile_time_args = {{"page_size", page_size}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .hw_config = CreateReaderGen1DataMovementConfig(),
 };
 
 KernelSpec writer{
     .unique_id = WRITER,
     .source = "kernels/writer.cpp",
-    .compile_time_args = {{"page_size", page_size}},
-    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "in_dfb",
@@ -751,6 +749,8 @@ KernelSpec writer{
         .tensor_parameter_name = OUTPUT,
         .accessor_name = "output",  // kernel accesses as `tensor::output`
     }},
+    .compile_time_args = {{"page_size", page_size}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .hw_config = CreateWriterGen1DataMovementConfig(),
 };
 
