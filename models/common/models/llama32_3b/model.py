@@ -460,10 +460,12 @@ def _build_decoder_layer(
             paged_attention_config=paged_cfg,
             kv_cache=None,
             kv_cache_dtype=precision.kv_cache_dtype,
-            # TTTv1 parity: Llama-3 family decode SDPA runs HIFI2 with exp_approx_mode=True
-            # (model_config.py `_default_settings` → SDPA_DECODE=HIFI2, used in BOTH accuracy
-            # and performance). Attention1D's generic default builds this prog config with
-            # exp_approx_mode=False, leaving decode SDPA slower than TTTv1. Flip it to match.
+            # Decode SDPA HIFI2 with exp_approx_mode=True (approximate exp in the softmax): a small
+            # perf-favorable choice; top1/top5 clear the accuracy floors. NB TTTv1's decode SDPA
+            # actually uses exp_approx_mode=False (model_config.py get_attn_sdpa_decode_program_config),
+            # so this is a deliberate TTTv2 deviation, NOT a parity match — the earlier comment here
+            # claiming TTTv1 uses True (and that False is "slower than TTTv1") was inaccurate. Fresh
+            # same-box medians (2026-07-22) show TTTv2 b32-ci decode >= TTTv1, so True does not slow it.
             decode_sdpa_prg_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=True,
