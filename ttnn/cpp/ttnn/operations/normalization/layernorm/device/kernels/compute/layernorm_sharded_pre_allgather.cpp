@@ -97,7 +97,7 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in_id);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_in_id);
     add_init(cb_in0, cb_in1);
     cb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -122,7 +122,7 @@ void kernel_main() {
     cb_in.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(cb_in_id, cb_x2_id);
 #else
-    binary_op_init_common(cb_in_id, cb_in_id, cb_x2_id);
+    compute_kernel_hw_startup(cb_in_id, cb_in_id, cb_x2_id);
 #endif
 
 #ifdef DO_COL_MASK

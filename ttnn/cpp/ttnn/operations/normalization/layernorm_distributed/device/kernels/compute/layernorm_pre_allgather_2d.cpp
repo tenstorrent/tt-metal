@@ -38,9 +38,9 @@ void kernel_main() {
     constexpr uint32_t cb_inp_id = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0_id;  // fused a + b, or just a
 
     if constexpr (FUSE_PRE_ADD) {
-        binary_op_init_common(cb_in0_id, cb_res_id, cb_inp_id);
+        compute_kernel_hw_startup(cb_in0_id, cb_res_id, cb_inp_id);
     } else {
-        binary_op_init_common(cb_inp_id, cb_reduce_id, cb_x2_id);
+        compute_kernel_hw_startup(cb_inp_id, cb_reduce_id, cb_x2_id);
     }
 
     CircularBuffer cb_in0(cb_in0_id);
@@ -109,7 +109,7 @@ void kernel_main() {
         cb_zero.wait_front(1);
 
         // Initialize accumulation
-        binary_op_init_common(cb_x2_merge_id, cb_zero_id, cb_out_final_id);
+        compute_kernel_hw_startup(cb_x2_merge_id, cb_zero_id, cb_out_final_id);
         reconfig_data_format(cb_x2_merge_id, cb_zero_id);
         pack_reconfig_data_format(cb_out_final_id);
         add_init(cb_x2_merge_id, cb_zero_id, true);

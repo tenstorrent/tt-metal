@@ -95,7 +95,7 @@ void kernel_main() {
                                 input_tensor_cb.push_back(2);
                                 rm_input_value_cb.pop_front(2 * TILE_H);
                                 tilize_uninit(rm_input_value_cb_id, input_tensor_cb_id);
-                                binary_op_init_common(rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_cb_id);
+                                compute_kernel_hw_startup(rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_cb_id);
 
                                 tilize_init(rm_input_index_cb_id, 2, index_tensor_cb_id);
                                 rm_input_index_cb.wait_front(2 * TILE_H);
@@ -104,7 +104,7 @@ void kernel_main() {
                                 index_tensor_cb.push_back(2);
                                 rm_input_index_cb.pop_front(2 * TILE_H);
                                 tilize_uninit(rm_input_index_cb_id, index_tensor_cb_id);
-                                binary_op_init_common(
+                                compute_kernel_hw_startup(
                                     input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
 
                                 ckernel::topk_tile_init();
@@ -269,7 +269,7 @@ void kernel_main() {
                                 input_tensor_output_cb.pop_front(2);
                                 rm_output_value_cb.push_back(2 * TILE_H);
                                 pack_untilize_uninit(rm_output_value_cb_id);
-                                binary_op_init_common(
+                                compute_kernel_hw_startup(
                                     rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_output_cb_id);
 
                                 pack_untilize_init<1>(index_tensor_output_cb_id, rm_output_index_cb_id);
@@ -280,7 +280,7 @@ void kernel_main() {
                                 rm_output_index_cb.push_back(2 * TILE_H);
                                 pack_untilize_uninit(rm_output_index_cb_id);
                                 // Reset compute state for the next pair's tilize.
-                                binary_op_init_common(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
+                                compute_kernel_hw_startup(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
                             }
 
                             processing_pair_id += number_of_available_cores;

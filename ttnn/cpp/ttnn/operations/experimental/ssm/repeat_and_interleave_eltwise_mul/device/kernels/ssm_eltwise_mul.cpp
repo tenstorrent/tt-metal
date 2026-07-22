@@ -25,10 +25,10 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
 
 #ifdef REPEAT_INTERLEAVE_IN1
-    binary_op_init_common(
+    compute_kernel_hw_startup(
         cb_in0_transposed, cb_in1_bcast_row, cb_id_out);  // TODO: Is there a specific one for bcast mul?
 #else
-    binary_op_init_common(cb_id_in0, cb_id_in1, cb_id_out);
+    compute_kernel_hw_startup(cb_id_in0, cb_id_in1, cb_id_out);
 #endif
 
     CircularBuffer cb_in0(cb_id_in0);

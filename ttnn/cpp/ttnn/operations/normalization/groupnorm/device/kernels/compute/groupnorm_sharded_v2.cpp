@@ -171,7 +171,7 @@ void kernel_main() {
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_in0_id, cb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
@@ -194,7 +194,7 @@ void kernel_main() {
 #endif
     cb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(cb_in0_id, cb_input_mask_id, cb_x_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_input_mask_id, cb_x_id);
 #endif
 
     index_b_offset = 0;

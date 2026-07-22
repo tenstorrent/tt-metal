@@ -138,7 +138,7 @@ void sum_top_experts_per_group(
     CircularBuffer cb_top_experts(cb_top_experts_per_group);
     CircularBuffer cb_group_summed(cb_group_summed_scores);
     // sum the top experts_per_group rows for each group
-    binary_op_init_common(cb_top_experts_per_group, cb_top_experts_per_group, cb_group_summed_scores);
+    compute_kernel_hw_startup(cb_top_experts_per_group, cb_top_experts_per_group, cb_group_summed_scores);
     add_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
     cb_top_experts.wait_front(summed_experts_per_group);
 
@@ -438,7 +438,7 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
+    compute_kernel_hw_startup(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         blocks::sigmoid(cb_in_scores, cb_sigmoid_scores, width_tiles);

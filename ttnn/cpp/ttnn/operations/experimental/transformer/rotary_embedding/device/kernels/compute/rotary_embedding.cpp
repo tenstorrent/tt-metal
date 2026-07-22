@@ -106,7 +106,7 @@ void kernel_main() {
     constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
-    binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
+    compute_kernel_hw_startup(sin_cb, scalar_cb, untilized_sin_cb);
     UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>();
     UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
@@ -116,7 +116,7 @@ void kernel_main() {
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
 #else
-    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
 #endif
     uint32_t in1_idx = 0;
     for (uint32_t i = 0; i < num_rows; ++i) {

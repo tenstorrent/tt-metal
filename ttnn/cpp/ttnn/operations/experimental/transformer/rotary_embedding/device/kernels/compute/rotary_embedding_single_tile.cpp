@@ -74,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(13);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(14);
 
-    binary_op_init_common(sin_cb, sin_cb, untilized_sin_cb);
+    compute_kernel_hw_startup(sin_cb, sin_cb, untilized_sin_cb);
     UNTILIZE_ONE_TILE<sin_cb, untilized_sin_cb>();
     UNTILIZE_ONE_TILE<cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
@@ -86,7 +86,7 @@ void kernel_main() {
 #endif
 
     cb_trans_mat.wait_front(onetile);
-    binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
+    compute_kernel_hw_startup(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)

@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr uint32_t cb_x2_idx = tt::CBIndex::c_6;  // x**2
     constexpr uint32_t cb_zero_idx = tt::CBIndex::c_13;
 
-    binary_op_init_common(cb_inp_idx, cb_reduce_idx, cb_x2_idx);
+    compute_kernel_hw_startup(cb_inp_idx, cb_reduce_idx, cb_x2_idx);
 
     CircularBuffer cb_inp(cb_inp_idx);
     CircularBuffer cb_reduce(cb_reduce_idx);
@@ -107,7 +107,7 @@ void kernel_main() {
         cb_out_final.reserve_back(onetile);
 
         // Initialize accumulation
-        binary_op_init_common(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
+        compute_kernel_hw_startup(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
         reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
         pack_reconfig_data_format(cb_out_final_idx);
         add_init(cb_x2_merge_idx, cb_zero_idx, true);

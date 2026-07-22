@@ -89,7 +89,7 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_in);
     reconfig_data_format(cb_in0, cb_in1);
     pack_reconfig_data_format(cb_in);
     reconfig_data_format(cb_in0, cb_in1);
@@ -116,7 +116,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
-    binary_op_init_common(cb_in, cb_in, cb_x2);
+    compute_kernel_hw_startup(cb_in, cb_in, cb_x2);
 #endif
 
     // X^2
@@ -203,7 +203,7 @@ void kernel_main() {
     cb_signaling.pop_front(1);
     constexpr uint32_t post_dst0 = 0;
     constexpr uint32_t post_scaler0 = 0;
-    binary_op_init_common(cb_stats, post_cb_scaler_global, cb_var);
+    compute_kernel_hw_startup(cb_stats, post_cb_scaler_global, cb_var);
     index_subblock_w_offset = 0;
     index_h_offset = 0;
     index = 0;

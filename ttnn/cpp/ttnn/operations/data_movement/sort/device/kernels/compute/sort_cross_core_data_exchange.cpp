@@ -81,7 +81,7 @@ void kernel_main() {
     compute_kernel_hw_startup(
         is_row_major ? rm_input_cb_id : input_tensor_cb_id, index_tensor_cb_id, input_tensor_cb_id);
     if constexpr (is_row_major) {
-        binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
+        compute_kernel_hw_startup(input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
     }
     ckernel::topk_tile_init();
     transpose_init(input_tensor_cb_id);
@@ -320,7 +320,7 @@ void kernel_main() {
             transpose_and_pack(index_tensor_transposed_cb, rm_post_sort_index_cb, number_of_tiles_per_core);
 
             // Untilize values: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_value_output_cb_id);
+            compute_kernel_hw_startup(input_tensor_cb_id, index_tensor_cb_id, rm_value_output_cb_id);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(input_tensor_cb_id, rm_value_output_cb_id);
             input_tensor_cb.wait_front(number_of_tiles_per_core);
             rm_value_output_cb.reserve_back(TILE_H);
@@ -333,7 +333,7 @@ void kernel_main() {
             pack_untilize_uninit(rm_value_output_cb_id);
 
             // Untilize indices: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(rm_post_sort_index_cb_id, input_tensor_cb_id, rm_index_output_cb_id);
+            compute_kernel_hw_startup(rm_post_sort_index_cb_id, input_tensor_cb_id, rm_index_output_cb_id);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(
                 rm_post_sort_index_cb_id, rm_index_output_cb_id);
             rm_post_sort_index_cb.wait_front(number_of_tiles_per_core);

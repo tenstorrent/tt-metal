@@ -449,7 +449,7 @@ void emit_output_for_row() {
     constexpr uint32_t reg1 = 2U;
     constexpr uint32_t reg2 = 3U;
 
-    binary_op_init_common(cb_x, cb_x, cb_output);
+    compute_kernel_hw_startup(cb_x, cb_x, cb_output);
 
     cb_wait_front(cb_weighted_inv_rms_x, onetile);
     cb_wait_front(cb_weighted_inv_rms_x2, onetile);
@@ -548,7 +548,7 @@ void kernel_main() {
     cb_wait_front(cb_w2, onetile);
 
     init_sfpu(cb_x, cb_output);
-    binary_op_init_common(cb_x, cb_x, cb_output);
+    compute_kernel_hw_startup(cb_x, cb_x, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;

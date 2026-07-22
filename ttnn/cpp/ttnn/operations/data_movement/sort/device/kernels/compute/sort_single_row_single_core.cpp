@@ -167,7 +167,7 @@ void kernel_main() {
             // tilize_uninit does not reset the PACK side on WormholeB0 (the
             // Blackhole-only llk_pack_init path is skipped), so the packer is
             // still configured for the out-of-order tilize writes it just
-            // performed.  binary_op_init_common (same critical calls as
+            // performed.  compute_kernel_hw_startup(same critical calls as
             // compute_kernel_hw_startup: llk_math_pack_sync_init +
             // llk_pack_dest_init) re-arms the MATH-PACK DST semaphore and
             // resets PACK to normal mode so that pack_tile /
@@ -175,7 +175,7 @@ void kernel_main() {
             // work correctly.  Unlike compute_kernel_hw_startup this function
             // is safe to call multiple times per kernel invocation (same pattern
             // as layernorm_large_tensor.cpp's TILIZE_IN path).
-            binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
+            compute_kernel_hw_startup(input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
             ckernel::topk_tile_init();
             transpose_init(input_tensor_cb_id);
         }
@@ -315,7 +315,7 @@ void kernel_main() {
             transpose_and_pack(index_tensor_transposed_cb, rm_post_sort_index_cb, Wt);
 
             // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_cb.
-            binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_value_output_cb_id);
+            compute_kernel_hw_startup(input_tensor_cb_id, index_tensor_cb_id, rm_value_output_cb_id);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(input_tensor_cb_id, rm_value_output_cb_id);
             input_tensor_cb.wait_front(Wt);
             rm_value_output_cb.reserve_back(TILE_H);
@@ -327,7 +327,7 @@ void kernel_main() {
             pack_untilize_uninit(rm_value_output_cb_id);
 
             // Untilize indices: same chunked pack_untilize pattern but operating on the PACK-only rm_post_sort_index_cb
-            binary_op_init_common(rm_post_sort_index_cb_id, input_tensor_cb_id, rm_index_output_cb_id);
+            compute_kernel_hw_startup(rm_post_sort_index_cb_id, input_tensor_cb_id, rm_index_output_cb_id);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(rm_post_sort_index_cb_id, rm_index_output_cb_id);
             rm_post_sort_index_cb.wait_front(Wt);
             rm_index_output_cb.reserve_back(TILE_H);

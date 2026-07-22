@@ -36,9 +36,9 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
 
     if (num_tiles > 1) {
-        binary_op_init_common(cb_input, cb_x, cb_y);
+        compute_kernel_hw_startup(cb_input, cb_x, cb_y);
     } else {
-        binary_op_init_common(cb_logx, cb_decimal, cb_y);
+        compute_kernel_hw_startup(cb_logx, cb_decimal, cb_y);
     }
 
     dfb_decimal_obj.wait_front(onetile);  // comes from the reader

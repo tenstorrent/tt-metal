@@ -87,16 +87,16 @@ void kernel_main() {
     CircularBuffer cb_x(cb_x_id);
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in_id, cb_inb_id, cb_x_id);
+    compute_kernel_hw_startup(cb_in_id, cb_inb_id, cb_x_id);
 #else
     // Always call binary_op_init_common regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
     // in the "available for MATH" state.  Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
 #ifdef RMSNORM
-    binary_op_init_common(cb_in_id, cb_scaler_id, cb_xmm2_id);
+    compute_kernel_hw_startup(cb_in_id, cb_scaler_id, cb_xmm2_id);
 #else
-    binary_op_init_common(cb_in_id, cb_scaler_id, cb_ex_id);
+    compute_kernel_hw_startup(cb_in_id, cb_scaler_id, cb_ex_id);
 #endif
 #endif
     cb_eps.wait_front(1);  // comes from the reader
@@ -131,9 +131,9 @@ void kernel_main() {
 #ifdef TILIZE_IN
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
 #ifdef RMSNORM
-            binary_op_init_common(cb_in_id, cb_scaler_id, cb_xmm2_id);
+            compute_kernel_hw_startup(cb_in_id, cb_scaler_id, cb_xmm2_id);
 #else
-            binary_op_init_common(cb_in_id, cb_scaler_id, cb_ex_id);
+            compute_kernel_hw_startup(cb_in_id, cb_scaler_id, cb_ex_id);
 #endif
 #endif
             cb_in.wait_front(block.full_block_size());
@@ -279,9 +279,9 @@ void kernel_main() {
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
 
 #ifdef RMSNORM
-            binary_op_init_common(cb_in_id, cb_scaler_id, cb_xmm2_id);
+            compute_kernel_hw_startup(cb_in_id, cb_scaler_id, cb_xmm2_id);
 #else
-            binary_op_init_common(cb_in_id, cb_scaler_id, cb_ex_id);
+            compute_kernel_hw_startup(cb_in_id, cb_scaler_id, cb_ex_id);
 #endif
 #endif
             tile_regs_acquire();

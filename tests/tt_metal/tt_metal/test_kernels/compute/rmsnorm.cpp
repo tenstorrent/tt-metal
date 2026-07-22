@@ -20,9 +20,9 @@ void kernel_main() {
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 #else
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 #endif
 
     constexpr uint32_t onetile = 1;

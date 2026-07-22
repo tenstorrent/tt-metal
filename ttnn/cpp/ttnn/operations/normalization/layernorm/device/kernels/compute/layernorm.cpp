@@ -97,13 +97,13 @@ void kernel_main() {
     CircularBuffer cb_x(cb_x_id);
 
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in_rm_id, cb_in_rm_id, cb_in_id);
+    compute_kernel_hw_startup(cb_in_rm_id, cb_in_rm_id, cb_in_id);
 #elif defined(FUSE_PRE_ADD)
-    binary_op_init_common(cb_in_id, cb_inb_id, cb_x_id);
+    compute_kernel_hw_startup(cb_in_id, cb_inb_id, cb_x_id);
 #elif defined(RMSNORM)
-    binary_op_init_common(cb_xmm_id, cb_xmm_id, cb_xmm2_id);
+    compute_kernel_hw_startup(cb_xmm_id, cb_xmm_id, cb_xmm2_id);
 #else
-    binary_op_init_common(cb_x_id, cb_scaler_id, cb_ex_id);
+    compute_kernel_hw_startup(cb_x_id, cb_scaler_id, cb_ex_id);
 #endif
 
     cb_eps.wait_front(1);  // comes from the reader
@@ -120,11 +120,11 @@ void kernel_main() {
         tilize_all_blocks_to_cb<block_size>(cb_in_rm, cb_in, Wt);
         // Re-init binary ops after tilize hardware reconfiguration.
 #ifdef FUSE_PRE_ADD
-        binary_op_init_common(cb_in_id, cb_inb_id, cb_x_id);
+        compute_kernel_hw_startup(cb_in_id, cb_inb_id, cb_x_id);
 #elif defined(RMSNORM)
-        binary_op_init_common(cb_xmm_id, cb_xmm_id, cb_xmm2_id);
+        compute_kernel_hw_startup(cb_xmm_id, cb_xmm_id, cb_xmm2_id);
 #else
-        binary_op_init_common(cb_x_id, cb_scaler_id, cb_ex_id);
+        compute_kernel_hw_startup(cb_x_id, cb_scaler_id, cb_ex_id);
 #endif
 #endif
 /*
