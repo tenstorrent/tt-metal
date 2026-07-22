@@ -79,11 +79,13 @@ is active.
 The CI run sets `TT_METAL_PROFILER_ACCUMULATE=1`: the profiler accumulates markers in
 per-RISC L1 and defers the L1→DRAM dump instead of flushing after every program. Without
 it, that ~3 µs per-program dump lands inside the op2op gap and inflates the measured
-latency (reviewer feedback). The gated firmware KERNEL zones and our lean
-`DeviceRecordEvent` markers both survive accumulate mode (`DeviceTimestampedData` is
-compiled out, which is why `PROG_ID` is the only such marker left and the lean markers use
-events). Both goldens currently ship `null` (record mode) while the accumulate baseline is
-collected on CI; they get re-armed once the numbers are stable.
+latency (reviewer feedback). Accumulate compiles out `DeviceTimestampedData`, so every custom
+marker we rely on is emitted with `DeviceRecordEvent` instead (which survives): the tile-0 and
+pack-finish markers as fixed event ids, and `PROG_ID` as an event id that encodes the program
+(`EV_PROG_BASE + program_id`, recovered host-side). Together with the firmware KERNEL zones,
+that keeps both the `official` and `pack_to_unpack` metrics working under accumulate. Both
+goldens currently ship `null` (record mode) while the accumulate baseline is collected on CI;
+they get re-armed once the numbers are stable.
 
 ## Where it runs
 

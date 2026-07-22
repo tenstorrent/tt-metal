@@ -53,13 +53,18 @@ void kernel_main() {
     copy_tile_init(cb_in);
 
     // Lean-mode markers use DeviceRecordEvent (event id only, no data payload) instead of
-    // DeviceTimestampedData: it writes fewer words to the L1 profiler buffer, so it perturbs the
-    // measured op2op gap less (the pack-finish marker in particular sits right at kernel exit, in
-    // the gap). The event id is recovered host-side as (timer_id & 0xFFFF) and mapped back to these
-    // marker names in op_to_op_postprocess.py (EVENT_NAMES) -- keep the two tables in sync.
-    constexpr uint16_t EV_UNPACK_TILE0 = 12, EV_PACK_FINISH = 13;
+    // DeviceTimestampedData: it writes fewer words to the L1 profiler buffer (less op2op
+    // perturbation) AND, crucially, DeviceRecordEvent survives TT_METAL_PROFILER_ACCUMULATE=1
+    // whereas DeviceTimestampedData is compiled out under accumulate. PROG_ID must survive
+    // accumulate or the pack_to_unpack metric cannot associate the tile-0 / pack-finish markers
+    // with a program, so it is emitted as an event id that ENCODES the program: EV_PROG_BASE +
+    // program_id. Host-side (op_to_op_postprocess.py) recovers the event id as (timer_id & 0xFFFF)
+    // and maps 12/13 -> TILE_IDX / FINISH_LAST_PUSH and [EV_PROG_BASE, ..) -> PROG_ID with
+    // data = id - EV_PROG_BASE. Keep the EV_* constants here in sync with that module.
+    constexpr uint16_t EV_UNPACK_TILE0 = 12, EV_PACK_FINISH = 13, EV_PROG_BASE = 64;
 
-    DeviceTimestampedData("PROG_ID", program_id);
+    // Program id as a payload-free event so it survives accumulate mode (see above).
+    DeviceRecordEvent(static_cast<uint16_t>(EV_PROG_BASE + program_id));
 
     // The actual per-tile consumer work: copy CB_in -> dst regs (+ NOP spin) -> CB_out.
     // Kept identical across profiling modes so lean mode changes only instrumentation.
