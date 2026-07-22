@@ -231,11 +231,15 @@ void kernel_main() {
     // global Q-frame indices — without it, every device would look up frame_allow row 0 and
     // produce garbage. Arrays are sized to num_frames_padded_compile (max 32) and indexed by
     // global Q frame; each device only reads/writes the slots for its own Q shard.
-    uint32_t q_frame_total_processed[num_frames_padded_compile] = {};
-    uint32_t q_frame_processed[num_frames_padded_compile] = {};
-    constexpr uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
-    const uint32_t q_frame_offset = ring_index * q_frames_per_shard;
+    uint32_t q_frame_total_processed[num_frames_padded_compile > 0 ? num_frames_padded_compile : 1] = {};
+    uint32_t q_frame_processed[num_frames_padded_compile > 0 ? num_frames_padded_compile : 1] = {};
+    uint32_t q_frame_offset = 0;
     if constexpr (sparse_frames_enabled) {
+        // Both divisions are guaranteed non-zero here: sparse_frames_enabled implies frame_seqlen
+        // (tokens) is set and tile-aligned (TT_FATAL in device_operation.cpp), so frame_seqlen_tiles
+        // > 0 and Sk_chunk_t > 0.
+        constexpr uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+        q_frame_offset = ring_index * q_frames_per_shard;
         constexpr uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
         for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
             uint32_t allowed_k_frames = 0;
