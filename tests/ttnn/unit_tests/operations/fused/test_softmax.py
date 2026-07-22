@@ -718,6 +718,39 @@ def test_softmax_large_kernel_block_size(device, Wt):
     )
 
 
+@pytest.mark.parametrize("Wt", [5, 7, 11, 13, 47])  # widths not divisible by block_size (4 fp32 / 8 bf16)
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("numeric_stable", [True, False])
+def test_softmax_non_divisible_width(device, Wt, fp32_acc_en, numeric_stable):
+    """Issue #39050: the attention-optimized interleaved softmax now uses a fixed block_size
+    (4 fp32 / 8 otherwise) and handles a clamped final block, so widths not divisible by
+    block_size must still be correct."""
+    torch.manual_seed(0)
+
+    W = Wt * 32
+    shape = (1, 1, 64, W)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = F.softmax(torch_input, dim=-1, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_acc_en,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(ttnn_input, dim=-1, compute_kernel_config=compute_config, numeric_stable=numeric_stable)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
+
+
 def test_softmax_4096x4096_fp32(device):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)

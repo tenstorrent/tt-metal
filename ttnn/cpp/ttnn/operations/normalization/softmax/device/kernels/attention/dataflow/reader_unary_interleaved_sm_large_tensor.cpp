@@ -94,13 +94,14 @@ void kernel_main() {
             mask_index = mask_id_offset;
 #endif
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_id_in0_obj.reserve_back(blk);
+                uint32_t rem = (wt + blk > Wt) ? (Wt - wt) : blk;  // clamped final block
+                cb_id_in0_obj.reserve_back(rem);
                 uint32_t write_offset = 0;
 #if FUSED_SCALE_MASK
-                cb_id_attn_obj.reserve_back(blk);
+                cb_id_attn_obj.reserve_back(rem);
                 uint32_t mask_write_offset = 0;
 #endif
-                for (uint32_t regs = 0; regs < blk; regs++) {
+                for (uint32_t regs = 0; regs < rem; regs++) {
                     noc.async_read(
                         src_a, cb_id_in0_obj, src0_tile_bytes, {.page_id = tile_index}, {.offset_bytes = write_offset});
                     tile_index++;
@@ -117,9 +118,9 @@ void kernel_main() {
 #endif
                 }
                 noc.async_read_barrier();
-                cb_id_in0_obj.push_back(blk);
+                cb_id_in0_obj.push_back(rem);
 #if FUSED_SCALE_MASK
-                cb_id_attn_obj.push_back(blk);
+                cb_id_attn_obj.push_back(rem);
 
 #endif
             }

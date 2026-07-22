@@ -76,8 +76,9 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
 
-    uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    // Fixed block size that maximizes dest register usage: 4 with fp32 accumulation, 8 otherwise.
+    // Widths not divisible by block_size are handled by the kernels via a clamped final block.
+    uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
     // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
@@ -102,9 +103,8 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
     uint32_t im2_t = 1;
     uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
 
-    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
+    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing (rounded up to a multiple of block_size)
     uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_FATAL(im0_t == Wt, "im0_t: {} == Wt: {}, (Non user error)", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
@@ -138,10 +138,12 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
     }
     if (!use_large_kernel) {
         TT_FATAL(
-            im3_t == Wt + block_size, "im3_t {} == Width in tiles {} + num_dest_regs to use {}", im3_t, Wt, block_size);
+            im3_t >= Wt + block_size,
+            "im3_t {} must be >= Width in tiles {} + num_dest_regs to use {}",
+            im3_t,
+            Wt,
+            block_size);
     }
-    TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
-    TT_FATAL((block_size != -1), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
     TT_FATAL(
         im0_t % block_size == 0,
         "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",

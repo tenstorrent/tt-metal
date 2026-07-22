@@ -196,10 +196,9 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
 void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_length_t, uint32_t blk) {
     // requirements:
     //   cb_length_t of cb_in and cb_out are the same.
-    //   blk is a divisor of cb_length_t
     //   Calculates e^cb_in for cb_length_t num of tiles
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
-    ASSERT(cb_length_t % blk == 0);
+    //   A partial final block (cb_length_t not a multiple of blk) is handled by clamping blk below.
 
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_out_obj(cb_out);

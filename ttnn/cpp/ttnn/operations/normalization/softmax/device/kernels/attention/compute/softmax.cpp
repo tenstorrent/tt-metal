@@ -41,21 +41,22 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     cb_max_obj.wait_front(1);
     sub_bcast_cols_init_short(cb_in, cb_max);
     for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+        const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
         tile_regs_acquire();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+        for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
             sub_tiles_bcast_cols(cb_in, cb_max, wt + wt8, 0, wt8);
         }
-        cb_out_obj.reserve_back(ndst);
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+        cb_out_obj.reserve_back(rem);
+        for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
             exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+        for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
             pack_tile(wt8, cb_out);     // reuse the exps buffer again, this time in a circular manner
         }
         tile_regs_release();
-        cb_out_obj.push_back(ndst);
+        cb_out_obj.push_back(rem);
     }
     cb_in_obj.pop_front(Wt);
     cb_max_obj.pop_front(1);
@@ -121,21 +122,22 @@ void kernel_main() {
         pack_reconfig_data_format(cb_scale_mask);
         mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             // apply fused scale [*= 1/sqrt(...)]
             tile_regs_acquire();
-            cb_in0_obj.wait_front(ndst);
-            cb_scale_mask_obj.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            cb_in0_obj.wait_front(rem);
+            cb_scale_mask_obj.reserve_back(rem);
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, wt8, 0, wt8);  // mul bcast-HW -> DST[wt8]
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 pack_tile(wt8, cb_scale_mask);                                // reuse exps buffer
             }
             tile_regs_release();
-            cb_scale_mask_obj.push_back(ndst);
-            cb_in0_obj.pop_front(ndst);
+            cb_scale_mask_obj.push_back(rem);
+            cb_in0_obj.pop_front(rem);
         }
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
@@ -149,36 +151,37 @@ void kernel_main() {
         add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             tile_regs_acquire();
-            cb_scale_mask_obj.wait_front(ndst);
+            cb_scale_mask_obj.wait_front(rem);
 #ifdef CAUSAL_MASK
-            cb_fused_attn_obj.wait_front(wt + ndst);  // cumulative wait for up to Wt tiles
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            cb_fused_attn_obj.wait_front(wt + rem);  // cumulative wait for up to Wt tiles
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 add_tiles(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
 #else
             if (wait_mask) {
-                cb_fused_attn_obj.wait_front(wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
+                cb_fused_attn_obj.wait_front(wt + rem);  // cumulative wait for up to Wt tiles, only at first ht
             }
 
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
 #endif
-            cb_scale_mask_obj.pop_front(ndst);
-            cb_x_obj.reserve_back(ndst);
+            cb_scale_mask_obj.pop_front(rem);
+            cb_x_obj.reserve_back(rem);
 #ifndef NUMERIC_STABLE
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
             }
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 pack_tile(wt8, cb_x);  // reuse the exps buffer again, this time in a circular manner
             }
             tile_regs_release();
-            cb_x_obj.push_back(ndst);
+            cb_x_obj.push_back(rem);
         }
 
 // add numeric_stable
@@ -211,10 +214,11 @@ void kernel_main() {
 #endif
         if (mask_padded_data) {
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+                const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
                 tile_regs_acquire();
-                cb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
+                cb_in0_obj.wait_front(rem);
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
+                    if (wt + wt8 == Wt - 1) {  // last tile of the row gets the -inf padding mask
                         reconfig_data_format(cb_in0, cb_mask_padded);
                         add_bcast_rows_init_short(cb_in0, cb_mask_padded);
                         cb_mask_padded_obj.wait_front(1);
@@ -223,21 +227,21 @@ void kernel_main() {
                         copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
                     }
                 }
-                cb_in0_obj.pop_front(ndst);
+                cb_in0_obj.pop_front(rem);
 
-                cb_x_obj.reserve_back(ndst);
+                cb_x_obj.reserve_back(rem);
 #ifndef NUMERIC_STABLE
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
                 }
 #endif
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     pack_tile(wt8, cb_x);  // DST[0]->cb_id[wt]
                 }
                 tile_regs_release();
-                cb_x_obj.push_back(ndst);
+                cb_x_obj.push_back(rem);
             }
 
 // add numeric_stable
@@ -253,24 +257,25 @@ void kernel_main() {
             calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #else
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+                const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
                 tile_regs_acquire();
-                cb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                cb_in0_obj.wait_front(rem);
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
                 }
-                cb_in0_obj.pop_front(ndst);
+                cb_in0_obj.pop_front(rem);
 
-                cb_exps_obj.reserve_back(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                cb_exps_obj.reserve_back(rem);
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     pack_tile(wt8, cb_exps);    // DST[0]->cb_id[wt]
                 }
                 tile_regs_release();
-                cb_exps_obj.push_back(ndst);
+                cb_exps_obj.push_back(rem);
             }
 #endif
         }
@@ -300,20 +305,21 @@ void kernel_main() {
         // by now we already did a cumulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             tile_regs_acquire();
-            cb_out0_obj.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            cb_out0_obj.reserve_back(rem);
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 // wt+wt8 since we pop Wt after the entire loop
                 mul_tiles_bcast<BroadcastType::COL>(
                     cb_exps, cb_recipsumexps, wt + wt8, 0, wt8);  // tile *= 1/(sum(exp(x)))
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 pack_tile(wt8, cb_out0);
             }
             tile_regs_release();
-            cb_out0_obj.push_back(ndst);
+            cb_out0_obj.push_back(rem);
         }
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);

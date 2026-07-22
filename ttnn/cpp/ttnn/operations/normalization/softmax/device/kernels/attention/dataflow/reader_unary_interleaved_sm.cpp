@@ -77,7 +77,7 @@ void kernel_main() {
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_blks; ++i) {
         for (uint32_t j = 0; j < Wt; j += blk) {
-            uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
+            uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
             cb_id_in0_obj.reserve_back(rem);
             uint32_t write_offset = 0;
             for (uint32_t r = 0; r < rem; ++r) {
@@ -96,9 +96,10 @@ void kernel_main() {
 // of slice of tensor that was assigned to our core, then we skip to next batch
 #if CAUSAL_MASK
         for (uint32_t j = 0; j < Wt; j += blk) {
-            cb_id_attn_obj.reserve_back(blk);
+            uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
+            cb_id_attn_obj.reserve_back(rem);
             uint32_t mask_write_offset = 0;
-            for (uint32_t wb = 0; wb < blk; ++wb) {
+            for (uint32_t wb = 0; wb < rem; ++wb) {
                 noc.async_read(
                     addr_mask,
                     cb_id_attn_obj,
@@ -109,7 +110,7 @@ void kernel_main() {
                 ++mask_id;
             }
             noc.async_read_barrier();
-            cb_id_attn_obj.push_back(blk);
+            cb_id_attn_obj.push_back(rem);
         }
         ++ht;
         ++mask_ht;
@@ -125,9 +126,10 @@ void kernel_main() {
         if (read_mask) {
             for (uint32_t j = 0; j < Wt; j += blk) {
                 // This is only executed every blk wts
-                cb_id_attn_obj.reserve_back(blk);
+                uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
+                cb_id_attn_obj.reserve_back(rem);
                 uint32_t mask_write_offset = 0;
-                for (uint32_t wb = 0; wb < blk; ++wb) {
+                for (uint32_t wb = 0; wb < rem; ++wb) {
                     noc.async_read(
                         addr_mask,
                         cb_id_attn_obj,
@@ -138,7 +140,7 @@ void kernel_main() {
                     ++mask_id;
                 }
                 noc.async_read_barrier();
-                cb_id_attn_obj.push_back(blk);
+                cb_id_attn_obj.push_back(rem);
             }
             read_mask = false;
         }

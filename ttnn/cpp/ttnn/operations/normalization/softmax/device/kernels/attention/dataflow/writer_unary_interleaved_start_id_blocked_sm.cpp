@@ -53,15 +53,16 @@ void kernel_main() {
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
-        cb_id_out0_obj.wait_front(blk);
+        uint32_t rem = (i + blk > num_tiles) ? (num_tiles - i) : blk;  // clamped final block
+        cb_id_out0_obj.wait_front(rem);
 
         uint32_t read_offset = 0;
-        for (uint32_t j = 0; j < blk; j++) {
+        for (uint32_t j = 0; j < rem; j++) {
             noc.async_write(cb_id_out0_obj, s, tile_bytes, {.offset_bytes = read_offset}, {.page_id = tile_id});
             tile_id++;
             read_offset += tile_bytes;
         }
         noc.async_write_barrier();
-        cb_id_out0_obj.pop_front(blk);
+        cb_id_out0_obj.pop_front(rem);
     }
 }
