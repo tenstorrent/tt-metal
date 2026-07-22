@@ -97,8 +97,11 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     TT_FATAL(mesh_device != nullptr, "all_gather_regime_a_matmul_async requires a MeshDevice");
 
     const uint32_t D = op.d;
-    // Milestone #17: D=2 forward-neighbour full-gather barrier. D>2 / ring is milestone #18.
-    TT_FATAL(D == 2, "all_gather_regime_a_matmul_async Phase A currently implements D=2 (got D={})", D);
+    TT_FATAL(D >= 2, "all_gather_regime_a_matmul_async fused path requires D>=2 (got D={})", D);
+    // Milestone #17/#18 (full-gather barrier): the injector unicasts this device's shard to all D-1 other
+    // devices through a SINGLE forward mux, reaching the device h hops away for h=1..D-1. For D>2 this only
+    // covers every device under a RING (the forward direction wraps around); D=2 also works on a line.
+    TT_FATAL(D == 2 || op.topology == ttnn::ccl::Topology::Ring, "all_gather_regime_a_matmul_async D>2 requires ring topology");
 
     const uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         in0_shard, mesh_coordinate, op.cluster_axis);
@@ -106,10 +109,10 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         in0_shard, mesh_coordinate, 1, op.topology, op.cluster_axis);
     const std::optional<ttnn::MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         in0_shard, mesh_coordinate, -1, op.topology, op.cluster_axis);
-    // D=2: the single "other" device is whichever neighbour exists (forward for device 0, backward for the
-    // wrap/end device under linear topology). Both directions reach the other device in one hop.
+    // Mux destination = the +1 forward neighbour (always present on a ring; for a D=2 line's wrap/end device
+    // there is no forward neighbour, so fall back to the backward one — still the single "other" device).
     const std::optional<ttnn::MeshCoordinate>& other_coord = forward_coord.has_value() ? forward_coord : backward_coord;
-    TT_FATAL(other_coord.has_value(), "D=2 requires a neighbour along the cluster axis");
+    TT_FATAL(other_coord.has_value(), "fused all-gather requires a neighbour along the cluster axis");
 
     // ============================ regime_a compute engine (replicated default path) =========================
     // Build the regime_a plan for the FULL matmul [M, K_global] x [K_global, N] using the GATHER buffer's shape
@@ -282,8 +285,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         program, mux_config, mux_logical, src_node, dst_node, link_indices.front(), NOC::RISCV_0_default);
     const CoreCoord mux_virtual = mesh_device->worker_core_from_logical_core(mux_logical);
 
-    // one-hop unicast to the (single) forward neighbour for D=2.
-    const uint32_t num_hops = 1u;
+    // The injector reaches all D-1 other devices by unicasting forward with num_hops = 1..D-1 (ring wrap).
+    const uint32_t num_dests = D - 1u;
 
     // Injector compile args: TensorAccessorArgs(in0 shard) then TensorAccessorArgs(gather buffer).
     std::vector<uint32_t> ict;
@@ -379,7 +382,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         Kt_global,                      // a4 Kt_global (gather row stride)
         k_tile_global_base,             // a5 global K-tile base of this shard
         kTileBytesBf16,                 // a6 tile bytes
-        num_hops,                       // a7 hops to forward neighbour
+        num_dests,                      // a7 number of remote devices to reach (hops 1..num_dests)
         progress_addr,                  // a8 gather_progress GlobalSemaphore L1 address (on neighbour)
         (uint32_t)inj_virtual.x,        // a9 neighbour injector core x (== ours; where its gather_progress lives)
         (uint32_t)inj_virtual.y,        // a10 neighbour injector core y

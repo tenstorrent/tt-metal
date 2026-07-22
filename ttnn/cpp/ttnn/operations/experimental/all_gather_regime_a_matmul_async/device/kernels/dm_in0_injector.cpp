@@ -24,7 +24,7 @@
 //   a4  Kt_global                 (K tiles of the gather buffer = row stride)
 //   a5  k_tile_global_base        (global K-tile offset of this device's shard)
 //   a6  tile_bytes                (bf16 tile = 2048)
-//   a7  num_hops                  (fabric distance to the forward neighbour)
+//   a7  num_dests                 (# remote devices = D-1; reach each via forward hops 1..num_dests)
 //   a8  progress_sem_addr         (gather_progress GlobalSemaphore L1 address; local read + remote target)
 //   a9  nbr_inj_x                 (neighbour injector core x — where its gather_progress lives)
 //   a10 nbr_inj_y                 (neighbour injector core y)
@@ -51,7 +51,7 @@ void kernel_main() {
     const uint32_t Kt_global = get_arg_val<uint32_t>(a++);
     const uint32_t k_tile_global_base = get_arg_val<uint32_t>(a++);
     const uint32_t tile_bytes = get_arg_val<uint32_t>(a++);
-    const uint32_t num_hops = get_arg_val<uint32_t>(a++);
+    const uint32_t num_dests = get_arg_val<uint32_t>(a++);  // reach devices 1..num_dests hops forward (ring)
     const uint32_t progress_sem_addr = get_arg_val<uint32_t>(a++);
     const uint32_t nbr_inj_x = get_arg_val<uint32_t>(a++);
     const uint32_t nbr_inj_y = get_arg_val<uint32_t>(a++);
@@ -92,25 +92,34 @@ void kernel_main() {
             noc_async_read_barrier();
             noc_async_write_page(global_tile_id, gather_acc, payload_l1);  // local gather write
 
-            const uint64_t dst = get_noc_addr(global_tile_id, gather_acc);  // neighbour gather slot (same addr)
-            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
-                &sender,
-                pkt_hdr,
-                payload_l1,
-                tile_bytes,
-                tt::tt_fabric::NocUnicastCommandHeader{dst},
-                (uint8_t)num_hops);
+            // Same global-K offset on every device's gather buffer (mesh tensor => identical NoC address).
+            const uint64_t dst = get_noc_addr(global_tile_id, gather_acc);
+            for (uint32_t h = 1; h <= num_dests; ++h) {
+                tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                    &sender,
+                    pkt_hdr,
+                    payload_l1,
+                    tile_bytes,
+                    tt::tt_fabric::NocUnicastCommandHeader{dst},
+                    (uint8_t)h);
+                // pkt_hdr AND payload_l1 are the (shared) source of this non-blocking send; drain the copy to
+                // the mux slot before the next iteration rewrites pkt_hdr's num_hops / the next tile's payload.
+                noc_async_writes_flushed();
+            }
         }
     }
     noc_async_writes_flushed();  // local gather writes departed L1
 
-    // Signal readiness to the neighbour AFTER the payload flushed (same channel => ordered delivery).
+    // Signal readiness to each remote AFTER the payload flushed (same channel => ordered delivery).
     const uint64_t nbr_progress = get_noc_addr(nbr_inj_x, nbr_inj_y, progress_sem_addr);
-    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
-        &sender,
-        pkt_hdr,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nbr_progress, /*val=*/1u, /*flush=*/true},
-        (uint8_t)num_hops);
+    for (uint32_t h = 1; h <= num_dests; ++h) {
+        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+            &sender,
+            pkt_hdr,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{nbr_progress, /*val=*/1u, /*flush=*/true},
+            (uint8_t)h);
+        noc_async_writes_flushed();  // pkt_hdr reused for the next inc
+    }
 
     noc_async_write_barrier();
     sender.close();

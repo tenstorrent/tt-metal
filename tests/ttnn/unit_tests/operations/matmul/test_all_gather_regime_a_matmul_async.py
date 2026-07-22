@@ -6,6 +6,8 @@
 #    reservation fit + collision, and L1 sizing.
 #  - D=1 correctness: the op is behaviorally identical to regime_a_matmul.
 
+import gc
+
 import pytest
 import torch
 import ttnn
@@ -95,37 +97,30 @@ def test_d1_matches_regime_a(device):
     assert torch.equal(got, got2), "D=1 fused op must equal regime_a_matmul exactly"
 
 
-# ---------------------------------------------------------------- D=2 full-gather-barrier correctness (device)
-# Task 3 milestone #17: fuse the fabric all-gather of the in0 K-shards with regime_a_matmul in ONE program.
-# Uses ring topology so BOTH devices have a forward neighbour (device 1 wraps to device 0).
-@pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
-def test_d2_full_gather_correctness():
-    D = 2
-    # Fabric only initializes on the full galaxy torus (a 2-chip mesh can't complete the ethernet router
-    # handshake). We open the full mesh with a bare FABRIC_1D config (the conftest fixture's STRICT_INIT config
-    # overflows the ACTIVE_ETH kernel-config buffer on this build), carve a (1,2) submesh, and run the fused
-    # D=2 op on it. dim -1 (K) is sharded across the 2 submesh devices; in1 is replicated.
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    full = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+# ---------------------------------------------------------------- multi-device full-gather correctness (device)
+# Task 3 (#17 D=2, #18 D=4/8): fuse the fabric all-gather of the in0 K-shards with regime_a_matmul in ONE
+# program. Fabric only initializes on the full galaxy torus (a small mesh can't complete the ethernet router
+# handshake) and the conftest fixture's STRICT_INIT fabric config + the watcher both overflow the ACTIVE_ETH
+# kernel-config buffer on this build — so we open the full mesh with a BARE fabric config, no watcher, and carve
+# a (1,D) submesh. D>2 uses a ring so the injector's forward hops 1..D-1 reach every other device.
+def _run_full_gather(D, mesh_shape, fabric_config, topology):
+    M, K, N = 32, 6144, 3072  # K == K_global; each device owns K_local = K/D
+    torch.manual_seed(0)
+    t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)  # global in0 [M, K_global], sharded on K
+    t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)  # in1 [K_global, N], replicated
+    ref = (t0.float() @ t1.float())[0, 0]
+
+    ttnn.set_fabric_config(fabric_config)
+    full = ttnn.open_mesh_device(ttnn.MeshShape(*mesh_shape))
     try:
         md = full.create_submesh(ttnn.MeshShape(1, D))
 
-        M, K, N = 32, 6144, 3072  # K == K_global; each device owns K_local = K/D = 3072
-        torch.manual_seed(0)
-        t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)  # global in0 [M, K_global], sharded on K
-        t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)  # in1 [K_global, N], replicated
-        ref = (t0.float() @ t1.float())[0, 0]
-
-        # Sub-device + stall group covering the full compute grid (CCL cores), and the gather_progress semaphore.
         grid = md.compute_with_storage_grid_size()
         ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-        worker_sub_device = ttnn.SubDevice([ccl_crs])
-        sub_device_manager = md.create_sub_device_manager([worker_sub_device], 0)
-        md.load_sub_device_manager(sub_device_manager)
+        md.load_sub_device_manager(md.create_sub_device_manager([ttnn.SubDevice([ccl_crs])], 0))
         md.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
         gather_progress_sem = ttnn.create_global_semaphore(md, ccl_crs, 0)
 
-        # in0: replicate over submesh axis 0, shard over axis 1 (the D axis) on the last (K) dim.
         a = ttnn.from_torch(
             t0,
             layout=ttnn.TILE_LAYOUT,
@@ -136,7 +131,6 @@ def test_d2_full_gather_correctness():
                 ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, D)),
             ),
         )
-        # in1: full [K, N] replicated to every device, regime_a DRAM width-shard layout.
         wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, md)
         b = ttnn.from_torch(
             t1,
@@ -156,7 +150,7 @@ def test_d2_full_gather_correctness():
             b,
             config=cfg,
             cluster_axis=1,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             num_links=1,
             num_workers_per_link=1,
             multi_device_global_semaphore=[gather_progress_sem],
@@ -164,11 +158,28 @@ def test_d2_full_gather_correctness():
         ttnn.synchronize_device(md)
 
         # Output [M, N] is computed (replicated) on every device — each must match the full matmul.
-        # ConcatMeshToTensor(dim=0) stacks the D per-device [1, M, N] outputs into [D, M, N].
         per_dev = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
         for d in range(D):
-            got = per_dev[d].float().reshape(ref.shape)
-            assert_with_pcc(ref, got, 0.999)
+            assert_with_pcc(ref, per_dev[d].float().reshape(ref.shape), 0.999)
+        del a, b, out, md  # drop device buffers so close_mesh_device can fully release all devices
     finally:
         ttnn.close_mesh_device(full)
+        del full
+        gc.collect()  # ensure no device is still open before the next test changes the fabric config
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
+def test_d2_full_gather_correctness():
+    # D=2 on a line: device 0 -> forward, device 1 -> backward (both one hop).
+    _run_full_gather(2, (8, 4), ttnn.FabricConfig.FABRIC_1D, ttnn.Topology.Linear)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="regime_a_matmul is Blackhole-only")
+@pytest.mark.parametrize(
+    "D, mesh_shape",
+    [(4, (8, 4)), (8, (4, 8))],  # (1,8) submesh needs axis-1 extent 8 -> open the mesh as (4,8)
+)
+def test_dn_full_gather_correctness_ring(D, mesh_shape):
+    # D>2: ring so the injector's forward hops 1..D-1 reach every other device.
+    _run_full_gather(D, mesh_shape, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.Topology.Ring)
