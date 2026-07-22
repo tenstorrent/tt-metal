@@ -201,5 +201,6 @@ compared against the split candidate; removing it costs about 0.90 ms traced.
   matched the 17:56 prefill/decode raw op sequences to the current
   split-prefill/wide-decode source, found no material hard-check gap, and
   confirmed all three prior findings closed. See `stage_review.md`.
-- Local Stage 02 commit SHA: pending.
+- Local Stage 02 implementation/evidence commit SHA:
+  `0da25aafeac04e2ff21cb39c4687565dc28f7f98`.
 - No push will be performed.
