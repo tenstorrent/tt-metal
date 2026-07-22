@@ -204,6 +204,33 @@ handles **partial** (non-tile-aligned) row/col via a masked bcast-mul on the las
 (`WaitAndPopPerTile` — DST is the accumulator, ~2 tiles resident), and **cross-call accumulate** (a raw
 partial-sum CB tile folded into the pairwise add natively by parity — no `binary_dest_reuse` — finalized only on
 the last chunk).
+## ⭐⭐/⭐⭐⭐ T2/T3 — [`sfpu_tile_scope`](sfpu_tile_scope/README.md)
+**Concept:** SFPU work-scoping — run only the 32-lane **vector ops** that cover the meaningful axis of a tile,
+instead of the whole 32×32 tile. An SFPU vector op = 4 rows × 8 stride-2 columns; a tile = 32 vector ops (4
+faces × 4 row-groups × 2 column parities), walked `[rg0-even, rg0-odd, rg1-even, …]`.
+**Situation:** you apply `rsqrt`/`recip` (a norm denominator, softmax `1/rowsum`, any reduce-then-activate
+epilogue) to a tile whose useful value lives on **one axis** — a per-row result in column 0, a per-column
+result in row 0, or a scalar at `[0,0]` — but the SFPU runs all 32 vectors, most on lanes you never read.
+**Measured win (BH, 1 core, sharded L1, isolated MATH-thread ns per SFPU call — copy+pack OUTSIDE the timed
+`DeviceZoneScopedN`, only the SFPU on the math thread; cost is ~flat per vector op, ~24 ns rsqrt / ~28 ns
+recip; zone unpack/pack ≈0 ns = proof of isolation):** the ladder is just vector count — rc=32 → r/c=16
+(**1.98×**) → face=8 (**3.96×**) → face_iter1=1 (**26.5×**). The two axis-optimal tricks: **row-0 via
+`ITERATIONS` alone** — `r_iter2` (`VectorMode::R` + `ITERATIONS=2`) = 4 vectors, **7.26× vs rc (rsqrt), 7.37×
+(recip)**, ~3.7× vs the coarse `R`; **col-0 via an address stride (raw sfpi)** — `c_skip` (`VectorMode::C` +
+even-parity `dst_reg+=2`) = 8 vectors, rsqrt **3.84× vs rc / clean 1.94× vs `c`** (same body). `r_iter2` (4)
+beats `c_skip` (8): a row collapses to one row-group, a column still spans all 32 rows. Caveat: `recip`'s
+`c_skip` (~10×) is confounded — reciprocal's fast path uses `SFPLOADMACRO` addressing that can't be strided, so
+the skip forces a cheaper hand-written Newton body (ns/vector ≈11 vs 28); the clean pure-skip number is rsqrt's
+1.94× over `c`. ISOLATION only — a full op's copy/pack/DRAM dilute it, a DM-bound op won't show it.
+**Gist:** when a reduction has collapsed data onto one axis, scope the SFPU to match. **Row-0 result → the
+`ITERATIONS` knob** (`VectorMode::R` + `ITERATIONS=2`): the row waste is the OUTER walk axis, so truncating
+iterations keeps just the top row-group of both top faces (4 vectors). **Col-0 result → an even-parity address
+stride** (raw sfpi `dst_reg += 2` inside a `VectorMode::C` body): the waste is column PARITY, the INNER walk
+axis, which `ITERATIONS` can't isolate — you skip the odd-parity vectors (they never touch column 0), 8 vectors.
+Coarser fallbacks: a half-tile result → `VectorMode::R`/`::C`; a scalar → `VectorMode::None` (+ `ITERATIONS=1`).
+`recip_tile` takes `vector_mode` directly; `rsqrt_tile` hardcodes it (scope via the `SFPU_UNARY_CALL` macro);
+neither exposes `ITERATIONS` or a parity stride, so `r_iter2`/`c_skip` need the underlying calls.
+
 ## ⭐⭐⭐ T3 — [`shared_input_reuse`](shared_input_reuse/README.md)
 **Concept:** redundant-DRAM-read elimination — stream a shared input once and NoC-multicast it (the `mcast_pipe` helper) vs. every core re-reading it from DRAM.
 **Situation:** a grid of cores all need the **same** multi-MB input — a large shared matrix `[R, C]` (~2.4 MB) streamed in fixed-size chunks (larger than L1). Written the obvious way, every core streams the whole input from DRAM — `N×` the unique bytes.
