@@ -136,13 +136,13 @@ jobs:
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 30
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
-          useDevHostMount: 'true'
-          sharedVolumeEnabled: 'true'
+          useDevHostMount: "true"
+          sharedVolumeEnabled: "true"
           path: /etc/ttop
 
       - name: 📦 Download Build Artifact
@@ -180,9 +180,6 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Runner is not in the mpirun hostfile — only /ci is shared via NFS.
-          # Demo cmds launch ttrun.py on the runner, so copy source locally then
-          # extract the build archive (avoid untarring onto NFS).
           sudo rm -rf /home/user/tt-metal
           sudo mkdir -p /home/user
           sudo chown "$(id -u):$(id -g)" /home/user
@@ -312,14 +309,14 @@ jobs:
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - name: Delete allocation
         if: always()
         uses: ./.github/actions/ttop-delete-allocation
         with:
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
