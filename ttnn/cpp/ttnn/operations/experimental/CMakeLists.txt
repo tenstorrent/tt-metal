@@ -42,6 +42,7 @@ add_subdirectory(isin)
 # cglagovichTT, jonathansuTT (named individuals, not a team)
 add_subdirectory(minimal_matmul)
 add_subdirectory(regime_a_matmul)
+add_subdirectory(all_gather_regime_a_matmul_async)
 
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
@@ -91,6 +92,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::RegimeAMatmul
+        TTNN::Ops::Experimental::AllGatherRegimeAMatmulAsync
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
@@ -139,6 +141,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RegimeAMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::AllGatherRegimeAMatmulAsync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
