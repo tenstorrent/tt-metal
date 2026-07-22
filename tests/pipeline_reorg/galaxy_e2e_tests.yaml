@@ -53,11 +53,12 @@
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
-# DC validation neighbor-exchange test, single Wormhole galaxy as one 8x4 2D torus
-# (equivalent to run_fabric_tests.sh --config 4x8wh --filter name.2DTorusXYNeighborExchange).
+# Fabric DC validation neighbor-exchange test on a single Wormhole galaxy (#50505).
+# Single galaxy is one host, so --hosts is the runner's own node. --image none runs the
+# test against the pipeline container's build (galaxy_e2e has no in-container docker daemon).
 - id: galaxy-fabric-2d-torus-neighbor-exchange
   name: Galaxy Fabric 2D Torus Neighbor Exchange DC Validation Tests
-  cmd: TT_MESH_GRAPH_DESC_PATH="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml --filter 'name.2DTorusXYNeighborExchange'
+  cmd: ./tools/scaleout/exabox/run_fabric_tests.sh --hosts "$(hostname)" --image none --config 4x8wh --filter name.2DTorusXYNeighborExchange
   skus:
     wh_galaxy:
       timeout: 20
@@ -107,11 +108,12 @@
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
-# DC validation neighbor-exchange test, single Blackhole galaxy as one 8x4 2D torus
-# (equivalent to run_fabric_tests.sh --config 4x8 --filter name.2DTorusXYNeighborExchange).
+# Fabric DC validation neighbor-exchange test on a single Blackhole galaxy (#50505).
+# Single galaxy is one host, so --hosts is the runner's own node. --image none runs the
+# test against the pipeline container's build (galaxy_e2e has no in-container docker daemon).
 - id: bh-galaxy-fabric-2d-torus-neighbor-exchange
   name: BH Galaxy Fabric 2D Torus Neighbor Exchange DC Validation Tests
-  cmd: TT_MESH_GRAPH_DESC_PATH="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml --filter 'name.2DTorusXYNeighborExchange'
+  cmd: ./tools/scaleout/exabox/run_fabric_tests.sh --hosts "$(hostname)" --image none --config 4x8 --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml --filter name.2DTorusXYNeighborExchange
   skus:
     bh_galaxy:
       timeout: 20
