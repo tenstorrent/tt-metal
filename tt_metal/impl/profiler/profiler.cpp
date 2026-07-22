@@ -335,20 +335,6 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
     return hash_to_zone_src_locations;
 }
 
-std::unordered_map<uint16_t, tracy::MarkerDetails> loadZoneSourceLocationsHashesReadOnly() {
-    // Same hash->name/file/line map as generateZoneSourceLocationsHashes(), but READ-ONLY: it never
-    // appends to the shared zone-source log (push_new=false for both). Safe to call concurrently
-    // from the real-time X280 drainer's receiver thread without racing the DeviceProfiler's own
-    // close-time (writing) call.
-    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
-    std::unordered_set<std::string> zone_src_locations;
-    populateZoneSrcLocations(
-        PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
-    populateZoneSrcLocations(
-        NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
-    return hash_to_zone_src_locations;
-}
-
 void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     const std::vector<uint32_t>& device_markers_chunk_offsets,
@@ -1493,16 +1479,6 @@ void DeviceProfiler::readRiscProfilerResults(
     const std::optional<ProfilerOptionalMetadata>& metadata,
     const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include) {
     ZoneScoped;
-
-    // X280 wins: if the X280 kernel-zone drainer booted for this chip, it is the sole consumer of
-    // the per-RISC SPSC profiler rings. The standard DeviceProfiler must not read them — a second
-    // consumer races on the ring head (HOST_BUFFER_END_INDEX) and corrupts markers. This is the
-    // single chokepoint every read path funnels through, so gating here covers mid-run, finish,
-    // teardown, and interval-thread reads. When X280 did NOT boot, this is false and the standard
-    // profiler collects as usual (already gated upstream by TT_METAL_DEVICE_PROFILER).
-    if (tt::IsProgramX280ProfilerActive(device_id)) {
-        return;
-    }
 
     if (data_source == ProfilerDataBufferSource::DRAM_AND_L1) {
         readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::DRAM, metadata, riscs_to_include);

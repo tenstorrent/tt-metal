@@ -35,15 +35,6 @@ using RuntimeID = uint32_t;
 
 namespace tt::tt_metal {
 
-// Build the 16-bit-hash -> zone source-location (name/file/line) map from the kernel profiler's
-// zone-source logs written at kernel compile time. Same map the DeviceProfiler read path uses to
-// name device zones.
-std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHashes();
-
-// READ-ONLY variant (never appends to the shared log); safe to call live from the real-time X280
-// drainer's receiver thread to resolve marker names without racing the DeviceProfiler.
-std::unordered_map<uint16_t, tracy::MarkerDetails> loadZoneSourceLocationsHashesReadOnly();
-
 template <typename T1, typename T2>
 struct pair_hash {
     size_t operator()(const std::pair<T1, T2>& p) const {

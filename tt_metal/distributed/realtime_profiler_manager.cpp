@@ -9,17 +9,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <exception>
-#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -63,38 +59,9 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 
-#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
-#include "hostdevcommon/profiler_common.h"
-#include "jit_build/build_env_manager.hpp"
-#include "tt_metal/impl/profiler/profiler.hpp"
-#include "tools/profiler/x280_driver.hpp"
-
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-// Broadcast PROFILER_TERMINATE=1 to every worker core on a device (FULL logical grid, so DISPATCH
-// cores are covered too). Makes each producing RISC's ring_ensure_room stop blocking on a full SPSC
-// ring and drop markers instead. Needed when the X280 drainer fails to boot: with no drainer the
-// rings are never emptied, so without this a producing RISC blocks forever once its ring fills —
-// deadlocking the workload (the command-queue completion never arrives). Best-effort; logs and
-// continues on write failure.
-void broadcast_profiler_terminate(Cluster& cluster, ChipId chip_id, IDevice* device, uint64_t prof_l1) {
-    if (device == nullptr) {
-        return;
-    }
-    const uint64_t terminate_addr =
-        prof_l1 + static_cast<uint64_t>(kernel_profiler::PROFILER_TERMINATE) * sizeof(uint32_t);
-    const uint32_t one = 1;
-    const CoreCoord grid = device->logical_grid_size();
-    for (uint32_t ly = 0; ly < static_cast<uint32_t>(grid.y); ly++) {
-        for (uint32_t lx = 0; lx < static_cast<uint32_t>(grid.x); lx++) {
-            const CoreCoord v =
-                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, CoreCoord{lx, ly}, CoreType::WORKER);
-            cluster.write_core(&one, sizeof(one), tt_cxy_pair(chip_id, v), terminate_addr);
-        }
-    }
-}
 
 // Minimum wall time between full init calibrations (run_sync + constructor SYNC_CHECK) and
 // between finish-path sync checks, per physical chip. Matches the finish-path throttle.
@@ -380,15 +347,6 @@ void RealtimeProfilerManager::publish_pages(
     const uint32_t* page_buf,
     uint32_t num_pages,
     std::vector<tt::ProgramRealtimeRecord>& records) {
-    // PROTOTYPING: program-record publishing is DISABLED. The ring is repurposed to carry X280
-    // device-zone markers (published by drain_x280_device). The program D2H socket is still drained
-    // (to keep its FIFO from filling / sync markers scanned) but its records are dropped here.
-    (void)dev_state;
-    (void)page_buf;
-    (void)num_pages;
-    (void)records;
-    return;
-#if 0
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
     auto is_record = [](const uint32_t* page) { return page[2] != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID; };
     records.clear();
@@ -414,7 +372,6 @@ void RealtimeProfilerManager::publish_pages(
     num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
     num_published_batches_.fetch_add(1, std::memory_order_relaxed);
     ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
-#endif
 }
 
 bool RealtimeProfilerManager::has_active_finish_sync() const {
@@ -531,25 +488,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
     const size_t max_consumer_batch_records =
         std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * devices_.size());
-    // PROTO: the ring now carries X280 device MARKERS (hundreds of k per run), not the far smaller
-    // program-record volume. The default (max_consumer_batch_records*headroom = 131072) is too small
-    // -> the lossy BroadcastRing overwrites unread markers, splitting START/END pairs -> orphaned zones.
-    // Size it to hold the full run's backlog so shutdown's DrainThenStop pushes everything (lossless).
-    // kMaxRingCapacity (4M records ~= 128 MB) covers the observed ~870k markers with headroom.
-    // (An earlier "4M crashes" note was a misdiagnosis -- the crash was a dangling x280_dev_ / the
-    //  find()-%0 SIGFPE, unrelated to ring size; fixed separately.)
-    (void)max_consumer_batch_records;
-    ring_.emplace(kMaxRingCapacity);
+    ring_.emplace(std::min(kMaxRingCapacity, max_consumer_batch_records * kRingHeadroomBatches));
 
-    // Announce activation; paired with NotifyProgramRealtimeProfilerDeactivated on shutdown.
-    // Additionally, for chips where the X280 drainer actually booted (x280_active), announce the
-    // "X280 won" signal so the standard DeviceProfiler stands down and doesn't read those chips'
-    // SPSC rings (two consumers corrupt the ring head).
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
-        if (dev_state.x280_active) {
-            tt::NotifyProgramX280ProfilerActivated(dev_state.chip_id);
-        }
     }
 
     run_init_sync();
@@ -843,364 +785,8 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 config_buffer_addr);
         }
 
-        // Optionally boot the X280 (L2CPU) kernel-zone drainer. Best-effort: on any failure it
-        // leaves x280_active=false and the device runs with the standard program-record path only.
-        boot_x280_drainer(mesh_device, coord, dev_state);
-
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
-    }
-
-    // Point x280_dev_ at the X280-active element INSIDE devices_, now that the vector is fully built
-    // and will not reallocate for the rest of the run. Doing this per-iteration (or inside
-    // boot_x280_drainer) is a use-after-free: each push_back can reallocate the vector, and the value
-    // boot_x280_drainer saw was a soon-moved-from loop local. run_consumer dereferences x280_dev_ from
-    // another thread, so a stale pointer here is the SIGFPE/SIGSEGV in the WorkerZone enrichment path.
-    for (auto& dev_state : devices_) {
-        if (dev_state.x280_active) {
-            x280_dev_ = &dev_state;
-            break;
-        }
-    }
-}
-
-void RealtimeProfilerManager::boot_x280_drainer(
-    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& coord, DeviceState& dev_state) {
-    const auto device_id = dev_state.chip_id;
-    const auto& hal = MetalContext::instance(context_id_).hal();
-
-    // --- Optional: boot the X280 (L2CPU) kernel-zone drainer on this device ---
-    // The X280 is the sole consumer of the per-RISC SPSC zone rings; without it a profiler
-    // run can deadlock once a ring fills. It drains those rings, PAIRS start/end markers per
-    // (core,risc) on-device, and pushes complete device-zone pages through its OWN D2H socket,
-    // which the receiver polls alongside the program-record socket. Best-effort: any failure
-    // leaves x280_active=false and the device runs without kernel-zone capture.
-    try {
-        auto& x280_cluster = MetalContext::instance(context_id_).get_cluster();
-        const auto& soc = x280_cluster.get_soc_desc(device_id);
-        std::string x280_fw = BuildEnvManager::get_instance(context_id_).get_x280_firmware_path(device_id);
-        std::string x280_idle_fw = BuildEnvManager::get_instance(context_id_).get_x280_idle_firmware_path(device_id);
-        if (x280_cluster.arch() == tt::ARCH::BLACKHOLE && !soc.get_cores(CoreType::L2CPU, CoordSystem::NOC0).empty() &&
-            !x280_fw.empty() && !x280_idle_fw.empty()) {
-            constexpr int kL2CpuIndex = 0;  // tile (8,3) — proven single-chip path
-            constexpr int kX280PllMhz = 1000;
-            // X280 LIM socket md: parked in the gap between MIRRORCTL (0x08018000..~0x0801B000, sized
-            // by the drain list) and SINGLECTL (0x0801C000). See profzone.c D8 LIM map.
-            // Two D2H sockets (one per relay): relay r reads its md at kX280ConfigAddr + r*0x1000
-            // (matches X280_CONFIG_STRIDE in profzone.c). Both sit in the freed [0x08018000, 0x0801C000)
-            // region, below RSPSCCTL (0x0801C000).
-            constexpr uint32_t kX280ConfigAddr = 0x0801A000u;   // relay-0 socket md
-            constexpr uint32_t kX280ConfigAddr2 = 0x0801B000u;  // relay-1 socket md
-            constexpr uint64_t kX280MboxParams = 0x08011000ull;
-            constexpr uint64_t kX280MboxResults = 0x08011040ull;
-            constexpr uint64_t kX280MboxCoords = 0x08011200ull;
-            // D2H FIFO depth (host pinned). At 4 KB (=64 x 64B markers) the X280 filled it in ~0.3ms
-            // and then spun on reserve-stalls waiting for the host to free space, throttling its ring
-            // drain and back-pressuring the compute cores. Size it to buffer the X280<->host round-trip
-            // (1 MB = 16384 markers) so the X280 pipelines ahead instead of stalling.
-            // Sweep knob (Way 2, no rebuild): TT_X280_FIFO_MB overrides the D2H FIFO size in MiB, to
-            // test whether growing downstream buffering moves the stall-onset op (steady deficit) or
-            // not (upstream/hard threshold). Default 1 MiB; clamped to [1, 64].
-            uint32_t kX280FifoMb = 1;
-            if (const char* e = std::getenv("TT_X280_FIFO_MB")) {
-                uint32_t v = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
-                if (v >= 1 && v <= 64) {
-                    kX280FifoMb = v;
-                }
-            }
-            const uint32_t kX280Fifo = kX280FifoMb << 20;
-            constexpr uint32_t kX280PageSize = 64;
-
-            std::ifstream f(x280_fw, std::ios::binary);
-            std::vector<uint8_t> bin((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-            while (bin.size() % 4 != 0) {
-                bin.push_back(0);
-            }
-            TT_FATAL(!bin.empty(), "X280 drainer firmware {} is empty", x280_fw);
-            std::ifstream fidle(x280_idle_fw, std::ios::binary);
-            std::vector<uint8_t> idle_bin((std::istreambuf_iterator<char>(fidle)), std::istreambuf_iterator<char>());
-            while (idle_bin.size() % 4 != 0) {
-                idle_bin.push_back(0);
-            }
-            TT_FATAL(!idle_bin.empty(), "X280 idle firmware {} is empty", x280_idle_fw);
-
-            const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
-            CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-            const uint32_t gx = static_cast<uint32_t>(grid.x), gy = static_cast<uint32_t>(grid.y);
-            const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
-
-            // Virtual coords of every logical worker core (what the X280's NOC addresses), and
-            // pre-zero each core's SPSC control vector so head/tail start clean.
-            std::vector<uint8_t> coord_buf(num_cores * 8, 0);
-            std::vector<uint8_t> zero_ctrl(profiler::X280_PROF_CTRL_WORDS * 4, 0);
-            for (uint32_t ly = 0; ly < gy; ly++) {
-                for (uint32_t lx = 0; lx < gx; lx++) {
-                    uint32_t idx = ly * gx + lx;
-                    CoreCoord v = x280_cluster.get_virtual_coordinate_from_logical_coordinates(
-                        device_id, CoreCoord{lx, ly}, CoreType::WORKER);
-                    uint32_t vx = static_cast<uint32_t>(v.x), vy = static_cast<uint32_t>(v.y);
-                    std::memcpy(coord_buf.data() + idx * 8 + 0, &vx, 4);
-                    std::memcpy(coord_buf.data() + idx * 8 + 4, &vy, 4);
-                    x280_cluster.write_core(
-                        zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, v), prof_l1);
-                    // Map the virtual coord the X280 relays back to the NOC0 coord the standard
-                    // DeviceProfiler / Tracy use, so kernel-zone lanes line up 1:1 with the DRAM
-                    // push profiler's view.
-                    const CoreCoord noc0 = x280_cluster.get_physical_coordinate_from_logical_coordinates(
-                        device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
-                    dev_state.x280_virt_to_noc0[(static_cast<uint64_t>(vx) << 32) | vy] = {
-                        static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y)};
-                    if (lx == 0 && ly == 0) {
-                        log_debug(
-                            tt::LogMetal,
-                            "[Real-time profiler] X280 coord map sample: logical(0,0) virtual=({},{}) "
-                            "noc0=({},{})",
-                            vx,
-                            vy,
-                            noc0.x,
-                            noc0.y);
-                    }
-                }
-            }
-
-            // PCIe tile (TRANSLATED) the X280 writes its socket pages through.
-            const auto pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-            TT_FATAL(!pcie_cores.empty(), "X280 drainer: no PCIe core on device {}", device_id);
-            const auto pc = pcie_cores.front();
-
-            dev_state.x280_driver =
-                std::make_unique<profiler::X280Driver>(x280_cluster, static_cast<int>(device_id), kL2CpuIndex);
-            auto& zx = *dev_state.x280_driver;
-            // Reset-once: boot the resident idle FW, or confirm it is already up. This is the ONLY
-            // place the X280 reset is touched -- the drainer is handed off via an indirect JUMP
-            // below, never by re-releasing reset (which intermittently half-boots the X280 and
-            // wedges the ARC -> the VM-freeze churn). Idempotent across runs within one chip reset.
-            bool x280_half_broken = false;
-            const bool x280_idle_ok =
-                zx.ensure_idle(idle_bin, kX280PllMhz, std::chrono::milliseconds(3000), x280_half_broken);
-            zx.write_block(coord_buf.data(), (uint32_t)coord_buf.size(), kX280MboxCoords);
-
-            // The socket's sender is the X280 L2CPU; its sender_socket_md lands in the X280 LIM.
-            const CoreCoord l2phys = profiler::x280_l2cpu_tile(kL2CpuIndex);
-            dev_state.x280_socket = std::make_unique<D2HSocket>(
-                mesh_device,
-                MeshCoreCoord{coord, l2phys},
-                kX280Fifo,
-                D2HSocket::ExternalConfigBuffer{.address = kX280ConfigAddr, .sender_is_l2cpu = true});
-            dev_state.x280_socket->set_page_size(kX280PageSize);
-            // Second D2H FIFO for relay-1 (drains reader-1's SPSC), so the two relays double the D2H
-            // drain to match the 16 B self-describing marker's 2x volume.
-            dev_state.x280_socket2 = std::make_unique<D2HSocket>(
-                mesh_device,
-                MeshCoreCoord{coord, l2phys},
-                kX280Fifo,
-                D2HSocket::ExternalConfigBuffer{.address = kX280ConfigAddr2, .sender_is_l2cpu = true});
-            dev_state.x280_socket2->set_page_size(kX280PageSize);
-
-            // Hart split (self-describing-marker redesign): NO collect hart. nread reader harts each
-            // bulk-copy their cores' raw 4-word markers into their OWN per-reader SPSC; hart[nread] =
-            // relay (round-robins the reader SPSCs -> D2H FIFO). 2 readers + 1 relay = 3 harts; the 4th
-            // Identity is in every marker (word0), so there are no mirrors and no sticky. Two relays
-            // (harts nread, nread+1) each drain one reader's SPSC to its own D2H FIFO = all 4 harts.
-            constexpr uint64_t kX280NRead = 2;   // reader harts (0..nread-1)
-            constexpr uint64_t kX280NHarts = 4;  // 2 readers + 2 relays
-            std::vector<uint8_t> params(64, 0), results(384, 0);  // covers relay + reader RES + probes
-            auto pk = [&](size_t off, uint64_t val) { std::memcpy(params.data() + off, &val, 8); };
-            pk(0x00, kX280ConfigAddr);
-            pk(0x08, static_cast<uint64_t>(pc.x));
-            pk(0x10, static_cast<uint64_t>(pc.y));
-            pk(0x18, prof_l1);
-            pk(0x20, num_cores);
-            pk(0x28, 0);  // P_STOP = 0: run continuously until shutdown
-            pk(0x30, kX280NRead);
-            pk(0x38, kX280NHarts);
-            zx.write_block(params.data(), (uint32_t)params.size(), kX280MboxParams);
-            zx.write_block(results.data(), (uint32_t)results.size(), kX280MboxResults);
-            // Pre-zero the per-reader SPSC control (RSPSCCTL @ 0x0801C000: per reader prod/cons page
-            // counts + READER_DONE) so both rings start empty (no init race). The ring STORAGE
-            // (0x08040000+) needs no zeroing: the relay only reads published (full) pages. (Config md
-            // at 0x0801B000 is written above, untouched.)
-            std::vector<uint8_t> rspscctl_zero(256, 0);
-            zx.write_block(rspscctl_zero.data(), (uint32_t)rspscctl_zero.size(), 0x0801C000ull);
-            if (num_cores > 140) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] X280: num_cores={} exceeds MAX_CORES=140 -- SPSC rings would "
-                    "overrun LIM; drainer will refuse to start (no DONE_MAGIC).",
-                    num_cores);
-            }
-            dev_state.x280_params_addr = kX280MboxParams;
-
-            // Hand off to the drainer (active FW) via indirect JUMP -- NO reset, NO PLL touch. The
-            // drainer is written to 0x08001000 and the idle FW JUMPs all 4 harts into it. hb becomes
-            // the legacy main-entry magic iff the drainer stamped RUNNING (i.e. the JUMP landed).
-            constexpr uint64_t kX280HbMainMagic = 0xB007ULL;
-            uint64_t hb = 0;
-            if (x280_idle_ok) {
-                if (zx.handoff_to_active_fw(bin, std::chrono::milliseconds(3000))) {
-                    hb = kX280HbMainMagic;  // drainer JUMP landed + RUNNING
-                } else {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: X280 idle FW is up but the drainer JUMP did not "
-                        "reach RUNNING within 3s -- continuing without X280 kernel-zone capture.",
-                        device_id);
-                }
-            } else if (x280_half_broken) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {}: X280 L2CPU is out of reset but its resident idle FW is "
-                    "not heartbeating -- unrecoverable in software (metal must NOT re-assert reset on a "
-                    "running L2CPU; that is the reservation-churn trigger). Run `tt-smi -r {}` then rerun. "
-                    "Continuing WITHOUT X280 kernel-zone capture.",
-                    device_id,
-                    device_id);
-            }
-            // else (idle FW never heartbeat): the L3 LIM ECC is almost certainly unprimed -- the
-            // degraded path below tells the user to run the standalone prime script. Priming is a
-            // SEPARATE, EXPLICIT step; metal never primes/warm-resets in-process (that re-enumerates
-            // PCIe and churns the reservation).
-            // --- All-hart boot verification + retry ----------------------------------------------
-            // hart 0's heartbeat only proves hart 0 started (and the ECC prime took). The X280's
-            // 4-hart release_reset is intermittently flaky: a reader/collect/relay hart can fail to
-            // start, which SILENTLY cripples the drainer -- its cores never drain, workers block on
-            // full rings, and trace replay wedges (host hangs in finish). Verify EVERY hart reached
-            // its work loop (per-hart stage 3 @ RESULTS+0x100+h*8). If any is missing we do NOT reset to
-            // retry (that churns the reservation -- see below); we degrade to no-X280-capture for the run.
-            if (hb == kX280HbMainMagic) {
-                const uint64_t kHartStageBase = kX280MboxResults + 0x100;
-                auto all_harts_ready = [&]() {
-                    for (uint32_t h = 0; h < kX280NHarts; h++) {
-                        if (zx.lim_rd_u64(kHartStageBase + h * 8) < 3) {
-                            return false;
-                        }
-                    }
-                    return true;
-                };
-                auto wait_harts = [&]() {
-                    for (int i = 0; i < 300 && !all_harts_ready(); i++) {
-                        std::this_thread::sleep_for(std::chrono::microseconds(200));
-                    }
-                    return all_harts_ready();
-                };
-                auto stages_str = [&]() {
-                    std::string s;
-                    for (uint32_t h = 0; h < kX280NHarts; h++) {
-                        if (h) {
-                            s += ",";
-                        }
-                        s += std::to_string(zx.lim_rd_u64(kHartStageBase + h * 8));
-                    }
-                    return s;
-                };
-                // Always record the FIRST-ATTEMPT per-hart stages (before any retry) so we can tabulate
-                // which harts are flaky and how often, across every boot -- clean or not.
-                const bool first_ok = wait_harts();
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {}: X280-BOOT-STAGES first-attempt [{}] -> {}",
-                    device_id,
-                    stages_str(),
-                    first_ok ? "all-up" : "INCOMPLETE");
-                // We deliberately do NOT reset-and-retry a flaky boot. On a partial boot (e.g. [3,3,0,3])
-                // some drainer harts -- readers/relay -- have already reached their work loops and are
-                // actively driving NoC reads + D2H PCIe traffic; asserting + RE-RELEASING reset on that
-                // LIVE L2CPU intermittently wedges the device hard enough that IRD recreates the
-                // reservation container (SSH-key loss). That reset-retry -- not the auto-prime, not the
-                // workload drain -- is the confirmed churn source. A crippled drainer is handled safely
-                // by the degraded path below: hb=0 parks the X280 and broadcasts PROFILER_TERMINATE so
-                // producers never block on a full ring -> no trace hang, just no X280 capture this run.
-                if (!first_ok) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: X280 not all harts started (stages [{}] want "
-                        "all>=3) -- NOT retrying (reset-retry churns the reservation); running WITHOUT "
-                        "X280 kernel-zone capture this run",
-                        device_id,
-                        stages_str());
-                    hb = 0;  // force the degraded path below
-                } else {
-                    log_info(
-                        tt::LogMetal, "[Real-time profiler] Device {}: X280 all {} harts up", device_id, kX280NHarts);
-                }
-            }
-            if (hb != kX280HbMainMagic) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {}: X280 drainer FW did not start (l2cpu {}, "
-                    "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is almost certainly not primed. Metal does "
-                    "NOT prime in-process (priming warm-resets the chip and re-enumerates PCIe). To enable "
-                    "X280 kernel-zone capture, run the standalone prime script ONCE per cold power cycle "
-                    "(it primes the ECC and activates it via an ASIC reset):  "
-                    "tt_metal/programming_examples/profiler/test_x280_profcons/prime_x280_ecc.sh  then "
-                    "rerun. Continuing WITHOUT X280 kernel-zone "
-                    "capture (the DRAM-based device profiler covers kernel zones as a fallback while "
-                    "TT_METAL_DEVICE_PROFILER is set).",
-                    device_id,
-                    kL2CpuIndex,
-                    hb);
-                // Do NOT assert_reset here: the resident idle FW must stay up so a later run can retry
-                // the JUMP handoff, and re-asserting reset on a running L2CPU is the churn/wedge trigger.
-                dev_state.x280_socket.reset();
-                dev_state.x280_socket2.reset();
-                dev_state.x280_driver.reset();
-                dev_state.x280_active = false;
-                // No drainer => the cores' SPSC profiler rings will never be emptied. Tell every
-                // worker to drop-not-block so a full ring can't deadlock the workload.
-                try {
-                    broadcast_profiler_terminate(x280_cluster, device_id, dev_state.device, prof_l1);
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE after X280 "
-                        "boot failure: {}",
-                        device_id,
-                        e.what());
-                }
-            } else {
-                dev_state.x280_active = true;
-                // NB: do NOT set x280_dev_ = &dev_state here. `dev_state` is the caller's loop LOCAL,
-                // which is immediately std::move'd into devices_ (and destroyed) after this returns --
-                // the pointer would dangle at a moved-from stack object, whose moved-from unordered_map
-                // reads as garbage/zero bucket_count in run_consumer (SIGFPE on `% 0`, or SIGSEGV once
-                // the frame is reused). x280_dev_ is set post-loop, once devices_ is fully built + stable.
-                log_info(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, "
-                    "{} cores, prof_l1=0x{:x}, pcie=({},{}))",
-                    device_id,
-                    kL2CpuIndex,
-                    num_cores,
-                    prof_l1,
-                    pc.x,
-                    pc.y);
-            }
-        }
-    } catch (const std::exception& e) {
-        dev_state.x280_active = false;
-        dev_state.x280_socket.reset();
-        dev_state.x280_socket2.reset();
-        dev_state.x280_driver.reset();
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: X280 kernel-zone drainer boot failed ({}); continuing without it.",
-            device_id,
-            e.what());
-        // No drainer => stop the cores blocking on full profiler rings (see boot-failure path above).
-        try {
-            const uint64_t prof_l1_t = MetalContext::instance(context_id_)
-                                           .hal()
-                                           .get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
-            broadcast_profiler_terminate(
-                MetalContext::instance(context_id_).get_cluster(), device_id, dev_state.device, prof_l1_t);
-        } catch (const std::exception& e2) {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE after X280 boot "
-                "exception: {}",
-                device_id,
-                e2.what());
-        }
     }
 }
 
@@ -1279,17 +865,6 @@ void RealtimeProfilerManager::run_init_sync() {
             dev_state.sync_host_start,
             static_cast<double>(dev_state.first_timestamp),
             dev_state.sync_frequency);
-        // Pre-create the per-core Tracy contexts NOW (init, rings empty) from the boot-time coord
-        // map, so the receiver thread never creates a context (~ms) lazily during draining — which
-        // would block the socket drain and back-pressure the X280 into stalling the compute cores.
-        if (dev_state.x280_active) {
-            std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
-            worker_noc0.reserve(dev_state.x280_virt_to_noc0.size());
-            for (const auto& [virt, noc0] : dev_state.x280_virt_to_noc0) {
-                worker_noc0.push_back(noc0);
-            }
-            tracy_handler_->PreCreateContexts(dev_state.chip_id, worker_noc0);
-        }
     }
 
     // Emit sync verification markers: take one independent device measurement per device
@@ -1407,141 +982,6 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
     return num_pages_to_read;
 }
 
-// EXPERIMENT: raw-marker stall decoder. In DROP mode the FW bulk-flushes raw 2-word markers (no
-// reshape, 8/64B-page). Rather than discard them, decode each marker and count PROFILER_STALL_ZONE
-// (id 0x7FFF) START/END events -- the producer's self-measured back-pressure -- with no core info.
-// This is the correct perturbation signal (device-side), which the reader "wall" does NOT capture.
-namespace {
-struct X280RawStall {
-    uint64_t markers = 0, stall_start = 0, stall_end = 0, paired = 0, dur_sum = 0, dur_max = 0;
-    uint64_t prev_start_ts = 0;
-    bool have_prev = false;
-    // STICKY_META tally + a sample of the first decoded one (validates the FW packet format).
-    uint64_t sticky = 0;
-    uint32_t s_cx = 0, s_cy = 0, s_risc = 0, s_id = 0;
-    bool have_sticky_sample = false;
-    uint32_t sticky_risc_mask = 0;  // bit r set if a sticky with risc==r was seen (expect 0x1F = all 5)
-};
-X280RawStall g_x280_raw;  // single receiver thread -> no lock
-// PROTO diagnostic: total WorkerZoneWire records the receiver PUBLISHED to the BroadcastRing. Compared
-// against the consumer's ring-dropped at shutdown to tell a real over-publish from a bogus drop count.
-uint64_t g_x280_published = 0;  // single receiver thread -> no lock
-// PROBE (b): total D2H pages the host READ + drain calls. If pages_read >> device-relayed pages, the
-// host over-reads the FIFO (the ~496x re-read behind the 430M over-publish).
-uint64_t g_x280_pages_read = 0;
-uint64_t g_x280_drain_calls = 0;
-}  // namespace
-
-uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
-    if (!dev_state.x280_active || !dev_state.x280_socket) {
-        return 0;
-    }
-    ZoneNamedN(z_x280_draincall, "X280-DrainCall", true);  // every active visit; SockRead fires only when avail>0
-    namespace exp = tt::tt_metal::experimental;
-    // Drain a big batch per call so the host frees FIFO room fast enough to keep up with the
-    // multi-hart relay (256 was the limiter once the readers were parallelized -> the 1 MB FIFO
-    // filled and the relay reserve-stalled). 4096 pages = 256 KB/read.
-    static constexpr uint32_t kX280BatchPages = 4096;
-    constexpr uint32_t page_words = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
-
-    static std::vector<uint32_t> x280_page_buf(static_cast<size_t>(kX280BatchPages) * page_words);
-    static const bool x280_drop = (std::getenv("TT_METAL_X280_DROP") != nullptr);
-    static std::vector<exp::WorkerZoneWire> wz;  // persists across drain calls
-    wz.clear();
-    constexpr uint16_t kWzValid = 0xA5A5;                               // in-memory WorkerZoneWire validity
-    const uint32_t kRecPerPage = (page_words * sizeof(uint32_t)) / 16;  // 64B / 16B = 4
-
-    // Drain ONE D2H socket (one relay's FIFO): read a batch, decode the self-describing 4-word markers
-    //   word0 = valid(31)|core_x(6)|core_y(6)|risc(6), word1 = timer_id|time_hi, word2 = time_lo, word3 = pad
-    // and append to `wz`. Returns pages read. (TT_METAL_X280_DROP tallies raw stall markers, no emit.)
-    auto drain_sock = [&](D2HSocket* sock) -> uint32_t {
-        if (sock == nullptr) {
-            return 0;
-        }
-        const uint32_t avail = sock->pages_available();
-        if (avail == 0) {
-            return 0;
-        }
-        const uint32_t n = std::min(avail, kX280BatchPages);
-        {
-            ZoneScopedN("X280-SockRead");  // D2H FIFO read (clflush + memcpy) + ack that frees FIFO room
-            sock->read(x280_page_buf.data(), n);
-        }
-        g_x280_pages_read += n;
-        g_x280_drain_calls++;
-        const uint32_t* words = x280_page_buf.data();
-        if (x280_drop) {
-            for (uint32_t pg = 0; pg < n; pg++) {
-                const uint32_t* page = words + static_cast<size_t>(pg) * page_words;
-                for (uint32_t s = 0; s < kRecPerPage; s++) {
-                    const uint32_t w0 = page[s * 4 + 0], w1 = page[s * 4 + 1], w2 = page[s * 4 + 2];
-                    if (!(w0 & 0x80000000u)) {
-                        continue;
-                    }
-                    g_x280_raw.markers++;
-                    const uint32_t tid = (w1 >> 12) & 0x7FFFF;
-                    if ((tid & 0xFFFF) != 0x7FFF) {
-                        continue;  // not a stall zone
-                    }
-                    const uint64_t ts = (static_cast<uint64_t>(w1 & 0xFFF) << 32) | w2;
-                    if (((tid >> 16) & 0x7) == kernel_profiler::ZONE_START) {
-                        g_x280_raw.stall_start++;
-                        g_x280_raw.prev_start_ts = ts;
-                        g_x280_raw.have_prev = true;
-                    } else {
-                        g_x280_raw.stall_end++;
-                        if (g_x280_raw.have_prev) {
-                            const uint64_t d = ts - g_x280_raw.prev_start_ts;
-                            g_x280_raw.dur_sum += d;
-                            if (d > g_x280_raw.dur_max) {
-                                g_x280_raw.dur_max = d;
-                            }
-                            g_x280_raw.paired++;
-                            g_x280_raw.have_prev = false;
-                        }
-                    }
-                }
-            }
-            return n;
-        }
-        ZoneScopedN("X280-DecodeWZW");  // 4-word markers -> WorkerZoneWire -> ring
-        for (uint32_t pg = 0; pg < n; pg++) {
-            const uint32_t* page = words + static_cast<size_t>(pg) * page_words;
-            for (uint32_t s = 0; s < kRecPerPage; s++) {
-                uint32_t w0 = page[s * 4 + 0];  // identity
-                uint32_t w1 = page[s * 4 + 1];  // timer_id | time_hi
-                uint32_t w2 = page[s * 4 + 2];  // time_lo
-                if (!(w0 & 0x80000000u)) {
-                    continue;  // padded/stale slot -> skip
-                }
-                uint32_t type = (w1 >> 28) & 0x7u;  // (timer_id>>16)&7
-                if (type > 1u) {
-                    continue;  // keep only ZONE_START(0)/ZONE_END(1)
-                }
-                exp::WorkerZoneWire rec;
-                rec.header.type = static_cast<uint16_t>(exp::ProfilerPacketType::WorkerZone);
-                rec.header.reserved = kWzValid;
-                rec.core_x = (w0 >> 12) & 0x3Fu;
-                rec.core_y = (w0 >> 6) & 0x3Fu;
-                rec.risc = w0 & 0x3Fu;
-                rec.timer_id = (w1 >> 12) & 0x7FFFFu;
-                rec.time_hi = w1 & 0xFFFu;
-                rec.time_lo = w2;
-                wz.push_back(rec);
-            }
-        }
-        return n;
-    };
-
-    // Drain BOTH relays' FIFOs (reader-0 via x280_socket, reader-1 via x280_socket2) into one batch.
-    const uint32_t total_pages = drain_sock(dev_state.x280_socket.get()) + drain_sock(dev_state.x280_socket2.get());
-    if (!wz.empty()) {
-        ring_->writer().publish_batch(std::span<const exp::WorkerZoneWire>(wz));
-        g_x280_published += wz.size();
-    }
-    return total_pages;
-}
-
 uint64_t RealtimeProfilerManager::run_receiver_loop() {
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
     std::vector<uint32_t> page_buf(kMaxSocketPagesPerRead * kPageWords);
@@ -1574,14 +1014,7 @@ uint32_t RealtimeProfilerManager::drain_all_devices(
     uint32_t num_pages = 0;
     for (auto& dev_state : devices_) {
         try {
-            {
-                ZoneScopedN("ProgRecDrain");  // program-record path (yusuf) -- if this dominates, it starves X280
-                num_pages += drain_device_pages(dev_state, scan_sync_marker, page_buf, record_buf);
-            }
-            // X280 kernel-zone drainer runs as a PARALLEL path: it pushes markers straight to
-            // Tracy via the profiler-packet callbacks (not the broadcast ring), so its pages are
-            // counted here only to keep the receiver's backoff/wake heuristics responsive.
-            num_pages += drain_x280_device(dev_state);
+            num_pages += drain_device_pages(dev_state, scan_sync_marker, page_buf, record_buf);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal, "[Real-time profiler] Exception draining device {}: {}", dev_state.chip_id, e.what());
@@ -1635,121 +1068,19 @@ void RealtimeProfilerManager::run_receiver() {
 
 void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
     tracy::SetThreadName(fmt::format("RtProfilerConsumer{}", consumer.handle).c_str());
-    namespace exp = tt::tt_metal::experimental;
-    // PROTOTYPING: the ring carries X280 WorkerZoneWire records (program records disabled). This consumer
-    // reads them OFF the receiver thread, enriches (virt->noc0 + zone name), and pushes to Tracy via the
-    // packet callback -- moving the Tracy push off the receiver (the confirmed back-pressure). consumer.callback
-    // (the program-record callback) is unused in this mode.
-    std::vector<exp::WorkerZoneWire> records(
-        std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * std::max<size_t>(devices_.size(), 1)));
-    std::unordered_map<uint16_t, tracy::MarkerDetails> zone_names;  // per-thread; loaded once
-    try {
-        zone_names = loadZoneSourceLocationsHashesReadOnly();
-    } catch (const std::exception& e) {
-        log_warning(tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
-    }
+    std::vector<tt::ProgramRealtimeRecord> records(
+        std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * devices_.size()));
+    uint64_t reported_dropped = 0;
 
-    auto push_batch = [&](std::span<const exp::WorkerZoneWire> batch) {
-        DeviceState* dev = x280_dev_;
-        if (dev == nullptr) {
-            return;  // no X280 device booted
-        }
-        for (const auto& w : batch) {
-            const uint32_t ptype = (w.timer_id >> 16) & 0x7;
-            if (ptype != kernel_profiler::ZONE_START && ptype != kernel_profiler::ZONE_END) {
-                continue;
-            }
-            uint32_t noc0_x = w.core_x, noc0_y = w.core_y;
-            // Defensive: skip the lookups if a map is genuinely empty (no mapping => keep fallback values,
-            // same outcome find() would give). A truly-empty x280_virt_to_noc0 would also be a real
-            // enrichment bug, so it's logged once below. (This is NOT what caused the historical SIGFPE --
-            // that was a dangling x280_dev_ pointing at a moved-from DeviceState; fixed at init time.)
-            if (!dev->x280_virt_to_noc0.empty()) {
-                if (auto it = dev->x280_virt_to_noc0.find((static_cast<uint64_t>(w.core_x) << 32) | w.core_y);
-                    it != dev->x280_virt_to_noc0.end()) {
-                    noc0_x = it->second.first;
-                    noc0_y = it->second.second;
-                }
-            } else {
-                [[maybe_unused]] static std::once_flag warned;
-                std::call_once(warned, [] {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] X280 consumer: x280_virt_to_noc0 is EMPTY -- noc0 enrichment "
-                        "disabled (zones will carry virtual coords). This also avoids a find()-on-empty SIGFPE.");
-                });
-            }
-            const uint16_t hash = static_cast<uint16_t>(w.timer_id & 0xFFFF);
-            std::string_view name;
-            if (hash == 0x7FFF) {  // PROFILER_STALL_ZONE_ID
-                name = "X280-STALL";
-            } else if (!zone_names.empty()) {
-                if (auto it = zone_names.find(hash); it != zone_names.end()) {
-                    name = it->second.marker_name;
-                }
-            } else {
-                [[maybe_unused]] static std::once_flag warned_zn;
-                std::call_once(warned_zn, [] {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] X280 consumer: zone_names is EMPTY -- zone names unresolved "
-                        "(zones will be unnamed). This also avoids a find()-on-empty SIGFPE.");
-                });
-            }
-            // The device kernel_profiler mark_time() packs only the low 44 bits of WALL_CLOCK
-            // (12 high bits + 32 low); the top ~20 bits are dropped on-device by fixed format, so a
-            // raw marker is (full_device_time mod 2^44). The Tracy context is calibrated against the
-            // FULL device time (dev->first_timestamp, from our host<->device sync), so a 44-bit marker
-            // would land ~2^44 ticks (~3.6h) off the timeline -> invisible. Reconstruct the full
-            // timestamp by grafting the anchor's high bits onto the marker's low 44 bits, picking the
-            // 2^44 epoch nearest the anchor (handles a marker straddling the boundary). This is the
-            // required reconstruction for raw kernel_profiler markers; the reserved-tensix RT profiler
-            // sidesteps it by shipping full start/end timestamps, which the X280 drain path can't.
-            constexpr uint64_t kEpoch = 1ull << 44;
-            constexpr uint64_t kMask44 = kEpoch - 1;
-            const uint64_t raw44 = (static_cast<uint64_t>(w.time_hi) << 32) | w.time_lo;
-            const uint64_t anchor = dev->first_timestamp;
-            uint64_t full_ts = (anchor & ~kMask44) | (raw44 & kMask44);
-            if (anchor != 0) {
-                if (anchor > full_ts && anchor - full_ts > kEpoch / 2) {
-                    full_ts += kEpoch;
-                } else if (full_ts > anchor && full_ts - anchor > kEpoch / 2) {
-                    full_ts -= kEpoch;
-                }
-            }
-            exp::WorkerZonePacket pkt{
-                .chip_id = dev->chip_id,
-                .core_virtual_x = w.core_x,
-                .core_virtual_y = w.core_y,
-                .core_noc0_x = noc0_x,
-                .core_noc0_y = noc0_y,
-                .risc = w.risc,
-                .timer_id = hash,
-                .name = name,
-                .timestamp = full_ts,
-                .is_start = (ptype == kernel_profiler::ZONE_START),
-            };
-            // DEBUG (TT_X280_ZONE_DEBUG=1): dump the first packets Tier 2 feeds Tracy, to check the
-            // decode produces sane virt/noc0 coords, risc, name and MONOTONIC timestamps with matched
-            // start/end (a zero/negative-duration zone renders invisible in the GUI).
-            static const bool zdbg = (std::getenv("TT_X280_ZONE_DEBUG") != nullptr);
-            static int zdbg_n = 0;
-            if (zdbg && zdbg_n < 24) {
-                log_info(
-                    tt::LogMetal,
-                    "[X280 zone dbg #{}] virt=({},{}) noc0=({},{}) risc={} id=0x{:x} name='{}' ts={} start={}",
-                    zdbg_n++,
-                    w.core_x,
-                    w.core_y,
-                    noc0_x,
-                    noc0_y,
-                    w.risc,
-                    hash,
-                    name,
-                    pkt.timestamp,
-                    pkt.is_start);
-            }
-            exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
+    auto deliver_batch = [&](std::span<const tt::ProgramRealtimeRecord> batch, uint64_t dropped_total) {
+        const tt::ProgramRealtimeRecordBatch arg{batch, dropped_total - reported_dropped};
+        reported_dropped = dropped_total;
+        try {
+            consumer.callback(arg);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "[Real-time profiler] Callback threw an exception: {}", e.what());
+        } catch (...) {
+            log_warning(tt::LogMetal, "[Real-time profiler] Callback threw an unknown exception");
         }
     };
 
@@ -1758,12 +1089,13 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         // wake and hang
         const auto token = consumer.reader.wait_token();
         const auto batch = consumer.reader.read_batch(records);
+        const uint64_t dropped_total = consumer.reader.dropped();
         const ConsumerStopMode stop_mode = consumer.stop_mode.load(std::memory_order_acquire);
         if (stop_mode == ConsumerStopMode::StopWithoutDrain) {
             break;
         }
         if (!batch.empty()) {
-            push_batch(batch);
+            deliver_batch(batch, dropped_total);
         } else if (stop_mode == ConsumerStopMode::DrainThenStop) {
             break;
         } else {
@@ -1818,39 +1150,9 @@ void RealtimeProfilerManager::shutdown() {
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
 
-    // The SPSC kernel-profiler backend has worker+dispatch cores BLOCK in ring_ensure_room when their
-    // zone ring is full. Once the X280 drainer stops advancing ring heads at teardown, a still-producing
-    // core (typically a dispatch core) would block forever and wait_for_dispatch_cores would never see it
-    // "done" -> the process hangs at close. Broadcast PROFILER_TERMINATE to the FULL logical grid first so
-    // ring_ensure_room drops-not-blocks (lossless during the run; only teardown-phase markers are dropped),
-    // BEFORE we P_STOP the drainer.
-    if (!devices_.empty()) {
-        const auto& hal = MetalContext::instance(context_id_).hal();
-        auto& cluster = MetalContext::instance(context_id_).get_cluster();
-        const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
-        for (auto& dev_state : devices_) {
-            if (dev_state.x280_active && dev_state.device) {
-                broadcast_profiler_terminate(cluster, dev_state.chip_id, dev_state.device, prof_l1);
-            }
-        }
-    }
-
     // Re-write ring_buffer->terminate as a safety net (dispatch_s already set it via the
     // profiler core's TERMINATE), then give the push kernel time to deliver the last PCIe page.
     for (auto& dev_state : devices_) {
-        // Tell the X280 drainer to finish its current drain pass and exit its loop, so the
-        // receiver's shutdown drain catches the last device-zone pages.
-        if (dev_state.x280_active && dev_state.x280_driver) {
-            try {
-                dev_state.x280_driver->lim_wr_u64(dev_state.x280_params_addr + 0x28, 1);  // P_STOP
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Failed to stop X280 on device {}: {}",
-                    dev_state.chip_id,
-                    e.what());
-            }
-        }
         if (dev_state.core_l1.ring_buffer != 0 && dev_state.device) {
             const uint32_t terminate_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, terminate);
             std::vector<uint32_t> terminate_flag = {1};
@@ -1871,29 +1173,6 @@ void RealtimeProfilerManager::shutdown() {
             }
         }
     }
-    // Drain-to-quiescence for the X280 path: the readers finish their L1 rings, the relay flushes all
-    // LIM-staged pages into the D2H FIFO, and the (still-running) receiver thread drains them -- so no
-    // staged marker is dropped at teardown. The relay writes DONE_MAGIC to its results slot once its
-    // staging + the FIFO are empty; poll for it (bounded) before stopping the receiver / resetting.
-    for (auto& dev_state : devices_) {
-        if (!dev_state.x280_active || !dev_state.x280_driver) {
-            continue;
-        }
-        constexpr uint64_t kX280DoneMagic = 0x20E50FFEE1ull;
-        const uint64_t done_addr = dev_state.x280_params_addr + 0x40 + 0x18;  // RESULTS base + RES_DONE
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (std::chrono::steady_clock::now() < deadline) {
-            try {
-                if (dev_state.x280_driver->lim_rd_u64(done_addr) == kX280DoneMagic) {
-                    break;
-                }
-            } catch (const std::exception&) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
-        }
-    }
-
     if (!devices_.empty()) {
         std::this_thread::sleep_for(kShutdownKernelExitGrace);
     }
@@ -1902,291 +1181,6 @@ void RealtimeProfilerManager::shutdown() {
         stop_.store(true, std::memory_order_release);
         notify_finish_sync_waiters();
         receiver_thread_.join();
-    }
-
-    // Park each X280 in reset now that its socket has been drained by the receiver's shutdown pass.
-    for (auto& dev_state : devices_) {
-        if (dev_state.x280_active && dev_state.x280_driver) {
-            try {
-                // Telemetry: profzone's result mailbox (results base = params_addr + 0x40).
-                // relayed_pages@+0x00 = 64B D2H PAGES relayed (profzone increments `total` once per
-                // page_copy, NOT per marker); each page carries up to 8 raw 2-word markers, so
-                // marker-slots = pages*8 (>= real markers; last page of each ring segment is padded).
-                // loops@+0x08 = drain-loop passes; stalls@+0x20 = reserve-spin iterations where the X280
-                // was BLOCKED waiting for the host to free D2H FIFO room. High stalls => host drain is the
-                // bottleneck; ~0 => the X280's own drain rate (or marker supply) is the limit.
-                // Two relays now. Per-relay stats: relay r wall/reserve/copy/total/stalls at RES(base+..),
-                // base = 0xB0 (relay-0) / 0xD8 (relay-1); RES(x) = params_addr + 0x40 + x.
-                auto rd = [&](uint64_t off) {
-                    return dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + off);
-                };
-                uint64_t pages0 = rd(0x40 + 0xC8), pages1 = rd(0x40 + 0xF0);  // per-relay `total` pages
-                uint64_t stalls0 = rd(0x40 + 0xD0), stalls1 = rd(0x40 + 0xF8);
-                log_info(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {}: X280 drainers relayed {} pages ({} B, up to {} marker-slots) "
-                    "[relay0={} relay1={}]; reserve-stalls: relay0={} relay1={} (waiting on host D2H FIFO)",
-                    dev_state.chip_id,
-                    pages0 + pages1,
-                    (pages0 + pages1) * 64,
-                    (pages0 + pages1) * 4,
-                    pages0,
-                    pages1,
-                    stalls0,
-                    stalls1);
-                // Per-relay time-split (X280 ~1 GHz => cycles ~= ns). empty-spin = wall - reserve - copy is
-                // time the relay found its SPSC empty (reader-side supply gap); reserve = blocked on the
-                // host D2H FIFO; copy = page_copy + bytes_sent. relay0 base 0xB0, relay1 base 0xD8.
-                for (int r = 0; r < 2; r++) {
-                    uint64_t b = 0x40 + (r == 0 ? 0xB0 : 0xD8);
-                    uint64_t rwall = rd(b + 0), rreserve = rd(b + 8), rcopy = rd(b + 16);
-                    uint64_t rempty = rwall > (rreserve + rcopy) ? rwall - (rreserve + rcopy) : 0;
-                    log_info(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: relay-{} time-split (of {} ms wall): reserve-stall={} ms "
-                        "(host FIFO), copy={} ms, empty-spin={} ms (SPSC empty / reader supply gap)",
-                        dev_state.chip_id,
-                        r,
-                        rwall / 1000000,
-                        rreserve / 1000000,
-                        rcopy / 1000000,
-                        rempty / 1000000);
-                }
-                // Raw-marker stall decode (DROP mode only): device-side back-pressure straight from the
-                // marker stream. ~1.35 GHz => cycles/1350 = us. START count is the robust metric.
-                if (std::getenv("TT_METAL_X280_DROP") != nullptr) {
-                    log_info(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: RAW stall decode: {} markers, stall START={}, END={}, "
-                        "paired={}, dur avg={} us, max={} us",
-                        dev_state.chip_id,
-                        g_x280_raw.markers,
-                        g_x280_raw.stall_start,
-                        g_x280_raw.stall_end,
-                        g_x280_raw.paired,
-                        g_x280_raw.paired ? (g_x280_raw.dur_sum / g_x280_raw.paired) / 1350 : 0,
-                        g_x280_raw.dur_max / 1350);
-                    log_info(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: RAW sticky decode: {} STICKY_META packets; "
-                        "risc-mask=0x{:x} (0x1F=all 5); sample core=({},{}) risc={} host_id={}",
-                        dev_state.chip_id,
-                        g_x280_raw.sticky,
-                        g_x280_raw.sticky_risc_mask,
-                        g_x280_raw.s_cx,
-                        g_x280_raw.s_cy,
-                        g_x280_raw.s_risc,
-                        g_x280_raw.s_id);
-                }
-                // Reader ILP diagnostic: avg bulk-read segment width (words) per reader. Small (<~8)
-                // => the round-robin drains rings to near-empty each visit, so the vector burst is
-                // too narrow to pipeline (ILP inactive); large => wide bursts, ILP is doing work.
-                for (int rh = 0; rh < 2; ++rh) {
-                    uint64_t bulk_words = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xA0 + rh * 8);
-                    uint64_t segs = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xB0 + rh * 8);
-                    // Count-based (per-iteration rdcycle traps on the X280 => contaminates timing). One
-                    // rdcycle pair gives an uncontaminated wall; counts give per-op cost. X280 ~1 GHz.
-                    uint64_t wall = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xC0 + rh * 8);
-                    uint64_t passes = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xD0 + rh * 8);
-                    uint64_t polls = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xE0 + rh * 8);
-                    // Reader lap-guard drop counter (profzone RES(0x50+h*8) == params+0x90+h*8). The reader
-                    // clamps head to tail-RING_CAP when the producer got >512 words ahead, DROPPING the
-                    // oldest words -- and the oldest word in a dispatch is the FW ZONE_START. If this is
-                    // NONZERO the "producer always blocks so tail-head<=512" invariant is being violated
-                    // under back-pressure, and the reader-side drop is the root cause of the orphan ENDs.
-                    uint64_t lap_dropped =
-                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x90 + rh * 8);
-                    uint64_t markers = bulk_words / 2;
-                    double wall_ms = wall / 1e6;
-                    log_info(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: reader {}: wall={} ms, {} markers => {} k/s; {} passes, "
-                        "{} core-polls ({} ns/poll); {} segments (avg {} words/seg); LAP-DROPPED {} words "
-                        "(want 0 -- nonzero => reader dropped oldest markers/STARTs under back-pressure)",
-                        dev_state.chip_id,
-                        rh,
-                        (uint64_t)wall_ms,
-                        markers,
-                        wall_ms > 0 ? (uint64_t)(markers / wall_ms) : 0,
-                        passes,
-                        polls,
-                        polls ? wall / polls : 0,
-                        segs,
-                        segs ? bulk_words / segs : 0,
-                        lap_dropped);
-                    // Full reader-wall breakdown (profzone RES 0x140/0x150/0x160/0x170/0x120 ==
-                    // params+0x180/0x190/0x1A0/0x1B0/0x160). "other" = wall - sum = per-poll parse/scan
-                    // overhead. mwait_spins is dilution-immune: high => reader blocked on a FULL mirror
-                    // => collect (reshape) is the wall, not the reader.
-                    uint64_t cyc_poll = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x180 + rh * 8);
-                    uint64_t cyc_bulk = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x190 + rh * 8);
-                    uint64_t cyc_mwait = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x1A0 + rh * 8);
-                    uint64_t cyc_backoff =
-                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x1B0 + rh * 8);
-                    uint64_t mwait_spins =
-                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x160 + rh * 8);
-                    uint64_t sum_cyc = cyc_poll + cyc_bulk + cyc_mwait + cyc_backoff;
-                    uint64_t wall_cyc = wall;  // wall was read in cycles above (params+0xC0)
-                    uint64_t other = wall_cyc > sum_cyc ? wall_cyc - sum_cyc : 0;
-                    auto pct = [&](uint64_t c) { return wall_cyc ? (uint64_t)(100.0 * c / wall_cyc) : 0; };
-                    log_info(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: reader {} wall-split: poll={} ms ({}%), bulk={} ms ({}%), "
-                        "mwait={} ms ({}%), backoff={} ms ({}%), other/parse={} ms ({}%); mwait_spins={} "
-                        "(nonzero => blocked on FULL mirror => collect is the wall)",
-                        dev_state.chip_id,
-                        rh,
-                        (uint64_t)(cyc_poll / 1e6),
-                        pct(cyc_poll),
-                        (uint64_t)(cyc_bulk / 1e6),
-                        pct(cyc_bulk),
-                        (uint64_t)(cyc_mwait / 1e6),
-                        pct(cyc_mwait),
-                        (uint64_t)(cyc_backoff / 1e6),
-                        pct(cyc_backoff),
-                        (uint64_t)(other / 1e6),
-                        pct(other),
-                        mwait_spins);
-                }
-                // Fill-trajectory dump: reconstruct queue-fill-vs-time to see WHICH queue saturates and
-                // WHEN. Slot = t(8) l1_0(4) l1_1(4) spsc0(4) spsc1(4) d2h(4) rp0(4) rp1(4). CSV to
-                // $HOME/x280_traj_dev<N>.csv; peaks logged inline.
-                try {
-                    constexpr uint64_t kTrajCount = 0x0801C100ull;  // RSPSCCTL + 0x100
-                    constexpr uint64_t kTrajBase = 0x0801D000ull;
-                    constexpr uint32_t kTrajCap = 2048, kTrajStride = 48;
-                    uint64_t cnt = dev_state.x280_driver->lim_rd_u64(kTrajCount);
-                    uint32_t nn = cnt < kTrajCap ? static_cast<uint32_t>(cnt) : kTrajCap;
-                    if (nn > 0) {
-                        std::vector<uint8_t> raw(static_cast<size_t>(nn) * kTrajStride, 0);
-                        dev_state.x280_driver->read_block(raw.data(), static_cast<uint32_t>(raw.size()), kTrajBase);
-                        const char* home = std::getenv("HOME");
-                        std::string path = std::string(home && *home ? home : "/tmp") + "/x280_traj_dev" +
-                                           std::to_string(dev_state.chip_id) + ".csv";
-                        std::ofstream csv(path);
-                        csv << "t_us,l1_0,l1_1,spsc0,spsc1,d2h,rp0_us,rp1_us\n";
-                        uint64_t t0 = 0;
-                        uint32_t pl1 = 0, psp = 0;
-                        uint64_t tl1 = 0, tsp = 0;
-                        for (uint32_t k = 0; k < nn; k++) {
-                            uint32_t idx = (cnt <= kTrajCap) ? k : static_cast<uint32_t>((cnt + k) % kTrajCap);
-                            const uint8_t* s = raw.data() + static_cast<size_t>(idx) * kTrajStride;
-                            uint64_t t = 0;
-                            uint32_t l1a = 0, l1b = 0, s0 = 0, s1 = 0, d2h = 0, rp0 = 0, rp1 = 0;
-                            std::memcpy(&t, s + 0, 8);
-                            std::memcpy(&l1a, s + 8, 4);
-                            std::memcpy(&l1b, s + 12, 4);
-                            std::memcpy(&s0, s + 16, 4);
-                            std::memcpy(&s1, s + 20, 4);
-                            std::memcpy(&d2h, s + 24, 4);
-                            std::memcpy(&rp0, s + 28, 4);
-                            std::memcpy(&rp1, s + 32, 4);
-                            if (k == 0) {
-                                t0 = t;
-                            }
-                            uint64_t tus = (t - t0) / 1000;
-                            csv << tus << "," << l1a << "," << l1b << "," << s0 << "," << s1 << "," << d2h << "," << rp0
-                                << "," << rp1 << "\n";
-                            uint32_t l1 = l1a > l1b ? l1a : l1b, sp = s0 > s1 ? s0 : s1;
-                            if (l1 > pl1) {
-                                pl1 = l1;
-                                tl1 = tus;
-                            }
-                            if (sp > psp) {
-                                psp = sp;
-                                tsp = tus;
-                            }
-                        }
-                        csv.close();
-                        log_info(
-                            tt::LogMetal,
-                            "[Real-time profiler] Device {}: fill-trajectory ({} samples) -> {}; peaks: "
-                            "L1={}/512 @{}us, SPSC={}/{} pages @{}us",
-                            dev_state.chip_id,
-                            nn,
-                            path,
-                            pl1,
-                            tl1,
-                            psp,
-                            4096,
-                            tsp);
-                    }
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: fill-trajectory dump failed: {}",
-                        dev_state.chip_id,
-                        e.what());
-                }
-                // Burst-window reader breakdown: the relay latched each reader's cumulative poll/bulk/mwait/
-                // backoff at burst-onset and at the fall-behind (sustained stall). The diff is the time
-                // distribution over JUST the burst -- where the reader spends the burst, and whether it's
-                // NoC-read bound (bulk), ctrl-poll bound (poll), or blocked on a full SPSC (mwait).
-                try {
-                    constexpr uint64_t kGauge = 0x08016400ull;
-                    constexpr uint64_t kOnset = kGauge + 0x300, kStall = kGauge + 0x400, kFlags = kGauge + 0x500;
-                    if (dev_state.x280_driver->lim_rd_u64(kFlags + 0) &&
-                        dev_state.x280_driver->lim_rd_u64(kFlags + 8)) {
-                        auto rd = [&](uint64_t b, int i) { return dev_state.x280_driver->lim_rd_u64(b + i * 8); };
-                        auto pct = [](uint64_t p, uint64_t w) { return w ? 100.0 * (double)p / (double)w : 0.0; };
-                        for (int h = 0; h < 2; h++) {
-                            int b = h * 5;
-                            uint64_t poll = rd(kStall, b + 0) - rd(kOnset, b + 0);
-                            uint64_t bulk = rd(kStall, b + 1) - rd(kOnset, b + 1);
-                            uint64_t mwait = rd(kStall, b + 2) - rd(kOnset, b + 2);
-                            uint64_t backoff = rd(kStall, b + 3) - rd(kOnset, b + 3);
-                            uint64_t wall = rd(kStall, b + 4) - rd(kOnset, b + 4);
-                            uint64_t other =
-                                wall > (poll + bulk + mwait + backoff) ? wall - (poll + bulk + mwait + backoff) : 0;
-                            log_info(
-                                tt::LogMetal,
-                                "[Real-time profiler] Device {}: BURST reader-{} ({} us): poll(ctrl)={:.1f}%  "
-                                "bulk(NoC copy)={:.1f}%  mwait(SPSC full)={:.1f}%  backoff={:.1f}%  "
-                                "other/parse={:.1f}%",
-                                dev_state.chip_id,
-                                h,
-                                wall / 1000,
-                                pct(poll, wall),
-                                pct(bulk, wall),
-                                pct(mwait, wall),
-                                pct(backoff, wall),
-                                pct(other, wall));
-                        }
-                    } else {
-                        log_info(
-                            tt::LogMetal,
-                            "[Real-time profiler] Device {}: BURST reader breakdown unavailable (no sustained stall)",
-                            dev_state.chip_id);
-                    }
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: burst reader-breakdown failed: {}",
-                        dev_state.chip_id,
-                        e.what());
-                }
-                // Do NOT assert_reset: the drainer, on P_STOP, jumps back to the resident idle FW
-                // (which stays up for the next run). Wait for that return instead of parking via
-                // reset -- re-asserting reset on a running L2CPU is the churn/wedge trigger, and it
-                // would tear down the idle FW we want to keep resident across runs.
-                if (!dev_state.x280_driver->wait_active_fw_returned(std::chrono::milliseconds(2000))) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: X280 drainer did not return to the idle FW within "
-                        "2s of P_STOP; leaving the L2CPU as-is (next run's ensure_idle will re-check).",
-                        dev_state.chip_id);
-                }
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Failed to quiesce X280 on device {}: {}",
-                    dev_state.chip_id,
-                    e.what());
-            }
-        }
-        dev_state.x280_socket.reset();
-        dev_state.x280_socket2.reset();
-        dev_state.x280_driver.reset();
     }
 
     for (const auto& dev_state : devices_) {
@@ -2225,17 +1219,6 @@ void RealtimeProfilerManager::shutdown() {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
         for (auto& [handle, consumer] : consumers_) {
             stop_consumer(*consumer, ConsumerStopMode::DrainThenStop);
-            // PROTO diagnostic: records the lossy BroadcastRing dropped before this consumer read them.
-            // Should be 0 now that the ring is sized for the device-marker backlog.
-            log_info(
-                tt::LogMetal,
-                "[Real-time profiler] X280 consumer {}: ring-dropped {} records (receiver published {} total; "
-                "PROBE-b: host read {} pages over {} drain calls -- if >> device-relayed pages, host over-reads)",
-                handle,
-                consumer->dropped,
-                g_x280_published,
-                g_x280_pages_read,
-                g_x280_drain_calls);
         }
         consumers_.clear();
     }
@@ -2245,7 +1228,6 @@ void RealtimeProfilerManager::shutdown() {
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
-        tt::NotifyProgramX280ProfilerDeactivated(dev_state.chip_id);  // no-op if X280 never won here
     }
     devices_.clear();
 }

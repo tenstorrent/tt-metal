@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
-#include <condition_variable>
 #include <mutex>
 #include <span>
 #include <string>
@@ -19,7 +18,6 @@
 #include <optional>
 #include <fstream>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "data_collection.hpp"
 
 namespace tt::tt_metal {
@@ -80,17 +78,6 @@ public:
     void AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
     void DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
 
-    // Generic profiler packet pipeline (see tools/x280_bm/PROFILER_PACKET_PIPELINE.md).
-    // Callbacks are registered per packet type; Invoke passes the enriched packet by
-    // address to every callback registered for that type. Same drain-safe unregister
-    // semantics as the program-record callbacks above.
-    tt::tt_metal::experimental::ProfilerPacketCallbackHandle RegisterProfilerPacketCallbackRaw(
-        tt::tt_metal::experimental::ProfilerPacketType type,
-        tt::tt_metal::experimental::RawProfilerPacketCallback callback);
-    void UnregisterProfilerPacketCallback(tt::tt_metal::experimental::ProfilerPacketCallbackHandle handle);
-    void InvokeProfilerPacketCallbacks(
-        tt::tt_metal::experimental::ProfilerPacketType type, const void* enriched_packet);
-
     // Real-time profiler liveness tracking. MeshDevice notifies activation after a
     // successful init+sync handshake and deactivation at close; IsRealtimeProfilerActive()
     // returns true while at least one chip is active.
@@ -98,28 +85,10 @@ public:
     void NotifyRealtimeProfilerDeactivated(uint32_t chip_id);
     bool IsRealtimeProfilerActive() const;
 
-    // "X280 won" tracking, per chip. The RT manager notifies this ONLY when the X280 kernel-zone
-    // drainer actually booted for a chip (x280_active). While set, the X280 is the sole consumer of
-    // that chip's SPSC kernel-profiler rings, so the standard DeviceProfiler must not read them —
-    // two consumers race on the ring head (HOST_BUFFER_END_INDEX) and corrupt markers. Shares the
-    // callback-list mutex.
-    void NotifyX280ProfilerActivated(uint32_t chip_id);
-    void NotifyX280ProfilerDeactivated(uint32_t chip_id);
-    bool IsX280ProfilerActive(uint32_t chip_id) const;
-
     void DumpData();
 
 private:
     static constexpr size_t kRuntimeIdSlots = 1u << 16;
-
-    // Per-registration guard for callbacks invoked from the receiver thread: tracks in-flight
-    // invocations so UnregisterProfilerPacketCallback can block until no invocation still holds the
-    // (now-removed) registration, avoiding a use-after-free on unregister during draining.
-    struct RealtimeCallbackState {
-        size_t in_flight_invocations = 0;
-        bool unregistering = false;
-        std::condition_variable drained_cv;
-    };
 
     struct RealtimeCallbackRegistration {
         tt::ProgramRealtimeProfilerCallbackHandle handle;
@@ -150,23 +119,8 @@ private:
     std::vector<tt::RealtimeProfilerCallbackListener*> realtime_callback_listeners_;
     tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 
-    // Generic profiler packet callbacks, keyed by packet type (invoked from the receiver thread).
-    struct PacketCallbackRegistration {
-        tt::tt_metal::experimental::ProfilerPacketCallbackHandle handle;
-        tt::tt_metal::experimental::ProfilerPacketType type;
-        tt::tt_metal::experimental::RawProfilerPacketCallback callback;
-        std::shared_ptr<RealtimeCallbackState> state;
-    };
-    mutable std::mutex profiler_packet_callbacks_mutex_;
-    std::vector<PacketCallbackRegistration> profiler_packet_callbacks_;
-    tt::tt_metal::experimental::ProfilerPacketCallbackHandle next_packet_callback_handle_{0};
-
     // Chip ids whose RT profiler is currently live; shares the callback-list mutex.
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
-    // Chip ids where the X280 drainer won (booted) and owns the SPSC profiler rings; shares the
-    // callback-list mutex. Distinct from realtime_profiler_active_chips_ (which is set for every
-    // RT-managed chip regardless of whether X280 booted).
-    std::unordered_set<uint32_t> x280_profiler_active_chips_;
 };
 
 }  // namespace tt::tt_metal

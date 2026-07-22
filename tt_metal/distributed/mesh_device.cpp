@@ -1462,11 +1462,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     if (realtime_profiler_) {
         return;
     }
-    // Escape hatch for X280 bring-up: skip the always-on RT profiler entirely so a standalone
-    // X280 boot has no reserved core / D2H-socket contention. Not a product flag.
-    if (const char* s = std::getenv("TT_METAL_NO_RT_PROFILER"); s != nullptr && *s != '\0' && *s != '0') {
-        return;
-    }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
 }
 

@@ -213,79 +213,6 @@ void DataCollector::DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerC
     std::erase(realtime_callback_listeners_, listener);
 }
 
-tt::tt_metal::experimental::ProfilerPacketCallbackHandle DataCollector::RegisterProfilerPacketCallbackRaw(
-    tt::tt_metal::experimental::ProfilerPacketType type,
-    tt::tt_metal::experimental::RawProfilerPacketCallback callback) {
-    std::lock_guard<std::mutex> lock(profiler_packet_callbacks_mutex_);
-    auto handle = next_packet_callback_handle_++;
-    profiler_packet_callbacks_.push_back(
-        {handle, type, std::move(callback), std::make_shared<RealtimeCallbackState>()});
-    return handle;
-}
-
-void DataCollector::UnregisterProfilerPacketCallback(tt::tt_metal::experimental::ProfilerPacketCallbackHandle handle) {
-    std::unique_lock<std::mutex> lock(profiler_packet_callbacks_mutex_);
-    auto it =
-        std::find_if(profiler_packet_callbacks_.begin(), profiler_packet_callbacks_.end(), [handle](const auto& entry) {
-            return entry.handle == handle;
-        });
-    if (it == profiler_packet_callbacks_.end()) {
-        return;
-    }
-
-    auto state = it->state;
-    state->unregistering = true;
-    profiler_packet_callbacks_.erase(it);
-
-    // Wait until all in-flight invocations that already captured this registration complete.
-    state->drained_cv.wait(lock, [&state]() { return state->in_flight_invocations == 0; });
-}
-
-void DataCollector::InvokeProfilerPacketCallbacks(
-    tt::tt_metal::experimental::ProfilerPacketType type, const void* enriched_packet) {
-    using ActiveCallback =
-        std::pair<tt::tt_metal::experimental::RawProfilerPacketCallback, std::shared_ptr<RealtimeCallbackState>>;
-    std::vector<ActiveCallback> active_callbacks;
-    {
-        std::lock_guard<std::mutex> lock(profiler_packet_callbacks_mutex_);
-        for (auto& registration : profiler_packet_callbacks_) {
-            if (registration.type != type || registration.state->unregistering) {
-                continue;
-            }
-            registration.state->in_flight_invocations++;
-            active_callbacks.emplace_back(registration.callback, registration.state);
-        }
-    }
-
-    std::exception_ptr callback_exception;
-    for (const auto& [callback, state] : active_callbacks) {
-        (void)state;
-        try {
-            callback(enriched_packet);
-        } catch (...) {
-            if (!callback_exception) {
-                callback_exception = std::current_exception();
-            }
-        }
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(profiler_packet_callbacks_mutex_);
-        for (const auto& [callback, state] : active_callbacks) {
-            (void)callback;
-            TT_ASSERT(state->in_flight_invocations > 0, "In-flight callback accounting underflow");
-            state->in_flight_invocations--;
-            if (state->unregistering && state->in_flight_invocations == 0) {
-                state->drained_cv.notify_all();
-            }
-        }
-    }
-
-    if (callback_exception) {
-        std::rethrow_exception(callback_exception);
-    }
-}
-
 void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
     realtime_profiler_active_chips_.insert(chip_id);
@@ -299,21 +226,6 @@ void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
 bool DataCollector::IsRealtimeProfilerActive() const {
     std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
     return !realtime_profiler_active_chips_.empty();
-}
-
-void DataCollector::NotifyX280ProfilerActivated(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    x280_profiler_active_chips_.insert(chip_id);
-}
-
-void DataCollector::NotifyX280ProfilerDeactivated(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    x280_profiler_active_chips_.erase(chip_id);
-}
-
-bool DataCollector::IsX280ProfilerActive(uint32_t chip_id) const {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    return x280_profiler_active_chips_.contains(chip_id);
 }
 
 void DataCollector::DumpData() {

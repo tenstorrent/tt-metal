@@ -84,7 +84,7 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, ui
 std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
-// Multiple callbacks can be registered; each callback is called from its own thread.
+// Multiple callbacks can be registered each callback is called from its own thread.
 // Returns a handle that can be used to unregister the callback.
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
 
@@ -109,12 +109,5 @@ bool IsProgramRealtimeProfilerActive();
 // Internal lifecycle hooks wired by MeshDevice (not for end-user calls).
 void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id);
 void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id);
-
-// "X280 won" hooks: the RT manager notifies these only for chips where the X280 kernel-zone
-// drainer actually booted. IsProgramX280ProfilerActive(chip) lets the standard DeviceProfiler
-// skip reading a chip's SPSC rings while X280 owns them (X280 wins).
-void NotifyProgramX280ProfilerActivated(uint32_t chip_id);
-void NotifyProgramX280ProfilerDeactivated(uint32_t chip_id);
-bool IsProgramX280ProfilerActive(uint32_t chip_id);
 
 }  // end namespace tt

@@ -22,7 +22,6 @@
 
 #include "context/context_types.hpp"
 #include "tt_metal/common/broadcast_ring.hpp"
-#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 
 namespace tt::tt_metal {
@@ -31,10 +30,6 @@ class IDevice;
 class Program;
 class DataCollector;
 class RealtimeProfilerTracyHandler;
-
-namespace profiler {
-class X280Driver;
-}
 
 namespace distributed {
 
@@ -103,20 +98,6 @@ private:
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<D2HSocket> socket;
-        // Optional X280 (L2CPU) kernel-zone drainer: a SECOND D2H socket whose sender is the X280.
-        // The X280 drains the per-RISC SPSC zone rings (HalL1MemAddrType::PROFILER) and relays each
-        // raw marker (in ring order) as a device-marker page. The receiver polls this alongside
-        // `socket` and pushes START/END to Tracy per lane. Null when no X280 / not eligible / fw
-        // not built.
-        std::unique_ptr<D2HSocket> x280_socket;
-        std::unique_ptr<D2HSocket> x280_socket2;  // 2nd D2H FIFO: relay-1 drains reader-1's SPSC here
-        std::unique_ptr<profiler::X280Driver> x280_driver;
-        uint64_t x280_params_addr = 0;  // MBOX_PARAMS in the X280 LIM (for the P_STOP write at shutdown)
-        bool x280_active = false;
-        // The X280 relays worker cores in VIRTUAL coords (what its NoC addresses); Tracy device
-        // lanes must use the same NOC0 coords the standard DeviceProfiler uses, so we map here.
-        // Key = (uint64_t(virtual_x) << 32) | virtual_y, value = NOC0 (x, y).
-        std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> x280_virt_to_noc0;
         // Owns the BRISC+NCRISC realtime-profiler program so its kernels remain alive for
         // the lifetime of the manager. If this goes out of scope while the kernels are
         // still running, downstream tooling (e.g. tt-inspector) loses the kernel metadata.
@@ -155,18 +136,7 @@ private:
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
     void run_init_sync();
 
-    // Best-effort boot of the optional X280 (L2CPU) kernel-zone drainer on an eligible Blackhole
-    // device (populates dev_state.x280_* on success). No-op / leaves x280_active=false otherwise.
-    void boot_x280_drainer(
-        const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& coord, DeviceState& dev_state);
-    // Drain one device's X280 socket (batched), enrich each WorkerZone marker and invoke the
-    // profiler-packet callbacks. Returns the number of pages read.
-    uint32_t drain_x280_device(DeviceState& dev_state);
-
-    // PROTOTYPING: the ring is repurposed to carry X280 device-zone markers (WorkerZoneWire), not
-    // program records. The translator (drain_x280_device) publishes WorkerZoneWire; the existing
-    // consumer threads enrich + push to Tracy off the receiver. Program-record publishing is disabled.
-    using RecordRing = BroadcastRing<tt::tt_metal::experimental::WorkerZoneWire>;
+    using RecordRing = BroadcastRing<tt::ProgramRealtimeRecord>;
 
     enum class ConsumerStopMode : uint8_t { Running, StopWithoutDrain, DrainThenStop };
 
@@ -250,10 +220,6 @@ private:
     std::optional<RecordRing> ring_;
     std::mutex consumers_mutex_;
     std::unordered_map<tt::ProgramRealtimeProfilerCallbackHandle, std::unique_ptr<Consumer>> consumers_;
-
-    // X280 device whose enrich maps (virt->noc0, chip_id) the consumer uses when pushing WorkerZone
-    // records pulled from the ring. Single X280 device on bh; set at boot_x280_drainer.
-    DeviceState* x280_dev_ = nullptr;
 };
 
 }  // namespace distributed
