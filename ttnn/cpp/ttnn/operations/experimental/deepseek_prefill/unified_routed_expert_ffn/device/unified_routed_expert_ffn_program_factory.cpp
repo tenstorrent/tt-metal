@@ -797,6 +797,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 21
         K_gate_tiles,                         // 22
         static_cast<uint32_t>(up_mode == 2),  // 23 writer_split_up
+        // down_k_tail_skip: when the compute tail-skips the last down block's
+        // K padding, the down matmul never reduces the N-OOB hidden columns, so
+        // the writer's `up` read can skip zero-filling them. Must match the
+        // reader's identically-derived constexpr.
+        static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT).

@@ -529,7 +529,7 @@ void kernel_main() {
                 // barrier does NOT fix this on Blackhole (multicast writes are
                 // posted; no completion ack). Mirrors the phase-4 activated mcast.
                 {
-                    // DeviceZoneScopedN("IN0-MCAST");
+                    DeviceZoneScopedN("IN0-MCAST");
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(block_start),
                         MulticastEndpoint{},
@@ -578,10 +578,18 @@ void kernel_main() {
                                     {.page_id = tile_idx},
                                     {});
                             } else {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
-                                for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                                // N-OOB hidden padding column (col >= N_gate_tiles_full ==
+                                // down's K_down_tiles). Its garbage gate output feeds the down
+                                // matmul's K reduction, so keep it zero UNLESS the compute
+                                // tail-skips the last down block's padding (down_k_tail_skip) —
+                                // then down never reduces this column and the garbage is dropped.
+                                // Mirrors the down-weight K-OOB fill below.
+                                if constexpr (!down_k_tail_skip) {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
+                                    for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
                                 }
                             }
                             l1_w_gate += gate_tile_bytes;
@@ -606,10 +614,14 @@ void kernel_main() {
                                 noc_read.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
                             } else {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                                // N-OOB hidden padding column: same rationale as the gate read
+                                // above — kept zero only when the down matmul still reduces it.
+                                if constexpr (!down_k_tail_skip) {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
+                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
                                 }
                             }
                             l1_w_up += up_tile_bytes;
@@ -620,12 +632,12 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
-                    // DeviceZoneScopedN("UP-WAITING-READ");
+                    DeviceZoneScopedN("UP-WAITING-READ");
                     up_done_sem.wait_min(up_seq);
                 }
 
                 {
-                    // DeviceZoneScopedN("IN1-MCAST");
+                    DeviceZoneScopedN("IN1-MCAST");
 
                     // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                     // locally-read weights go straight to compute via cb_push_back.
