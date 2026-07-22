@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 import torch
 from loguru import logger
@@ -1181,14 +1182,17 @@ class LTXTransformerCheckpoint:
             sd = fuse_loras_into(sd, lora_specs)
         return sd
 
-    def cache_name(self, lora_specs: list[LoraSpec]) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
-        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
+    def cache_name(self, lora_specs: list[LoraSpec], quant_tag: str | None = None) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
+        alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached tensorbins carry their dtype, so
+        a bf8 preset run and the bf16 baseline must live in separate dirs."""
         base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
-        if not lora_specs:
-            return base
-        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
-        return f"{base}.lora-{tag}"
+        if lora_specs:
+            tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+            base = f"{base}.lora-{tag}"
+        if quant_tag:
+            base = f"{base}.q-{quant_tag}"
+        return base
 
     def build(
         self,
@@ -1235,15 +1239,18 @@ class LTXTransformerCheckpoint:
         mesh_shape: tuple[int, ...],
         is_fsdp: bool,
         lora_specs: list[LoraSpec],
+        quant_tag: str | None = None,
+        post_load_hook: Callable[[Module], None] | None = None,
     ) -> None:
         """Load (or reload) weights for a previously-built transformer."""
         cache_module.load_model(
             model,
-            model_name=self.cache_name(lora_specs),
+            model_name=self.cache_name(lora_specs, quant_tag),
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=mesh_shape,
             mesh_device=model.mesh_device,
             is_fsdp=is_fsdp,
             get_torch_state_dict=lambda: self.state_dict(lora_specs),
+            post_load_hook=post_load_hook,
         )

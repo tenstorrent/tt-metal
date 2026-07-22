@@ -52,6 +52,7 @@ def load_model(
     is_fsdp: bool = False,
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
+    post_load_hook: Callable[[Module], None] | None = None,
 ) -> None:
     """
     Load model weights from cache or PyTorch state dict.
@@ -73,6 +74,9 @@ def load_model(
             evaluation - PyTorch model only loads if the cache does not exist. If `None`, cache
             must exist or `MissingCacheError` is raised.
         `create_cache`: Create cache after loading from PyTorch (default: True).
+        `post_load_hook`: Optional callback run on the loaded module before the cache is written
+            (and after every cache hit), e.g. a quant typecast, so cached tensorbins carry the
+            post-hook weight dtype.
 
     Raises:
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
@@ -100,12 +104,16 @@ def load_model(
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
         tt_model.load_torch_state_dict(get_torch_state_dict())
+        if post_load_hook is not None:
+            post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
         return
 
     if _cache_is_complete(cache_dir):
         logger.info(f"loading cache at '{cache_dir}'.")
         tt_model.load(cache_dir)
+        if post_load_hook is not None:
+            post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
         return
 
@@ -114,6 +122,12 @@ def load_model(
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
     tt_model.load_torch_state_dict(get_torch_state_dict())
+
+    # Run the hook (e.g. quant typecast) BEFORE save, so the cache holds the post-hook weight
+    # dtype; otherwise a later reload reads stale-dtype tensorbins into a hook-mutated module and
+    # the strict dtype check fails.
+    if post_load_hook is not None:
+        post_load_hook(tt_model)
 
     # If distributed, ensure that all processes have completed the check whether cache_dir exists,
     # before any rank might proceed to create that dir to save.
