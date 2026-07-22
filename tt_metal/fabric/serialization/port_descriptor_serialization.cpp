@@ -28,12 +28,12 @@ std::vector<uint8_t> serialize_to_bytes(const PortDescriptorTable& port_id_table
             // Set destination mesh ID
             entry->mutable_dest_mesh_id()->set_value(*dest_mesh_id);
 
-            // Add port descriptors (physical facts only; direction assigned later on rank 0)
+            // Add port descriptors
             for (const auto& port_desc : port_descriptors) {
                 auto* proto_port_desc = entry->add_port_descriptors();
+                proto_port_desc->set_port_direction(static_cast<uint32_t>(port_desc.port_id.first));
+                proto_port_desc->set_port_channel(port_desc.port_id.second);
                 proto_port_desc->set_connection_hash(port_desc.connection_hash);
-                proto_port_desc->set_src_chip(port_desc.src_chip);
-                proto_port_desc->set_dst_chip(port_desc.dst_node.chip_id);
             }
         }
     }
@@ -69,13 +69,13 @@ PortDescriptorTable deserialize_port_descriptors_from_bytes(const std::vector<ui
         for (const auto& entry : mesh_map.entries()) {
             MeshId dest_mesh_id{entry.dest_mesh_id().value()};
 
-            // Extract port descriptors (dst mesh comes from the entry key)
+            // Extract port descriptors
             std::vector<PortDescriptor> port_descriptors;
             for (const auto& proto_port_desc : entry.port_descriptors()) {
                 PortDescriptor port_desc;
+                port_desc.port_id = {
+                    static_cast<RoutingDirection>(proto_port_desc.port_direction()), proto_port_desc.port_channel()};
                 port_desc.connection_hash = proto_port_desc.connection_hash();
-                port_desc.src_chip = proto_port_desc.src_chip();
-                port_desc.dst_node = FabricNodeId(dest_mesh_id, proto_port_desc.dst_chip());
                 port_descriptors.push_back(port_desc);
             }
 

@@ -13,7 +13,6 @@
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
-#include <map>
 #include <vector>
 #include <unordered_map>
 #include <queue>
@@ -107,14 +106,6 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
 std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
     const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
-// Serialize the resolved inter-mesh port assignment to a YAML file (golden-comparable, debug-logged).
-// Builds per-boundary entries "D<chip>ch<chan>(<DIR>)>M<peer_mesh>D<peer_chip>ch<peer_chan>" from the
-// control-plane maps, fully sorted so the output is deterministic and independent of the physical host.
-void serialize_intermesh_port_assignment_to_file(
-    const std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>>& exit_node_directions,
-    const std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>>&
-        intermesh_chan_to_peer,
-    const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric
 
