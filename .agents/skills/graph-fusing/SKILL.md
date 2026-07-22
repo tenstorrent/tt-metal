@@ -71,7 +71,8 @@ Patterns of this kind (light list — see examples for the unfused→fused form)
 - TopK: `sort → slice[:k]` → `ttnn.topk`.
 - Fused residual-add + RMSNorm: `add(residual) → rms_norm` → `ttnn.rms_norm(..., residual_input_tensor=…)`.
 - Fused matmul + collective (multi-device): local-matmul→all-reduce, matmul→reduce-scatter, or all-gather→matmul → the fused CCL-matmul variant when the op contract allows it.
-- MoE experts: routed `ttnn.sparse_matmul` (+ score-weight + reduce), and `ttnn.experimental.moe_compute` where it fits the routing.
+- MoE experts: routed `ttnn.sparse_matmul` (+ score-weight + reduce), or the dedicated `moe_compute` / `moe_decode` (`ttmoedecode`) compute op where it fits the routing.
+- MoE gate/router: a spelled-out linear→softmax→topk gate → a dedicated MoE gate op (`moe_gate_mm`, `deepseek_moe_gate`, or the generalized / grouped-topk / hash-gate variants under `ttnn` moe ops) when it matches the routing scheme.
 - Paged KV-cache update: fold the separate write into the fused cache-update op — but validate it under the watcher NoC sanitizer (a fused update can pass the functional check yet trip a NoC fault).
 
 Fusing caveats: do not fold a bias into a low-precision (e.g. BFP8) linear — keep it a separate higher-precision add (folding can damage Q/K/V PCC); fold an activation into the elementwise op that consumes it (`multiply(..., activations=[SILU])`), not into the upstream matmul.
