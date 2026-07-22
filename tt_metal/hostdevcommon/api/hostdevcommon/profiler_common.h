@@ -58,6 +58,11 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
+    // Host->kernel terminate signal (SPSC/X280 backend): set at teardown when the X280 consumer
+    // is stopping. While clear, a producing RISC BLOCKS on a full ring (lossless). While set, the
+    // producer stops blocking and proceeds (drops), so a dispatch core cannot get stuck in
+    // ring_ensure_room and wedge wait_until_cores_done() during device close.
+    PROFILER_TERMINATE,
     // Used for device debug dump mode. Needs to come last in the control buffer
     // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,
@@ -67,7 +72,12 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B };
+// STICKY_META (SPSC/X280 backend): an 8B context packet emitted once per RISC per launch at the main
+// zone scope. High word carries (core_x, core_y, risc) + this type; low word a 32-bit host-side ID. The
+// host forward-fills that identity onto the following timing markers so the X280 reader can bulk-copy raw
+// markers with NO per-marker reshape. Its type sits in the same bits (28-30 of w0) as a marker's type, so
+// the host distinguishes it before decoding the rest. Must stay <= 7 (3-bit type field).
+enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B, STICKY_META };
 
 // Number of expected uint64_t data values for each PacketType
 template <PacketTypes packet_type>
@@ -89,6 +99,9 @@ struct TimestampedDataSize<TS_DATA_16B> {
 // TODO: use data types in profile_msg_t rather than addresses/sizes
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+// Governs the L1 buffer SIZING (part of mailboxes_t, which is L1-size-bounded) and the DRAM path.
+// The X280 SPSC markers are 4 words (see SPSC_MARKER_WORDS in kernel_profiler.hpp) but this stays 2
+// so the L1 profiler ring keeps its size (holding 128 4-word markers instead of 256 2-word ones).
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
