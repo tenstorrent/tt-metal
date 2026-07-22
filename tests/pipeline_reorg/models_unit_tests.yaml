@@ -778,9 +778,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
-  # NOTE! The -k filtering above is a hack! We ideally should test both is_fsdp0 and is_fsdp1
-  # but wh_galaxies error with OOM right now for fsdp0. This workaround lets tests pass on wh_galaxy.
+    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py
   model: wan-2.2-i2v
   skus:
     # bh_galaxy:
