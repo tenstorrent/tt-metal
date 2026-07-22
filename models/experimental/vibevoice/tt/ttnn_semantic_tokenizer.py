@@ -33,6 +33,7 @@ Requires device opened with l1_small_size=32768 for conv support on Blackhole.
 """
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -390,6 +391,26 @@ class TTConv1d:
                     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 x = ttnn.pad(x, [(0, 0), (0, 0), (cp, extra_pad), (0, 0)], value=0.0)
 
+        # VV_CONV_SINGLE_BLOCK=1: force the depthwise conv (groups>1) onto the single-height-block
+        # path (act_block_h >= full output height) — the ONE code path in compute_depthwise_conv1d.cpp
+        # that the ttnn rebuild left UNCHANGED (multi-block got a separate-scratch rework).  Reproduces
+        # the old-build depthwise numerics byte-for-byte iff the old build also ran these convs
+        # single-block (probing the long-form collapse; the conv is the only value-changing feedback op).
+        _conv_cfg = None
+        if os.environ.get("VV_CONV_SINGLE_BLOCK", "1") == "1" and self.groups > 1 and use_cache:
+            out_w = (T_padded - self.K) // self.stride + 1
+            abh = ((out_w + 31) // 32) * 32
+            # A full-height single block > ~1600 rows overflows L1 (the g=32/outw=3200 last decoder
+            # stage needs ~2.9 MB > 1.5 MB), so cap it — that conv stays on auto (multi-block).
+            _sb_cap = int(os.environ.get("VV_CONV_SB_CAP", "1600"))
+            if out_w <= _sb_cap:
+                _conv_cfg = ttnn.Conv2dConfig(act_block_h_override=abh)
+            if os.environ.get("VV_CONV_DBG") == "1":
+                print(
+                    f"[conv sb] g={self.groups} in={self.in_ch} out={self.out_ch} "
+                    f"Tpad={T_padded} outw={out_w} abh={abh} pinned={_conv_cfg is not None}",
+                    flush=True,
+                )
         x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -408,6 +429,7 @@ class TTConv1d:
             return_weights_and_bias=True,
             dtype=self.compute_dtype,
             compute_config=_HIFI4,
+            conv_config=_conv_cfg,
         )
         # Output from conv2d is [1, 1, B*w_out, out_ch]; reshape to [B, 1, T_out, out_ch]
         return ttnn.reshape(x_out, [B, 1, w_out, self.out_ch])
