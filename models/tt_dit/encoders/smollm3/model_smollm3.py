@@ -168,7 +168,6 @@ class SmolLM3Context:
     device: ttnn.MeshDevice
     tp_axis: int | None
     ccl_manager: CCLManager | None
-    fsdp_mesh_axis: int | None = None
     sp_axis: int | None = None
     sp_factor: int = 1
 
@@ -204,7 +203,6 @@ class SmolLM3Mlp(Module):
             bias=False,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
-            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
         )
         self.up_proj = ColParallelLinear(
@@ -213,7 +211,6 @@ class SmolLM3Mlp(Module):
             bias=False,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
-            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
         )
         self.down_proj = RowParallelLinear(
@@ -222,7 +219,6 @@ class SmolLM3Mlp(Module):
             bias=False,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
-            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
         )
 
@@ -278,7 +274,6 @@ class SmolLM3Attention(Module):
             bias=False,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
-            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
         )
         self.o_proj = ColParallelLinear(
@@ -287,7 +282,6 @@ class SmolLM3Attention(Module):
             bias=False,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
-            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
         )
 
@@ -480,16 +474,10 @@ class SmolLM3TextEncoder(Module):
         device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig,
         ccl_manager: CCLManager | None = None,
-        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         tp_factor = parallel_config.tensor_parallel.factor
-        fsdp_mesh_axis = None
-        if is_fsdp and tp_factor > 1:
-            other = 1 - tp_axis
-            if device.shape[other] > 1:
-                fsdp_mesh_axis = other
         sp = parallel_config.sequence_parallel
         sp_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
         sp_factor = sp.factor if sp is not None else 1
@@ -497,7 +485,6 @@ class SmolLM3TextEncoder(Module):
             device=device,
             tp_axis=tp_axis if tp_factor > 1 else None,
             ccl_manager=ccl_manager,
-            fsdp_mesh_axis=fsdp_mesh_axis,
             sp_axis=sp_axis,
             sp_factor=sp_factor,
         )
