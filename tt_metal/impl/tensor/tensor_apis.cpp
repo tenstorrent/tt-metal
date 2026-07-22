@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <tt-logger/tt-logger.hpp>
 #include <unordered_set>
 
 #include "host_tensor_impl.hpp"
@@ -1048,12 +1049,15 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
+    log_info(LogMetal, "Using host side padding facility pad.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
 }
 
 HostTensor pad_to_tile(const HostTensor& tensor, float pad_value) {
+    log_info(LogMetal, "Using host side padding facility pad_to_tile.");
+
     uint32_t height = tensor.padded_shape()[-2];
     uint32_t width = tensor.padded_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
@@ -1084,12 +1088,14 @@ HostTensor unpad(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
+    log_info(LogMetal, "Using host side unpadding facility unpad.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });
 }
 
 HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape) {
+    log_info(LogMetal, "Using host side unpadding facility unpad_from_tile.");
     for (auto index = -3; index >= -static_cast<int>(tensor.padded_shape().rank()); index--) {
         TT_FATAL(
             tensor.logical_shape()[index] == output_tensor_shape[index],
