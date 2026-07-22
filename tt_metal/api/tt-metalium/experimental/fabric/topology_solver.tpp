@@ -1548,12 +1548,12 @@ inline bool topology_mapping_should_use_sat_engine(
         case TopologyMappingSolverEngine::Dfs:
             return false;
         case TopologyMappingSolverEngine::Auto: {
-            // Auto now defaults to SAT for ALL problem sizes. Rationale: the SAT backend is the only one that
-            // honors the same-rank-group host-count constraints (set_max_same_rank_groups_used /
-            // set_minimize_same_rank_groups_used); the DFS backend silently ignores them (see
-            // SearchHeuristic::compute_candidate_cost and the ConstraintIndexData ctor note). To avoid backend-
-            // dependent results we use SAT everywhere. The TT_TOPOLOGY_SOLVER_ENGINE=dfs env override still forces
-            // DFS for explicit debugging (with the caveat that host-count constraints won't be enforced there).
+            // Auto now defaults to SAT for ALL problem sizes. Both backends now honor the same-rank-group host-count
+            // constraints (set_max_same_rank_groups_used HARD cap + set_minimize_same_rank_groups_used SOFT bias; see
+            // SearchHeuristic::compute_candidate_cost and the dfs_recursive / dfs_enum cap prunes), but SAT gives a
+            // guaranteed minimum plus the soft-minimize fallback when a hard cap is infeasible, whereas DFS's minimize
+            // is only a greedy best-effort bias. We use SAT everywhere for backend-independent, optimal results. The
+            // TT_TOPOLOGY_SOLVER_ENGINE=dfs env override still forces DFS for explicit debugging.
             (void)n_target;
             (void)n_global;
             const char* env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
@@ -3269,9 +3269,37 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
 
         const size_t target_idx = selection.target_idx;
 
+        // Hard host-group cap (max_same_rank_groups_used): mirror DFSSearchEngine::dfs_recursive so the enumeration
+        // path honors the same at-most-k occupied same-rank-group cap as the single-solution search and every SAT
+        // path. Build the set of groups already occupied by the current partial mapping once per node; a candidate
+        // whose group is NEW is only allowed if that keeps the occupied count <= k. Inert when the cap is unset.
+        const size_t host_group_cap = constraint_data.max_same_rank_groups_used;
+        const auto& global_to_host = constraint_data.global_to_same_rank_group;
+        const bool host_cap_active = host_group_cap > 0 && !global_to_host.empty();
+        std::set<int> occupied_host_groups;
+        if (host_cap_active) {
+            for (int g : state_.mapping) {
+                if (g >= 0 && static_cast<size_t>(g) < global_to_host.size()) {
+                    const int grp = global_to_host[static_cast<size_t>(g)];
+                    if (grp >= 0) {
+                        occupied_host_groups.insert(grp);
+                    }
+                }
+            }
+        }
+
         for (size_t global_idx : selection.candidates) {
             if (all_mappings_out.size() >= max_solutions) {
                 return;
+            }
+
+            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
+            if (host_cap_active && global_idx < global_to_host.size()) {
+                const int grp = global_to_host[global_idx];
+                if (grp >= 0 && occupied_host_groups.count(grp) == 0 &&
+                    occupied_host_groups.size() >= host_group_cap) {
+                    continue;  // would exceed at-most-k occupied host groups
+                }
             }
 
             if (!ConsistencyChecker::check_local_consistency(

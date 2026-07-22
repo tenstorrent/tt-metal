@@ -6016,6 +6016,41 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespect
     }
 }
 
+// Enumeration parity: every solution returned by the MULTI-solution path (solve_topology_mapping_n) must also
+// respect the hard host-group cap, for BOTH engines. This covers the DFS enumeration lambda (dfs_enum) cap prune,
+// which is a separate code path from the single-solve dfs_recursive prune exercised above.
+TEST_F(TopologySolverTest, SolveTopologyMappingN_MaxSameRankGroups_HardCapRespected_AllSolutions) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    constexpr size_t kMaxSolutions = 64;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    (void)constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups);
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            /*max_solutions=*/kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            /*unique_shapes=*/true);
+        ASSERT_FALSE(results.empty()) << name << ": expected at least one capped enumeration solution";
+        for (const auto& result : results) {
+            ASSERT_TRUE(result.success) << name << ": " << result.error_message;
+            ASSERT_EQ(result.target_to_global.size(), kNumTargets) << name;
+            EXPECT_LE(count_occupied_groups(result.target_to_global, host_groups), kCap)
+                << name << ": every enumerated solution must respect set_max_same_rank_groups_used(" << kCap << ")";
+        }
+    }
+}
+
 TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_ReducesOccupiedGroups) {
     constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
     constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;
