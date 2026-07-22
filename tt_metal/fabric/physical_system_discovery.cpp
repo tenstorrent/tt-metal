@@ -15,8 +15,6 @@
 #include <algorithm>
 #include <set>
 #include <unordered_map>
-#include <filesystem>
-#include <vector>
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
@@ -26,7 +24,6 @@
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/port_lookup.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -46,18 +43,6 @@ PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
         case tt::scaleout_tools::PortType::UNKNOWN: return PortType::UNKNOWN;
     }
     return PortType::UNKNOWN;
-}
-
-// OS hostname for live clusters; mock cluster descriptor filename (basename) per rank in mock mode.
-std::string get_local_discovery_hostname() {
-    const auto& rtoptions = MetalContext::instance().rtoptions();
-    if (rtoptions.get_mock_enabled()) {
-        const auto& path = rtoptions.get_mock_cluster_desc_path();
-        if (!path.empty()) {
-            return std::filesystem::path(path).filename().string();
-        }
-    }
-    return get_host_name();
 }
 
 std::string get_mobo_name() {
@@ -167,7 +152,7 @@ bool resolve_hostname_uniqueness(
     bool all_hostnames_unique = true;
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
-        hostnames.push_back(get_local_discovery_hostname());
+        hostnames.push_back(get_host_name());
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
@@ -198,7 +183,7 @@ bool resolve_hostname_uniqueness(
             }
         }
     } else {
-        auto host_name = get_local_discovery_hostname();
+        auto host_name = get_host_name();
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
         distributed_context->send(
@@ -588,11 +573,11 @@ PhysicalSystemDescriptor run_local_discovery(
     auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context->rank());
-    auto hostname = get_local_discovery_hostname();
+    auto hostname = get_host_name();
 
-    // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
-    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
-    // PSD merge keys stay unique and global eth links validate correctly.
+    // When multiple ranks exist and hostnames are not unique (e.g. mock, same machine), use hostname_rank
+    // so each rank gets its own entry during merge. When hostnames are unique (different machines),
+    // use hostname so graph keys match my_host_name() for lookups (e.g. get_host_neighbors).
     auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
                             ? (hostname + "_" + std::to_string(my_rank))
                             : hostname;
@@ -741,7 +726,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
-    psd.set_discovery_data(get_local_discovery_hostname(), my_rank, all_hostnames_unique);
+    auto hostname = get_host_name();
+    psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);

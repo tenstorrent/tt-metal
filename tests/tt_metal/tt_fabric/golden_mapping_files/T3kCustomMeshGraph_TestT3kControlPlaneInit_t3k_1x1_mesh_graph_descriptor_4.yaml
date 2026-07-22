@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: t3k_cluster_desc.yaml
+    - hostname: g14glx03
       mesh:
         - mesh: 0
         - chips:

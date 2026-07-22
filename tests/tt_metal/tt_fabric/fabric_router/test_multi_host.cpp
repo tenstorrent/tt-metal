@@ -1208,37 +1208,6 @@ TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
     check_asic_mapping_against_golden("TestBHBlitzPipelineControlPlaneInit");
 }
 
-TEST(MultiHost, TestBlitzSuperpodAutoMapperControlPlaneInit) {
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path blitz_superpod_mesh_graph_desc_path =
-        std::filesystem::path(rtoptions.get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
-        "fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto";
-    if (rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        blitz_superpod_mesh_graph_desc_path = rtoptions.get_custom_fabric_mesh_graph_desc_path();
-    }
-
-    const bool variation_run = std::getenv("TT_METAL_BLITZ_SUPERPOD_VARIATION") != nullptr;
-
-    auto control_plane = make_control_plane(
-        blitz_superpod_mesh_graph_desc_path.string(),
-        tt::tt_fabric::FabricConfig::FABRIC_2D,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-
-    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
-    const int my_rank = static_cast<int>(*world_ctx->rank());
-    const auto local_mesh_ids = control_plane->get_local_mesh_id_bindings();
-    ASSERT_EQ(local_mesh_ids.size(), 1u) << "Blitz superpod: one mesh per MPI rank";
-
-    if (!variation_run) {
-        EXPECT_EQ(static_cast<unsigned int>(my_rank), *local_mesh_ids[0])
-            << "MPI world rank must equal mesh_id for Blitz decode pipeline (64 stages)";
-        check_asic_mapping_against_golden("TestBlitzSuperpodAutoMapperControlPlaneInit");
-    }
-}
-
 TEST(MultiHost, TestBHBlitzPipelineFabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);

@@ -39,7 +39,7 @@ bool find_device_with_neighbor_in_direction(
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
 
-// Compare ASIC mapping YAML files (fabric node, ASIC ID, hostname, and tray placement)
+// Compare ASIC mapping YAML files (hostname-agnostic comparison)
 bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
 
 // Helper function to check generated ASIC mapping files against golden files
