@@ -23,11 +23,24 @@ runs:
         OVERALL_TIMEOUT=300 #5 minutes: long enough to ride out a token expiry/transient blip. Prevent long waits.
         MAX_AUTH_FAILURES=3
 
+        # Retry token minting in-place so a brief token-endpoint blip (e.g. a
+        # DNS "could not resolve host", exit 6 — the failure that left
+        # allocations dangling) doesn't leave us tokenless.
         mint_token() {
-          curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL" \
-            -H "Accept: application/json; api-version=2.0" \
-            -H "Content-Type: application/json" -d "{}" | jq -r '.value'
+          local t
+          for _ in 1 2 3; do
+            t=$(curl -s --max-time 30 \
+              -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" \
+              -H "Accept: application/json; api-version=2.0" \
+              -H "Content-Type: application/json" -d "{}" | jq -r '.value') || t=""
+            if [[ -n "$t" && "$t" != "null" ]]; then
+              echo "$t"
+              return 0
+            fi
+            sleep 2
+          done
+          return 1
         }
 
         IDTOKEN=$(mint_token) || true
@@ -39,6 +52,20 @@ runs:
           if (( SECONDS - start >= OVERALL_TIMEOUT )); then
             echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for allocation to be deleted."
             exit 1
+          fi
+
+          # A failed mint leaves IDTOKEN empty; kubectl --token "" prints a
+          # confusing "Please enter Username" error that would NOT match the
+          # auth branch below, so we'd never re-mint. Re-mint here instead of
+          # ever calling kubectl with an empty token.
+          if [[ -z "$IDTOKEN" ]]; then
+            echo "::warning::No valid token yet; (re)minting before delete."
+            IDTOKEN=$(mint_token) || true
+            echo "::add-mask::${IDTOKEN}"
+            if [[ -z "$IDTOKEN" ]]; then
+              sleep "$POLL_INTERVAL"
+              continue
+            fi
           fi
 
           output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" delete "allocation/${ALLOCATION_NAME}" --ignore-not-found 2>&1) && rc=0 || rc=$?
