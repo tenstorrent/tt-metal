@@ -48,10 +48,14 @@ def test_prefill_sdpa_max_seq_clamped_to_hard_max():
 
 
 def test_shared_mlp_down_shard_unguarded_at_tp8(monkeypatch):
-    """intermediate=2112 @ TP=8 → down_k=264 is not DRAM-shardable; gate_up is."""
+    """Unpadded intermediate=2112 @ TP=8 → down_k=264 is not DRAM-shardable.
+
+    SharedMLP now pads to 288/device before sharding; this guards the raw shape.
+    """
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
-    assert can_dram_shard(2816, 528)  # gate_up n at tp=8
-    assert not can_dram_shard(264, 2816)  # down_k at tp=8
+    assert can_dram_shard(2816, 528)  # gate_up n at tp=8 (unpadded half*2)
+    assert not can_dram_shard(264, 2816)  # raw down_k
+    assert can_dram_shard(288, 2816)  # padded down_k used by SharedMLP
 
 
 def test_dram_shard_disabled_off_blackhole(monkeypatch):
