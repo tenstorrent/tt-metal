@@ -289,9 +289,9 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             )
         self.weights_dir = weights_dir
         qwen_repo = config.qwen_repo
-        self.config = modeling_ideogram4.Ideogram4Config()
+        self.model_config = modeling_ideogram4.Ideogram4Config()
         self.patch, self.ae = 2, 8
-        cfg = self.config
+        cfg = self.model_config
 
         ccl = CCLManager(mesh_device, num_links=config.num_links, topology=config.topology)
         self.ccl = ccl
@@ -537,7 +537,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         as ``spatial_sequence_length`` (ring-SDPA ``logical_n``), masking the trailing pad. We do
         NOT pass L as spatial_sequence_length.
         """
-        cfg = self.config
+        cfg = self.model_config
         seq = n_pre + num_img  # REAL length (logical_n); image + real text, no pad
         # Constant total length across all prompts (image + MAX text, SP-aligned).
         L = get_padded_vision_seq_len(num_img + MAX_TEXT_TOKENS, self.sp_factor)
@@ -618,7 +618,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         if height % vae_patch != 0 or width % vae_patch != 0:
             raise ValueError(f"height and width must be multiples of {vae_patch} (patch*ae); got {height}x{width}")
 
-        cfg = self.config
+        cfg = self.model_config
         dev = self.mesh_device
         grid_h, grid_w = height // (self.patch * self.ae), width // (self.patch * self.ae)
         num_img = grid_h * grid_w
