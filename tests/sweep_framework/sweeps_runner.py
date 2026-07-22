@@ -348,11 +348,6 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
 MAX_RETRIES = 1
 
-# After a device-fatal wedge we reset and continue with the next vector. Guard
-# against a permanently-wedged device (every vector re-faults) by aborting the
-# suite once this many consecutive resets fail to recover it.
-MAX_CONSECUTIVE_DEVICE_RECOVERIES = 3
-
 
 def _create_main_proc_runner(module_name, input_queue, output_queue, config):
     """Create a persistent runner for main process mode that keeps device open.
@@ -498,6 +493,16 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
         elif "Watcher" in str(message):
             result["status"] = TestStatus.FAIL_WATCHER
+        elif _is_infra_failure_message(message):
+            # Infrastructure-class failure: either a fabric / control-plane
+            # bring-up failure (mesh never initialized, so this vector's op kernel
+            # never ran) or a device-fatal wedge (a bad core run state surfaced as
+            # "Read unexpected run_mailbox value"). Both are environment faults,
+            # not test-vector faults -- mark NOT_RUN rather than
+            # FAIL_ASSERT_EXCEPTION. _execute_vector_with_retry detects the same
+            # signatures and exits the run early so the remaining vectors are not
+            # each re-reported as false failures on a device that won't recover.
+            result["status"] = TestStatus.NOT_RUN
         else:
             result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
@@ -562,14 +567,14 @@ def _is_device_hang_message(message) -> bool:
     return any(sig in msg for sig in _DEVICE_HANG_SIGNATURES)
 
 
-# Signatures of a device-level *fatal* (distinct from a hang): one vector leaves
-# a core in a bad run state, so the NEXT program launch on that device aborts
-# reading the stale run mailbox ("Read unexpected run_mailbox value: 0x40").
-# Unlike a hang we do NOT abort the whole suite — the fault is tied to the single
-# offending vector, so we reset the device and continue with the next vector on a
-# clean mesh. Without this, one bad vector wedges the device and every remaining
-# vector in the process cascade-fails with the same error (observed on N300: a
-# clamp (12,1,1) config wedging cores 25-16/25-17 then ~25 false FAIL_ASSERT).
+# Signatures of a device-level *fatal* wedge (distinct from a hang): one vector
+# leaves a core in a bad run state, so the NEXT program launch on that device
+# aborts reading the stale run mailbox ("Read unexpected run_mailbox value:
+# 0x40"). This is treated as an infrastructure failure (see
+# _is_infra_failure_message): the device does not recover within the job — on a
+# Galaxy the wedge cascades into dispatch hangs, slow resets, and all-zero
+# outputs that mis-report as PCC failures on every remaining vector — so rather
+# than reset+continue we exit the whole run early and mark the rest NOT_RUN.
 _DEVICE_FATAL_SIGNATURES = (
     "unexpected run_mailbox value",
     "read unexpected run_mailbox",
@@ -577,8 +582,9 @@ _DEVICE_FATAL_SIGNATURES = (
 
 
 def _is_device_fatal_message(message) -> bool:
-    """Return True if a returned exception indicates a device-fatal wedge that
-    requires a device reset before the next vector can run."""
+    """Return True if a returned exception indicates a device-fatal wedge (a core
+    left in a bad run state, surfaced on the next launch as an unexpected
+    run_mailbox value)."""
     if not message:
         return False
     msg = str(message).lower()
@@ -606,6 +612,54 @@ def _is_elf_load_error(message) -> bool:
         return False
     msg = str(message).lower()
     return any(sig in msg for sig in _ELF_LOAD_RETRY_SIGNATURES)
+
+
+# Signatures of a fabric / control-plane bring-up failure — the mesh could not
+# be initialized at all, so NO op kernel ever ran. The canonical case is the
+# fabric topology mapper failing to fit the mesh-graph descriptor (MGD) onto the
+# discovered physical topology, e.g. on a Galaxy where an ethernet edge has
+# degraded below the required channel count and auto-discovery yields a
+# non-uniform degree histogram:
+#     TT_FATAL @ .../topology_mapper.cpp:546: mapping_result.success
+#     Graph specified in MGD could not fit in the discovered physical topology
+# This is an ENVIRONMENT fault, not a test-vector fault, and it is sticky: the
+# same host state makes every subsequent vector throw the identical error. Left
+# unhandled it falls through to FAIL_ASSERT_EXCEPTION and mis-reports the whole
+# suite as a wall of test failures. We instead classify it as NOT_RUN and abort
+# the suite early (see _execute_vector_with_retry / execute_suite).
+# NOTE: match on the specific mapping-failure text, NOT on the bare filename
+# "topology_mapper.cpp". That file emits TT_FATALs for several unrelated
+# conditions; keying off the filename alone would reclassify any of them as a
+# sticky infra abort and kill the whole sweep on a false positive.
+_FABRIC_INFRA_SIGNATURES = (
+    "could not fit in the discovered physical topology",
+    "mapping_result.success",
+    "inter-mesh mapping failed",
+    "intra-mesh mapping failed",
+)
+
+
+def _is_fabric_infra_message(message) -> bool:
+    """Return True if a returned exception indicates a fabric / control-plane
+    bring-up failure (the mesh never initialized, so no vector actually ran).
+    These are environment faults, not test-vector faults."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _FABRIC_INFRA_SIGNATURES)
+
+
+def _is_infra_failure_message(message) -> bool:
+    """Return True for any infrastructure-class failure that has degraded the
+    host: either a fabric / control-plane bring-up failure (the mesh never came
+    up) or a device-fatal wedge (a core left in a bad run state, surfaced as
+    "Read unexpected run_mailbox value: 0x40" on the next launch). Both are
+    environment faults, not test-vector faults, and both are STICKY — the device
+    does not recover within the job (a wedge cascades into dispatch hangs, slow
+    Galaxy resets, and all-zero/garbage outputs that mis-report as PCC failures).
+    So rather than reset+continue on a machine that "once degraded is always
+    degraded", we classify the vector NOT_RUN and exit the whole run early."""
+    return _is_fabric_infra_message(message) or _is_device_fatal_message(message)
 
 
 def _set_crash_hang_defaults(result):
@@ -710,31 +764,6 @@ def _execute_vector_with_retry(
                 result["_abort_suite"] = config.skip_on_timeout
                 return result
 
-            # A device-fatal wedge (e.g. "Read unexpected run_mailbox value")
-            # corrupts the mesh: this vector failed AND every later vector on
-            # the same device would abort the same way. Reset the device and
-            # respawn the child so the REST of the suite runs on a clean mesh —
-            # but, unlike a hang, do NOT abort the suite: the fault is tied to
-            # this one vector, not the whole device session. A repeatedly-faulting
-            # device is caught by the consecutive-recovery cap in execute_suite.
-            if _is_device_fatal_message(result.get("message")):
-                logger.error(
-                    f"DEVICE FATAL detected for input_hash='{input_hash}': {result.get('message')}. "
-                    f"Resetting device and continuing with the next vector."
-                )
-                _kill_child(p, timeout_before_rejoin)
-                p = None
-                result["status"] = TestStatus.FAIL_CRASH_HANG
-                result["exception"] = str(result.get("message", "DEVICE FATAL"))
-                reset_util.reset()
-                if child_mode:
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                    p.start()
-                result["_child_process"] = p
-                result["_abort_suite"] = False
-                result["_device_recovered"] = True
-                return result
-
             # A transient kernel-ELF build/load failure (tt_elffile.cpp:405),
             # typically a cold-cache concurrent fabric_erisc_router build race on
             # the first FABRIC_2D open. The .elf is written by the time we get
@@ -754,6 +783,41 @@ def _execute_vector_with_retry(
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                     p.start()
                 continue
+
+            # An infrastructure-class failure that has degraded the host:
+            #   * fabric / control-plane bring-up (topology_mapper.cpp: the MGD
+            #     mesh graph could not be fit onto the discovered physical
+            #     topology — e.g. a Galaxy ethernet link degraded below its
+            #     required channel count). The mesh never came up, so no op kernel
+            #     ran, and every subsequent vector throws the identical error.
+            #   * device-fatal wedge ("Read unexpected run_mailbox value: 0x40"):
+            #     a core left in a bad run state. The device does NOT recover for
+            #     the rest of the job — it cascades into dispatch hangs, slow
+            #     Galaxy resets, and all-zero/garbage outputs that mis-report as
+            #     PCC failures on every remaining vector (observed: run 29887189384
+            #     — one wedged host turned 6 suites into a wall of false PCC/assert
+            #     results and burned the 60-min wall-clock).
+            # Retrying/resetting will not heal a degraded machine, so abort the
+            # suite immediately and mark it NOT_RUN. execute_suite honours
+            # _infra_abort unconditionally (regardless of skip_on_timeout) and
+            # marks the remaining vectors NOT_RUN; run_sweeps then exits the whole
+            # run early, so the job surfaces one infrastructure error instead of a
+            # wall of false FAIL_ASSERT_EXCEPTION / PCC results.
+            if _is_infra_failure_message(result.get("message")):
+                logger.error(
+                    f"INFRASTRUCTURE ERROR (degraded host) for input_hash='{input_hash}': "
+                    f"{result.get('message')}. The device is degraded and will not recover within "
+                    f"this job — exiting the run early instead of reporting false failures."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                result["status"] = TestStatus.NOT_RUN
+                result["exception"] = "INFRASTRUCTURE ERROR (degraded host): " + str(result.get("message", ""))
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                result["_child_process"] = p
+                result["_abort_suite"] = True
+                result["_infra_abort"] = True
+                return result
 
             result["_child_process"] = p
             result["_abort_suite"] = False
@@ -804,15 +868,16 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     # runs a single suite in a test vector
     results = []
     invalid_vectors_count = 0
+    # Set True when a fabric/control-plane bring-up failure aborts this suite.
+    # A degraded mesh stays degraded for the rest of the job, so run_sweeps uses
+    # this to stop the whole run instead of re-hitting the dead device per suite.
+    infra_aborted = False
     input_queue = Queue()
     output_queue = Queue()
     p = None
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    # Consecutive device-fatal resets; reset to 0 on any vector that runs without
-    # a device-fatal wedge. Abort the suite if it exceeds the cap (device won't recover).
-    consecutive_device_recoveries = 0
     # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
     child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
@@ -880,26 +945,26 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 )
                 p = result.pop("_child_process", p)
                 abort_suite = result.pop("_abort_suite", False)
-
-                # Track device-fatal recoveries. We continue past a single wedge,
-                # but if the device keeps faulting it isn't recovering — abort the
-                # suite rather than reset+respawn for every remaining vector.
-                if result.pop("_device_recovered", False):
-                    consecutive_device_recoveries += 1
-                    if consecutive_device_recoveries > MAX_CONSECUTIVE_DEVICE_RECOVERIES:
-                        logger.error(
-                            f"{consecutive_device_recoveries} consecutive device-fatal resets in suite "
-                            f"'{suite_name}'; device is not recovering. Aborting remaining tests in suite."
-                        )
-                        abort_suite = True
-                else:
-                    consecutive_device_recoveries = 0
+                # A fabric / control-plane bring-up failure aborts the suite
+                # unconditionally (not gated on skip_on_timeout): the mesh is
+                # down, so no remaining vector can be meaningfully tested.
+                infra_abort = result.pop("_infra_abort", False)
+                if infra_abort:
+                    infra_aborted = True
 
                 if abort_suite:
-                    if config.skip_on_timeout:
+                    if infra_abort or config.skip_on_timeout:
                         results.append(result)
                         suite_pbar.update()
-                        logger.info("Skipping remaining tests in suite due to timeout.")
+                        skip_reason = (
+                            "SKIPPED — INFRASTRUCTURE ERROR ABORTED SUITE"
+                            if infra_abort
+                            else "SKIPPED DUE TO PREVIOUS TIMEOUT"
+                        )
+                        logger.info(
+                            "Skipping remaining tests in suite due to "
+                            + ("infrastructure error." if infra_abort else "timeout.")
+                        )
                         for j in range(i + 1, len(test_vectors)):
                             remaining_vector = test_vectors[j]
                             skipped_result = dict()
@@ -907,7 +972,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                             skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
                             skipped_result["original_vector_data"] = remaining_vector.copy()
                             skipped_result["status"] = TestStatus.NOT_RUN
-                            skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
+                            skipped_result["exception"] = skip_reason
                             skipped_result["e2e_perf"] = None
                             skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                             skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
@@ -990,7 +1055,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         logger.info("Device closed in main process mode")
 
     suite_pbar.close()
-    return results, invalid_vectors_count
+    return results, invalid_vectors_count, infra_aborted
 
 
 def _vector_mesh_dims(vector) -> str | None:
@@ -1122,6 +1187,9 @@ def run_sweeps(
     max_test_cases_per_module = 0
     # Track test status counts across the entire run (only meaningful for non-dry runs)
     status_counts = {}
+    # Set True when a suite aborts on a fabric/control-plane infra failure; used
+    # to stop the whole run early (a degraded device stays degraded for the job).
+    infra_aborted = False
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
@@ -1159,7 +1227,7 @@ def run_sweeps(
                     logger.warning(f"No vectors found for module {module_name}, suite {suite}")
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-                results, invalid_vectors_count = execute_suite(
+                results, invalid_vectors_count, infra_aborted = execute_suite(
                     test_vectors, pbar_manager, suite, module_name, header_info, config
                 )
                 total_invalid_vectors += invalid_vectors_count
@@ -1195,6 +1263,23 @@ def run_sweeps(
                         final_status = "failure"
                         # continue with other suites
 
+                # A degraded mesh (fabric / control-plane bring-up failure) stays
+                # degraded for the rest of the job — every remaining suite and
+                # module would re-hit the same dead device and re-report the same
+                # infra error. Stop the whole run now, after exporting this
+                # suite's NOT_RUN results, and finalize as a failure so the job is
+                # visibly red for the infrastructure fault (not a silent skip).
+                if infra_aborted:
+                    logger.error(
+                        "Infrastructure error (degraded host: fabric topology mapping or a "
+                        "device-fatal run_mailbox wedge) detected; the device is degraded for the "
+                        "remainder of this job. Aborting the entire run early."
+                    )
+                    final_status = "failure"
+                    break
+
+            if infra_aborted:
+                break
             module_pbar.update()
     except Exception as e:
         logger.error(f"Error during sweep execution: {e}")
@@ -1259,7 +1344,7 @@ def run_sweeps(
             final_status = "failure"
             logger.error(f"{failed_count} test case(s) failed/crashed/hung")
 
-    return final_status
+    return final_status, infra_aborted
 
 
 def get_module_names(config: SweepsConfig):
@@ -1573,7 +1658,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    final_status = run_sweeps(
+    final_status, infra_aborted = run_sweeps(
         module_names,
         config=config,
     )
@@ -1583,6 +1668,15 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    # An infrastructure abort (degraded host: fabric topology mapping failure or a
+    # device-fatal run_mailbox wedge) always forces a nonzero exit, independent of
+    # --fail-on-test-failure. The sweep workflow only sets that input for the Lead
+    # Models and Model Traced suites, so without this the vast majority of suites
+    # would exit 0 (green) on a degraded machine and hide the real infra fault.
+    if infra_aborted:
+        logger.error("Exiting with failure: infrastructure error degraded the host mid-run (see log above)")
+        sys.exit(1)
 
     if config.fail_on_test_failure and final_status == "failure":
         logger.error("Exiting with failure: one or more test cases did not pass (--fail-on-test-failure)")
