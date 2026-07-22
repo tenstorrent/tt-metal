@@ -50,6 +50,7 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::UINT16:
             // Tilize doesn't support uint16.
         case DataType::UINT8:
+        case DataType::INT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
             return false;
         default: return true;
@@ -305,6 +306,7 @@ Tensor create_tt_tensor_from_host_data(
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
+        case DataType::INT8: return create_tensor_from_host_buffer.operator()<int8_t>();
         case DataType::UINT16: return create_tensor_from_host_buffer.operator()<uint16_t>();
         case DataType::FLOAT32: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::BFLOAT16: return create_tensor_from_host_buffer.operator()<bfloat16>();
@@ -320,6 +322,7 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::INT32: return DataType::INT32;
             case ttnn::PyDType::UINT32: return DataType::UINT32;
             case ttnn::PyDType::UINT8: return DataType::UINT8;
+            case ttnn::PyDType::INT8: return DataType::INT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
             case ttnn::PyDType::BOOL: return DataType::UINT8;
             case ttnn::PyDType::UINT64:
@@ -327,7 +330,6 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::FLOAT16:
             case ttnn::PyDType::INT64:
             case ttnn::PyDType::INT16:
-            case ttnn::PyDType::INT8:
             default: return DataType::INVALID;
         }
         ttsl::unreachable();
@@ -337,6 +339,12 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
         (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : dst_dtype;
 
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
+        return mapped_dst_type;
+    }
+
+    // int8 is a storage-only dtype: host to_dtype from/to int8 is unsupported. Keep an
+    // int8 host buffer only for an int8 -> int8 borrow.
+    if (to_ttnn_dtype(src_dtype) == DataType::INT8 && dst_dtype != DataType::INT8) {
         return mapped_dst_type;
     }
 

@@ -51,6 +51,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::BFLOAT16: os << "bfloat16"; break;
         case DataType::FLOAT32: os << "float32"; break;
         case DataType::UINT8: os << "uint8"; break;
+        case DataType::INT8: os << "int8"; break;
         case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
         case DataType::INT32: os << "int32"; break;

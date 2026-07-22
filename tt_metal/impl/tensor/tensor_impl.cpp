@@ -46,6 +46,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
         case DataType::FP8_E4M3: return HostBuffer(std::vector<float8_e4m3>(size_bytes / sizeof(float8_e4m3)));
         case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
+        case DataType::INT8: return HostBuffer(std::vector<int8_t>(size_bytes / sizeof(int8_t)));
         case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
@@ -268,6 +269,8 @@ template std::vector<uint16_t> encode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
+template std::vector<int8_t> encode_tensor_data<int8_t>(
+    ttsl::Span<const int8_t> logical_data, const TensorSpec& tensor_spec, int8_t pad_value);
 
 // Referenced from tensor_apis.cpp; explicit instantiations ensure symbols survive Release --gc-sections linking.
 template std::vector<bfloat16> to_tile_major_layout<bfloat16>(
@@ -282,6 +285,8 @@ template std::vector<uint16_t> to_tile_major_layout<uint16_t>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const uint16_t> data_to_convert);
 template std::vector<uint8_t> to_tile_major_layout<uint8_t>(
     const Shape2D& shape, const Tile& tile, ttsl::Span<const uint8_t> data_to_convert);
+template std::vector<int8_t> to_tile_major_layout<int8_t>(
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const int8_t> data_to_convert);
 
 template <typename T>
 std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec) {
@@ -347,5 +352,7 @@ template std::vector<uint16_t> decode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> physical_data, const TensorSpec& tensor_spec);
+template std::vector<int8_t> decode_tensor_data<int8_t>(
+    ttsl::Span<const int8_t> physical_data, const TensorSpec& tensor_spec);
 
 }  // namespace tt::tt_metal::tensor_impl

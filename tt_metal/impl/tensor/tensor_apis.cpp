@@ -1235,6 +1235,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::FLOAT32: return with_src_and_dst.operator()<SrcType, float>();
                 case DataType::BFLOAT16: return with_src_and_dst.operator()<SrcType, bfloat16>();
                 case DataType::UINT8: return with_src_and_dst.operator()<SrcType, uint8_t>();
+                case DataType::INT8: TT_THROW("to_dtype: conversion to int8 is not supported");
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
@@ -1250,6 +1251,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::FLOAT32: return with_src.operator()<float>();
             case DataType::BFLOAT16: return with_src.operator()<bfloat16>();
             case DataType::UINT8: return with_src.operator()<uint8_t>();
+            case DataType::INT8: TT_THROW("to_dtype: conversion from int8 is not supported");
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
@@ -1310,6 +1312,8 @@ void validate_datatype(DataType dtype) {
         TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
         TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, int8_t>) {
+        TT_FATAL(dtype == DataType::INT8, "Incorrect data type {}", dtype);
     } else {
         static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
     }
@@ -1369,6 +1373,7 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(int8_t)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 

@@ -39,6 +39,7 @@ enum class DataType {
     // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
     FP8_E4M3 = 8,
     INVALID = 9,
+    INT8 = 10,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -47,6 +48,8 @@ template <typename T>
 consteval DataType convert_to_data_type() {
     if constexpr (std::is_same_v<T, uint8_t>) {
         return DataType::UINT8;
+    } else if constexpr (std::is_same_v<T, int8_t>) {
+        return DataType::INT8;
     } else if constexpr (std::is_same_v<T, uint16_t>) {
         return DataType::UINT16;
     } else if constexpr (std::is_same_v<T, int32_t>) {

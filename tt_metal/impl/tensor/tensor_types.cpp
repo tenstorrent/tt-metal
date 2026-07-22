@@ -14,6 +14,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::BFLOAT8_B: return os << "DataType::BFLOAT8_B";
         case DataType::BFLOAT4_B: return os << "DataType::BFLOAT4_B";
         case DataType::UINT8: return os << "DataType::UINT8";
+        case DataType::INT8: return os << "DataType::INT8";
         case DataType::UINT16: return os << "DataType::UINT16";
         case DataType::INT32: return os << "DataType::INT32";
         case DataType::FP8_E4M3: return os << "DataType::FP8_E4M3";
@@ -97,6 +98,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::UINT32: return tt::DataFormat::UInt32;
         case tt::tt_metal::DataType::UINT16: return tt::DataFormat::UInt16;
         case tt::tt_metal::DataType::UINT8: return tt::DataFormat::UInt8;
+        case tt::tt_metal::DataType::INT8: return tt::DataFormat::Int8;
         case tt::tt_metal::DataType::FP8_E4M3: return tt::DataFormat::Fp8_e4m3;
         default: TT_THROW("Unsupported DataType"); return tt::DataFormat::Float16_b;  // for clang-tidy
     }
@@ -112,6 +114,7 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
         case tt::DataFormat::UInt32: return tt::tt_metal::DataType::UINT32;
         case tt::DataFormat::UInt16: return tt::tt_metal::DataType::UINT16;
         case tt::DataFormat::UInt8: return tt::tt_metal::DataType::UINT8;
+        case tt::DataFormat::Int8: return tt::tt_metal::DataType::INT8;
         case tt::DataFormat::Fp8_e4m3: return tt::tt_metal::DataType::FP8_E4M3;
         default: TT_THROW("Unsupported DataFormat"); return tt::tt_metal::DataType::BFLOAT16;  // for clang-tidy
     }
@@ -134,6 +137,7 @@ auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, f
         case tt::tt_metal::DataType::BFLOAT8_B: name = "DataType::BFLOAT8_B"; break;
         case tt::tt_metal::DataType::BFLOAT4_B: name = "DataType::BFLOAT4_B"; break;
         case tt::tt_metal::DataType::UINT8: name = "DataType::UINT8"; break;
+        case tt::tt_metal::DataType::INT8: name = "DataType::INT8"; break;
         case tt::tt_metal::DataType::UINT16: name = "DataType::UINT16"; break;
         case tt::tt_metal::DataType::INT32: name = "DataType::INT32"; break;
         case tt::tt_metal::DataType::FP8_E4M3: name = "DataType::FP8_E4M3"; break;

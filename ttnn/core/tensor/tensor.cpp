@@ -212,6 +212,12 @@ template Tensor Tensor::from_span<uint8_t>(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint8_t pad_value);
+template Tensor Tensor::from_span<int8_t>(
+    ttsl::Span<const int8_t> buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::QueueId> cq_id,
+    int8_t pad_value);
 template Tensor Tensor::from_span<uint16_t>(
     ttsl::Span<const uint16_t> buffer,
     const TensorSpec& spec,
@@ -241,6 +247,11 @@ template Tensor Tensor::from_borrowed_data<int32_t>(
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint8_t>(
     ttsl::Span<uint8_t> buffer,
+    const tt::tt_metal::Shape& shape,
+    tt::tt_metal::MemoryPin buffer_pin,
+    const std::optional<Tile>& tile);
+template Tensor Tensor::from_borrowed_data<int8_t>(
+    ttsl::Span<int8_t> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
@@ -278,6 +289,12 @@ template Tensor Tensor::from_vector<uint8_t>(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint8_t pad_value);
+template Tensor Tensor::from_vector<int8_t>(
+    std::vector<int8_t>&& buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::QueueId> cq_id,
+    int8_t pad_value);
 template Tensor Tensor::from_vector<uint16_t>(
     std::vector<uint16_t>&& buffer,
     const TensorSpec& spec,
@@ -295,6 +312,7 @@ template std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal:
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
+template std::vector<int8_t> Tensor::to_vector<int8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 
@@ -353,6 +371,7 @@ uint32_t Tensor::element_size() const {
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");

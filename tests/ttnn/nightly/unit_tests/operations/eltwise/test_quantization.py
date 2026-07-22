@@ -651,10 +651,133 @@ def test_requantize_uint8_upper_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
-@pytest.mark.parametrize("in_dtype,in_q_max", [(ttnn.int32, 127), (ttnn.uint8, 255)])
-@pytest.mark.parametrize("out_dtype,out_q_max", [(ttnn.int32, 127), (ttnn.uint8, 255)])
-def test_requant_uint8_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out_dtype, out_q_max):
-    """Test requant across int32/uint8 input and output dtype combinations (per-tensor)"""
+@pytest.mark.parametrize("x0", [32, 128])
+@pytest.mark.parametrize("x1", [32, 128])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_quant_dequant_requant_int8_per_tensor_2d(device, x0, x1, input_dtype):
+    """Test quantize, dequantize and requantize (per-tensor) for int8"""
+    torch.manual_seed(0)
+    input_tr = torch.rand(x0, x1, dtype=torch.float32)
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
+
+    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.qint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.int8)
+    assert quantized_tt.dtype == ttnn.int8
+    result_q = ttnn.to_torch(quantized_tt)
+    check_pcc(quantized_tr.int_repr(), result_q, False)
+    check_match_ratio(quantized_tr, result_q, ttnn.int8)
+
+    dequantized_tr = torch.dequantize(quantized_tr)
+    dequantized_tt = ttnn.dequantize(quantized_tt, scale, zero_point, dtype=input_dtype)
+    result_dq = ttnn.to_torch(dequantized_tt)
+    check_pcc(dequantized_tr, result_dq, False)
+    check_match_ratio(dequantized_tr, result_dq, input_dtype)
+
+    scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -100, 100)
+    requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r, dtype=ttnn.int8)
+    assert requantized_tt.dtype == ttnn.int8
+    rederequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
+    result_rq = ttnn.to_torch(rederequantized_tt)
+    check_pcc(input_tr, result_rq, True)
+    check_match_ratio(input_tr, result_rq, input_dtype)
+
+
+def test_quantize_int8_upper_saturation(device):
+    """Test quantize int8 upper saturation to 127"""
+    row = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0]
+    input_tr = torch.tensor([row], dtype=torch.float32)
+    scale, zero_point = 1.0 / 127.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), -128, 127).to(torch.int8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_quantize_int8_lower_saturation(device):
+    """Test quantize int8 lower saturation to -128"""
+    row = [0.0, -0.2, -0.4, -0.6, -0.8, -1.0, -2.0, -5.0]
+    input_tr = torch.tensor([row], dtype=torch.float32)
+    scale, zero_point = 1.0 / 127.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), -128, 127).to(torch.int8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_int8_upper_saturation(device):
+    """Test requantize int8 upper saturation to 127 on the output side"""
+    q_in = torch.tensor([[0, 50, 100, 120, 127, 200, 1000]], dtype=torch.int32)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), -128, 127).to(torch.int8)
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_int8_lower_saturation(device):
+    """Test requantize int8 lower saturation to -128 on the output side"""
+    q_in = torch.tensor([[0, -50, -100, -120, -127, -200, -1000]], dtype=torch.int32)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), -128, 127).to(torch.int8)
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_int8_in_int8_out_saturation(device):
+    """Test requantize with an int8 input tensor saturating both output ends"""
+    q_in = torch.tensor([[-128, -100, -32, -1, 0, 1, 32, 100, 127]], dtype=torch.int8)
+    in_scale, in_zp, out_scale, out_zp = 4.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), -128, 127).to(
+        torch.int8
+    )
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_dequantize_int8_edge_cases(device):
+    """Test dequantize on fixed int8 boundary values against the exact float output"""
+    q_in = torch.tensor([[-128, -100, -1, 0, 1, 100, 127]], dtype=torch.int8)
+    scale, zero_point = 0.5, -10
+    expected = (q_in.to(torch.float32) - zero_point) * scale
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.dequantize(q_in_tt, scale, zero_point, dtype=ttnn.float32)
+    assert out_tt.dtype == ttnn.float32
+    result = ttnn.to_torch(out_tt)
+    # All operands/results are exactly representable in fp32 and dequant (cast+add+mul, no stochastic
+    # rounding) is deterministic, so the device output is bit-exact: assert exact equality.
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize(
+    "in_dtype,in_q_max",
+    [(ttnn.int32, 127), (ttnn.int8, 127), (ttnn.uint8, 255)],
+)
+@pytest.mark.parametrize(
+    "out_dtype,out_q_max",
+    [(ttnn.int32, 127), (ttnn.int8, 127), (ttnn.uint8, 255)],
+)
+def test_requant_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out_dtype, out_q_max):
+    """Test requant across int32/int8/uint8 input and output dtype combinations (per-tensor)"""
     torch.manual_seed(0)
     input_tr = torch.rand(64, 64, dtype=torch.float32)
 

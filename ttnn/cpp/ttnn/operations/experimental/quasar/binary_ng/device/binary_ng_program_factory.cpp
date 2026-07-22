@@ -398,6 +398,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto input_dtype = operation_attributes.input_dtype;
     if (is_quant_op) {
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
+        TT_FATAL(
+            a.dtype() != DataType::INT8 && c.dtype() != DataType::INT8,
+            "Int8 quantization is not supported on the Quasar binary_ng path yet; use the default binary_ng op.");
     }
 
     const auto shard_volumes = get_shard_volumes(
