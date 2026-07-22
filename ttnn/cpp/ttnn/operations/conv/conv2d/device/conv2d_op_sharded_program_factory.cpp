@@ -17,6 +17,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -234,8 +235,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
-    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
+    // Non-const: an eligible HEIGHT_SHARDED no-bias conv may override these with a larger (relaxed)
+    // subblock for the TileRowMajor (non-pin) path — see the CONV_TILE_PACK_ROW_MAJOR eligibility block
+    // below. The override re-derives all subblock-dependent quantities.
+    uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
+    uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
@@ -507,10 +511,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         act_block_h_ntiles,
         out_subblock_h_ntiles);
 
-    const uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
+    // Non-const: re-derived by the CONV_TILE_PACK_ROW_MAJOR override below if the conv is eligible.
+    uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
     const uint32_t act_block_num_tiles = act_block_h_ntiles * act_block_w_ntiles;
-    const uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
-    const uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
+    uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
+    uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
@@ -638,6 +643,93 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+
+    // ── TileRowMajor eligibility (NON-pin dedicated-partials base — M2) ────────────────────────────────
+    // The matmul helper can pack the interm/out row-major (TileRowMajor, pack_subblock_row_strided) on the
+    // SAME non-pin dedicated-partials FIFO the SubblockMajor path uses (M1 dedicated matmul_partials_cb to
+    // one output block; its FIFO wraps to base per output block). TileRowMajor lifts the SubblockMajor
+    // constraint out_subblock_w == per_core_N, letting the tuner pick a LARGER (relaxed) subblock when
+    // per_core_N exceeds DST capacity (so SubblockMajor was stranded at out_subblock_h == 1, e.g.
+    // per_core_N 9/11/13). A larger subblock means fewer matmul_block_init / pack passes per output block.
+    // Per output layout (NO pin, NO partials alias — partials is always dedicated since M1):
+    //   • TILE (Out / OutWithRelu target): TileRowMajor packs straight into out_cb — row-major tile order
+    //     IS the tiled shard layout, so no reblock, no untilize. Software spill/reload (l1_acc off) and
+    //     per-address L1_ACC (l1_acc on) both work on the dedicated FIFO; the helper's strided reload
+    //     (copy_subblock_row_strided) mirrors the strided spill for the l1_acc-on Out path. Supported for
+    //     BOTH l1_acc on and off.
+    //   • ROW_MAJOR (untilize_out, Interm target): TileRowMajor packs the interm row-major, then plain
+    //     `untilize` reads it (no reblock gather). Supported for BOTH l1_acc on and off (M3). With l1_acc
+    //     ON the helper accumulates per-address across K-blocks. With l1_acc OFF the software spill/reload
+    //     drains the prior K-block's full output block AND reserves the next M-row-group in the SAME
+    //     matmul_partials_cb; the last-block reserve_back lands one M-row-group ON TOP of a still-fronted
+    //     full block of spills (the reload pop is sequenced after the reserve), so the dedicated partials
+    //     CB is sized to 2*out_block_num_tiles for the l1_acc-OFF case (get_cb_info MATMUL_PARTIALS) — that
+    //     headroom clears the otherwise-deadlocking reserve_back (was Watcher UPAW). No degrade to SBM.
+    // The kernel keys all of this off the tile_pack_row_major compile arg (39) (see conv_bmm_tilize.cpp).
+    // When ineligible we emit byte-identical SubblockMajor.
+    //
+    // Eligible iff ALL hold:
+    //   • HEIGHT_SHARDED                 (width-sharded keeps SubblockMajor)
+    //   • !has_bias                      (TileRowMajor + bias deadlocks the partials CB — see kernel note)
+    //   • weights bf16 or fp32           (the lever is inert on bf8 — same packed-tile layout either way)
+    //   • not 1d-depthwise               (0-page partials; the lever does not apply)
+    //   • (no acc/layout gate — M3 sized the l1_acc-OFF partials CB for the ROW_MAJOR reload, so all four
+    //     {l1_acc on,off}×{TILE,ROW_MAJOR} quadrants are supported)
+    //   • the relaxed subblock differs from the SBM subblock AND is larger: relaxed.out_subblock_h > 1
+    //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
+    //     (per_core_M) divisible by relaxed.out_subblock_h.
+    bool tile_pack_row_major = false;
+    // In-place-pack class (formerly "caller_owns"): the deep-K packer_l1_acc + bias convs that pin used
+    // to capture (rn50 DS2/DS3/L3a/L3b/L4a/L4b) now route through the matmul helper's in-place pack path
+    // (TileRowMajor + packer_l1_acc + Interm — the helper does its own single reserve/push; pin has been
+    // deleted — GH#45995). These convs all satisfy out_subblock_w == per_core_N (in1_num_subblocks == 1),
+    // so TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (do NOT
+    // re-derive the relaxed/taller subblock) and only flip the layout flag (CONV_TILE_PACK_ROW_MAJOR). The
+    // kernel derives the in-place-pack behavior itself from (TileRowMajor + packer_l1_acc + Interm); there
+    // is no longer a separate host define. The decision is finalized after get_cb_info (where
+    // partials_cb_uses_output is known); see the pin_class_caller_owns block following the CB-info call.
+    {
+        // Shared with get_cb_info() (via conv2d_utils) so the partials-CB alias decision is derived
+        // identically on the allocation path and the L1-usage prediction path — see the helper's banner.
+        const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
+        const auto trm = ttnn::operations::conv::auto_select_tile_pack_row_major(
+            height_sharded,
+            has_bias,
+            weights_df,
+            is_conv_1d_depthwise_conv,
+            fp32_dest_acc_en,
+            act_block_h_ntiles,
+            weight_block_w_ntiles);
+        if (trm.selected) {
+            tile_pack_row_major = true;
+            out_subblock_h_ntiles = trm.relaxed_out_subblock_h;
+            out_subblock_w_ntiles = trm.relaxed_out_subblock_w;
+            // Re-derive every subblock-dependent quantity from the relaxed shape. These were computed
+            // from the SBM shape above; the relaxed shape satisfies the same TT_FATALs (vol <= DST cap
+            // via the tuner, weight_block_w % w == 0 via the tuner's divisibility, act_block_h % h == 0
+            // guaranteed by the helper's divisibility gate), so the SBM-shape validations remain correct.
+            weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
+            out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
+            act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
+            act_subblock_h_ntiles = out_subblock_h_ntiles;
+            act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
+            log_info(
+                tt::LogOp,
+                "conv2d TileRowMajor (non-pin) ELIGIBLE: per_core_M={} per_core_N={} fp32_accum={} "
+                "packer_l1_acc={} out_layout={} | SBM subblock={}x{} relaxed subblock={}x{} "
+                "(auto-selected TileRowMajor; no bias, weights bf16/fp32)",
+                act_block_h_ntiles,
+                weight_block_w_ntiles,
+                fp32_dest_acc_en,
+                packer_l1_acc_en,
+                untilize_out ? "ROW_MAJOR" : "TILE",
+                trm.sbm_out_subblock_h,
+                trm.sbm_out_subblock_w,
+                trm.relaxed_out_subblock_h,
+                trm.relaxed_out_subblock_w);
+        }
+    }
+
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -772,6 +864,77 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool partials_cb_uses_output =
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
+
+    // ── in-place-pack class (DEFAULT — replaces the deleted pin for the deep-K INTERM-target class) ────
+    // The compute kernel used to pin (the now-deleted pin_interm_to_captured_base) exactly when:
+    //     packer_l1_acc && SubblockMajor && (fuse_bias || untilize_out || !partials_cb_uses_output)
+    // Pin has been removed (GH#45995); that class now routes through the matmul helper's in-place pack
+    // path (TileRowMajor + packer_l1_acc + Interm — the helper does its own single reserve/push and skips
+    // the per-block reserve/push/drain). It requires TileRowMajor layout + DEDICATED (non-aliased)
+    // partials. For the engaged convs out_subblock_w == per_core_N (in1_num_subblocks == 1), so
+    // TileRowMajor is BYTE-IDENTICAL to SubblockMajor — we KEEP the SBM-derived subblock (no relaxed
+    // re-derive) and only flip the layout flag (CONV_TILE_PACK_ROW_MAJOR); the kernel derives the
+    // in-place-pack behavior from the template args, so there is no longer a separate host define.
+    //
+    // Engage only when the production no-bias TRM-relaxed path above did NOT already claim this conv
+    // (tile_pack_row_major still false): that path re-derives a taller subblock, which is incompatible
+    // with the byte-identical SBM-subblock requirement here.
+    //
+    // Scope: the INTERM-target members of the former pin class — the matmul packs its last K-block to the
+    // DEDICATED matmul_partials_cb (LastBlockTarget::Interm), and the kernel's caller_owns reserve/push
+    // is on matmul_partials_cb. The downstream consumer reads partials and writes a DISTINCT out_cb:
+    //   • fuse_bias  (step a): bias-add reads partials → out_cb. Validated on rn50 DS2/DS3/L3a/L3b/L4a/L4b
+    //     (bit-identical to the old SBM+pin).
+    //   • untilize_out, no bias (step a′): the untilize phase reads the row-major partials via plain
+    //     `untilize` (WaitMode::WaitBlock) → out_cb — the SAME helper instantiation CCL all_gather and the
+    //     bias path use (LastBlockTarget::Interm + TileRowMajor + caller_owns_pack_target). The +12.7%
+    //     win on these (vu_512_30x40_BS ROW_MAJOR) is preserved without pin.
+    // The OUT target (no bias, no untilize, dedicated multi-output-block partials) is NOT migrated to
+    // caller_owns: it runs the helper's NON-pin FIFO. Rationale: it has no production-trace vehicle (every
+    // real no-bias TILE conv is single-output-block → partials aliased onto OUT → already non-pin;
+    // multi-output-block OUT was only reachable via a synthetic act_block_h override), and caller_owns +
+    // the Out-target software-reload would need new shared-helper logic untested by any shipped caller
+    // (CCL/bias/untilize all use the Interm target). The synthetic-only non-pin perf delta is accepted.
+    //
+    // caller_owns keeps the SBM-derived subblock (no relaxed re-derive). For in1_num_subblocks == 1
+    // (out_subblock_w == per_core_N) TileRowMajor is BYTE-IDENTICAL to SBM; for in1_num_subblocks > 1
+    // TileRowMajor is a different-but-valid layout (the helper's row-strided pack + the consumer's
+    // row-major read agree), proven correct by the step-(a) bias convs (SD per_core_N=10, in1=2) and the
+    // d7b9fb1ad1c absolute-offset fix for in0_num_subblocks > 1. So NO in1-subblock guard.
+    //
+    // fp32+bias+untilize is NOT excluded. The former exclusion existed because the kernel aliased the
+    // bias-add output onto matmul_partials_cb when untilize_out (untilize_mode_out_cb_id ==
+    // matmul_partials_cb). The TileRowMajor bias-add issues reserve_back BEFORE pop_front, so with
+    // fp32_dest_acc_en the fp32-sized partials CB (4B/elem) had no slack — the full out_block filled it and
+    // reserve_back deadlocked. The kernel now does the bias-add IN PLACE for this class (bias_in_place in
+    // conv_bmm_tilize.cpp): the matmul packed the whole block into matmul_partials_cb with a single
+    // reserve/push, and the bias-add read-modify-writes that fronted block at its original positions with
+    // NO reserve_back / push_back / pop_front. With no reserve at all the reserve-before-pop circular wait
+    // cannot occur for ANY dtype, so fp32+bias+untilize takes caller_owns + TileRowMajor like every other
+    // bias+untilize conv (bf16 included — test_sd_conv_wh), and NO staging CB is needed — the untilize phase
+    // reads the biased block straight out of matmul_partials_cb and pops it. The dedicated UNTILIZE_STAGING
+    // CB (see conv2d_op_program_factory_common.cpp) is now 0 pages for this class (its full output-block of
+    // L1 is recovered); it is retained only for the SubblockMajor (!packer_l1_acc) bias+untilize path, whose
+    // per-subblock FIFO does not fit the in-place read-modify-write model.
+    const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
+    if (!tile_pack_row_major && pin_class_caller_owns) {
+        tile_pack_row_major = true;
+        log_debug(
+            tt::LogOp,
+            "conv2d CALLER_OWNS (default, was pin): per_core_M={} per_core_N={} out_subblock={}x{} "
+            "in0_num_subblocks={} in1_num_subblocks={} packer_l1_acc={} has_bias={} untilize_out={} "
+            "partials_dedicated={}",
+            act_block_h_ntiles,
+            weight_block_w_ntiles,
+            out_subblock_h_ntiles,
+            out_subblock_w_ntiles,
+            act_block_h_ntiles / out_subblock_h_ntiles,
+            weight_block_w_ntiles / out_subblock_w_ntiles,
+            packer_l1_acc_en,
+            has_bias,
+            untilize_out,
+            !partials_cb_uses_output);
+    }
 
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
@@ -936,6 +1099,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["ACTIVATION_REUSE"] = "1";
     }
 
+    // TileRowMajor (non-pin) path: the compute kernel packs the interm/out row-major
+    // (pack_subblock_row_strided) on the dedicated-partials FIFO, and (ROW_MAJOR output) untilizes it with
+    // plain `untilize` instead of reblock_and_untilize. Eligibility decided above; the relaxed
+    // out_subblock_{h,w} were already folded into the compute compile args.
+    // TileRowMajor is passed to the compute kernel as compile arg 39 (see compute_kernel_args), not a
+    // define. The deep-K fuse_bias/untilize + packer_l1_acc INTERM-target convs (formerly the
+    // caller_owns / pin class) derive their in-place-pack behavior from the kernel's own template args
+    // (TileRowMajor + packer_l1_acc + Interm), so no separate signal is needed.
+
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
@@ -1096,7 +1268,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
             get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-            partials_cb_uses_output,
+            // Slot 25 (was the now-dead partials_cb_uses_output) now carries the UNTILIZE_STAGING CB
+            // index: the distinct one-block buffer the fuse_bias + untilize_out bias-add writes to (and
+            // the untilize phase reads from) instead of aliasing onto matmul_partials_cb. Only allocated
+            // (valid index) when untilize_out && has_bias; otherwise kInvalidCBIndex (kernel never uses it).
+            get_cb_info_by_name(cb_info, Conv2dCb::UNTILIZE_STAGING).index,
             conv_act_c_blocks,
             check_skip_compute,
             pack_relu,
@@ -1119,7 +1295,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
         }
         compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
+        compute_kernel_args.push_back(static_cast<uint32_t>(tile_pack_row_major));  // 39: TileRowMajor layout
     }
+
+    // "Dedicate partials, match matmul" (GH#45995): every conv routes through the matmul-helper kernel
+    // (conv_bmm_tilize.cpp). It uses a DEDICATED one-block matmul_partials_cb (is_globally_allocated=false)
+    // instead of a bespoke pin scheme, so its non-pin FIFO wraps to a fixed base each K-block and
+    // packer_l1_acc lands at a fixed address for multi-output-block convs too. The non-l1_acc path likewise
+    // uses the helper's plain FIFO reserve/push/pop (no L1_ACC, so no per-address accumulation requirement).
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =

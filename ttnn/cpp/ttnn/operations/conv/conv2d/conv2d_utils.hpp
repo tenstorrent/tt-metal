@@ -334,4 +334,27 @@ Conv2dExecutionPath determine_conv2d_execution_path(
     const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config);
 Conv2dExecutionPath determine_conv2d_execution_path(
     bool input_is_in_L1, const std::optional<const Conv2dSliceConfig>& slice_config);
+
+// Result of the conv "stranded-SubblockMajor → TileRowMajor" auto-selection lever.
+struct TilePackRowMajorDecision {
+    bool selected = false;            // relaxed subblock is taller AND larger-volume than the SBM fallback
+    uint32_t sbm_out_subblock_h = 0;  // SBM (subblock_w == per_core_N) choice — diagnostics only
+    uint32_t sbm_out_subblock_w = 0;
+    uint32_t relaxed_out_subblock_h = 0;  // relaxed (TileRowMajor-permitted) choice, applied when selected
+    uint32_t relaxed_out_subblock_w = 0;
+};
+
+// Auto-select the conv "stranded-SubblockMajor → TileRowMajor" lever. Factored out of the sharded
+// program factory so get_cb_info() — and therefore the L1-usage prediction path that the post-op
+// CB-size check compares against — derives the SAME decision. If this lived only in the factory, the
+// partials-CB alias decision (which un-aliases for TileRowMajor + !packer_l1_acc) would differ between
+// the realised allocation and the predicted allocation and the equality check would abort.
+TilePackRowMajorDecision auto_select_tile_pack_row_major(
+    bool height_sharded,
+    bool has_bias,
+    tt::DataFormat weights_df,
+    bool is_1d_depthwise_conv,
+    bool fp32_dest_acc_en,
+    uint32_t per_core_M_ntiles,
+    uint32_t per_core_N_ntiles);
 }  // namespace ttnn::operations::conv

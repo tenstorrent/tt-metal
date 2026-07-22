@@ -11,35 +11,20 @@
 #include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers_advanced.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
+
 #ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 #endif
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-FORCE_INLINE void reload_from_cb_to_dst(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
-    bool in1_transpose_tile,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_w,
-    uint32_t out_subblock_h,
-    uint32_t in0_block_w) {
-    CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-    mm_partials_cb.wait_front(out_subblock_num_tiles);
-
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
-
-    mm_partials_cb.pop_front(out_subblock_num_tiles);
-    // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-}
+// ── Local CB rd_ptr utilities (used by ENABLE_GLOBAL_CB ring management) ─────
+// reload_from_cb_to_dst is gone — the matmul_block helper does its own reload
+// (copy_tile_to_dst_init_short_with_dt + copy_block_matmul_partials +
+// mm_block_init_short_with_dt) inline as part of its K-loop.
 
 FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
@@ -183,13 +168,137 @@ constexpr std::array<uint32_t, N> fill_named_cb_array(const char* const* names) 
     return arr;
 }
 
+// ── Functors threaded into compute_kernel_lib::matmul_block ─────────────────
+//
+// SFPU activation is fused via the matmul_block helper's Activation template
+// parameter, built as ActivationOp<activation_type, activation_param0,
+// activation_param1, activation_param2> from named CT args below. It runs on
+// the packer thread (TRISC2) at
+// the per-subblock pack stage of the last K-block — overlaps with the next
+// math iteration and frees math-thread DST register pressure. No separate
+// PostComputeFn struct is needed.
+
+// Per-K-block PreKBlockFn. Three responsibilities, all gated by compile-time switches:
+//   block-0 self-prime → reserve_back + push_back on the local in0 CB on block 0.
+//   ENABLE_GLOBAL_CB   → compute the next in1 ring rd_ptr (UNPACK-only side effect).
+//   PACK_RELU + untilize_out → enable ZERO_RELU on the last K-block (the untilize
+//      path via the Interm target doesn't auto-enable relu the way OutWithRelu does).
+template <
+    bool EnableGlobalCb,
+    bool EnableReluOnLast,
+    uint32_t In0CbId,
+    uint32_t In0BlockNumTiles,
+    uint32_t In1CbId,
+    uint32_t NumBlocks,
+    uint32_t In1BlockSizeBytes>
+struct GatheredPreKBlock {
+    uint32_t* curr_block_index_ptr;
+    uint32_t cb_start_addr;
+    uint32_t rd_ptr_start_addr;
+    bool tensor_split;
+    uint32_t* next_block_index_ptr;
+    uint32_t* next_rd_ptr_addr_ptr;
+
+    ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool last_out) const {
+        // Block-0 self-prime: the production gathered factory expects compute to
+        // self-prime its local in0 CB for the first ring step, so on block 0 this
+        // PreKBlockFn reserves+pushes one in0 block before the matmul consumes it.
+        if (block == 0) {
+            CircularBuffer in0_cb(In0CbId);
+            in0_cb.reserve_back(In0BlockNumTiles);
+            in0_cb.push_back(In0BlockNumTiles);
+        }
+        if constexpr (EnableReluOnLast) {
+            if (last_out) {
+                PACK((llk_pack_relu_config(ReluConfig::zero())));
+            }
+        }
+        if constexpr (EnableGlobalCb) {
+            UNPACK((calculate_next_block_index_and_update_rd_ptr(
+                In1CbId,
+                NumBlocks,
+                In1BlockSizeBytes,
+                *curr_block_index_ptr,
+                cb_start_addr,
+                rd_ptr_start_addr,
+                tensor_split,
+                next_block_index_ptr,
+                next_rd_ptr_addr_ptr)));
+        }
+    }
+};
+
+// Per-K-block PostKBlockFn. ENABLE_GLOBAL_CB only — commits the next ring rd_ptr
+// computed by GatheredPreKBlock. Fires after the helper's in0/in1 pop_front and
+// after the L1_ACC drain, so the rd_ptr advance observes a fully-consumed K-block.
+template <bool EnableGlobalCb, uint32_t In1CbId>
+struct GatheredPostKBlock {
+    uint32_t* curr_block_index_ptr;
+    const uint32_t* next_block_index_ptr;
+    const uint32_t* next_rd_ptr_addr_ptr;
+
+    ALWI void operator()(uint32_t /*block*/, uint32_t /*num_k_blocks*/, bool /*last_out*/) const {
+        if constexpr (EnableGlobalCb) {
+            *curr_block_index_ptr = *next_block_index_ptr;
+            UNPACK((update_local_cb_rd_ptr(In1CbId, *next_rd_ptr_addr_ptr)));
+        }
+    }
+};
+
+// Per-K-block KBlockInnerDimFn. Returns the unpadded inner-dim step count for
+// this K-block (read from the runtime-arg table indexed by the active ring
+// position). The LLK call's kt_dim arg stays In0BlockW — only the loop bound
+// shrinks; in1 is still strided as if the K-tile span were full-width.
+template <uint32_t RingSize>
+struct GatheredInnerDimFn {
+    const uint32_t* unpadded_widths;
+    uint32_t ring_idx;
+
+    ALWI uint32_t operator()(uint32_t block, uint32_t /*block_k*/) const {
+        const uint32_t curr_ring_idx = (ring_idx + block) % RingSize;
+        return unpadded_widths[curr_ring_idx];
+    }
+};
+
+// In0SourceFn hook — the helper calls this once per K-block (before the matmul) to
+// pick which in0 CB to unpack. Block 0 reads the self-primed local in0 CB; blocks
+// 1..N read the remote/mcast in2 CB, as the gather streams the remaining K-slabs in
+// over the ring. The two CBs MUST share a dataformat — the unpacker is configured
+// once for in0_cb_id (see the helper's In0SourceFn contract).
+template <uint32_t In2CbId>
+struct GatheredIn0Source {
+    ALWI uint32_t operator()(uint32_t block, uint32_t in0_cb_id) const { return block == 0 ? in0_cb_id : In2CbId; }
+};
+
+// In1BaseOffsetFn hook — the helper calls this once per K-block to shift the in1
+// read base within the fronted region. Zero when in1 is a single fronted block
+// (ENABLE_GLOBAL_CB receiver or DRAM in1); otherwise steps one in1 block per ring
+// position — In1BlockNumTiles * curr_ring_idx, with curr_ring_idx = (ring_idx +
+// block) % RingSize — to index the K-slab for the active ring position.
+template <bool NeedsOffset, uint32_t In1BlockNumTiles, uint32_t RingSize>
+struct GatheredIn1BaseOffsetFn {
+    uint32_t ring_idx;
+
+    ALWI uint32_t operator()(uint32_t block) const {
+        if constexpr (!NeedsOffset) {
+            return 0;
+        } else {
+            const uint32_t curr_ring_idx = (ring_idx + block) % RingSize;
+            return In1BlockNumTiles * curr_ring_idx;
+        }
+    }
+};
+
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     // Compile time args
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
         get_compile_time_arg_val(2);  // out_subblock_h*in0_block_w*in0_num_subblocks;
-    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
+    [[maybe_unused]] constexpr uint32_t in0_subblock_num_tiles =
+        get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
     constexpr uint32_t in1_num_subblocks =
         get_compile_time_arg_val(4);  // outer column block size (in inner column blocks)
     constexpr uint32_t in1_block_num_tiles =
@@ -202,7 +311,8 @@ void kernel_main() {
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
+    [[maybe_unused]] constexpr uint32_t out_block_num_tiles =
+        get_compile_time_arg_val(14);                                          // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
@@ -212,38 +322,98 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
     constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
 
+    constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
+    constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
+
+    // ── SFPU activation params (compile-time, named CT args) ──
+    // Always declared; default to NONE/0 so the helper template arguments resolve
+    // either way — when SFPU_ACTIVATION is undefined the helpers statically discard
+    // their packer-side activation paths.
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
         static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
     constexpr uint32_t activation_param0 = get_named_compile_time_arg_val("activation_param0");
     constexpr uint32_t activation_param1 = get_named_compile_time_arg_val("activation_param1");
     constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
+#else
+    constexpr KernelActivation activation_type = KernelActivation::NONE;
+    constexpr uint32_t activation_param0 = 0;
+    constexpr uint32_t activation_param1 = 0;
+    constexpr uint32_t activation_param2 = 0;
 #endif
-
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer sync_buf(sync_cb);
-    CircularBuffer sync2_buf(sync_cb2);
-
-    constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
-    constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
 
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
+
+    // Compile-time helper switches.
+#ifdef ENABLE_GLOBAL_CB
+    constexpr bool enable_global_cb = true;
+#else
+    constexpr bool enable_global_cb = false;
+#endif
 
 #ifdef STREAMING_IN1
     constexpr bool streaming_in1 = true;
 #else
     constexpr bool streaming_in1 = false;
 #endif
-    // The DRAM path and the streaming (GCB-aligned) path both consume in1 through the standard
-    // in1_cb wait_front/pop_front cycle, so they share one gate. DRAM: the reader pushes one block
-    // of credit per landed block. Streaming: the prefetcher delivers blocks in ring-rotated FIFO
-    // order and the in1 CB is aligned to the GCB ring, so the same front/pop cycle drives it
-    // (in1_index_subblock_offset is 0 for the GCB path). llk_pop_tiles publishes this CB's consumer
-    // ack only after the unpacker HW has drained the block, so the reader frees the GCB slot off
-    // that engine-accurate ack (pages_reservable_at_back) — a hand-rolled done-semaphore isn't tied
-    // to the unpacker drain, so it is neither needed nor safe as the recycle gate.
+    // Streaming in1 (GCB ring-rotated FIFO) is consumed through the standard in1_cb wait_front/
+    // pop_front cycle, exactly like the DRAM path — both share consume_in1_cb (drives in1_policy).
+    // The manual global-CB rd_ptr management is DISABLED under streaming: the prefetcher delivers
+    // blocks in ring-rotated FIFO order aligned to the in1 CB, and llk_pop_tiles publishes the
+    // consumer ack only after the unpacker drains the block, which recycles the GCB slot; a
+    // hand-rolled done-semaphore is neither needed nor safe. enable_global_cb_ring gates that
+    // manual management off on the streaming path.
     constexpr bool consume_in1_cb = in1_is_dram || streaming_in1;
+    constexpr bool enable_global_cb_ring = enable_global_cb && !streaming_in1;
+
+#ifdef PACK_RELU
+    constexpr bool pack_relu_defined = true;
+#else
+    constexpr bool pack_relu_defined = false;
+#endif
+
+#ifdef PACKER_L1_ACC
+    constexpr bool l1_acc = true;
+#else
+    constexpr bool l1_acc = false;
+#endif
+
+#ifdef IN1_TRANSPOSE_TILE
+    constexpr bool in1_transpose_tile = true;
+#else
+    constexpr bool in1_transpose_tile = false;
+#endif
+
+    // LastBlockTarget selection (FUSE_BIAS is host-side dead code in this
+    // kernel — same as the llama variant — so the FUSE_BIAS arm is moot).
+    // untilize_out uses Interm (not the old fused OutWithUntilize): the matmul accumulates
+    // the fully-tiled block into interm, then a downstream reblock_and_untilize untilizes the
+    // FULLY-accumulated block into out. The fused pack_untilize untilized a partial before the
+    // block finished accumulating, corrupting under packer_l1_acc.
+    constexpr LastBlockTarget last_block_target =
+        untilize_out ? LastBlockTarget::Interm
+                     : (pack_relu_defined ? LastBlockTarget::OutWithRelu : LastBlockTarget::Out);
+
+    // On the Interm-target untilize path, LastBlockTarget::Interm does NOT auto-enable relu and the
+    // downstream reblock does not apply activation, so the PreKBlockFn enables relu-on-last for the
+    // untilize path — relu still runs (at the matmul's pack stage) before untilize.
+    constexpr bool enable_relu_on_last_via_pre_k = pack_relu_defined && untilize_out;
+
+    // in1_policy: DRAM and streaming in1 are consumed per-K-block (wait/pop each block via the
+    // standard CB cycle); a fronted / manually-ring-managed global-CB in1 is caller-managed, so the
+    // helper neither waits nor pops it.
+    constexpr InputPolicy in1_policy_const =
+        consume_in1_cb ? InputPolicy::WaitAndPopPerKBlock : InputPolicy::NoWaitNoPop;
+
+    // The per-K-block in1 base offset is non-zero only on the
+    // (`!ENABLE_GLOBAL_CB && !in1_is_dram`) path.
+    constexpr bool needs_in1_base_offset = !enable_global_cb && !in1_is_dram;
+
+    // Buf wrappers used by the kernel's outer fabric-sync primitives.
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer sync_buf(sync_cb);
+    CircularBuffer sync2_buf(sync_cb2);
 
 #ifdef STREAMING_IN1
     // Streaming consumes in1 through the standard in1_cb API, so the batched-only sync2 channel and
@@ -264,45 +434,63 @@ void kernel_main() {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-#ifdef SFPU_ACTIVATION
-    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
-#endif
+    // Buf wrappers for the helper's wait_front / pop_front / LLK call hygiene.
+    // The In0SourceFn alternates between in0_cb_id (block 0) and in2_cb_id
+    // (blocks 1..N); the helper uses these via active_in0_buf inside the K-loop.
+    CircularBuffer in0_buf(in0_cb_id);
+    CircularBuffer in1_buf(in1_cb_id);
 
-#ifdef IN1_TRANSPOSE_TILE
-    constexpr uint32_t in1_transpose_tile = true;
-#else
-    constexpr uint32_t in1_transpose_tile = false;
-#endif
-
-    constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
-
+    // Boot-time matmul + activation init. The helper invocation below uses
+    // InitMode::None so it doesn't re-init each call; the per-batch
+    // pack_reconfig_data_format re-binds the packer to the current batch's
+    // partials CB without disturbing the unpacker matmul state. mm_block_init is
+    // deprecated: boot with compute_kernel_hw_startup (hw_configure) then
+    // matmul_block_init (unpack/math init). ActivationInitHelper::init() is a
+    // compile-time no-op when activation_type == KernelActivation::NONE.
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-    for (uint32_t b = 0; b < batch; b++) {
-#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
-        uint32_t in1_cb_start_addr = 0;
-        uint32_t in1_rd_ptr_start_addr = 0;
-        [[maybe_unused]] uint32_t curr_in1_block_index = 0;
-        bool in1_tensor_split = 0;
-        uint32_t next_in1_block_index;
-        uint32_t next_in1_rd_ptr_addr;
+    if constexpr (activation_type != KernelActivation::NONE) {
+        ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+    }
 
-        UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
-        UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
-        UNPACK((curr_in1_block_index = ring_idx));
-        UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
-        UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
-#endif
+    // Per-batch ring CB state (used by ENABLE_GLOBAL_CB; declared at outer scope
+    // so the functors can hold pointers across helper invocations).
+    [[maybe_unused]] uint32_t in1_cb_start_addr = 0;
+    [[maybe_unused]] uint32_t in1_rd_ptr_start_addr = 0;
+    [[maybe_unused]] uint32_t curr_in1_block_index = 0;
+    [[maybe_unused]] bool in1_tensor_split = false;
+    [[maybe_unused]] uint32_t next_in1_block_index = 0;
+    [[maybe_unused]] uint32_t next_in1_rd_ptr_addr = 0;
+
+    using PreFn = GatheredPreKBlock<
+        enable_global_cb_ring,
+        enable_relu_on_last_via_pre_k,
+        in0_cb_id,
+        in0_block_num_tiles,
+        in1_cb_id,
+        num_blocks,
+        in1_block_size_bytes>;
+    using PostFnRing = GatheredPostKBlock<enable_global_cb_ring, in1_cb_id>;
+    using InnerDimFn = GatheredInnerDimFn<ring_size>;
+    using In0SrcFn = GatheredIn0Source<in2_cb_id>;
+    using In1OffsetFn = GatheredIn1BaseOffsetFn<needs_in1_base_offset, in1_block_num_tiles, ring_size>;
+
+    for (uint32_t b = 0; b < batch; b++) {
+        if constexpr (enable_global_cb_ring) {
+            UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
+            UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
+            UNPACK((curr_in1_block_index = ring_idx));
+            UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
+            UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
+        }
+
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
-        CircularBuffer mm_out_cb(mm_out_cb_id);
-        CircularBuffer mm_partials_cb(mm_partials_cb_id);
-
-        bool enable_reload = false;
-        uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
+        CircularBuffer mm_out_buf(mm_out_cb_id);
+        CircularBuffer mm_partials_buf(mm_partials_cb_id);
 
 #ifdef PACK_RELU
-        // for each batch we start we relu disabled so that intermediate results are not relu'd
+        // for each batch we start with relu disabled so that intermediate results are not relu'd
         if constexpr (batch > 1) {
             PACK((llk_pack_relu_config(ReluConfig::none())));
         }
@@ -312,205 +500,112 @@ void kernel_main() {
             PACK((pack_reconfig_data_format(mm_partials_cb_id)));
         }
 
-        // Wait to receive in1
+        // Wait to receive in1 (sync_cb2 gates the entire batch — in1 data is staged
+        // upfront via the all-gather producer, separate from the per-K-block wait/pop the helper
+        // manages on the WaitAndPopPerKBlock branch). Streaming in1 drives the standard per-K-block
+        // CB cycle instead, so it does not use the batched sync2 channel.
 #ifndef STREAMING_IN1
         sync2_buf.wait_front(1);
         sync2_buf.pop_front(1);
 #endif
 
-        for (uint32_t block = 0; block < num_blocks; block++) {
-            const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
-            uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
+        PreFn pre_fn{
+            /*curr_block_index_ptr=*/&curr_in1_block_index,
+            /*cb_start_addr=*/in1_cb_start_addr,
+            /*rd_ptr_start_addr=*/in1_rd_ptr_start_addr,
+            /*tensor_split=*/in1_tensor_split,
+            /*next_block_index_ptr=*/&next_in1_block_index,
+            /*next_rd_ptr_addr_ptr=*/&next_in1_rd_ptr_addr,
+        };
+        PostFnRing post_fn{
+            /*curr_block_index_ptr=*/&curr_in1_block_index,
+            /*next_block_index_ptr=*/&next_in1_block_index,
+            /*next_rd_ptr_addr_ptr=*/&next_in1_rd_ptr_addr,
+        };
+        InnerDimFn inner_dim_fn{/*unpadded_widths=*/unpadded_in0_shard_widths_in_tiles, /*ring_idx=*/ring_idx};
+        In0SrcFn in0_source_fn{};
+        In1OffsetFn in1_offset_fn{/*ring_idx=*/ring_idx};
 
-            // Wait for in1 block (DRAM and streaming both drive the standard CB cycle; see
-            // consume_in1_cb). in1_index_subblock_offset is 0 for both, so no manual rd_ptr here.
-            if constexpr (consume_in1_cb) {
-                in1_cb.wait_front(in1_block_num_tiles);
-            }
-
-            const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
-            CircularBuffer input0_cb(input0_cb_id);
-            bool last_out = block == (num_blocks - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-            if (last_out) {
-                // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
-            }
-#endif
-
-            // Wait to receive in0 block
-            if (block == 0) {
-                input0_cb.reserve_back(in0_block_num_tiles);
-                input0_cb.push_back(in0_block_num_tiles);
-            }
-            input0_cb.wait_front(in0_block_num_tiles);
-
-#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
-            UNPACK((calculate_next_block_index_and_update_rd_ptr(
-                in1_cb_id,
+        matmul_block_gathered<
+            in1_transpose_tile,                                 // transpose
+            l1_acc,                                             // packer_l1_acc
+            last_block_target,                                  // last_block_target
+            OutputCBLayout::SubblockMajor,                      // layout
+            matmul_config::InitMode::None,                      // init_mode
+            InputPolicy::WaitAndPopPerKBlock,                   // in0_policy
+            in1_policy_const,                                   // in1_policy
+            matmul_config::DataFormatReconfig::InputAndOutput,  // reconfig (was defaulted)
+            ActivationOp<activation_type, activation_param0, activation_param1, activation_param2>,  // Activation
+            NoPostCompute,  // PostComputeFn (math-thread; unused)
+            PreFn,          // PreKBlockFn
+            PostFnRing,     // PostKBlockFn
+            InnerDimFn,     // KBlockInnerDimFn
+            In0SrcFn,       // In0SourceFn
+            In1OffsetFn>(   // In1BaseOffsetFn
+            in0_buf,
+            in1_buf,
+            mm_out_buf,
+            mm_partials_buf,
+            MatmulBlockShape::of(
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_h,
+                out_subblock_w,
+                in0_block_w,
                 num_blocks,
-                in1_block_size_bytes,
-                curr_in1_block_index,
-                in1_cb_start_addr,
-                in1_rd_ptr_start_addr,
-                in1_tensor_split,
-                &next_in1_block_index,
-                &next_in1_rd_ptr_addr)));
+                /*batch=*/1,
+                /*in1_per_core_w=*/in1_per_core_w),  // out_row_width defaults to in1_per_core_w (SubblockMajor)
+            NoPostCompute{},
+            pre_fn,
+            post_fn,
+            inner_dim_fn,
+            in0_source_fn,
+            in1_offset_fn);
+
+        // ── Downstream untilize (Interm target) ─────────────────────────────
+        // matmul_block accumulated the fully-tiled block into mm_partials_buf (SubblockMajor).
+        // reblock_and_untilize gathers it into row-major and untilizes into mm_out_buf. This
+        // untilizes the FULLY-accumulated block (fixes the packer_l1_acc corruption the old fused
+        // OutWithUntilize had, where a partial got untilized before accumulation finished).
+        if constexpr (untilize_out) {
+#ifdef PACK_RELU
+            // The PreKBlockFn (enable_relu_on_last_via_pre_k) enabled relu for the last K-block's
+            // interm pack; restore a clean packer state before the untilize reblock.
+            PACK((llk_pack_relu_config(ReluConfig::none())));
 #endif
-
-            int in0_index_subblock_offset = 0;
-            for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-#ifdef ENABLE_GLOBAL_CB
-                int in1_index_subblock_offset = 0;
-#else
-                // This should always be 0 when reading in1 from DRAM
-                int in1_index_subblock_offset = in1_is_dram ? 0 : in1_block_num_tiles * (curr_ring_idx);
-#endif
-                for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    tile_regs_acquire();
-                    if (enable_reload) {
-                        reload_from_cb_to_dst(
-                            input0_cb_id,
-                            in1_cb_id,
-                            mm_partials_cb_id,
-                            in1_transpose_tile,
-                            out_subblock_num_tiles,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                    }
-
-#ifndef SKIP_COMPUTE
-                    // Compute output sub-block
-                    uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
-                    uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                    uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                    // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
-                        // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                        // accumulation is done by iterating matmul_block across inner dim
-                        // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                        matmul_block(
-                            input0_cb_id,
-                            in1_cb_id,
-                            in0_index,
-                            in1_index,
-                            dst_index,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index++;                  // stride right by 1
-                        in1_index += in1_per_core_w;  // to stride down by 1 need to stride by in_per_core_w (should be
-                                                      // called in1_block_w)
-                    }
-
-#endif  // SKIP_COMPUTE
-
-                    if (last_out) {
-                        if constexpr (untilize_out) {
-                            pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_cb_id);
-                        }
-                        tile_regs_commit();
-                        // Pack out to output buffer
-                        mm_out_cb.reserve_back(out_subblock_num_tiles);
-
-#if not defined FUSE_BIAS and defined SFPU_ACTIVATION
-                        apply_activation_from_pack<
-                            activation_type,
-                            activation_param0,
-                            activation_param1,
-                            activation_param2>(out_subblock_num_tiles);
-#else
-                        tile_regs_wait();
-#endif
-
+            // Reconfigure srcA / pack DF / l1_acc for the reblock read, then invoke with
+            // NoReconfigure so the helper adds no reconfig of its own — mirrors the production
+            // (non-gather) kernel's !FUSE_BIAS untilize phase.
+            reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                        PACK((pack_reconfig_data_format(mm_out_cb_id)));
+            PACK((pack_reconfig_data_format(mm_out_cb_id)));
 #endif
-
 #ifdef PACKER_L1_ACC
-
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+            PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-
-                        uint32_t start_dst_index = 0;
-                        if constexpr (untilize_out) {
-                            pack_untilize_dest<out_subblock_num_tiles>(mm_out_cb_id);
-                        } else {
-                            pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
-                        }
-
-                        tile_regs_release();
-                        if constexpr (untilize_out) {
-                            pack_untilize_uninit(mm_out_cb_id);
-                        }
-                        mm_out_cb.push_back(out_subblock_num_tiles);
-
-                    } else if (spill) {
-                        tile_regs_commit();
-                        // Move partial result to interm buffer
-                        mm_partials_cb.reserve_back(out_subblock_num_tiles);
-                        tile_regs_wait();
-
-#ifdef PACKER_L1_ACC
-                        if (block == 0) {  // no accumulation for first iteration
-                            PACK((llk_pack_reconfig_l1_acc(0)));
-                        } else if (block == 1) {
-                            PACK((llk_pack_reconfig_l1_acc(1)));
-                        }
-#endif
-
-                        uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-
-                        tile_regs_release();
-                        mm_partials_cb.push_back(out_subblock_num_tiles);
-                    }
-
-                    in1_index_subblock_offset += out_subblock_w;
-                }
-                in0_index_subblock_offset += in0_subblock_num_tiles;
-            }
-
-#ifdef PACKER_L1_ACC
-
-            // Last iteration does spill and reload to output buffer
-            if (block < num_blocks - 2 && spill) {
-                mm_partials_cb.wait_front(out_block_num_tiles);
-                mm_partials_cb.pop_front(out_block_num_tiles);
-            }
-            if (block == num_blocks - 2 && spill) {
-                enable_reload = true;
-            }  // reload when last iteration
-#else
-            if constexpr (spill) {
-                enable_reload = true;
-            }
-#endif
-
-            input0_cb.pop_front(in0_block_num_tiles);
-            // Pop the consumed in1 block with the standard API (advances rd_ptr to the next FIFO
-            // block, wrapping at the fifo limit). Both DRAM and streaming take this path; streaming
-            // relies on llk_pop_tiles publishing the consumer ack only after the unpacker drains the
-            // block, which is what lets the reader recycle the GCB slot (see consume_in1_cb).
-            if constexpr (consume_in1_cb) {
-                in1_cb.pop_front(in1_block_num_tiles);
-            }
-#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
-            curr_in1_block_index = next_in1_block_index;
-            UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
-#endif
+            reblock_and_untilize<
+                out_subblock_w,
+                out_block_w,
+                reblock_untilize_config::InitUninitMode::InitAndUninit,
+                reblock_untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_num_tiles,
+                out_subblock_h,
+                mm_partials_buf,
+                mm_out_buf);
         }
 
-#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
-        // Release in1
-        sync_buf.reserve_back(1);
-        sync_buf.push_back(1);
-        UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
-        UNPACK((update_rd_ptr_to_ring_index(
-            in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
-#endif
+        // Release in1 (manual global-CB ring management; disabled on the streaming path — see
+        // enable_global_cb_ring).
+        if constexpr (enable_global_cb_ring) {
+            // Release in1
+            sync_buf.reserve_back(1);
+            sync_buf.push_back(1);
+            UNPACK(
+                (update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
+            UNPACK((update_rd_ptr_to_ring_index(
+                in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
+        }
     }
 }
