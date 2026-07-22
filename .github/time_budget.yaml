@@ -138,7 +138,7 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 20
+    wh_n150_civ2: 30
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
@@ -162,15 +162,23 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  e2e_tier2:
+    wh_n150: 150
+    wh_n300: 30
+    bh_p150b_civ2: 120
   e2e_tier3:
     bh_p150b_civ2: 18
+  unit_tier2:
+    wh_n150: 220
+    wh_n300: 216
+    bh_p150: 100
+    bh_p150b_civ2: 90
   unit_tier3:
     bh_p150b_civ2: 20
     bh_p150: 2
-  unit:
-    wh_n150: 90
-    wh_n300: 115
-    bh_p150b_civ2: 125
+  device_perf:
+    wh_n150: 100
+    bh_p150: 60
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -290,7 +298,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 190
+    bh_loudbox: 193
     bh_quietbox_2: 80
     bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
@@ -327,6 +335,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 260
     bh_galaxy: 70
+    bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172

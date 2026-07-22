@@ -221,6 +221,7 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
@@ -348,6 +349,10 @@ public:
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
+    // Metal 2.0: Mark this Program as created from ProgramSpec
+    // This enables legality checks against illegal mixing of Metal 2.0 idioms with legacy Programs.
+    void mark_created_from_spec() { created_from_spec_ = true; }
+
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
@@ -423,6 +428,13 @@ public:
     // Metal 2.0: Get all registered kernel names (for completeness validation)
     std::vector<std::string> get_registered_kernel_names() const;
 
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -434,6 +446,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -521,6 +534,12 @@ private:
         std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // True only for Programs minted by BuildProgramFromSpec (the sole legitimate source of
+    // Metal 2.0 kernels). Metal 2.0 named bindings require the ProgramSpec path; add_kernel
+    // rejects an is_metal2_kernel() kernel added to any other Program (e.g. the
+    // ProgramDescriptor ctor path or a legacy CreateKernel program).
+    bool created_from_spec_ = false;
 
     // Semaphores
     std::vector<Semaphore> semaphores_;

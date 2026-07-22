@@ -445,6 +445,61 @@ public:
             }
         }
 
+        // Whether the op re-applies ALL per-dispatch state itself on a program-cache hit via
+        // override_runtime_arguments() — the descriptor-era analog of the legacy
+        // override_runtime_arguments().  When present, the adapter calls it on every hit and uses
+        // NEITHER resolve_bindings (address inference) NOR get_dynamic_runtime_args: the op owns the
+        // full re-derivation, correct by construction.  This is the target mechanism; resolve_bindings
+        // and get_dynamic are the legacy paths being migrated out (and, eventually, deleted with
+        // Metal 2.0 native bindings).
+        //
+        // The hook lives on the program factory (its natural home — alongside create_descriptor):
+        // factory_has_override_runtime_arguments() below. For DirectDescriptorFactory the factory has
+        // no override, so we also accept it on the DeviceOperation itself, preserving direct ops that
+        // predate the factory-struct shape.
+        static consteval bool factory_has_override_runtime_arguments() {
+            return requires(
+                tt::tt_metal::Program& program,
+                const operation_attributes_t& attrs,
+                const tensor_args_t& tensor_args,
+                tensor_return_value_t& tensor_return_value,
+                const std::optional<ttnn::MeshCoordinate>& coord) {
+                DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+            };
+        }
+        static consteval bool device_op_has_override_runtime_arguments() {
+            return requires(
+                tt::tt_metal::Program& program,
+                const operation_attributes_t& attrs,
+                const tensor_args_t& tensor_args,
+                tensor_return_value_t& tensor_return_value,
+                const std::optional<ttnn::MeshCoordinate>& coord) {
+                DeviceOperation::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+            };
+        }
+        static consteval bool has_override_runtime_arguments() {
+            return factory_has_override_runtime_arguments() || device_op_has_override_runtime_arguments();
+        }
+
+        static consteval bool has_get_dynamic_runtime_args() {
+            return requires(
+                const operation_attributes_t& attrs,
+                const tensor_args_t& tensor_args,
+                tensor_return_value_t& tensor_return_value,
+                const std::optional<ttnn::MeshCoordinate>& coord) {
+                DeviceOperation::get_dynamic_runtime_args(attrs, tensor_args, tensor_return_value, coord);
+            };
+        }
+
+        // An op that owns its cache-hit re-derivation via override_runtime_arguments() must NOT also
+        // declare the legacy get_dynamic_runtime_args() — override supersedes it, and having both is
+        // ambiguous (which one re-applies?).  This assert forces porting an op to DROP get_dynamic.
+        static_assert(
+            !(has_override_runtime_arguments() && has_get_dynamic_runtime_args()),
+            "A DeviceOperation must not declare BOTH override_runtime_arguments() and "
+            "get_dynamic_runtime_args(): override_runtime_arguments supersedes the legacy hook. "
+            "Delete get_dynamic_runtime_args() from this op.");
+
         // Build a ProgramDescriptor for one mesh coordinate (the ProgramDescriptor variant).
         // The declarative WorkloadDescriptor path (the WorkloadDescriptor variant) does NOT go through
         // this — it iterates `workload_descriptor.programs` directly.
@@ -491,8 +546,19 @@ public:
                 for (auto& [device_range, desc] : programs) {
                     tt::tt_metal::Program program{desc};
                     auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, workload_descriptor);
-                    auto bindings =
-                        tt::tt_metal::resolve_bindings(program, desc, collected.buffers, collected.num_input_buffers);
+                    // The WorkloadDescriptor variant has NO slow-path rebuild (apply_descriptor only
+                    // re-applies resolved bindings + dynamic args), so it must ALWAYS allow the in-place
+                    // output_tensor alias — otherwise resolve_bindings bails to an EMPTY ResolvedBindings
+                    // and the fast path skips address patching, leaving stale addresses on a cache hit
+                    // (breaks supported cross-device p2p where output_tensor aliases input). This restores
+                    // the pre-opt-in behavior for this branch; the unsafe_optin gate only applies to the
+                    // ProgramDescriptor branch below, which CAN fall back to a safe slow-path rebuild.
+                    auto bindings = tt::tt_metal::resolve_bindings(
+                        program,
+                        desc,
+                        collected.buffers,
+                        collected.num_input_buffers,
+                        /*allow_inplace_output_tensor_alias=*/true);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
                         .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
@@ -512,11 +578,19 @@ public:
                             return;
                         }
                         tt::tt_metal::Program program{desc};
-                        auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
-                        auto bindings = tt::tt_metal::resolve_bindings(
-                            program, desc, collected.buffers, collected.num_input_buffers);
-                        mesh_workload.add_program(device_range, std::move(program));
-                        shared_variables[device_range] = shared_variables_t{.resolved_bindings = std::move(bindings)};
+                        if constexpr (has_override_runtime_arguments()) {
+                            // The op re-derives all per-dispatch state on every hit via
+                            // override_runtime_arguments(); no resolve_bindings needed.
+                            mesh_workload.add_program(device_range, std::move(program));
+                            shared_variables[device_range] = shared_variables_t{};
+                        } else {
+                            auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
+                            auto bindings = tt::tt_metal::resolve_bindings(
+                                program, desc, collected.buffers, collected.num_input_buffers);
+                            mesh_workload.add_program(device_range, std::move(program));
+                            shared_variables[device_range] =
+                                shared_variables_t{.resolved_bindings = std::move(bindings)};
+                        }
                     };
 
                 if constexpr (create_descriptor_uses_mesh_dispatch_coordinate()) {
@@ -580,6 +654,43 @@ public:
                     // excluded would stay frozen at first miss — re-apply declared dynamic args.
                     apply_dynamic_runtime_args_if_declared(
                         program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                } else if constexpr (has_override_runtime_arguments()) {
+                    // ProgramDescriptor variant, op owns its cache-hit re-derivation (the descriptor-era
+                    // override_runtime_arguments()): re-apply ALL per-dispatch state — every runtime arg
+                    // AND every tensor-backed CB address — for the current tensors.  No resolve_bindings
+                    // (address inference) and no get_dynamic; correct by construction for in-place,
+                    // mixed-aliasing, and work-set shifts. Prefer the factory's hook; fall back to the
+                    // DeviceOperation for direct ops that predate the factory-struct shape.
+                    if constexpr (factory_has_override_runtime_arguments()) {
+                        DescriptorFactory::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    } else {
+                        DeviceOperation::override_runtime_arguments(
+                            program,
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    }
+#ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
+                    // Same regression net as the legacy fast path: assert the op's override reproduced a
+                    // full rebuild exactly (rt-args AND CB addresses).
+                    {
+                        auto parity_desc = invoke_per_coord(
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                        tt::tt_metal::Program parity_scratch{parity_desc};
+                        tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
+                        tt::tt_metal::assert_fastpath_parity(
+                            program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
+                    }
+#endif
                 } else {
                     // ProgramDescriptor variant — simple per-coord factory.  Fast-path when the
                     // factory declared rt-arg buffer bindings via emplace_runtime_args(), OR the op
@@ -618,6 +729,22 @@ public:
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                         tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
+#ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
+                        // Regression net: assert the fast path reproduced a full rebuild exactly (rt-args
+                        // AND CB addresses). Fires loudly at the exact stale arg for any op whose cache-hit
+                        // re-application is incomplete (SDXL in-place silu / MorehAdamW). Debug/CI only.
+                        {
+                            auto parity_desc = invoke_per_coord(
+                                attrs,
+                                tensor_args,
+                                tensor_return_value,
+                                std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                            tt::tt_metal::Program parity_scratch{parity_desc};
+                            tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
+                            tt::tt_metal::assert_fastpath_parity(
+                                program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
+                        }
+#endif
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);

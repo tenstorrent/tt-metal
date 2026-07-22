@@ -43,10 +43,14 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t chunk_M_tiles,
     uint32_t m_tiles,
     bool read_x_at_offset,
+    bool x_is_row_major,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu);
+        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu,
+    const std::optional<ttnn::Tensor>& gate_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& up_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
 
 }  // namespace ttnn::prim
