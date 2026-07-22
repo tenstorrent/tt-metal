@@ -43,6 +43,29 @@ channels. It must not be reduced blind; it needs fabric-team validation across a
 - DONE: fabric-MUX pybind + build (this branch); codegen RS-line-MUX candidate
   (`tt-ccl-codegen/docs/pending_upstream/rs_line_mux_candidate.patch`) applies + builds; correctness
   clean on the non-mux path (all_gather 10/10, RS+AR 20/20 PASS).
-- REMAINING: option 1 or 2 above (fabric-team), then re-probe `reduce_scatter --fleet-tuple bh:8
-  --num-links 1 --num-workers 2` — expect it to fit under 25600 B and PCC-pass, then measure the mux
-  perf and extend to all_gather line-MUX to beat all_reduce.
+- REMAINING: see below — the mux path has TWO independent silicon bugs.
+
+## Update (2026-07-22): per-axis probing found TWO blockers, and a concrete lever for #1
+
+Probing num_workers=2 per cluster-axis on this build:
+- **ring_size 4 (axis 1): the 30816 ACTIVE_ETH overflow** (config, this doc).
+- **ring_size 2 (axis 0): the Line-MUX BUILDS then HANGS at exec** — an eth-sync deadlock in the
+  codegen num_workers=2 mux kernel (single-worker RS passes the identical config). Separate bug, lives
+  in the codegen (`reduce_scatter_line_writer.cpp` / mux handshake), not tt-metal.
+
+**Concrete tt-metal lever for blocker #1 (the design-swarm's recommendation):** the router overflows
+because it is built *single-erisc*. `tt_metal/fabric/erisc_datamover_builder.cpp` `is_fabric_two_erisc_enabled()`
+(~lines 100-110) already splits senders→erisc0 / receivers→erisc1 for the DISABLED path the winning ops
+use (each half fits under 25600). If the mux bring-up lands single-erisc, gate the split back on for it:
+
+```cpp
+// after computing tensix_extensions_enabled / single_erisc_dispatch:
+bool mux_mode = mc.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX;
+return arch_bh && (!tensix_extensions_enabled || mux_mode) && !single_erisc_dispatch;
+```
+This is byte-identical for every DISABLED (non-mux) bring-up — the all_gather/reduce_scatter wins are
+unaffected. **VERIFY FIRST on-device** whether the mux run's `get_fabric_tensix_config()` is actually
+`MUX` or `DISABLED`, and whether the split is already active — that decides between "no tt-metal change
+needed" and this gated edit. Then fix blocker #2 (Watcher-isolate the mux writer/reader eth-sync
+deadlock) before the path runs end-to-end. Full analysis:
+`tt-ccl-codegen/docs/pending_upstream/rs_line_mux_SILICON_BLOCKER.md`.
