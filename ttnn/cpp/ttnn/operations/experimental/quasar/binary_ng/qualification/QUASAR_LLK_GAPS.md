@@ -21,6 +21,7 @@ any Quasar cell that is not yet `✓`. Over time the WH and Quasar columns conve
 |---|---|
 | `✓` | Supported — present at all 3 layers with an explicit Quasar branch **and it compiles**. |
 | `✓*` | Supported **and sim-certified** on the QSR simulator (craq-sim). |
+| `✓!` | LLK primitive **compiles**, but the op is **runtime-wrong** end-to-end on the `binary_ng` DFB path (see Caveats). NOT a working claim. |
 | `bridge` | **Tier-1, cheap.** The Quasar ckernel **and** `SfpuType` slot already exist; only the layer-1 compute-API gate and/or the layer-2 `calculate_<op>` bridge is missing. |
 | `kernel` | **Tier-2, real LLK work.** No Quasar `_calculate_<op>_` ckernel and/or no `SfpuType` slot. |
 | `broken` | The Quasar bridge/ckernel EXISTS but **fails to JIT-compile** — a bug to fix, not a port. |
@@ -67,10 +68,10 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 ### Arithmetic
 | Op | Route | WH | Quasar | Evidence / to-close |
 |---|---|:--:|---|---|
-| `add` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `✓` int32 · `✓` fp32 | int32 `ckernel_sfpu_add.h`; fp32 `add_binary_tile` (Quasar branch) + `calculate_sfpu_binary` ADD |
-| `sub` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓` bf16 · `kernel` int32 · `✓` fp32 | fp32 `sub_binary_tile` (Quasar branch) + `calculate_sfpu_binary` SUB; int32 `sub_int_sfpu.h` WH-only |
-| `mul` | FPU (bf16) · SFPU | ✓ | `✓*` bf16 · `✓` fp32 · `✓` int32 | `mul_binary_tile` (Quasar branch) + `ckernel_sfpu_mul_int32.h` |
-| `div` | SFPU | ✓ | `✓*` bf16/fp32 · `kernel` int32 | `div_binary_tile` ✓; `div_int32_tile` unported |
+| `add` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `✓!` int32 · `✓*` fp32 | bf16/fp32 sim-certified via `binary_ng`'s no-bcast AND tensor-scalar suites; int32 `ckernel_sfpu_add.h` compiles but is silent-wrong on the DFB compute path — see Caveats |
+| `sub` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `kernel` int32 · `✓*` fp32 | bf16/fp32 sim-certified via `binary_ng`'s no-bcast AND tensor-scalar suites; fp32 `sub_binary_tile` (Quasar branch) + `calculate_sfpu_binary` SUB; int32 `sub_int_sfpu.h` WH-only |
+| `mul` | FPU (bf16) · SFPU | ✓ | `✓*` bf16 · `✓*` fp32 · `✓!` int32 | bf16/fp32 sim-certified via `binary_ng`'s no-bcast AND tensor-scalar suites; `mul_binary_tile` (Quasar branch); int32 `ckernel_sfpu_mul_int32.h` compiles but is silent-wrong on the DFB compute path — see Caveats |
+| `div` | SFPU | ✓ | `✓*` bf16/fp32 · `kernel` int32 | bf16/fp32 also sim-certified via the tensor-scalar suite; `div_binary_tile` ✓; `div_int32_tile` unported |
 | `rsub` | FPU+`NEG` (bf16) · SFPU | ✓ | `kernel` | bf16 blocked by `NEG` (Tier-2 activation); fp32/int SFPU rsub gated |
 
 ### Comparison
@@ -83,8 +84,8 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 ### Integer arithmetic (int32; uint16/uint32 → `format`)
 | Op | Route | WH | Quasar | Evidence / to-close |
 |---|---|:--:|---|---|
-| `add_int` | SFPU | ✓ | `✓` | `ckernel_sfpu_add.h` |
-| `mul_int` | SFPU | ✓ | `✓` | `ckernel_sfpu_mul_int32.h` |
+| `add_int` | SFPU | ✓ | `✓!` | `ckernel_sfpu_add.h` compiles but is silent-wrong on the DFB — see Caveats |
+| `mul_int` | SFPU | ✓ | `✓!` | `ckernel_sfpu_mul_int32.h` compiles but is silent-wrong on the DFB — see Caveats |
 | `sub_int` / `rsub_int` | SFPU | ✓ | `kernel` | WH-only header |
 | `gcd` / `lcm` | SFPU | ✓ | `kernel` | |
 | `div_int` / `floor_div` / `trunc_div` | SFPU | ✓ | `kernel` | `div_int32_sfpu.h`, `div_int32_floor.h` |
@@ -275,8 +276,10 @@ All three dimensions lower to the same Quasar LLK path — the MOVB2D srcB→des
 5. Everything else as op/model demand arises.
 
 **Already done — no LLK work:** `relu` (ResNet50), `silu` (Llama SwiGLU), `sigmoid`, `tanh`, `square`, `gelu`
-— all sim-certified — plus the arithmetic/`where`/compare-to-zero core and single-operand subtile
-broadcast `unary_bcast` SCALAR/ROW/COL (Table 3), sim-certified through `binary_ng` itself.
+— all sim-certified — plus the arithmetic/`where`/compare-to-zero core (bf16/fp32 add/sub/mul/div now
+sim-certified through both `binary_ng`'s tensor-tensor no-broadcast path AND its tensor-scalar path, the
+latter via a writer-filled RHS tile) and single-operand subtile broadcast `unary_bcast` SCALAR/ROW/COL
+(Table 3), sim-certified through `binary_ng` itself.
 
 ## Closing a gap — the pattern
 
@@ -313,10 +316,18 @@ broadcast `unary_bcast` SCALAR/ROW/COL (Table 3), sim-certified through `binary_
 
 ## Caveats
 
-- Quasar cells are static compile-availability, except `✓*` (run on the QSR sim).
+- Quasar cells are static compile-availability, except `✓*` (sim-certified correct) and `✓!` (sim-observed runtime-wrong).
 - **Two `tt_llk_quasar` trees** — classify against `tt_metal/tt-llk/tt_llk_quasar/` (build path), not
   `tt_metal/third_party/tt_llk/tt_llk_quasar/` (IDE-only, staler-but-richer → false positives).
 - `format` cells (block-float / uint16 / uint32 / int32) may be intentional Quasar arch choices (MX) —
   confirm with the arch team before porting.
+- **`add`/`mul` int32 are the `✓!` exception:** both compile and run on `binary_ng`'s Quasar DFB path, but
+  return wrong output at runtime (all-zero tiles on the tensor-scalar path; garbage on the tensor-tensor
+  no-broadcast path) — a compute-path bug (suspected locus: the op factory's `set_unpack_mode`, which only
+  emits an SFPU unpack mode for `Float32`, never `Int32`), not a compile or LLK-primitive gap. The
+  tensor-**scalar** AND tensor-**tensor** no-broadcast gates both exclude int32 (→ descriptor, a clean
+  "unsupported on Quasar" throw), so int32 no longer reaches the broken DFB path; the underlying compute bug
+  is unfixed (int32 would be wrong if run there) (see `../QUASAR_PARITY_GAPS.md` §2 and §7). Do not read the
+  `✓!` cells as a working claim.
 - Keep current on tt-llk / craq-sim pin bumps: re-run `qualify_quasar_binary.py --coverage` and reconcile.
   The LLK team's `quasar-llk.yml` on the QSR sim is the upstream source of truth.

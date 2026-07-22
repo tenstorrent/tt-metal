@@ -219,3 +219,44 @@ def _run_mixed(
         ), "output is ~constant while the golden varies (wrong tile pairing?)"
     assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
     return out_tt
+
+
+def _run_scalar(device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=None, post_act=None, pcc=None):
+    # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
+    # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
+    # guard as _run. On Quasar the DFB path is the only path that can run (the descriptor throws as
+    # unsupported), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
+    # factory -- the same implicit v2-routing check the no-broadcast / subtile-broadcast suites rely on
+    # (there is no explicit DFB-path assertion helper in this module). The scalar is passed as the second
+    # positional arg, which the nanobind binding routes to the tensor-scalar overload.
+    torch.manual_seed(0)
+    ttnn_fn = _OPS[op_name][0]()
+    torch_fn = _OPS[op_name][1]
+
+    a = torch.randn(shape, dtype=torch.float32)
+
+    # Golden: an lhs (pre) activation applies to A before the binary op; a post activation applies to the
+    # result. The Python scalar RHS is used as-is.
+    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
+    golden = torch_fn(a_golden, scalar)
+    if post_act is not None:
+        golden = _ACT_GOLDEN[post_act](golden)
+
+    a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+
+    kwargs = {"memory_config": mem_config, "dtype": dtype_tt}
+    if post_act is not None:
+        kwargs["activations"] = _act(post_act)
+    if lhs_act is not None:
+        kwargs["input_tensor_a_activations"] = _act(lhs_act)
+
+    out_tt = ttnn_fn(a_tt, scalar, **kwargs)
+    out_torch = ttnn.to_torch(out_tt)
+
+    # Degenerate-constant guard (as in _run): a varying golden must map to a varying output (catches a
+    # broken scalar fill that leaves the RHS tile zero -> out == a, or an incoherent fill -> out ~ 0).
+    golden_std = golden.float().std()
+    if golden_std > 0.1:
+        assert out_torch.float().std() > 0.1 * golden_std, "output is ~constant while the golden varies (scalar fill?)"
+    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
+    return out_tt

@@ -98,6 +98,19 @@ constexpr const char* kComputeFpuDfb =
 constexpr const char* kComputeSfpuDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
     "eltwise_binary_sfpu_no_bcast_dfb.cpp";
+// Tensor-SCALAR DFB kernels. The writer becomes the producer of the RHS input DFB (in1) and fills it
+// once with the packed scalar (coherent uncached-L1-alias store on Quasar DM cores); the reader
+// produces in0 only; the compute waits on in1 once and reuses tile index 0. FPU handles bf16
+// add/subtract; the SFPU compute file is added in a later task (referenced but not yet exercised).
+constexpr const char* kReaderScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/reader_scalar_op_dfb.cpp";
+constexpr const char* kWriterScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/writer_scalar_dfb.cpp";
+constexpr const char* kComputeFpuScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/eltwise_binary_scalar_dfb.cpp";
+constexpr const char* kComputeSfpuScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
+    "eltwise_binary_sfpu_scalar_dfb.cpp";  // added in a later task; only the FPU path runs here
 // Subtile-broadcast DFB kernels. The bcast reader delivers the partial tile (BCAST_LLK path, no fill);
 // the row-bcast compute expands it via unary_bcast<ROW> through the intermediate llk_post DFB.
 constexpr const char* kReaderBcastDfb =
@@ -332,21 +345,27 @@ ProgramArtifacts create_no_bcast_artifacts(
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
     Tensor& c) {
     const Tensor& a = tensor_args.input_tensor_a;
+    // Tensor-scalar: no input_tensor_b. The writer fills the RHS DFB (in1) once from the packed scalar,
+    // so `b` is absent -- every b-derived value below is guarded on is_scalar (b_dtype is derived, the
+    // in1 DFB is a 1-tile non-borrowed ring, and the reader drops its in1 producer/binding).
+    const bool is_scalar = !tensor_args.input_tensor_b.has_value();
     TT_FATAL(
-        tensor_args.input_tensor_b.has_value(),
-        "binary_ng Metal 2.0 no-bcast factory requires a second input tensor (tensor-scalar routes to the "
-        "descriptor)");
-    const Tensor& b = *tensor_args.input_tensor_b;
+        is_scalar || tensor_args.input_tensor_b.has_value(),
+        "binary_ng Metal 2.0 no-bcast factory requires a second input tensor or a scalar");
+    TT_FATAL(
+        !is_scalar || op.scalar.has_value(),
+        "binary_ng Metal 2.0 no-bcast factory tensor-scalar path requires a scalar value");
+    const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
 
     const bool is_sfpu = op.is_sfpu;
     const DataType input_dtype = op.input_dtype;
     const auto op_type = op.binary_op_type;
 
     Buffer* a_buffer = a.buffer();
-    Buffer* b_buffer = b.buffer();
+    Buffer* b_buffer = is_scalar ? nullptr : b_opt->buffer();
     Buffer* c_buffer = c.buffer();
     TT_FATAL(
-        a_buffer != nullptr && b_buffer != nullptr && c_buffer != nullptr,
+        a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
         "binary_ng Metal 2.0 no-bcast factory requires allocated device buffers");
 
     // --- Borrow vs NoC routing. The borrow facts come from the shared get_shard_volumes helper -- the
@@ -366,8 +385,11 @@ ProgramArtifacts create_no_bcast_artifacts(
     // on them), so enabling per-operand borrow for broadcast later is a one-line change here. The all-NoC
     // path is correct for any layout mix; borrowing is a throughput optimization for the fully co-resident
     // case (a block-sharded residual add). ---
-    const auto shard_volumes =
-        get_shard_volumes(a.tensor_spec(), std::optional<tt::tt_metal::TensorSpec>{b.tensor_spec()}, c.tensor_spec());
+    const auto shard_volumes = get_shard_volumes(
+        a.tensor_spec(),
+        is_scalar ? std::optional<tt::tt_metal::TensorSpec>{}
+                  : std::optional<tt::tt_metal::TensorSpec>{b_opt->tensor_spec()},
+        c.tensor_spec());
     const bool native = shard_volumes.has_value();
     const bool a_sharded = native && shard_volumes->a_shard_volume.has_value();
     const bool b_sharded = native && shard_volumes->b_shard_volume.has_value();
@@ -383,15 +405,19 @@ ProgramArtifacts create_no_bcast_artifacts(
     // linear page-id walk. The reader/writer read it as a #define.
     const bool has_sharding = borrow_shards;
 
-    // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). b is a tensor here. ---
+    // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
+    // `b`, so b_dtype is derived exactly as the descriptor does (binary_ng_program_factory.cpp): the
+    // scalar is packed as bf16 for block-float a, else the sfpu path keeps a_dtype, else bf16. b_tile
+    // borrows a's tile geometry (a single bf16 scalar tile). ---
     const DataType a_dtype = a.dtype();
-    const DataType b_dtype = b.dtype();
+    const DataType b_dtype =
+        is_scalar ? ((op.is_sfpu && !is_block_float(a_dtype)) ? a_dtype : DataType::BFLOAT16) : b_opt->dtype();
     const DataType c_dtype = c.dtype();
     const tt::DataFormat a_df = datatype_to_dataformat_converter(a_dtype);
     const tt::DataFormat b_df = datatype_to_dataformat_converter(b_dtype);
     const tt::DataFormat c_df = datatype_to_dataformat_converter(c_dtype);
     const tt::tt_metal::Tile a_tile = a.tensor_spec().tile();
-    const tt::tt_metal::Tile b_tile = b.tensor_spec().tile();
+    const tt::tt_metal::Tile b_tile = is_scalar ? a_tile : b_opt->tensor_spec().tile();
     const tt::tt_metal::Tile c_tile = c.tensor_spec().tile();
     const uint32_t a_tile_bytes = static_cast<uint32_t>(a_tile.get_tile_size(a_df));
     const uint32_t b_tile_bytes = static_cast<uint32_t>(b_tile.get_tile_size(b_df));
@@ -508,7 +534,16 @@ ProgramArtifacts create_no_bcast_artifacts(
     // no-broadcast (NONE) triple, the ROW subtile-broadcast reader/compute for ROW_A / ROW_B, the COL
     // subtile-broadcast reader/compute for COL_A / COL_B, and the SCALAR subtile-broadcast reader/compute
     // for SCALAR_A / SCALAR_B.
-    const DfbKernelSources kernel_sources = select_dfb_kernel_sources(op.subtile_broadcast_type, is_sfpu);
+    // Tensor-scalar selects the in0-only reader + scalar-fill writer + wait-once/reuse-0 compute (FPU
+    // for bf16 add/subtract; the SFPU scalar compute file is added in a later task). Tensor-tensor
+    // dispatches per subtile-broadcast type as before.
+    const DfbKernelSources kernel_sources =
+        is_scalar ? DfbKernelSources{
+                        .reader = kReaderScalarDfb,
+                        .writer = kWriterScalarDfb,
+                        .compute = is_sfpu ? kComputeSfpuScalarDfb : kComputeFpuScalarDfb,
+                    }
+                  : select_dfb_kernel_sources(op.subtile_broadcast_type, is_sfpu);
 
     // bcast_lhs / bcast_rhs mark which operand owns the compute unary_bcast -> llk_post intermediate
     // (c_5 / c_6). Single-operand: the broadcast operand itself (ROW_A / COL_A / SCALAR_A -> a; ROW_B /
@@ -548,7 +583,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
     // Float16_b intermediate on the FPU path, else the operand's own format. ---
     const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : 2u;
-    const uint32_t b_entries = b_borrowed ? full_shard_tiles(b, *b.shard_spec()) : 2u;
+    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or a
+    // 2-entry NoC ring.
+    const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? full_shard_tiles(*b_opt, *b_opt->shard_spec()) : 2u);
     const uint32_t c_entries = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : 2u;
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -707,15 +744,21 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (!a_borrowed) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_A, "in0"});
     }
-    if (!b_borrowed) {
+    // Scalar: the reader produces in0 only; in1 is produced by the writer (the scalar fill), so it gets
+    // neither a "in1" DFB producer binding nor a T_B tensor binding.
+    if (!is_scalar && !b_borrowed) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_B, "in1"});
+    }
+    m2::Group<m2::DFBBinding> reader_dfb_bindings = {m2::ProducerOf(IN0, "in0")};
+    if (!is_scalar) {
+        reader_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
     }
     m2::KernelSpec reader_spec{
         .unique_id = READER,
         .source = std::filesystem::path(kernel_sources.reader),
         .num_threads = 1,
         .compiler_options = {.defines = reader_defines_tbl},
-        .dfb_bindings = {m2::ProducerOf(IN0, "in0"), m2::ProducerOf(IN1, "in1")},
+        .dfb_bindings = reader_dfb_bindings,
         .tensor_bindings = reader_tensor_bindings,
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -745,16 +788,26 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (!c_borrowed) {
         writer_tensor_bindings.push_back(m2::TensorBinding{T_C, "out"});
     }
+    // Scalar: the writer is ALSO the producer of the in1 DFB (it fills the single scalar tile), so it
+    // gets a "in1" producer binding and a leading "packed_scalar" runtime arg. Tensor-tensor keeps the
+    // out-drain-only writer unchanged.
+    m2::Group<m2::DFBBinding> writer_dfb_bindings = {m2::ConsumerOf(OUT, "out")};
+    if (is_scalar) {
+        writer_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
+    }
+    m2::Group<std::string> writer_rt_names = {
+        "start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"};
+    if (is_scalar) {
+        writer_rt_names.insert(writer_rt_names.begin(), "packed_scalar");
+    }
     m2::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path(kernel_sources.writer),
         .num_threads = 1,
         .compiler_options = {.defines = writer_defines_tbl},
-        .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
+        .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {"start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"}},
+        .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
         .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
@@ -830,10 +883,15 @@ ProgramArtifacts create_no_bcast_artifacts(
     // (no dummy args). ---
     const int out_rank = c.logical_shape().rank();
     const uint32_t aND = extract_nD_dims(a, out_rank);
-    const uint32_t bND = extract_nD_dims(b, out_rank);
+    // Scalar has no `b`: its dims are all 1 so every b stride below collapses to 0 (unread by the
+    // scalar reader, which drops the *_b args, but the reader arg schema still carries them).
+    const uint32_t bND = is_scalar ? 1u : extract_nD_dims(*b_opt, out_rank);
     const uint32_t cND = extract_nD_dims(c, out_rank);
     const auto [aD, aN, aC, aHt, aWt] = get_shape_dims(a);
-    const auto [bD, bN, bC, bHt, bWt] = get_shape_dims(b);
+    uint32_t bD = 1, bN = 1, bC = 1, bHt = 1, bWt = 1;
+    if (!is_scalar) {
+        std::tie(bD, bN, bC, bHt, bWt) = get_shape_dims(*b_opt);
+    }
     const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(c);
 
     // a/b input strides (the (dim>1) gate zeroes a stride for a unit dim). Same on every core.
@@ -891,6 +949,10 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t isclose_rtol_bits = std::bit_cast<uint32_t>(op.rtol);
     const uint32_t isclose_atol_bits = std::bit_cast<uint32_t>(op.atol);
 
+    // Scalar packed to the in1 data format for the writer's one-time fill (mirrors the descriptor
+    // scalar packing). Same value on every core. Quant never reaches this factory (gated out).
+    const uint32_t packed_scalar = is_scalar ? pack_scalar_runtime_arg(*op.scalar, a.dtype(), /*is_quant*/ false) : 0u;
+
     std::set<CoreRange> target_ranges;
     uint32_t start_tile_id = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
@@ -943,6 +1005,9 @@ ProgramArtifacts create_no_bcast_artifacts(
         reader_args["c_stride_b"][node] = c_stride_b;
         reader_args["src_num_tiles_b"][node] = b_num_tiles;
 
+        if (is_scalar) {
+            writer_args["packed_scalar"][node] = packed_scalar;
+        }
         writer_args["start_tile_id"][node] = c_start_id;
         writer_args["dst_num_tiles"][node] = c_num_tiles_core;
         writer_args["dst_shard_width"][node] = c_current_shard_width;
@@ -979,14 +1044,19 @@ ProgramArtifacts create_no_bcast_artifacts(
         .target_nodes = target_nodes,
     };
 
+    // Scalar has no `b` tensor, so it declares only T_A / T_C (the in1 DFB is writer-filled, not
+    // backed by a TensorParameter).
+    m2::Group<m2::TensorParameter> tensor_params = {{.unique_id = T_A, .spec = a.tensor_spec()}};
+    if (!is_scalar) {
+        tensor_params.push_back({.unique_id = T_B, .spec = b_opt->tensor_spec()});
+    }
+    tensor_params.push_back({.unique_id = T_C, .spec = c.tensor_spec()});
+
     m2::ProgramSpec spec{
         .name = "binary_ng_metal_v2_no_bcast",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = dfbs,
-        .tensor_parameters =
-            {{.unique_id = T_A, .spec = a.tensor_spec()},
-             {.unique_id = T_B, .spec = b.tensor_spec()},
-             {.unique_id = T_C, .spec = c.tensor_spec()}},
+        .tensor_parameters = tensor_params,
         .work_units = {wu},
     };
 
@@ -999,7 +1069,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     // Bind each TensorParameter to its MeshTensor. For in-place add_ (a aliases c) both bindings
     // resolve to the same MeshTensor; the borrowed DFBs alias the same shard (permitted).
     run_params.tensor_args.emplace(T_A, m2::ProgramRunArgs::TensorArgument{a.mesh_tensor()});
-    run_params.tensor_args.emplace(T_B, m2::ProgramRunArgs::TensorArgument{b.mesh_tensor()});
+    if (!is_scalar) {
+        run_params.tensor_args.emplace(T_B, m2::ProgramRunArgs::TensorArgument{b_opt->mesh_tensor()});
+    }
     run_params.tensor_args.emplace(T_C, m2::ProgramRunArgs::TensorArgument{c.mesh_tensor()});
 
     return ProgramArtifacts{
