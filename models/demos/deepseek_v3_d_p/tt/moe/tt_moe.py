@@ -468,8 +468,6 @@ class TtMoe(LightweightModule):
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
-        # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
-
         # Padding awareness is only validated/safe for RIGHT padding. With right padding,
         # real tokens have the lowest indices, so they are packed first in every expert
         # region and stay within the shortened FFN/dispatch bound. For left padding the
@@ -501,13 +499,12 @@ class TtMoe(LightweightModule):
             padding_config=padding_config,
         )
 
-        signpost(header="moe_gate_calculate_dispatch_offsets")
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
         )
-        signpost(header="moe_gate_calculate_dispatch_offsets")
+
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates

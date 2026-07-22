@@ -99,7 +99,6 @@ This is a TTNN wrapper around two device operations executed in sequence:
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -191,7 +190,6 @@ class TtMoERoutingSetup(LightweightModule):
             expert_histograms: Per-device token count per expert (before cross-chip aggregation).
                 Shape per device: (num_routed_experts,), uint32
         """
-        signpost(header="MoERoutingSetup")
 
         if isinstance(ttnn_top_k_experts_indices, torch.Tensor):
             # Standalone/test path: build the same UINT16, TILE, L1 interleaved tensor the gate emits.
