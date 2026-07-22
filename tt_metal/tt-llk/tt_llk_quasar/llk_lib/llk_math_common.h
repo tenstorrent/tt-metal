@@ -161,10 +161,12 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
  * (math_override_saved_dest_format). When not DataFormat::Invalid, the ALU/moves use this format instead of the
  * saved per-bank dest format (the format the last compute op wrote to DEST); DataFormat::Invalid disables the
  * override. Example: used by the 32-bit transpose (passes Float32) so MOVD2B/MOVB2D read DEST via the current 32b path.
+ * Required (no default): every caller must decide explicitly — pass DataFormat::Invalid for compute paths that must
+ * keep the saved/implied DEST format, so a new DEST-reading MOV path cannot silently omit the override and
+ * reproduce the stale-format hi16 corruption.
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
-inline void _configure_alu_formats_(
-    DataFormat srcA_format, DataFormat srcB_format, bool en_int32_dest_format, DataFormat dstacc_override_fmt = DataFormat::Invalid)
+inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format, bool en_int32_dest_format, DataFormat dstacc_override_fmt)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
 
@@ -230,7 +232,8 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
     }
 
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format);
+    // Regular compute path: keep the saved/implied DEST format — no dest-format override.
+    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
 
     data_format_config_set = DataFormatConfigSet::DEFAULT;
 }
