@@ -17,6 +17,7 @@
     tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py::test_run_tilize_with_val_padding_test
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
     tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_height_sharded
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_rank_gt_4_uses_output_tensor_end
     tests/ttnn/unit_tests/operations/data_movement/test_pad.py::test_pad
     tests/ttnn/unit_tests/operations/data_movement/test_fill_pad.py::test_fill_pad_complex_sharding
     tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
