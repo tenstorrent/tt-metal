@@ -41,8 +41,29 @@ def _target_met(metric: dict[str, Any]) -> bool:
     return current >= target
 
 
+def _band_decision(state: dict[str, Any]) -> ExitDecision | None:
+    """Band-driven stop (plan §3.3), opt-in via ``state['target_band']``. Consumes the
+    perf_target status: IN_BAND -> DONE (reached the achievable ceiling); BELOW_BAND /
+    ABOVE_BAND -> continue (ladder keeps escalating; ABOVE_BAND additionally flags active_bytes/
+    floor as suspect, asserted upstream — never a stop). UNKNOWN falls through to the existing
+    policy. Returns None when the band is not enabled or not decisive, so default behaviour is
+    unchanged."""
+    if not state.get("target_band"):
+        return None
+    status = str(state.get("perf_status") or "").upper()
+    if status == "IN_BAND":
+        return "DONE"
+    if status in ("BELOW_BAND", "ABOVE_BAND"):
+        return "continue"
+    return None
+
+
 def check_exit(state: dict[str, Any]) -> ExitDecision:
     """Decide continue / DONE / STOPPED from checkpoint counters + metric block."""
+    band = _band_decision(state)
+    if band is not None:
+        return band
+
     # 1. Goal metric reached (per direction).
     if _target_met(state.get("metric") or {}):
         return "DONE"

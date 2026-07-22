@@ -11000,6 +11000,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "agent session that climbs the whole ladder). Use 1 for a single pass, raise for models with "
         "lots of headroom. The deterministic gate can still stop earlier via can_stop.",
     )
+    popt.add_argument(
+        "--target-band",
+        action="store_true",
+        dest="target_band",
+        help="stop when the DRAM-bandwidth target band is reached (IN_BAND -> can_stop), so a run ends "
+        "at min(band reached, --max-rounds). Full-model: tok/s ceiling from active_bytes; per-module: "
+        "each module's own roofline floor. Off by default (termination unchanged).",
+    )
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")
     popt.add_argument(
         "--hitl",

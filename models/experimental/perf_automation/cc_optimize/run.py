@@ -237,6 +237,10 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     _seq = os.environ.get("TT_PERF_SEQ_LEN")
     if _seq:
         env["TT_PERF_SEQ_LEN"] = _seq
+    for _k in ("PERF_MCP_TARGET_BAND", "TT_PERF_MODULE_LEVEL", "TT_PERF_MESH_COLS"):
+        _v = os.environ.get(_k)
+        if _v:
+            env[_k] = _v
     return {
         "mcpServers": {
             "perf-mcp": {

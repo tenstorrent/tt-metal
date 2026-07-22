@@ -32,7 +32,7 @@ _PKG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PKG.parent.parent.parent))  # repo root, so `models...` imports resolve
 sys.path.insert(0, str(_PKG))  # the perf_automation dir, so `agent` imports resolve
 
-from agent import gitio, promote, roofline, router  # noqa: E402
+from agent import gitio, perf_target, promote, roofline, router  # noqa: E402
 from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
@@ -2154,6 +2154,53 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     }
 
 
+def _reliable_forward_ms(dev: float) -> float:
+    """Prefer the robust trace+1cq per-token (full-pipeline 1cq baseline) over the noisy per-op
+    device_ms for band scoring; fall back to device_ms when no trace number is available."""
+    try:
+        b = json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text())
+        ms = float(b.get("full_pipeline_ms") or 0.0)
+        if ms > 0:
+            return ms
+    except Exception:  # noqa: BLE001
+        pass
+    return dev
+
+
+def _load_perf_target_inputs() -> dict | None:
+    try:
+        return json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _perf_target_status(rep: dict, dev: float) -> dict | None:
+    """Opt-in DRAM-bandwidth band status for the target-driven stop (PERF_MCP_TARGET_BAND=1).
+
+    Full-model uses the config-derived active_bytes ceiling when perf_target_inputs.json is
+    present, else the roofline aggregate floor; per-module always scores that module's OWN floor,
+    so the target is recomputed per module and never shared. Scored on trace+1cq, not the noisy
+    device_ms. Fail-open: returns None on any issue so the deterministic ladder stop is untouched."""
+    if os.environ.get("PERF_MCP_TARGET_BAND") != "1":
+        return None
+    try:
+        measured_ms = _reliable_forward_ms(dev)
+        module_level = os.environ.get("TT_PERF_MODULE_LEVEL") == "1"
+        target = None
+        if not module_level:
+            mf = _load_perf_target_inputs()
+            if mf:
+                tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
+                target = perf_target.compute_target(mf, _ENV, tp_degree=tp)
+        if target is None:
+            target = perf_target.target_from_floor_ms(rep.get("modeled_floor_ms"))
+        s = perf_target.score(target, measured_ms)
+        s["scope"] = "module" if module_level else "model"
+        return s
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
@@ -2210,6 +2257,9 @@ def termination_check() -> dict:
         blocking.append(decode_block)
     blocking.sort(key=lambda b: -(b.get("gap_ms") or 0.0))
     can_stop = not blocking
+    pt_status = _perf_target_status(rep, dev)
+    if pt_status and pt_status.get("status") == "IN_BAND":
+        can_stop = True
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
     next_target = (
@@ -2234,6 +2284,7 @@ def termination_check() -> dict:
         "at_floor": at_floor,
         "residual_gap_ms": rep.get("residual_gap_ms"),
         "material_gap_threshold_ms": round(material, 4),
+        "perf_target": pt_status,
         "next_target": next_target,
         "blocking_ops": blocking,
         "cleared_ops": cleared,

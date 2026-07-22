@@ -483,6 +483,8 @@ def cmd_optimize(args) -> int:
     if pcc_test:
         print(f"  pcc gate : {pcc_test} (perf test auto-generated from it)")
     _derive_topology_env(args, model_dir)
+    if getattr(args, "target_band", False):
+        os.environ["PERF_MCP_TARGET_BAND"] = "1"
     if engine == "cc":
         run_cc = _load_cc_runner(repo_root)
         if run_cc is None:
