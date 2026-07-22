@@ -386,7 +386,11 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             layers_per_block=2,
             norm_num_groups=32,
         )
-        akl.load_state_dict({k: v for k, v in vae_sd.items() if not k.startswith("bn.")}, strict=False)
+        # strict=False so the checkpoint-only bn.* keys don't error; but a real key-map drift that
+        # leaves akl params at random init must NOT pass silently -> assert nothing else is missing.
+        incompat = akl.load_state_dict({k: v for k, v in vae_sd.items() if not k.startswith("bn.")}, strict=False)
+        leftover_missing = [k for k in incompat.missing_keys if not k.startswith("bn.")]
+        assert not leftover_missing, f"VAE weights not loaded (key-map drift?): {leftover_missing[:8]}"
         akl = akl.to(torch.bfloat16).eval()
         vae = Ideogram4VAEDecoder.from_torch(
             akl,
@@ -606,6 +610,12 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             _dq_log.warning("Ideogram4 ignores negative_prompts (its unconditional net takes no text)")
         height = height if height is not None else self._config.height
         width = width if width is not None else self._config.width
+
+        # The latent grid is (height, width) // (patch*ae); a non-divisible size would silently
+        # floor (e.g. 513 -> a 512px image), so reject it up front with a clear error.
+        vae_patch = self.patch * self.ae  # 16
+        if height % vae_patch != 0 or width % vae_patch != 0:
+            raise ValueError(f"height and width must be multiples of {vae_patch} (patch*ae); got {height}x{width}")
 
         cfg = self.config
         dev = self.mesh_device
