@@ -488,6 +488,13 @@ void AttachBorrowedDFBBuffers(
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
+    // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec (the run-args
+    // schema lives on the spec). Legacy Programs configure runtime args via SetRuntimeArgs.
+    TT_FATAL(
+        program.impl().created_from_spec(),
+        "SetProgramRunArgs requires a Metal 2.0 Program. "
+        "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
+
     // Validate parameters against the schema (can be skipped for trusted inputs, e.g. cached-program
     // re-enqueue inner loops where the args have already been validated once).
     if (!skip_validation) {
@@ -778,6 +785,12 @@ void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunA
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();
+    // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
+    // would also fail the initialized-check below, but this gives the accurate reason.)
+    TT_FATAL(
+        program_impl.created_from_spec(),
+        "UpdateTensorArgs requires a Metal 2.0 Program. "
+        "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
     TT_FATAL(
         program_impl.program_run_args_initialized(),
         "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
@@ -1140,6 +1153,12 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();
+    // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
+    // would also fail the initialized-check below, but this gives the accurate reason.)
+    TT_FATAL(
+        program_impl.created_from_spec(),
+        "UpdateProgramRunArgs requires a Metal 2.0 Program. "
+        "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
     TT_FATAL(
         program_impl.program_run_args_initialized(),
         "UpdateProgramRunArgs: CRTA buffer not allocated because SetProgramRunArgs has not been called. Call "

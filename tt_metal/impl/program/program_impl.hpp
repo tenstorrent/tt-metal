@@ -352,6 +352,7 @@ public:
     // Metal 2.0: Mark this Program as created from ProgramSpec
     // This enables legality checks against illegal mixing of Metal 2.0 idioms with legacy Programs.
     void mark_created_from_spec() { created_from_spec_ = true; }
+    bool created_from_spec() const { return created_from_spec_; }
 
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
