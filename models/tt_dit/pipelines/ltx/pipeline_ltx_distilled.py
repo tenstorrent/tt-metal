@@ -246,12 +246,19 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int,
         num_inference_steps: int = 2,
         stages: tuple[str, ...] = ("s1", "s2"),
+        ref_num_frames: int | None = None,
         capture_all: bool = False,
         in_capture_pass: bool = False,
         capture_traced: bool = False,
     ) -> None:
         """Compile both stages' programs. Both stages use variant 0 (distilled doesn't
         swap weights — only the sequence length differs); ``stages=("s1",)`` skips s2.
+
+        ``ref_num_frames`` (IC-LoRA) additionally warms the wider s1_ref/s2_ref trace family and the
+        multi-frame reference encoders; pass e.g. ``stages=("s1_ref","s2_ref")`` to warm ONLY the
+        reference family (a dedicated ``-ref`` worker — mirrors the deployed ``-kf`` keyframe worker —
+        which keeps the four-trace DRAM pressure down). The s*_ref traces are captured HERE in warmup
+        (``traced=capture_traced``), exactly like s1/s2, never deferred to gen#0.
 
         ``capture_all`` forces a COMPLETE warmup (all eager warmups + the s1/s2 denoise), overriding
         the iter_fast / prep_run skips, so the cold-start capture pass records every kernel the real
@@ -264,8 +271,11 @@ class LTXDistilledPipeline(LTXPipeline):
         cleanly, its small kernel set compiling in-window."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
-        valid = {"s1", "s2"}
+        valid = {"s1", "s2", "s1_ref", "s2_ref"}
         assert set(stages).issubset(valid), f"stages must be subset of {valid} (got {stages})"
+        assert ref_num_frames is not None or not any(
+            s.endswith("_ref") for s in stages
+        ), "ref trace stages (s1_ref/s2_ref) require ref_num_frames"
 
         # Keyframe worker bakes the tail-padded shape (one extra latent frame) so a last-frame keyframe
         # decodes interior; generate() pads + trims to match. Every keyframe gen — interior or last —
@@ -297,19 +307,37 @@ class LTXDistilledPipeline(LTXPipeline):
         t0 = time.time()
         logger.info(
             f"warmup (distilled 2-stage): {num_frames}f@{height}x{width}, "
-            f"stages={stages}, {warmup_steps} steps/stage"
+            f"stages={stages}, ref_num_frames={ref_num_frames}, {warmup_steps} steps/stage"
         )
+
+        # Every stage below runs the DiT denoise, so variant 0 must be resident before any of them.
+        # It isn't guaranteed on entry: this method warms the coresident-excluded encoders/VAE LAST,
+        # so an earlier warmup (or an encode) leaves the DiT evicted — a second warmup_buffers call
+        # (e.g. the IC-LoRA s1_ref/s2_ref family after a base s1/s2 pass) would otherwise denoise on
+        # evicted weights ("parameter has no data" at adaln_single). No-op when already resident.
+        self._prepare_transformer(0)
 
         # Zeros at the real shapes compile the shape-driven kernels; the encoder is warmed
         # separately at the end of this method (it coresident-evicts the DiT/VAE).
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
 
-        # Allocate both stages' persistent trace I/O before any capture so all held inputs sit
-        # below both traces' activation regions and neither replay overwrites the other's inputs.
+        # Allocate every requested stage's persistent trace I/O before any capture so all held inputs
+        # sit below every trace's activation region and no replay overwrites another's inputs. The
+        # s*_ref stages size their baked buffers to the COMBINED target+reference length.
         if self._traced:
-            self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
-            self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
+            if "s1" in stages:
+                self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
+            if "s2" in stages:
+                self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
+            if "s1_ref" in stages:
+                self._prealloc_trace_io(
+                    "s1_ref", num_frames=num_frames, height=height // 2, width=width // 2, ref_num_frames=ref_num_frames
+                )
+            if "s2_ref" in stages:
+                self._prealloc_trace_io(
+                    "s2_ref", num_frames=num_frames, height=height, width=width, ref_num_frames=ref_num_frames
+                )
 
         # Keyframe worker: capture the s1/s2 traces at the append-token sequence length by feeding dummy
         # conditioning at the configured anchor latents. Zeros compile the same pin/append kernels the
@@ -358,7 +386,35 @@ class LTXDistilledPipeline(LTXPipeline):
         elif skip_dit_warmup:
             logger.info("LTX_DIT_PREP_RUN: skipping stage-1 warmup denoise (gen#0 self-warms via prep_run)")
 
-        if "s2" in stages:
+        if "s1_ref" in stages and not skip_dit_warmup:
+            # IC-LoRA stage 1: capture the combined (target+reference) DiT trace at s1_ref. A zero
+            # looped reference clip fixes the wider sequence shape; captured HERE (traced=capture_traced,
+            # trace_key="s1_ref") exactly like s1 above — NOT deferred to gen#0 (deferred capture is the
+            # known blank-video bug). Reference rides ref_latent, never keyframe conds (mutually excl).
+            s1_h, s1_w = height // 2, width // 2
+            ref_lf, s1_lh, s1_lw = latent_grid(ref_num_frames, s1_h, s1_w)
+            dummy_ref_s1 = torch.zeros(1, self.in_channels, ref_lf, s1_lh, s1_lw)
+            logger.info(f"warmup stage 1 (ref): {s1_h}x{s1_w} +{ref_lf} ref frames, σ={s1_sigmas}")
+            with walltime.timed("warmup", "stage1_ref build"):
+                self._denoise_no_guidance(
+                    v_p,
+                    a_p,
+                    num_frames=num_frames,
+                    height=s1_h,
+                    width=s1_w,
+                    sigma_values=s1_sigmas,
+                    seed=0,
+                    ref_latent=dummy_ref_s1,
+                    traced=capture_traced,
+                    trace_key="s1_ref",
+                )
+        elif "s1_ref" in stages and skip_dit_warmup:
+            logger.info("LTX_DIT_PREP_RUN: skipping stage-1 (ref) warmup denoise (gen#0 self-warms via prep_run)")
+
+        # The eager upsample/VAE-decode/audio warmups below are shared by the target-only and the
+        # reference stage-2 families — decode/upsample never see reference — so run them if EITHER
+        # full-res stage is requested.
+        if "s2" in stages or "s2_ref" in stages:
             # Upsample runs between stage 1 and stage 2; compile its kernels here.
             if not iter_fast:
                 logger.info(f"warmup upsample → {height}x{width}")
@@ -366,15 +422,15 @@ class LTXDistilledPipeline(LTXPipeline):
 
             # Zero-dummies at the exact shapes the real stage-2 call uses.
             latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
-            dummy_v_init = torch.zeros(1, latent_frames * full_lh * full_lw, self.in_channels)
             als = AudioLatentShape.from_video_pixel_shape(
                 VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
             )
             dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
-            if skip_dit_warmup:
+            if "s2" in stages and skip_dit_warmup:
                 logger.info("LTX_DIT_PREP_RUN: skipping stage-2 warmup denoise (gen#0 self-warms via prep_run)")
-            else:
+            elif "s2" in stages:
+                dummy_v_init = torch.zeros(1, latent_frames * full_lh * full_lw, self.in_channels)
                 logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
                 # Cold kernel compile for the stage-2 denoise (full-res) — the other dominant
                 # warmup slice.
@@ -392,6 +448,33 @@ class LTXDistilledPipeline(LTXPipeline):
                         image_conds=_kf_conds(height, width),
                         traced=capture_traced,
                         trace_key="s2",
+                    )
+
+            if "s2_ref" in stages and skip_dit_warmup:
+                logger.info("LTX_DIT_PREP_RUN: skipping stage-2 (ref) warmup denoise (gen#0 self-warms via prep_run)")
+            elif "s2_ref" in stages:
+                # GRID-sized upsampled latent (target frames only), like the s2/keyframe path: _denoise
+                # allocates base_v at the combined video_N_real and writes this into the [:video_N_grid]
+                # target slice; the reference rows [T,T+R) are base zeros overwritten by the ref pin.
+                # Captured HERE at trace_key="s2_ref" exactly like s2 — never deferred to gen#0.
+                ref_lf = latent_grid(ref_num_frames, height, width)[0]
+                grid_v_init = torch.zeros(1, latent_frames * full_lh * full_lw, self.in_channels)
+                dummy_ref_full = torch.zeros(1, self.in_channels, ref_lf, full_lh, full_lw)
+                logger.info(f"warmup stage 2 (ref): {height}x{width} +{ref_lf} ref frames, σ={s2_sigmas}")
+                with walltime.timed("warmup", "stage2_ref build"):
+                    self._denoise_no_guidance(
+                        v_p,
+                        a_p,
+                        num_frames=num_frames,
+                        height=height,
+                        width=width,
+                        sigma_values=s2_sigmas,
+                        seed=0,
+                        initial_video_latent=grid_v_init,
+                        initial_audio_latent=dummy_a_init,
+                        ref_latent=dummy_ref_full,
+                        traced=capture_traced,
+                        trace_key="s2_ref",
                     )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
@@ -440,6 +523,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
 
+                # IC-LoRA reference encoders (multi-frame, both stage res) — warmed here in the same
+                # post-DiT ordering as the image encoder so their load evicts the DiT LAST (never
+                # mid-trace-capture). Built lazily by _build_ref_vae_encoders; skipped without ref.
+                if ref_num_frames is not None:
+                    logger.info(
+                        f"warmup reference encoder: {ref_num_frames}f @ {height // 2}x{width // 2} + {height}x{width}"
+                    )
+                    self._warmup_ref_encode(ref_num_frames, height, width)
+
             # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
             # already warmed before capture (above); dynamic_load / untraced warm last.
             if self.dynamic_load or not self._traced:
@@ -464,15 +556,23 @@ class LTXDistilledPipeline(LTXPipeline):
         sp_axis,
         video_N_grid=None,
         anchor_frames=None,
+        ref_latent_frames=0,
     ):
         """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat).
 
         ``anchor_frames`` (append-token) extends the video RoPE + cross-PE by one hw block per interior
         keyframe (carrying that frame's phase); ``video_N_grid`` is the pre-append length used for the
-        V→A mask so the audio never attends to the appended anchors."""
+        V→A mask so the audio never attends to the appended anchors.
+
+        ``ref_latent_frames`` (R, IC-LoRA) instead extends the video RoPE + cross-PE by the reference
+        block's OWN fresh 0-based grid of R frames (rows ``[T*hw, (T+R)*hw)``) — mutually exclusive with
+        ``anchor_frames``. Unlike anchors, the reference IS in audio's view, so the caller passes the
+        COMBINED length as ``video_N_grid`` here (that is what the V→A mask real region must be)."""
         if video_N_grid is None:
             video_N_grid = video_N_real
         anchor_frames = anchor_frames or []
+        # ref_num_frames drives the RoPE two-grid concat (rope_ltx); 0/None is an exact no-op.
+        ref_num_frames = ref_latent_frames or None
         built = state.tt_video_rope_cos is not None
         # Only the video RoPE/cross-PE carry each anchor's target-frame phase (prepare_*'s anchor_frames
         # extends the video temporal axis; audio positions and every mask are anchor-position-independent).
@@ -492,6 +592,7 @@ class LTXDistilledPipeline(LTXPipeline):
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
             anchor_frames=anchor_frames,
+            ref_num_frames=ref_num_frames,
         )
         if built:
             (v_xpe_cos, v_xpe_sin, *_a_xpe) = prepare_av_cross_pe(
@@ -504,6 +605,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
                 anchor_frames=anchor_frames,
+                ref_num_frames=ref_num_frames,
             )
             # traced=True => ttnn.copy into the baked buffer, not a fresh allocation the captured trace
             # would never reference.
@@ -538,6 +640,7 @@ class LTXDistilledPipeline(LTXPipeline):
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
             anchor_frames=anchor_frames,
+            ref_num_frames=ref_num_frames,
         )
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
@@ -583,21 +686,34 @@ class LTXDistilledPipeline(LTXPipeline):
         raw = os.environ.get("LTX_KF_TRACE_ANCHORS", "").strip()
         return [int(x) for x in raw.split(",") if x.strip()] if raw else []
 
-    def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
+    def _prealloc_trace_io(self, trace_key, *, num_frames, height, width, ref_num_frames=0):
         """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front,
         before any capture. A ttnn trace bakes absolute tensor addresses; activations allocated
         during capture are freed afterward and reused by the next capture, so a held input sitting
         in another trace's activation region is overwritten on replay. Allocating every held input
         for both stages first keeps them below both traces' activations. (The prompt is built
-        separately in _denoise.)"""
+        separately in _denoise.)
+
+        ``ref_num_frames`` (IC-LoRA) grows every trace-baked buffer to the COMBINED target+reference
+        length so an s1_ref/s2_ref trace family bakes the wider addresses its replay needs. It feeds
+        the SAME "extend video_N_real" machinery the keyframe anchors use; ``ref_num_frames=0`` is an
+        exact no-op (video_N_real / video_N_grid collapse to the target-only lengths). Reference and
+        keyframe anchors are mutually exclusive, so at most one extends the sequence."""
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         hw = latent_h * latent_w
-        video_N_grid = latent_frames * hw
+        grid = latent_frames * hw
         # A keyframe trace reserves one hw anchor block per configured keyframe (see _kf_trace_anchors);
         # the grid length stays the decode/strip length, and video_N_real carries the appended anchors.
         anchor_frames = [a for a in self._kf_trace_anchors() if 0 < a < latent_frames]
-        video_N_real = video_N_grid + len(anchor_frames) * hw
+        # IC-LoRA reference block: R frames appended after the grid (fresh 0-based grid, IN audio's view).
+        ref_latent_frames = latent_grid(ref_num_frames, height, width)[0] if ref_num_frames else 0
+        video_N_real = grid + len(anchor_frames) * hw + ref_latent_frames * hw
         video_N = self._sp_pad_len(video_N_real)
+        # V→A pad-mask real region (video_N_grid passed to _prepare_stage_statics): the target grid for a
+        # keyframe trace (anchors hidden from audio) but the COMBINED length for a reference trace (audio
+        # attends to the reference) — matches _denoise_no_guidance's video_kv_logical_n decouple so the
+        # baked mask replays correctly.
+        video_N_grid = grid + ref_latent_frames * hw if ref_latent_frames else grid
         als = AudioLatentShape.from_video_pixel_shape(
             VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
         )
@@ -607,7 +723,8 @@ class LTXDistilledPipeline(LTXPipeline):
 
         state = self._trace_state.setdefault(trace_key, LTXTransformerState())
         # Reserves the base grid shape by default; with LTX_KF_TRACE_ANCHORS the append-token anchor
-        # blocks are baked here so a keyframe worker's trace matches the extended gen sequence.
+        # blocks are baked here so a keyframe worker's trace matches the extended gen sequence, and with
+        # ref_num_frames the reference block is baked so an s*_ref trace matches the wider gen sequence.
         self._prepare_stage_statics(
             state,
             latent_frames=latent_frames,
@@ -620,6 +737,7 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
             anchor_frames=anchor_frames,
+            ref_latent_frames=ref_latent_frames,
         )
         # Reserve the latent buffers before capture so the trace bakes their addresses.
         if state.tt_video_lat is None:
@@ -666,15 +784,29 @@ class LTXDistilledPipeline(LTXPipeline):
         initial_audio_latent: torch.Tensor | None = None,
         # I2V conditioning: list of (latent_frame_index, cond_latent (1,C,1,lh,lw), strength).
         image_conds: list | None = None,
+        # IC-LoRA reference block: an encoded looped reference (1, C, R, lh, lw) appended clean AFTER
+        # the target grid. Mutually exclusive with the append-token keyframe path.
+        ref_latent: torch.Tensor | None = None,
+        ref_strength: float = 1.0,
         traced: bool = False,
         trace_key: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
-        # video_N_grid is the base (decode/strip) length; append-token grows the real length by one hw
-        # anchor block per interior keyframe. video_N_real is the extended logical count (== grid when
-        # not appending); video_N is its SP-padded total, sizing every device buffer.
-        video_N_grid = latent_frames * latent_h * latent_w
+        hw = latent_h * latent_w
+        # THREE lengths that COINCIDE for base/i2v/keyframe but SPLIT for reference:
+        #   * decode_N       — the return/decode strip: always TARGET-ONLY (latent_frames * hw).
+        #   * video_N_grid   — the target grid; == decode_N. In the append-token keyframe path this
+        #                      also drives the KV-logical / V→A pad-mask real region (anchors hidden).
+        #   * video_N_real   — the extended logical count fed to self-attn (Q): grid + anchor blocks
+        #                      (keyframe) OR grid + reference block (reference); video_N is its SP-pad.
+        # For REFERENCE the audio cross-attention MUST see the reference block, so its KV-logical and
+        # the V→A pad-mask real region become the COMBINED (target+reference) length, NOT video_N_grid
+        # — see video_kv_logical_n below (the Item 3 silent-correctness decouple).
+        decode_N = latent_frames * hw
+        video_N_grid = decode_N
+        ref_latent_frames = ref_latent.shape[2] if ref_latent is not None else 0
+        has_ref = ref_latent_frames > 0
         als = AudioLatentShape.from_video_pixel_shape(
             VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         )
@@ -683,29 +815,65 @@ class LTXDistilledPipeline(LTXPipeline):
         sp_factor = self.parallel_config.sequence_parallel.factor
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
-        image_cond = bool(image_conds)
         append_interior = os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True")
+        # Reference and keyframe append-token are mutually exclusive: reference rides in-place conds
+        # (never an anchor block) and is visible to audio, whereas anchors are appended and hidden.
+        assert not (
+            has_ref and append_interior
+        ), "reference conditioning and append-token keyframe conditioning are mutually exclusive"
+        needs_video_ts = getattr(self.transformer, "image_conditioning", False)
+        image_cond = bool(image_conds) or has_ref
         # AdaLN's 2-value timestep pair (in the step loop) carries one pinned noise level, so the
         # modulation uses a single shared strength; the per-token pin/denoise_mask below still honors
         # each frame's own strength. Uniform strengths (the server default) make this exact.
-        image_cond_strength = image_conds[0][2] if image_cond else 1.0
-        needs_video_ts = getattr(self.transformer, "image_conditioning", False)
-        i2v = self._build_i2v_conditioning(
-            image_conds,
-            needs_video_ts,
-            B,
-            video_N_grid,
-            latent_frames,
-            latent_h,
-            latent_w,
-            append_interior=append_interior,
-        )
+        if has_ref:
+            # Pin the R reference frames IN-PLACE at combined latent indices [T, T+R) at ref_strength
+            # (1.0 = kept clean forever); they ride the same conds / pin machinery as ordinary i2v
+            # conds. build_conditioning_tensors' in-place assert (0 <= idx < latent_frames) requires
+            # the COMBINED frame count, so build with combined_latent_frames and append_interior=False.
+            ref_conds = [
+                (latent_frames + i, ref_latent[:, :, i : i + 1, :, :], ref_strength) for i in range(ref_latent_frames)
+            ]
+            all_conds = (list(image_conds) if image_conds else []) + ref_conds
+            combined_latent_frames = latent_frames + ref_latent_frames
+            video_N_real_combined = combined_latent_frames * hw
+            image_cond_strength = all_conds[0][2]
+            i2v = self._build_i2v_conditioning(
+                all_conds,
+                needs_video_ts,
+                B,
+                video_N_real_combined,
+                combined_latent_frames,
+                latent_h,
+                latent_w,
+                append_interior=False,
+            )
+        else:
+            image_cond_strength = image_conds[0][2] if image_cond else 1.0
+            i2v = self._build_i2v_conditioning(
+                image_conds,
+                needs_video_ts,
+                B,
+                video_N_grid,
+                latent_frames,
+                latent_h,
+                latent_w,
+                append_interior=append_interior,
+            )
         video_N_real = i2v.video_N_real_ext
         video_N = self._sp_pad_len(video_N_real)
         anchor_frames = i2v.anchor_frame_indices
+        # THE DECOUPLE. video_kv_logical_n is audio cross-attention's logical view of the video K/V
+        # (and the V→A pad-mask real region). Keyframe: video_N_grid (anchors excluded from audio).
+        # Reference: the COMBINED length video_N_real (== video_N_real_combined) so audio attends to
+        # target+reference — matching the proven SOURCE, whose inner_step kv_logical_n == combined.
+        # Leaving this at video_N_grid in the reference path COMPILES, RUNS, and LOGS CLEAN while
+        # silently dropping the reference from audio cross-attention (the Item 3 trap).
+        video_kv_logical_n = video_N_real if has_ref else video_N_grid
 
         logger.info(
-            f"  shapes: vN={video_N}(real={video_N_real} grid={video_N_grid}), "
+            f"  shapes: vN={video_N}(real={video_N_real} grid={video_N_grid} decode={decode_N} "
+            f"kv_logical={video_kv_logical_n} ref={ref_latent_frames}), "
             f"aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]"
         )
 
@@ -719,11 +887,13 @@ class LTXDistilledPipeline(LTXPipeline):
             latent_w=latent_w,
             video_N=video_N,
             video_N_real=video_N_real,
-            video_N_grid=video_N_grid,
+            # V→A pad-mask real region: grid for keyframe (hide anchors), combined for reference.
+            video_N_grid=video_kv_logical_n,
             audio_N=audio_N,
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
             anchor_frames=anchor_frames,
+            ref_latent_frames=ref_latent_frames,
         )
 
         prompt_v = self._prepare_prompt(v_embeds)
@@ -845,7 +1015,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 video_rope_cos=state.tt_video_rope_cos,
                 video_rope_sin=state.tt_video_rope_sin,
                 video_N=video_N_real,
-                video_kv_logical_n=video_N_grid,
+                video_kv_logical_n=video_kv_logical_n,
                 trans_mat=state.tt_trans_mat,
                 audio_prompt_1BLP=prompt_a,
                 audio_rope_cos=state.tt_audio_rope_cos,
@@ -903,8 +1073,9 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_already_gathered=False,
             tp_already_gathered=True,
         ).squeeze(0)
-        # Strip the appended anchor tokens (and SP-pad): return exactly the base grid for decode.
-        return v_final[:, :video_N_grid, :], a_final[:, :audio_N_real, :]
+        # Strip the appended anchor / reference tokens (and SP-pad): return exactly the target grid
+        # for decode. decode_N is TARGET-ONLY, so the reference block never reaches decode/upsample.
+        return v_final[:, :decode_N, :], a_final[:, :audio_N_real, :]
 
     def generate(
         self,
@@ -915,6 +1086,12 @@ class LTXDistilledPipeline(LTXPipeline):
         # I2V conditioning: list of (image_path, pixel_frame_idx, s1_strength[, s2_strength]).
         # frame_idx 0 = first frame, num_frames-1 = last, any value = a keyframe.
         images: list[tuple] | None = None,
+        # IC-LoRA sequence-extension conditioning: (reference_sheet_path, strength). The still is
+        # looped to a static reference video, VAE-encoded per stage, and APPENDED (clean) as an extra
+        # token block — the sequence grows by R frames; requires the fused IC-LoRA checkpoint. Mutually
+        # exclusive with the append-token keyframe path.
+        reference_video: tuple[str, float] | None = None,
+        ref_frames: int | None = None,
         num_frames: int = 121,
         height: int = 512,
         width: int = 768,
@@ -932,6 +1109,19 @@ class LTXDistilledPipeline(LTXPipeline):
 
         s1_height = height // 2
         s1_width = width // 2
+
+        # IC-LoRA reference sheet: loop the still to the output length (model card >=121, capped to
+        # num_frames). Mutually exclusive with the append-token keyframe path — they contradict on the
+        # KV-logical/decode-strip roles (reference is IN audio's view; anchors are hidden), so refuse
+        # to run both rather than silently pick one.
+        # The reference is a STILL looped to ref_pixel_frames, so frames beyond the first carry no extra
+        # signal — but they cost sequence: R=num_frames doubles the video tokens and OOMs from 720p up.
+        # Callers pass a small ref_frames (17 px -> 3 latent) to keep the overhead ~20%. This MUST match
+        # the ref_num_frames the s*_ref traces were warmed with, or trace replay shape-mismatches.
+        ref_pixel_frames = (ref_frames or num_frames) if reference_video is not None else 0
+        assert not (
+            reference_video is not None and os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True")
+        ), "reference conditioning (reference_video) is mutually exclusive with append-token keyframe conditioning (LTX_KF_APPEND_TOKEN)"
 
         # Append-token tail-pad. A keyframe pinned to the LAST latent frame has no neighbor after it,
         # so its freed grid frame settles onto the static anchor and the causal VAE holds the clip's
@@ -1065,6 +1255,34 @@ class LTXDistilledPipeline(LTXPipeline):
                 s1_conds, full_conds = _pad_anchors(s1_conds), _pad_anchors(full_conds)
             s1_image_conds, full_image_conds = s1_conds, full_conds
 
+        # ----- IC-LoRA reference sheet: loop -> encode per stage -> appended clean block -----
+        # The still is looped to a static reference video and VAE-encoded through the multi-frame
+        # reference encoders (the existing self.vae_encoder is single-frame image-i2v), producing the
+        # half-res (s1) and full-res (s2) reference latents appended clean in _denoise_no_guidance.
+        ref_latent_s1 = ref_latent_full = None
+        ref_strength = 1.0
+        if reference_video is not None:
+            assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run IC-LoRA reference"
+            ref_path, ref_strength = reference_video
+            self._build_ref_vae_encoders(ref_pixel_frames, height, width)
+            t0 = time.time()
+            ref_clip_s1 = self._load_reference_video(ref_path, s1_height, s1_width, ref_pixel_frames)
+            ref_clip_full = self._load_reference_video(ref_path, height, width, ref_pixel_frames)
+            ref_latent_s1 = self.encode_image(ref_clip_s1, encoder=self.vae_ref_encoder_s1)
+            ref_latent_full = self.encode_image(ref_clip_full, encoder=self.vae_ref_encoder_full)
+            timings.append(("Reference encode", time.time() - t0))
+            logger.info(
+                f"IC-LoRA reference {ref_path}: {ref_pixel_frames} looped px frames -> "
+                f"{tuple(ref_latent_full.shape)} latent (strength={ref_strength}) in {time.time() - t0:.1f}s"
+            )
+
+        # IC-LoRA runs on a wider (target+reference) sequence, so it captures / replays its OWN trace
+        # family (s1_ref/s2_ref) and never collides with the narrower i2v/t2v traces (which bake the
+        # target-only addresses). trace_key stays s1/s2 for every non-reference gen (byte-identical).
+        has_ref = reference_video is not None
+        s1_trace_key = "s1_ref" if has_ref else "s1"
+        s2_trace_key = "s2_ref" if has_ref else "s2"
+
         t0 = time.time()
         self._prepare_transformer(0)
         if self.dynamic_load:
@@ -1084,8 +1302,10 @@ class LTXDistilledPipeline(LTXPipeline):
             sigma_values=s1_sigmas,
             seed=seed,
             image_conds=s1_image_conds,
+            ref_latent=ref_latent_s1,
+            ref_strength=ref_strength,
             traced=self._traced and "s1" not in eager_stages,
-            trace_key="s1",
+            trace_key=s1_trace_key,
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
@@ -1101,9 +1321,10 @@ class LTXDistilledPipeline(LTXPipeline):
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
-        upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
-            1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
-        )
+        hw_full = (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION)
+        # Grid-sized (target-only). _denoise allocates base_v at the combined video_N_real and writes this
+        # into the [:video_N_grid] target slice; the reference rows [T,T+R) are base zeros the ref pin fills.
+        upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(1, latent_frames * hw_full, 128)
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -1118,8 +1339,10 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             image_conds=full_image_conds,
+            ref_latent=ref_latent_full,
+            ref_strength=ref_strength,
             traced=self._traced and "s2" not in eager_stages,
-            trace_key="s2",
+            trace_key=s2_trace_key,
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))

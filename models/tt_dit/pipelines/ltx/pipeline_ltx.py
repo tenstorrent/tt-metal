@@ -350,6 +350,11 @@ class LTXPipeline:
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
         self.vae_encoder = None
+        # IC-LoRA reference-video encoders (multi-frame, one per stage res). Built on demand by
+        # _build_ref_vae_encoders since ref_pixel_frames isn't known until warmup/generate; the
+        # single-frame self.vae_encoder above can't encode a looped reference clip.
+        self.vae_ref_encoder_s1 = None
+        self.vae_ref_encoder_full = None
         # Memoized I2V conditioning latents, keyed by (image_path, height, width). The VAE
         # encoder is eager (not part of the denoise trace), so re-running it per generation is
         # wasteful and — under a traced replay pass — has hung the device; the encode is
@@ -733,6 +738,33 @@ class LTXPipeline:
             width=width or None,
         )
 
+    def _build_ref_vae_encoders(self, ref_pixel_frames: int, height: int, width: int) -> None:
+        """Construct the IC-LoRA reference-video encoders (multi-frame, one per stage res) and wire
+        their coresident exclusions. Idempotent. ``ref_pixel_frames`` is the looped-still length
+        (>=121, capped to the output frame count); the reference is encoded at the SAME res as the
+        target (downscale_factor=1 for Ingredients). The existing ``self.vae_encoder`` is single-frame
+        (image i2v), so the reference needs its own shape-baked instances. Exclusion wiring is
+        centralized in ``_register_coresident_exclusions`` (which picks the ref encoders up once they
+        exist and re-wires them if the decoder/upsampler is later rebuilt)."""
+        if self.vae_encoder is None or self.vae_ref_encoder_full is not None:
+            return
+        self.vae_ref_encoder_s1 = self._new_vae_encoder(
+            num_frames=ref_pixel_frames, height=height // 2, width=width // 2
+        )
+        self.vae_ref_encoder_full = self._new_vae_encoder(num_frames=ref_pixel_frames, height=height, width=width)
+        self._register_coresident_exclusions()
+
+    @staticmethod
+    def _load_reference_video(
+        image_path: str, height: int, width: int, ref_pixel_frames: int, crf: int = DEFAULT_IMAGE_CRF
+    ) -> torch.Tensor:
+        """Load an IC-LoRA reference SHEET (still image) and loop it into a static reference VIDEO of
+        ``ref_pixel_frames`` at the target res — the model card's "loop the still to the output length"
+        preprocessing, done as an in-memory repeat (functionally identical to decoding a looped .mp4,
+        no video round-trip needed for a still). Returns ``(1, 3, ref_pixel_frames, H, W)`` in [-1, 1]."""
+        frame = LTXPipeline._load_conditioning_image(image_path, height, width, crf=crf)  # (1, 3, 1, H, W)
+        return frame.expand(1, 3, ref_pixel_frames, height, width).contiguous()
+
     def _new_upsampler(self, num_frames: int | None = None) -> LTXLatentUpsampler:
         """Spatial-2x latent upsampler at stage-1 shape: input H/W = full // (SPATIAL_COMPRESSION*2)
         (stage 1 runs at half-res, then the VAE compresses by SPATIAL_COMPRESSION),
@@ -901,6 +933,22 @@ class LTXPipeline:
                 m.register_coresident_exclusions(self.vae_encoder)
             self.vae_encoder.register_coresident_exclusions(*enc_peers)
 
+        # IC-LoRA reference encoders (multi-frame, built lazily by _build_ref_vae_encoders) get the
+        # SAME wiring as the single-frame image encoder above: evict/be-evicted against every DiT
+        # variant, the decoder, the upsampler, and the image encoder; the two ref encoders (distinct
+        # shapes) also exclude each other so neither co-fits with an active DiT. Inert until the ref
+        # encoders exist; re-runs here (decoder/upsampler rebuilds) re-wire them against current peers.
+        ref_encoders = [e for e in (self.vae_ref_encoder_s1, self.vae_ref_encoder_full) if e is not None]
+        for ref_enc in ref_encoders:
+            ref_peers = [*models]
+            for extra in (self.vae_decoder, self.upsampler, self.vae_encoder):
+                if extra is not None:
+                    ref_peers.append(extra)
+            ref_peers += [e for e in ref_encoders if e is not ref_enc]
+            for m in ref_peers:
+                m.register_coresident_exclusions(ref_enc)
+            ref_enc.register_coresident_exclusions(*ref_peers)
+
         # The on-device Gemma encoder modules are bidirectionally excluded with the DiT
         # variants + VAE; the pair wires the exclusions on each module at its first build.
         encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
@@ -1017,10 +1065,12 @@ class LTXPipeline:
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
-    def _prepare_vae_encoder(self) -> None:
+    def _prepare_vae_encoder(self, encoder=None) -> None:
         """Push VAE encoder weights onto the mesh (I2V image conditioning). Mirrors
-        ``_prepare_vae``; shares the decoder's ``vae.per_channel_statistics.*``."""
-        if self.vae_encoder is None:
+        ``_prepare_vae``; shares the decoder's ``vae.per_channel_statistics.*``. ``encoder``
+        overrides ``self.vae_encoder`` (the IC-LoRA reference encoders share the same weights)."""
+        enc = encoder or self.vae_encoder
+        if enc is None:
             return
 
         def _vae_encoder_state_provider() -> dict[str, torch.Tensor]:
@@ -1036,10 +1086,10 @@ class LTXPipeline:
                         enc_state[short_key] = v
             return enc_state
 
-        blocking_key = conv3d_blocking_hash(self.vae_encoder)
+        blocking_key = conv3d_blocking_hash(enc)
         subfolder = f"vae_enc_{blocking_key}" if blocking_key else "vae_enc"
         cache_module.load_model(
-            self.vae_encoder,
+            enc,
             model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
             subfolder=subfolder,
             parallel_config=self.parallel_config,
@@ -1048,17 +1098,21 @@ class LTXPipeline:
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
 
-    def encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
+    def encode_image(self, image_BCFHW: torch.Tensor, encoder=None) -> torch.Tensor:
         """Encode a conditioning image/clip ``(B, 3, F, H, W)`` in [-1, 1] to a normalized
         latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers).
+
+        ``encoder`` overrides ``self.vae_encoder`` — used for the multi-frame IC-LoRA reference
+        encoders (``vae_ref_encoder_s1``/``vae_ref_encoder_full``), which share the same weights.
 
         When ``LTX_VAE_ENCODER_HOST=1`` (off by default), also runs the reference CPU/torch
         encoder, logs device-vs-host parity (PCC + abs diff), and returns the HOST latent for
         the run — a self-checking I2V path. Default (``0``) is the device-only fast path.
         """
-        assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
-        self._prepare_vae_encoder()
-        device_latent = self.vae_encoder(image_BCFHW)
+        enc = encoder or self.vae_encoder
+        assert enc is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
+        self._prepare_vae_encoder(enc)
+        device_latent = enc(image_BCFHW)
         if os.environ.get("LTX_VAE_ENCODER_HOST", "0") != "1":
             return device_latent
         host_latent = self._host_encode_image(image_BCFHW)
@@ -1295,6 +1349,15 @@ class LTXPipeline:
             return
         self._prepare_vae_encoder()
         self.vae_encoder(torch.zeros(1, 3, 1, height, width))
+
+    def _warmup_ref_encode(self, ref_pixel_frames: int, height: int, width: int) -> None:
+        """Build + JIT-compile the IC-LoRA reference encoders at both stage resolutions with a
+        zero looped clip. No-op when no encoder is configured (non-I2V checkpoints)."""
+        if self.vae_encoder is None:
+            return
+        self._build_ref_vae_encoders(ref_pixel_frames, height, width)
+        self.encode_image(torch.zeros(1, 3, ref_pixel_frames, height // 2, width // 2), encoder=self.vae_ref_encoder_s1)
+        self.encode_image(torch.zeros(1, 3, ref_pixel_frames, height, width), encoder=self.vae_ref_encoder_full)
 
     def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
         """Load VAE + JIT-compile decode kernels with a zero dummy latent at

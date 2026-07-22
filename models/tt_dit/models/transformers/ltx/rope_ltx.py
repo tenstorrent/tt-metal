@@ -230,6 +230,43 @@ def pad_video_rope_sp(
     return cos_freq, sin_freq
 
 
+def _build_ref_video_positions(
+    ref_num_frames: int,
+    latent_height: int,
+    latent_width: int,
+    fps: float,
+    v_positions: torch.Tensor,
+    ref_downscale_factor: int,
+    ref_temporal_scale_factor: int,
+) -> torch.Tensor:
+    """Build an IC-LoRA reference block's OWN independent 0-based ``(1, 3, R*hw, 2)`` pixel-position grid.
+
+    Mirrors the target grid construction exactly (same ``latent_height``/``latent_width``, ``causal_fix``,
+    ``scale_factors``, and ``/fps``), so the reference gets a fresh 0-based ``(t, h, w)`` grid rather than a
+    continuation of the target's frame axis. It is then remapped per the reference-video-cond inference path
+    (``ref_temporal_scale_factor`` / ``ref_downscale_factor``); both are 1 for Ingredients, which makes the
+    reference block's positions bit-identical to a target grid of ``ref_num_frames`` frames. ``v_positions``
+    is the target-only grid, used only for the target's first-token temporal end when re-timing the reference.
+    """
+    ref_shape = VideoLatentShape(batch=1, channels=128, frames=ref_num_frames, height=latent_height, width=latent_width)
+    ref_coords = video_get_patch_grid_bounds(ref_shape)
+    ref_positions = get_pixel_coords(ref_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
+    ref_positions[:, 0, ...] = ref_positions[:, 0, ...] / fps  # temporal axis -> seconds
+    if ref_temporal_scale_factor != 1:
+        # Reference time spacing = target_fps / S; _positions already divided by target fps, so a
+        # temporal_scale_factor S of >1 (ref at 1/S fps) scales the reference times back up by S.
+        ref_positions[:, 0, ...] = ref_positions[:, 0, ...] * ref_temporal_scale_factor
+        # Translate into the target's frame; clamp the causal patch's negative start back to >=0.
+        t_target = v_positions[:, 0, 0:1, 1:2]  # target's first-token temporal end = 1/target_fps
+        ref_positions[:, 0, ...] = torch.clamp(
+            ref_positions[:, 0, ...] - (ref_temporal_scale_factor - 1) * t_target, min=0
+        )
+    if ref_downscale_factor != 1:
+        ref_positions[:, 1, ...] = ref_positions[:, 1, ...] * ref_downscale_factor  # height axis
+        ref_positions[:, 2, ...] = ref_positions[:, 2, ...] * ref_downscale_factor  # width axis
+    return ref_positions
+
+
 def prepare_video_rope(
     latent_frames: int,
     latent_height: int,
@@ -243,12 +280,24 @@ def prepare_video_rope(
     parallel_config: DiTParallelConfig,
     fps: float = 24.0,
     anchor_frames: list[int] | None = None,
+    ref_num_frames: int | None = None,
+    ref_downscale_factor: int = 1,
+    ref_temporal_scale_factor: int = 1,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compute video RoPE in INTERLEAVED layout, SP×TP sharded onto the mesh.
 
     ``anchor_frames`` appends, at the tail, one h×w block of positions per listed latent frame,
     reusing that frame's own (temporal+spatial) coordinates. Append-token interior keyframes ride
-    there so the anchor carries the exact RoPE phase of the free grid frame it conditions."""
+    there so the anchor carries the exact RoPE phase of the free grid frame it conditions.
+
+    ``ref_num_frames`` appends, on the token axis after the target grid, an IC-LoRA reference block's
+    OWN fresh 0-based (t,h,w) grid of ``ref_num_frames`` latent frames (rows ``[T*hw, (T+R)*hw)``),
+    remapped by ``ref_downscale_factor`` / ``ref_temporal_scale_factor`` (both 1 => the reference grid
+    equals a target grid of that many frames). Reference and ``anchor_frames`` are mutually exclusive.
+    ``ref_num_frames`` None/0 is an exact no-op of the target-only path."""
+    assert not (
+        anchor_frames and ref_num_frames
+    ), "reference conditioning (ref_num_frames) and keyframe conditioning (anchor_frames) are mutually exclusive"
     v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
     v_coords = video_get_patch_grid_bounds(v_shape)
     v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
@@ -258,6 +307,17 @@ def prepare_video_rope(
         v_positions = torch.cat(
             [v_positions] + [v_positions[:, :, f * hw : (f + 1) * hw, :] for f in anchor_frames], dim=2
         )
+    if ref_num_frames:
+        ref_positions = _build_ref_video_positions(
+            ref_num_frames,
+            latent_height,
+            latent_width,
+            fps,
+            v_positions,
+            ref_downscale_factor,
+            ref_temporal_scale_factor,
+        )
+        v_positions = torch.cat([v_positions, ref_positions], dim=2)
 
     cos_freq, sin_freq = precompute_freqs_cis(
         v_positions,
@@ -337,6 +397,9 @@ def prepare_av_cross_pe(
     fps: float = 24.0,
     cross_pe_max_pos: int = 20,
     anchor_frames: list[int] | None = None,
+    ref_num_frames: int | None = None,
+    ref_downscale_factor: int = 1,
+    ref_temporal_scale_factor: int = 1,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Temporal-only cross positional embeddings for A↔V cross-attention.
 
@@ -351,6 +414,9 @@ def prepare_av_cross_pe(
         (a_q_cos, a_q_sin)  — audio Q in V→A cross-attn (SP×TP sharded).
         (a_k_cos, a_k_sin)  — audio K in A→V cross-attn (TP-only; K side after AllGather).
     """
+    assert not (
+        anchor_frames and ref_num_frames
+    ), "reference conditioning (ref_num_frames) and keyframe conditioning (anchor_frames) are mutually exclusive"
     v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
     v_coords = video_get_patch_grid_bounds(v_shape)
     v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
@@ -363,6 +429,20 @@ def prepare_av_cross_pe(
         v_temporal = torch.cat(
             [v_temporal] + [v_temporal[:, :, f * hw : (f + 1) * hw, :] for f in anchor_frames], dim=2
         )
+    if ref_num_frames:
+        # The IC-LoRA reference block appends its own fresh 0-based grid after the target grid; the
+        # cross-PE keeps only the temporal axis, so append the reference grid's temporal slice to stay
+        # length-matched (rows [T*hw, (T+R)*hw)) with the extended video token sequence.
+        ref_positions = _build_ref_video_positions(
+            ref_num_frames,
+            latent_height,
+            latent_width,
+            fps,
+            v_positions,
+            ref_downscale_factor,
+            ref_temporal_scale_factor,
+        )
+        v_temporal = torch.cat([v_temporal, ref_positions[:, 0:1, :]], dim=2)
 
     a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
     a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, audio_N_real, 2)
