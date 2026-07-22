@@ -105,6 +105,23 @@ class OutputReader:
         assert isinstance(result, PendingRead)
         return result
 
+    def read_synchronized(self, value: Any) -> Any:
+        """Submit nested host copies and synchronize the device once."""
+
+        retained_destinations: list[Any] = []
+        try:
+            host_value, submitted = _read_to_host(
+                value,
+                blocking=False,
+                retained_destinations=retained_destinations,
+            )
+            if submitted:
+                ttnn.synchronize_device(self.mesh_device)
+        except BaseException:
+            _synchronize_after_failed_submission(self.mesh_device)
+            raise
+        return host_value
+
     def complete(self, pending_or_value: PendingRead | Any) -> Any:
         """Synchronize and retire a pending read, returning its host payload.
 

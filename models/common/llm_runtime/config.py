@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Static configuration for the generic LLM execution runtime."""
+"""Static configuration and resolved geometry for the LLM runtime toolkit."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Literal
 import ttnn
 
 TraceMode = Literal["none", "decode_only", "all"]
+
+_PAGE_TABLE_WIDTH_ALIGNMENT = 8
 
 
 @dataclass(frozen=True)
@@ -104,22 +106,57 @@ class PagedKVCacheConfig:
 
 
 @dataclass(frozen=True)
-class LLMExecutorConfig:
-    """The complete immutable static policy paired with one LLMExecutor."""
+class PageTableLayout:
+    """Resolved page-table geometry shared by prefill, decode, and warmup."""
 
-    trace: TraceConfig
-    warmup: WarmupConfig
-    paged_kv_cache: PagedKVCacheConfig
-    device_sampling_enabled: bool
+    block_size: int
+    raw_capacity_width: int
+    prefill_width: int
+    decode_width: int
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        block_size: int,
+        model_max_sequence_length: int,
+        physical_num_blocks: int,
+        max_prefill_chunk_size: int,
+    ) -> "PageTableLayout":
+        values = {
+            "block_size": block_size,
+            "model_max_sequence_length": model_max_sequence_length,
+            "physical_num_blocks": physical_num_blocks,
+            "max_prefill_chunk_size": max_prefill_chunk_size,
+        }
+        for name, value in values.items():
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+        model_width = _ceil_div(model_max_sequence_length, block_size)
+        raw_width = min(model_width, physical_num_blocks)
+        decode_width = _round_up(raw_width, _PAGE_TABLE_WIDTH_ALIGNMENT)
+        padding_blocks = _ceil_div(max_prefill_chunk_size - 1, block_size)
+        prefill_width = _round_up(raw_width + padding_blocks, _PAGE_TABLE_WIDTH_ALIGNMENT)
+        return cls(
+            block_size=block_size,
+            raw_capacity_width=raw_width,
+            prefill_width=prefill_width,
+            decode_width=decode_width,
+        )
 
     def __post_init__(self) -> None:
-        nested_configs = (
-            ("trace", self.trace, TraceConfig),
-            ("warmup", self.warmup, WarmupConfig),
-            ("paged_kv_cache", self.paged_kv_cache, PagedKVCacheConfig),
-        )
-        for name, value, expected_type in nested_configs:
-            if type(value) is not expected_type:
-                raise TypeError(f"{name} must be exactly {expected_type.__name__}")
-        if not isinstance(self.device_sampling_enabled, bool):
-            raise TypeError("device_sampling_enabled must be bool")
+        if self.block_size <= 0 or self.raw_capacity_width <= 0:
+            raise ValueError("page-table block size and capacity width must be positive")
+        if self.prefill_width < self.raw_capacity_width or self.decode_width < self.raw_capacity_width:
+            raise ValueError("canonical page-table widths cannot be smaller than raw capacity")
+        if self.prefill_width % _PAGE_TABLE_WIDTH_ALIGNMENT or self.decode_width % _PAGE_TABLE_WIDTH_ALIGNMENT:
+            raise ValueError("canonical page-table widths must satisfy alignment")
+
+
+def _ceil_div(value: int, divisor: int) -> int:
+    return (value + divisor - 1) // divisor
+
+
+def _round_up(value: int, alignment: int) -> int:
+    return _ceil_div(value, alignment) * alignment

@@ -225,13 +225,14 @@ class LaneGroupExecutor:
         for lane_idx in range(self.tt_data_parallel):
             start = lane_idx * self.per_lane_max_batch_size
             end = start + self.per_lane_max_batch_size
-            rows = list(range(start, end))
             lane_kwargs = dict(kwargs)
-            lane_kwargs["tokens"] = _slice_rows(tokens, rows)
-            lane_kwargs["start_pos"] = _slice_rows(start_pos, rows)
-            lane_kwargs["page_table"] = _slice_rows(page_table, rows)
+            lane_kwargs["tokens"] = tokens[start:end]
+            lane_kwargs["start_pos"] = start_pos[start:end]
+            lane_kwargs["page_table"] = page_table[start:end]
             if lane_kwargs.get("sampling_params") is not None:
-                lane_kwargs["sampling_params"] = _slice_sampling_params(lane_kwargs["sampling_params"], rows)
+                lane_kwargs["sampling_params"] = _slice_contiguous_sampling_params(
+                    lane_kwargs["sampling_params"], start, end
+                )
             if lane_kwargs.get("kv_cache") is not None:
                 lane_kwargs["kv_cache"] = self._lane_value(lane_kwargs["kv_cache"], lane_idx, "KV caches")
             lane_outputs.append(getattr(self.lanes[lane_idx], method_name)(**lane_kwargs))
@@ -415,9 +416,42 @@ def _slice_sampling_params(sampling_params: Any, rows: list[int]) -> Any:
     raise TypeError("sampling_params must be a dataclass or mapping")
 
 
+def _slice_contiguous_sampling_params(sampling_params: Any, start: int, end: int) -> Any:
+    count = end - start
+
+    def slice_value(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor):
+            if value.ndim == 0:
+                return value
+            if int(value.shape[0]) == 1:
+                return value.expand((count, *value.shape[1:]))
+            return value[start:end]
+        if isinstance(value, list):
+            if len(value) == 1:
+                return value * count
+            return value[start:end]
+        if isinstance(value, tuple):
+            if len(value) == 1:
+                return value * count
+            return value[start:end]
+        return value
+
+    if dataclasses.is_dataclass(sampling_params) and not isinstance(sampling_params, type):
+        updates = {
+            field.name: slice_value(getattr(sampling_params, field.name))
+            for field in dataclasses.fields(sampling_params)
+        }
+        return dataclasses.replace(sampling_params, **updates)
+    if isinstance(sampling_params, dict):
+        return sampling_params.__class__((key, slice_value(value)) for key, value in sampling_params.items())
+    raise TypeError("sampling_params must be a dataclass or mapping")
+
+
 def _aggregate_prefill_outputs(lane_results: list[tuple[list[int], Any]], batch_size: int) -> Any:
     if not lane_results:
-        return torch.empty((0,), dtype=torch.int32)
+        return torch.empty((0,), dtype=torch.int64)
     unwrapped = []
     had_tuple = False
     for rows, result in lane_results:
@@ -434,9 +468,9 @@ def _aggregate_prefill_outputs(lane_results: list[tuple[list[int], Any]], batch_
     first = unwrapped[0][1]
     assert isinstance(first, torch.Tensor)
     if _is_token_tensor(first):
-        output = torch.empty((batch_size,), dtype=torch.int32, device=first.device)
+        output = torch.empty((batch_size,), dtype=torch.int64, device=first.device)
         for rows, lane_output in unwrapped:
-            output[rows] = lane_output.reshape(-1).to(torch.int32)
+            output[rows] = lane_output.reshape(-1).to(torch.int64)
     else:
         output = torch.empty((batch_size, *first.shape[1:]), dtype=first.dtype, device=first.device)
         for rows, lane_output in unwrapped:
@@ -461,7 +495,7 @@ def _aggregate_contiguous_outputs(lane_results: list[Any], *, force_tokens: bool
     first = unwrapped[0]
     assert isinstance(first, torch.Tensor)
     if force_tokens or _is_token_tensor(first):
-        output = torch.cat([lane_output.reshape(-1) for lane_output in unwrapped], dim=0).to(torch.int32)
+        output = torch.cat([lane_output.reshape(-1) for lane_output in unwrapped], dim=0).to(torch.int64)
     else:
         output = torch.cat(unwrapped, dim=0)
     return (output, None) if had_tuple else output

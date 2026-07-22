@@ -614,6 +614,7 @@ class Llama3Transformer1D(LightweightModule):
         hidden_states: ttnn.Tensor,
         last_token_idx: int,
         last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Convert traced prefill hidden states into logits for the last token block."""
         if last_token_slice is None:
@@ -632,6 +633,15 @@ class Llama3Transformer1D(LightweightModule):
                 num_devices=int(hidden_states.shape[2]) // 32,
             )
 
+        if last_token_index is not None:
+            if x.dtype != ttnn.bfloat16:
+                old = x
+                x = ttnn.typecast(x, ttnn.bfloat16)
+                ttnn.deallocate(old)
+            old = x
+            x = ttnn.embedding(last_token_index, x, layout=ttnn.TILE_LAYOUT)
+            x = ttnn.unsqueeze_to_4D(x)
+            ttnn.deallocate(old)
         x = self.norm.prefill_forward(x)
         x = _all_gather_rmsnorm_tensor(self.norm, x)
         lm_head_memcfg = self.lm_head.config.input_memcfg

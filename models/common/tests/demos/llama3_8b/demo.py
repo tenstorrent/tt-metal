@@ -29,8 +29,8 @@ from loguru import logger
 
 import ttnn
 from models.common.device_utils import get_device_name
-from models.common.llm_runtime.config import LLMExecutorConfig, PagedKVCacheConfig, TraceConfig, WarmupConfig
-from models.common.models.llama3_8b.executor import build_llama3_executor
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.models.llama3_8b.executor import Llama3ExecutorConfig, build_llama3_executor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 from models.common.sampling.sampling_params import SamplingParams
@@ -182,9 +182,9 @@ def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_ba
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
-        {"mesh_shape": (1, 1), "trace_region_size": 50000000, "num_command_queues": 1},
-        {"mesh_shape": (1, 2), "trace_region_size": 50000000, "num_command_queues": 1},
-        {"mesh_shape": (1, 8), "trace_region_size": 50000000, "num_command_queues": 1},
+        {"mesh_shape": (1, 1), "trace_region_size": 85000000, "num_command_queues": 1},
+        {"mesh_shape": (1, 2), "trace_region_size": 85000000, "num_command_queues": 1},
+        {"mesh_shape": (1, 8), "trace_region_size": 85000000, "num_command_queues": 1},
     ],
     ids=[
         "1x1",
@@ -238,7 +238,7 @@ def _attention_config(model):
 def _build_demo_executor(llm, *, trace_mode, device_sampling_enabled, include_decode_top_k=False):
     attention_config = _attention_config(llm.model)
     paged_attention_config = attention_config.paged_attention_config
-    config = LLMExecutorConfig(
+    config = Llama3ExecutorConfig(
         trace=TraceConfig(mode=trace_mode),
         warmup=WarmupConfig(include_decode_top_k=include_decode_top_k),
         paged_kv_cache=PagedKVCacheConfig(
@@ -250,6 +250,10 @@ def _build_demo_executor(llm, *, trace_mode, device_sampling_enabled, include_de
         device_sampling_enabled=device_sampling_enabled,
     )
     return build_llama3_executor(llm, config)
+
+
+def _force_decode_top_k(sampling_mode, sampling_params, num_devices):
+    return sampling_params is not None and sampling_mode == "on_device_topk" and int(num_devices) == 8
 
 
 def _warmup_demo_executor(executor, *, kv_cache, page_table):
@@ -271,7 +275,6 @@ def _warmup_demo_executor(executor, *, kv_cache, page_table):
     executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
 
     if executor.config.trace.prefill_enabled:
-        executor.already_warmed_up_prefill = False
         executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
     if executor.config.trace.decode_enabled:
         executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
@@ -391,7 +394,11 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
             llm,
             trace_mode="all",
             device_sampling_enabled=sampling_params is not None,
-            include_decode_top_k=sampling_params is not None and sampling_mode == "on_device_topk",
+            include_decode_top_k=_force_decode_top_k(
+                sampling_mode,
+                sampling_params,
+                model_config.num_devices,
+            ),
         )
         kv_cache = executor.allocate_kv_cache()
         max_batch_size = model_config.max_batch_size

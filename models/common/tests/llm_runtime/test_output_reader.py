@@ -62,6 +62,22 @@ def test_blocking_read_returns_nested_host_payload_without_retention(monkeypatch
     assert reader.pending_count == 0
 
 
+def test_synchronized_read_submits_every_copy_then_synchronizes_device_once(monkeypatch):
+    synchronized = []
+    monkeypatch.setattr(ttnn, "synchronize_device", synchronized.append)
+    reader = OutputReader("mesh")
+    output = FakeDeviceTensor("output")
+    log_probs = FakeDeviceTensor("log_probs")
+
+    host = reader.read_synchronized((output, log_probs))
+
+    assert host == (output.host_value, log_probs.host_value)
+    assert output.cpu_calls == [False]
+    assert log_probs.cpu_calls == [False]
+    assert synchronized == ["mesh"]
+    assert reader.pending_count == 0
+
+
 def test_async_read_retains_destination_and_event_until_completion(monkeypatch):
     events, synchronized = _install_events(monkeypatch)
     reader = OutputReader("mesh")

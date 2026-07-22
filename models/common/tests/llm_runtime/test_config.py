@@ -7,7 +7,8 @@ import pytest
 
 import ttnn
 from models.common.llm_runtime import config as runtime_config
-from models.common.llm_runtime.config import LLMExecutorConfig, PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PagedKVCacheConfig, PageTableLayout, TraceConfig, WarmupConfig
+from models.common.models.llama3_8b.executor import Llama3ExecutorConfig
 
 
 class _TraceConfigSubclass(TraceConfig):
@@ -25,7 +26,7 @@ def _paged_config(**overrides):
 
 
 def test_executor_config_has_exact_static_policy_owners_and_is_frozen(expect_error):
-    config = LLMExecutorConfig(
+    config = Llama3ExecutorConfig(
         trace=TraceConfig(mode="all"),
         warmup=WarmupConfig(),
         paged_kv_cache=_paged_config(),
@@ -50,6 +51,7 @@ def test_executor_config_has_exact_static_policy_owners_and_is_frozen(expect_err
     }
     assert forbidden.isdisjoint(field.name for field in fields(config))
     assert not hasattr(runtime_config, "LLMGraphCompilerConfig")
+    assert not hasattr(runtime_config, "LLMExecutorConfig")
     assert not hasattr(runtime_config, "Sampling1DConfig")
     with expect_error(FrozenInstanceError, ""):
         config.device_sampling_enabled = False
@@ -74,7 +76,7 @@ def test_executor_config_rejects_non_exact_nested_config_types(field_name, inval
     values[field_name] = invalid_value
 
     with expect_error(TypeError, rf"{field_name} must be exactly"):
-        LLMExecutorConfig(**values)
+        Llama3ExecutorConfig(**values)
 
 
 @pytest.mark.parametrize(
@@ -131,3 +133,16 @@ def test_paged_kv_config_rejects_invalid_capacity(expect_error):
         _paged_config(num_blocks=1025)
     with expect_error(ValueError, "block_size"):
         _paged_config(block_size=0)
+
+
+def test_page_table_layout_is_resolved_without_warmup_policy():
+    layout = PageTableLayout.resolve(
+        block_size=32,
+        model_max_sequence_length=4096,
+        physical_num_blocks=100,
+        max_prefill_chunk_size=2048,
+    )
+
+    assert layout.raw_capacity_width == 100
+    assert layout.decode_width == 104
+    assert layout.prefill_width == 168

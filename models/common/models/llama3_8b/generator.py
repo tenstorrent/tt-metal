@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import ttnn
-from models.common.llm_runtime.config import LLMExecutorConfig, PagedKVCacheConfig, TraceConfig, TraceMode, WarmupConfig
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, TraceMode, WarmupConfig
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.llm_runtime.vllm_adapter import VLLMAdapter
-from models.common.models.llama3_8b.executor import build_llama3_executor
+from models.common.models.llama3_8b.executor import Llama3ExecutorConfig, build_llama3_executor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 
@@ -60,6 +60,7 @@ class Llama3Generator:
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "accepts_trace_mode": True,
         "required_block_size": _VLLM_BLOCK_SIZE,
     }
     requires_prefill_trace_warmup = True
@@ -211,7 +212,7 @@ def build_llama3_generator(config: Llama3GeneratorConfig) -> Llama3Generator:
                 paged_attention_config=paged_attention_config,
             )
             model_kv_cache_dtypes, _, _, _ = _model_kv_metadata(llm.model)
-            executor_config = LLMExecutorConfig(
+            executor_config = Llama3ExecutorConfig(
                 trace=TraceConfig(mode=config.trace_mode),
                 warmup=WarmupConfig(),
                 paged_kv_cache=PagedKVCacheConfig(

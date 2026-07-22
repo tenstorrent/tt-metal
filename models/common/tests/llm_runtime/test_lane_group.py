@@ -122,7 +122,7 @@ def test_prefill_routes_global_slots_and_restores_source_row_order():
 
     assert isinstance(output, tuple)
     assert output[0].tolist() == [110, 11, 112]
-    assert output[0].dtype == torch.int32
+    assert output[0].dtype == torch.int64
     assert output[1] is None
 
     lane0_kwargs = next(kwargs for method, kwargs in lanes[0].calls if method == "prefill")
@@ -153,7 +153,7 @@ def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
     )
 
     assert output[0].tolist() == [10, 11, 112, 113]
-    assert output[0].dtype == torch.int32
+    assert output[0].dtype == torch.int64
     assert output[1] is None
     lane0_kwargs = next(kwargs for method, kwargs in lanes[0].calls if method == "decode")
     lane1_kwargs = next(kwargs for method, kwargs in lanes[1].calls if method == "decode")
@@ -213,7 +213,7 @@ def test_async_read_and_host_processing_run_per_lane_and_preserve_lane_order():
 
     assert events == ["event-0", "event-1"]
     assert processed[0].tolist() == [0, 1, 2, 3]
-    assert processed[0].dtype == torch.int32
+    assert processed[0].dtype == torch.int64
     assert processed[1] is None
 
 
