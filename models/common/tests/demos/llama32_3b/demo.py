@@ -200,9 +200,11 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
             "N150": {"tok_s_u": 10.45, "ttft_ms": 23},  # max(TTTv1 ci-32 10.44, TTTv2 10.4)
             "N300": {"tok_s_u": 28.36, "ttft_ms": 18},  # max(TTTv1 ci-32 28.36, TTTv2 28.4)
             # T3K decode gap CLOSED (#49284 + decode loop). Fresh healthy-box: TTTv2 74.8 vs same-box
-            # TTTv1 ci-32 75.58 (99% = parity within tol). ttft 11 covers TTTv2 8.5 (== TTTv1 ci-32 8.08,
-            # 1.05x parity) -- the batch-32-ci prefill-TTFT residual CLOSED (was ~1.6x, 12.9->8.5ms via the
-            # shared concat-dedup fix + max_prefill_batch_size=32). Prior 69.6 was the #893-degraded floor.
+            # TTTv1 ci-32 75.58 (99% = parity within tol). ttft 11 is a conservative upper bound; the
+            # prefill-TTFT residual is now REVERSED -- TTTv2 7.7ms (median of 7.5-7.9) BEATS same-box
+            # TTTv1 ci-32 8.09ms (0.95x) via the on-device batched last-token gather (executor.py
+            # _gather_last_tokens_on_device: eliminates the ~25MB device->host hidden read). Earlier this
+            # cell was 8.5ms/1.05x (shared concat-dedup + max_prefill_batch_size=32); the gather closed it.
             "T3K": {"tok_s_u": 75.6, "ttft_ms": 11},  # max(TTTv1 75.58, TTTv2 74.8)
         },
         "accuracy": {
@@ -462,13 +464,18 @@ def create_model(
 
     precision = LLAMA32_3B_PERFORMANCE if optimizations == "performance" else LLAMA32_3B_ACCURACY
 
+    # Diagnostic-only: LLAMA32_3B_DEMO_NUM_LAYERS truncates the decoder stack for reduced-layer
+    # profiling (one real layer of each kind + real surrounding path). Inert unless set. Perf/accuracy
+    # gates are meaningless with a truncated stack — use only for tt-perf-report capture, never CI.
+    _num_layers = int(os.environ.get("LLAMA32_3B_DEMO_NUM_LAYERS", 0)) or None
+
     try:
         model = Llama32_3BTransformer1D.from_pretrained(
             mesh_device,
             hf_model,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
-            num_layers=None,
+            num_layers=_num_layers,
             cache_dir=cache_dir,
             precision=precision,
             executor_mode=True,
