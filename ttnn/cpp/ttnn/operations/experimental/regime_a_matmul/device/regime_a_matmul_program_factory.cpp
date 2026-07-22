@@ -136,13 +136,16 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["REDTREE"] = "1";
         ddefs["REDTREE"] = "1";
     }
-    if (diag & RegimeADiag::DIAG_RSCATTER) {  // test-only: ring reduce-scatter (Pk==4, row-partitionable block)
+    if (diag & RegimeADiag::DIAG_RSCATTER) {  // test-only: ring reduce-scatter over the Pk cores (tile-partition)
+        const uint32_t rs_T = geo.M_block_capacity * geo.N_sub;  // tiles in one output block
         TT_FATAL(
-            Pk == 4u && geo.M_block_capacity == Pk && geo.N_bpc == 1u,
-            "DIAG_RSCATTER requires Pk==4, M_block==Pk (one output row per Pk core) and N_bpc==1; got Pk={} "
-            "M_block={} N_bpc={}",
+            Pk > 1u && geo.N_bpc == 1u && rs_T % Pk == 0u && rs_T >= Pk,
+            "DIAG_RSCATTER requires Pk>1, N_bpc==1, and the output block (M_block*N_sub={}) divisible by Pk={} "
+            "and >= Pk (row/tile-partitionable into Pk chunks); got M_block={} N_sub={} N_bpc={}",
+            rs_T,
             Pk,
             geo.M_block_capacity,
+            geo.N_sub,
             geo.N_bpc);
         wdefs["RSCATTER"] = "1";
         ddefs["RSCATTER"] = "1";
@@ -519,12 +522,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         }
     }
 
-    // ---- DIAG_RSCATTER: assign the ring reduce-scatter cyclic order over each group's Pk=4 cores. ----
-    // For each (bank b, within-bank sub) group, order the 4 k-slice cores into a Hamiltonian CYCLE minimizing
-    // the worst adjacent NoC-hop edge (then total), using physical worker-coord Manhattan distance as the hop
-    // proxy — a poor wraparound edge would serialize the whole ring, so we optimize it. rs_pos = position in
-    // the cycle; rs_next/prev_idx = cyclic neighbours; rs_own_chunk = (rs_pos+1)%4 (the block row this core
-    // finally owns + writes). Mutates only rs_* fields; leaves reduction-chain + ownership + placement intact.
+    // ---- DIAG_RSCATTER: assign the ring reduce-scatter cyclic order over each group's Pk cores. ----
+    // For each (bank b, within-bank sub) group, order the Pk k-slice cores into a Hamiltonian CYCLE with small
+    // NoC hops (a poor wraparound edge would serialize the whole ring). Pk==4 keeps the exact min-(maxedge,tot)
+    // 3!-search; Pk>4 uses a greedy nearest-neighbour cycle over physical worker-coord Manhattan distance
+    // (P! is infeasible). rs_pos = cycle position; rs_next/prev_idx = cyclic neighbours; rs_own_chunk =
+    // (rs_pos+1)%Pk (the tile-chunk this core finally owns + writes). Mutates only rs_* fields.
     if (diag & RegimeADiag::DIAG_RSCATTER) {
         const uint32_t mfac = geo.mfac;
         const uint32_t preaders = geo.preaders;
@@ -535,44 +538,63 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         };
         for (uint32_t b = 0; b < 8u; ++b) {
             for (uint32_t sub = 0; sub < mfac; ++sub) {
-                std::array<uint32_t, 4> idx = {
-                    b * preaders + 0u * mfac + sub,
-                    b * preaders + 1u * mfac + sub,
-                    b * preaders + 2u * mfac + sub,
-                    b * preaders + 3u * mfac + sub};
-                std::array<std::pair<int, int>, 4> xy = {
-                    phys_xy(idx[0]), phys_xy(idx[1]), phys_xy(idx[2]), phys_xy(idx[3])};
+                std::vector<uint32_t> idx(Pk);
+                std::vector<std::pair<int, int>> xy(Pk);
+                for (uint32_t kk = 0; kk < Pk; ++kk) {
+                    idx[kk] = b * preaders + kk * mfac + sub;
+                    xy[kk] = phys_xy(idx[kk]);
+                }
                 auto dist = [&](uint32_t a, uint32_t c) {
                     return std::abs(xy[a].first - xy[c].first) + std::abs(xy[a].second - xy[c].second);
                 };
-                // Fix position 0 = local index 0; search the 3! orderings of {1,2,3} for the min (maxedge,total)
-                // cycle (edges include the wraparound back to 0).
-                std::array<uint32_t, 4> best = {0, 1, 2, 3};
-                int best_max = 1 << 30, best_tot = 1 << 30;
-                std::array<uint32_t, 3> perm = {1, 2, 3};
-                std::array<std::array<uint32_t, 3>, 6> perms = {
-                    {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}}};
-                for (const auto& pm : perms) {
-                    std::array<uint32_t, 4> ord = {0, pm[0], pm[1], pm[2]};
-                    int mx = 0, tot = 0;
-                    for (uint32_t p = 0; p < 4u; ++p) {
-                        int e = dist(ord[p], ord[(p + 1u) % 4u]);
-                        mx = std::max(mx, e);
-                        tot += e;
+                std::vector<uint32_t> ord(Pk);
+                if (Pk == 4u) {
+                    // exact min-(maxedge,total) cycle over the 3! orderings of {1,2,3} (position 0 fixed)
+                    const uint32_t perms[6][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}};
+                    int best_max = 1 << 30, best_tot = 1 << 30;
+                    for (const auto& pm : perms) {
+                        uint32_t o[4] = {0, pm[0], pm[1], pm[2]};
+                        int mx = 0, tot = 0;
+                        for (uint32_t p = 0; p < 4u; ++p) {
+                            int e = dist(o[p], o[(p + 1u) % 4u]);
+                            mx = std::max(mx, e);
+                            tot += e;
+                        }
+                        if (mx < best_max || (mx == best_max && tot < best_tot)) {
+                            best_max = mx;
+                            best_tot = tot;
+                            for (uint32_t p = 0; p < 4u; ++p) {
+                                ord[p] = o[p];
+                            }
+                        }
                     }
-                    if (mx < best_max || (mx == best_max && tot < best_tot)) {
-                        best_max = mx;
-                        best_tot = tot;
-                        best = ord;
+                } else {
+                    // greedy nearest-neighbour Hamiltonian cycle (start at local 0)
+                    std::vector<bool> vis(Pk, false);
+                    ord[0] = 0;
+                    vis[0] = true;
+                    for (uint32_t p = 1; p < Pk; ++p) {
+                        int best = -1, bestd = 1 << 30;
+                        for (uint32_t cand = 0; cand < Pk; ++cand) {
+                            if (vis[cand]) {
+                                continue;
+                            }
+                            int dd = dist(ord[p - 1], cand);
+                            if (dd < bestd) {
+                                bestd = dd;
+                                best = (int)cand;
+                            }
+                        }
+                        ord[p] = (uint32_t)best;
+                        vis[best] = true;
                     }
                 }
-                (void)perm;
-                for (uint32_t p = 0; p < 4u; ++p) {
-                    auto& cp = P.cores[idx[best[p]]];
+                for (uint32_t p = 0; p < Pk; ++p) {
+                    auto& cp = P.cores[idx[ord[p]]];
                     cp.rs_pos = p;
-                    cp.rs_next_idx = idx[best[(p + 1u) % 4u]];
-                    cp.rs_prev_idx = idx[best[(p + 3u) % 4u]];
-                    cp.rs_own_chunk = (p + 1u) % 4u;
+                    cp.rs_next_idx = idx[ord[(p + 1u) % Pk]];
+                    cp.rs_prev_idx = idx[ord[(p + Pk - 1u) % Pk]];
+                    cp.rs_own_chunk = (p + 1u) % Pk;
                 }
             }
         }
@@ -636,12 +658,13 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
     }
     // DIAG_RSCATTER only (unfused): c_4 = compute->writer send-chunk CB; c_5 = incoming-chunk recv CB. Both
-    // bf16, EXACTLY double-buffered (2 x N_sub) so the FIFO period is 2 and matches the writer's fixed
-    // recv-slot offset (t%2) for the remote chunk writes. Reuse c_4/c_5 (bias/residual CBs in fused builds;
-    // unused on the unfused reduce-scatter compile). cb_reduce (c_7) is NOT used by reduce-scatter.
+    // bf16, EXACTLY double-buffered (2 x chunk_tiles, chunk_tiles = M_block*N_sub / Pk) so the FIFO period is
+    // 2 and matches the writer's fixed recv-slot offset (t%2) for the remote chunk writes. Reuse c_4/c_5
+    // (bias/residual CBs in fused builds; unused on the unfused reduce-scatter compile). c_7 unused here.
     if (diag & RegimeADiag::DIAG_RSCATTER) {
-        mkcb(program, all_cores, 4, 2u * geo.N_sub, tt::DataFormat::Float16_b, kTileBytesBf16);
-        mkcb(program, all_cores, 5, 2u * geo.N_sub, tt::DataFormat::Float16_b, kTileBytesBf16);
+        const uint32_t rs_chunk = (geo.M_block_capacity * geo.N_sub) / Pk;
+        mkcb(program, all_cores, 4, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
+        mkcb(program, all_cores, 5, 2u * rs_chunk, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
     // Fused-epilogue operand CBs (only when the matching fusion is active). c_4 bias [1,N_sub], c_5 residual
     // [M,N] block, c_6 gate [1,N_sub] (broadcast) or [M,N] block. Sized to hold a full sub-block so the
@@ -869,11 +892,13 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         if (diag & RegimeADiag::DIAG_RSCATTER) {
             auto rn = phys(cp.rs_next_idx);
             auto rp = phys(cp.rs_prev_idx);
-            wa.push_back(rn.x);             // 17 next core x
-            wa.push_back(rn.y);             // 18 next core y
-            wa.push_back(rp.x);             // 19 prev core x
-            wa.push_back(rp.y);             // 20 prev core y
-            wa.push_back(cp.rs_own_chunk);  // 21 owned block M-row
+            wa.push_back(rn.x);                                     // 17 next core x
+            wa.push_back(rn.y);                                     // 18 next core y
+            wa.push_back(rp.x);                                     // 19 prev core x
+            wa.push_back(rp.y);                                     // 20 prev core y
+            wa.push_back(cp.rs_own_chunk);                          // 21 owned tile-chunk index (0..Pk-1)
+            wa.push_back(Pk);                                       // 22 P = ring size (Pk)
+            wa.push_back((geo.M_block_capacity * geo.N_sub) / Pk);  // 23 chunk_tiles
         }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
@@ -887,9 +912,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         if (diag & RegimeADiag::DIAG_REDTREE) {
             ca.push_back(cp.num_recv);
         }
-        // DIAG_RSCATTER (never combined with fusion): compute reads its ring position after is_reduce_bottom.
+        // DIAG_RSCATTER (never combined with fusion): compute reads ring position + P + chunk_tiles after
+        // is_reduce_bottom.
         if (diag & RegimeADiag::DIAG_RSCATTER) {
             ca.push_back(cp.rs_pos);
+            ca.push_back(Pk);
+            ca.push_back((geo.M_block_capacity * geo.N_sub) / Pk);
         }
         if (has_bias || has_ternary || has_activation) {
             ca.push_back(cp.is_top ? 1u : 0u);

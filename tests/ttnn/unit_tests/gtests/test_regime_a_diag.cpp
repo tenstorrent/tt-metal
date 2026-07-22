@@ -213,6 +213,76 @@ TEST_F(RegimeADiagFixture, Correctness) {
     }
 }
 
+// Generalized ring reduce-scatter (DIAG_RSCATTER, mask 128) over arbitrary Pk with tile-partition. Random
+// BF16 vs f32 golden, PCC >= 0.99, fresh + cached, for a table spanning Pk=2 (chunk=2), Pk=4 (row-partition,
+// chunk==N_block), and Pk=6 (chunk=2, Mt=4). Also reports maxdiff vs the chain (mask 0). A mis-routed chunk /
+// dropped partial / bad ring-cycle would collapse PCC. All configs are N_bpc==1 with T=M_block*N_sub % Pk==0.
+TEST_F(RegimeADiagFixture, RScatterGeneral) {
+    struct Cfg {
+        uint32_t M, K, N, Ns, Pk, Sm, kb, nsb;
+        const char* tag;
+    };
+    const std::vector<Cfg> cfgs = {
+        {32, 2048, 2048, 2, 2, 1, 4, 4, "pk2_chunk2"},    // Pk=2, T=4, chunk=2
+        {128, 15360, 768, 1, 6, 1, 2, 3, "pk6_chunk2"},   // Pk=6, T=12, chunk=2, Mt=4
+        {256, 2048, 1024, 1, 4, 2, 2, 4, "pk4_rowpart"},  // Pk=4, T=16, chunk=4==N_block (row-partition)
+    };
+    auto* device = device_;
+    std::mt19937 rng(321);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    for (const auto& c : cfgs) {
+        const uint32_t M = c.M, K = c.K, N = c.N;
+        std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+        std::vector<float> af(a.size()), bf(b.size());
+        for (size_t i = 0; i < a.size(); ++i) {
+            a[i] = bfloat16(dist(rng));
+            af[i] = static_cast<float>(a[i]);
+        }
+        for (size_t i = 0; i < b.size(); ++i) {
+            b[i] = bfloat16(dist(rng));
+            bf[i] = static_cast<float>(b[i]);
+        }
+        std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t kk = 0; kk < K; ++kk) {
+                const float aik = af[static_cast<size_t>(i) * K + kk];
+                const float* brow = &bf[static_cast<size_t>(kk) * N];
+                float* crow = &golden[static_cast<size_t>(i) * N];
+                for (uint32_t j = 0; j < N; ++j) {
+                    crow[j] += aik * brow[j];
+                }
+            }
+        }
+        const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
+        Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+        const MemoryConfig wcfg = ttnn::experimental::prim::create_regime_a_weight_memory_config(
+            ttnn::Shape({K, N}), DataType::BFLOAT16, device);
+        Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+        const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
+            .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
+        std::vector<float> chain_ref;
+        for (uint32_t mask : {0u, 128u}) {
+            for (int pass = 0; pass < 2; ++pass) {
+                Tensor out =
+                    ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+                const std::vector<float> got = out.to_vector<float>();
+                const double p = pcc(got, golden);
+                if (mask == 0u && pass == 0) {
+                    chain_ref = got;
+                }
+                double maxdiff = 0.0;
+                for (size_t k = 0; k < got.size() && k < chain_ref.size(); ++k) {
+                    maxdiff = std::max(maxdiff, std::abs(static_cast<double>(got[k]) - chain_ref[k]));
+                }
+                fmt::print(
+                    "DIAGRSGEN {} mask={} pass={} pcc={:.5f} maxdiff_vs_chain={:.5f}\n", c.tag, mask, pass, p, maxdiff);
+                EXPECT_GT(p, 0.99) << "rscatter-general " << c.tag << " mask=" << mask << " pass=" << pass;
+            }
+        }
+    }
+}
+
 // Progressive-cumulative-wait (default, mask 0) vs old full-slice startup barrier (DIAG_FULL_IN0_WAIT,
 // mask 1024) A/B. Both paths use IDENTICAL config/tensors/ring-transport/reduction — only the CB0 wait
 // placement differs, and the matmul accumulation ORDER is unchanged — so the two outputs must be BIT-
