@@ -62,14 +62,17 @@ void kernel_main() {
                 dataflow_kernel_lib::write_sticks_after_untilize<cb_out_sticks>(
                     out_accessor, valid_rows, cols * out_elem, base_stick, col0 * out_elem);
             } else {
+                // Coalesce the whole block behind ONE barrier (writer twin of the
+                // reader's batched reads).
+                const uint32_t tile_bytes = get_tile_size(cb_out);
+                cb_wait_front(cb_out, BLOCK_SIZE);
+                uint32_t l1 = get_read_ptr(cb_out);
                 for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
-                    const uint32_t tile_id = row_tile_base + b * BLOCK_SIZE + wt;
-                    cb_wait_front(cb_out, 1);
-                    const uint32_t l1 = get_read_ptr(cb_out);
-                    noc_async_write_tile(tile_id, out_accessor, l1);
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_out, 1);
+                    noc_async_write_tile(row_tile_base + b * BLOCK_SIZE + wt, out_accessor, l1);
+                    l1 += tile_bytes;
                 }
+                noc_async_write_barrier();
+                cb_pop_front(cb_out, BLOCK_SIZE);
             }
         }
     }

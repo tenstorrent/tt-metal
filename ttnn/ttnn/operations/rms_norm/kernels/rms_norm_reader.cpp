@@ -115,14 +115,17 @@ void kernel_main() {
                     dataflow_kernel_lib::read_sticks_for_tilize<cb_x_sticks>(
                         in_accessor, valid_rows, cols * in_elem, base_stick, col0 * in_elem);
                 } else {
+                    // Coalesce the whole block behind ONE barrier (keep BLOCK_SIZE
+                    // reads in flight -> DRAM-bandwidth, not per-tile latency).
+                    const uint32_t tile_bytes = get_tile_size(cb_x_in);
+                    cb_reserve_back(cb_x_in, BLOCK_SIZE);
+                    uint32_t l1 = get_write_ptr(cb_x_in);
                     for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
-                        const uint32_t tile_id = row_tile_base + b * BLOCK_SIZE + wt;
-                        cb_reserve_back(cb_x_in, 1);
-                        const uint32_t l1 = get_write_ptr(cb_x_in);
-                        noc_async_read_tile(tile_id, in_accessor, l1);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_x_in, 1);
+                        noc_async_read_tile(row_tile_base + b * BLOCK_SIZE + wt, in_accessor, l1);
+                        l1 += tile_bytes;
                     }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_x_in, BLOCK_SIZE);
                 }
 
                 // gamma: pass 1 only, per block (same order compute consumes it).
