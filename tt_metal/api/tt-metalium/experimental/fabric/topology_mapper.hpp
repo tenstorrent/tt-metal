@@ -31,6 +31,10 @@ namespace tt::tt_fabric {
 
 struct LocalMeshBinding;
 
+namespace coordination {
+class SystemCoordinator;
+}  // namespace coordination
+
 // Use ASICPosition from tt::tt_metal namespace
 using AsicPosition = tt::tt_metal::ASICPosition;
 
@@ -89,13 +93,18 @@ public:
      * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
      * @param local_mesh_binding Reference to the local mesh binding object containing mesh binding information
      */
+    // The optional `coordinator` routes all cross-host exchanges through the SystemCoordinator seam
+    // instead of the DistributedContext. It is required for no-MPI (ServiceCoordinator) bring-up, where
+    // the local DistributedContext is size-1 and system-wide identity/exchanges come from the
+    // controller. When nullptr, the legacy DistributedContext (MPI/single-host) path is used unchanged.
     TopologyMapper(
         const tt::Cluster& cluster,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        coordination::SystemCoordinator* coordinator = nullptr);
 
     // Construct a TopologyMapper with fixed ASIC-position pinnings.
     // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
@@ -108,7 +117,8 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        coordination::SystemCoordinator* coordinator = nullptr);
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
@@ -119,7 +129,8 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
+        std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f),
+        coordination::SystemCoordinator* coordinator = nullptr);
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -335,6 +346,30 @@ public:
 private:
     const std::reference_wrapper<const tt::Cluster> cluster_;
     const std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
+    // Optional domain-level coordinator. When set, all cross-host exchanges are routed through it
+    // instead of distributed_context_ (see the SystemCoordinator seam / Option B2-i). May be null.
+    // Non-const because the exchange primitives (all_gather/broadcast/barrier) mutate transport state.
+    coordination::SystemCoordinator* coordinator_ = nullptr;
+
+    // System-wide identity used by the mapping algorithm. Under a coordinator these come from the
+    // controller (the local DistributedContext is size-1); otherwise they come from distributed_context_.
+    [[nodiscard]] int effective_world_size() const;
+    [[nodiscard]] int effective_rank() const;
+
+    // Coordinator-routed replacements for the MPI chip-info choreography. `solve_multi_mesh_mapping`
+    // runs the (host-independent) topology solve and returns fabric-node -> ASIC assignments;
+    // `apply_solved_mapping` writes those assignments back into chip_topology_mapping_. Splitting the
+    // solve from its distribution lets both the MPI path and the coordinator path share one solver.
+    [[nodiscard]] std::map<FabricNodeId, tt::tt_metal::AsicID> solve_multi_mesh_mapping(
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) const;
+    void apply_solved_mapping(
+        const std::map<FabricNodeId, tt::tt_metal::AsicID>& fabric_node_to_asic,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank);
+    static std::vector<uint8_t> serialize_fabric_node_to_asic(
+        const std::map<FabricNodeId, tt::tt_metal::AsicID>& mapping);
+    static std::map<FabricNodeId, tt::tt_metal::AsicID> deserialize_fabric_node_to_asic(
+        const std::vector<uint8_t>& bytes);
 
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs

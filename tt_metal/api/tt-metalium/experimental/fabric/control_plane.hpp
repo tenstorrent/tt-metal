@@ -61,6 +61,10 @@ UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 
 class FabricContext;
 
+namespace coordination {
+class SystemCoordinator;
+}
+
 // This struct provides information for how a process binds to a particular
 // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
 // descriptor.
@@ -101,7 +105,8 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
         FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+        std::shared_ptr<coordination::SystemCoordinator> coordinator = nullptr);
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -115,7 +120,8 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
         FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+        std::shared_ptr<coordination::SystemCoordinator> coordinator = nullptr);
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -130,7 +136,8 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
         FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+        std::shared_ptr<coordination::SystemCoordinator> coordinator = nullptr);
 
     ~ControlPlane();
 
@@ -163,6 +170,14 @@ public:
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
     MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
+
+    // Inject a SystemCoordinator to route cross-host fabric-coordination steps through a
+    // domain-level backend (e.g. gRPC-based ServiceCoordinator) instead of the raw
+    // DistributedContext collectives. When null (default), the legacy DistributedContext
+    // path is used and behaviour is unchanged. Must be set before
+    // configure_routing_tables_for_fabric_ethernet_channels() to take effect for routing.
+    // See tt-metalium/experimental/fabric/system_coordinator.hpp (Option B2-i).
+    void set_system_coordinator(std::shared_ptr<coordination::SystemCoordinator> coordinator);
 
     // Initializes distributed contexts for each mesh; for host-to-host communication.
     void initialize_distributed_contexts();
@@ -351,6 +366,11 @@ private:
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
+
+    // Optional domain-level coordination backend (Option B2-i). Null => legacy DistributedContext
+    // path. Injected via the constructor (available for construction-time exchanges) or the
+    // set_system_coordinator() setter. Declared last so the constructor init-list order matches.
+    std::shared_ptr<coordination::SystemCoordinator> coordinator_;
 
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;

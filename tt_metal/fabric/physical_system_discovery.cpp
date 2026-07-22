@@ -34,6 +34,7 @@
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/port_lookup.hpp"
+#include <tt-metalium/experimental/fabric/system_coordinator.hpp>
 
 namespace tt::tt_metal {
 
@@ -617,6 +618,94 @@ void exchange_metadata(
     distributed_context->barrier();
 }
 
+// Option B2-i coordinator variant of resolve_hostname_uniqueness: gather each participant's
+// discovery hostname through the coordinator, decide uniqueness on the coordinator (index 0), then
+// broadcast the verdict. Behaviour matches the DistributedContext version but uses only the
+// domain-level primitives, so a no-MPI ServiceCoordinator can drive it.
+bool resolve_hostname_uniqueness_coordinated(tt::tt_fabric::coordination::SystemCoordinator& coordinator) {
+    namespace coord = tt::tt_fabric::coordination;
+    const auto world = coord::Scope::world();
+    if (!coordinator.is_distributed() || coordinator.participant_count(world) <= 1) {
+        return true;
+    }
+
+    auto hostname = get_local_discovery_hostname();
+    coord::Bytes local(hostname.begin(), hostname.end());
+    auto gathered = coordinator.all_gather(local, world);
+
+    bool all_hostnames_unique = true;
+    if (coordinator.is_coordinator(world)) {
+        std::set<std::string> unique_names;
+        for (const auto& bytes : gathered) {
+            unique_names.emplace(bytes.begin(), bytes.end());
+        }
+        all_hostnames_unique = unique_names.size() == gathered.size();
+    }
+
+    coord::Bytes verdict = coordinator.is_coordinator(world)
+                               ? coord::Bytes{static_cast<uint8_t>(all_hostnames_unique ? 1 : 0)}
+                               : coord::Bytes{};
+    auto resolved = coordinator.broadcast(verdict, /*root_index=*/0, world);
+    TT_FATAL(!resolved.empty(), "resolve_hostname_uniqueness_coordinated: empty broadcast result");
+    return resolved[0] != 0;
+}
+
+// Option B2-i coordinator variant of the exchange_metadata gather/scatter pair. Gather every
+// participant's PhysicalSystemDescriptor to the coordinator (index 0), which merges them (with the
+// same firmware-version validation as the legacy path), runs the controller-only post-processing
+// (remove_unresolved_nodes / generate_cross_host_connections / validate_graphs), then broadcasts
+// the finalized descriptor back to all participants. This preserves the gather -> process ->
+// scatter shape while using only SystemCoordinator primitives.
+void exchange_metadata_coordinated(
+    PhysicalSystemDescriptor& psd, tt::tt_fabric::coordination::SystemCoordinator& coordinator) {
+    namespace coord = tt::tt_fabric::coordination;
+    const auto world = coord::Scope::world();
+    if (!coordinator.is_distributed() || coordinator.participant_count(world) <= 1) {
+        return;
+    }
+
+    auto local_bytes = serialize_physical_system_descriptor_to_bytes(psd);
+    auto gathered = coordinator.all_gather(local_bytes, world);
+    const int me = coordinator.local_index(world);
+
+    if (coordinator.is_coordinator(world)) {
+        for (int i = 0; i < static_cast<int>(gathered.size()); ++i) {
+            if (i == me) {
+                continue;
+            }
+            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(gathered[i]);
+            TT_FATAL(
+                !psd.get_asic_descriptors().empty() && !peer_desc.get_asic_descriptors().empty(),
+                "Cannot exchange metadata: empty ASIC descriptors");
+            validate_eth_fw_versions(
+                psd,
+                peer_desc.get_ethernet_firmware_version(),
+                psd.get_asic_descriptors().begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
+            validate_fw_bundle_versions(
+                psd,
+                peer_desc.get_firmware_bundle_version(),
+                psd.get_asic_descriptors().begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
+            psd.merge(std::move(peer_desc));
+        }
+        remove_unresolved_nodes(psd);
+        generate_cross_host_connections(psd);
+        validate_graphs(psd);
+    }
+
+    coord::Bytes finalized =
+        coordinator.is_coordinator(world) ? serialize_physical_system_descriptor_to_bytes(psd) : coord::Bytes{};
+    auto merged_bytes = coordinator.broadcast(finalized, /*root_index=*/0, world);
+    if (!coordinator.is_coordinator(world)) {
+        // PhysicalSystemDescriptor is non-assignable; mirror the legacy scatter path which merges
+        // the controller's finalized (complete) descriptor into the local one.
+        auto finalized_desc = deserialize_physical_system_descriptor_from_bytes(merged_bytes);
+        psd.merge(std::move(finalized_desc));
+    }
+    coordinator.barrier(world);
+}
+
 bool is_bh_galaxy_rev_c(tt::umd::ClusterDescriptor& cluster_desc) {
     if (cluster_desc.get_board_type(0) != BoardType::UBB_BLACKHOLE) {
         return false;
@@ -632,7 +721,8 @@ namespace discovery_impl {
 
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::ClusterDescriptor& cluster_desc,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    int my_rank,
+    int world_size,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
@@ -644,15 +734,15 @@ PhysicalSystemDescriptor run_local_discovery(
     const auto& eth_connections = cluster_desc.get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
-    auto my_rank = *(distributed_context->rank());
     auto hostname = get_local_discovery_hostname();
 
-    // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
-    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
-    // PSD merge keys stay unique and global eth links validate correctly.
-    auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
-                            ? (hostname + "_" + std::to_string(my_rank))
-                            : hostname;
+    // Cluster descriptor basename (mock) or OS hostname (live). When multiple ranks share the same
+    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with the global
+    // rank so PSD merge keys stay unique and global eth links validate correctly. `my_rank` /
+    // `world_size` are the *global* identity: under MPI they come from the DistributedContext; under a
+    // no-MPI ServiceCoordinator agent (whose local context is size-1) they come from the coordinator.
+    auto hostname_key =
+        (world_size > 1 && !all_hostnames_unique) ? (hostname + "_" + std::to_string(my_rank)) : hostname;
 
     // Set local hostname and rank (friend access allows direct access to private members)
     psd.get_host_mobo_name_map()[hostname_key] = get_mobo_name();
@@ -755,10 +845,11 @@ PhysicalSystemDescriptor run_local_discovery(
 
 PhysicalSystemDescriptor run_local_discovery_live(
     tt::umd::ClusterDescriptor& cluster_desc,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    int my_rank,
+    int world_size,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-    return run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+    return run_local_discovery(cluster_desc, my_rank, world_size, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
@@ -768,13 +859,31 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
-    bool run_live_discovery) {
-    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
-    distributed_context->barrier();
+    bool run_live_discovery,
+    const std::shared_ptr<tt::tt_fabric::coordination::SystemCoordinator>& coordinator) {
+    namespace coord = tt::tt_fabric::coordination;
+    const auto world = coord::Scope::world();
+
+    // Barrier to ensure all participants are synchronized and ready to communicate. Under a
+    // coordinator each agent's local DistributedContext is size-1, so the cross-host barrier must
+    // go through the coordinator; otherwise use the raw context.
+    if (coordinator != nullptr) {
+        coordinator->barrier(world);
+    } else {
+        distributed_context->barrier();
+    }
 
     // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
-    bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
+    bool all_hostnames_unique = (coordinator != nullptr) ? resolve_hostname_uniqueness_coordinated(*coordinator)
+                                                         : resolve_hostname_uniqueness(distributed_context);
+
+    // Global identity used to key this host in the PSD. Under a no-MPI ServiceCoordinator agent the
+    // local DistributedContext is size-1, so identity must come from the coordinator (which carries the
+    // service-assigned world index/size); under MPI it comes from the DistributedContext as before.
+    const int my_rank = (coordinator != nullptr) ? coordinator->local_index(world) : *(distributed_context->rank());
+    const int world_size =
+        (coordinator != nullptr) ? coordinator->participant_count(world) : *(distributed_context->size());
 
     static constexpr bool dispatch_local_discovery = false;
     static constexpr bool dispatch_live_discovery = true;
@@ -784,26 +893,28 @@ PhysicalSystemDescriptor run_physical_system_discovery(
                                    : dispatch_live_discovery;
 
     PhysicalSystemDescriptor psd =
-        dispatch_live
-            ? discovery_impl::run_local_discovery_live(
-                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
-            : discovery_impl::run_local_discovery(
-                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
+        dispatch_live ? discovery_impl::run_local_discovery_live(
+                            cluster_desc, my_rank, world_size, target_device_type, all_hostnames_unique)
+                      : discovery_impl::run_local_discovery(
+                            cluster_desc, my_rank, world_size, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
-    auto my_rank = *(distributed_context->rank());
     psd.set_discovery_data(get_local_discovery_hostname(), my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
-        exchange_metadata(psd, distributed_context, true);
-        auto my_rank_val = *(distributed_context->rank());
-        constexpr uint32_t controller_rank = 0;
-        if (my_rank_val == controller_rank) {
-            remove_unresolved_nodes(psd);
-            generate_cross_host_connections(psd);
-            validate_graphs(psd);
+        if (coordinator != nullptr) {
+            exchange_metadata_coordinated(psd, *coordinator);
+        } else {
+            exchange_metadata(psd, distributed_context, true);
+            auto my_rank_val = *(distributed_context->rank());
+            constexpr uint32_t controller_rank = 0;
+            if (my_rank_val == controller_rank) {
+                remove_unresolved_nodes(psd);
+                generate_cross_host_connections(psd);
+                validate_graphs(psd);
+            }
+            exchange_metadata(psd, distributed_context, false);
         }
-        exchange_metadata(psd, distributed_context, false);
     }
 
     return psd;

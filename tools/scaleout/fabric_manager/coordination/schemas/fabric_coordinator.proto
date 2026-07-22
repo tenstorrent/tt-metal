@@ -1,0 +1,107 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package tt.tt_fabric.coordination.proto;
+
+// Wire contract between fabric-manager agents (clients) and the controller
+// (server) for cross-host fabric bring-up coordination (Option (a)).
+//
+// STATUS: this is the EVENTUAL gRPC contract. The current PoC ships a
+// dependency-free reference transport (in-process + a minimal length-prefixed TCP
+// framing in tcp_transport.cpp) that implements the exact same semantics via a
+// single rendezvous primitive (see transport.hpp / controller.hpp). gRPC is a
+// drop-in transport added later; nothing in tt_metal depends on this file.
+//
+// Design notes:
+//  * This is a DOMAIN coordination contract, not an MPI transport. There are no
+//    tags, no general point-to-point, no communicator objects -- only the handful
+//    of aggregation primitives the fabric-config path actually needs.
+//  * Every collective carries (scope, epoch, participant_index) so the controller
+//    can rendezvous participants of the same phase without MPI-style tag matching.
+//  * `Reduce` is an optional central-merge optimization; if the controller does
+//    not implement a given MergeOp it returns merge_unsupported=true and the agent
+//    falls back to AllGather + local merge.
+
+// nullopt mesh_id (has_mesh_id=false) == whole-system scope; otherwise the mesh
+// whose host-ranks participate.
+message Scope {
+  bool has_mesh_id = 1;
+  uint32 mesh_id = 2;
+}
+
+enum MergeOp {
+  MERGE_OP_UNSPECIFIED = 0;
+  MERGE_OP_PHYSICAL_SYSTEM_DESCRIPTOR = 1;
+  MERGE_OP_ROUTER_PORT_DIRECTIONS = 2;
+}
+
+// ---- Bootstrap -----------------------------------------------------------
+message RegisterRequest {
+  int32 world_index = 1;      // assigned by the fabric-manager service
+  int32 world_size = 2;
+  uint32 mesh_id = 3;         // this agent's mesh binding
+  uint32 mesh_host_rank = 4;  // this agent's host rank within the mesh
+  string hostname = 5;
+}
+
+message RegisterReply {
+  // Per-scope membership resolved by the controller from all registrations.
+  // Keyed by mesh_id; also includes the world membership.
+  int32 world_participant_count = 1;
+  int32 world_local_index = 2;
+  map<uint32, int32> mesh_participant_count = 3;  // mesh_id -> count
+  map<uint32, int32> mesh_local_index = 4;        // mesh_id -> this agent's index
+}
+
+// ---- Collectives ---------------------------------------------------------
+message BarrierRequest {
+  Scope scope = 1;
+  uint64 epoch = 2;
+  int32 participant_index = 3;
+}
+message BarrierReply {}
+
+message AllGatherRequest {
+  Scope scope = 1;
+  uint64 epoch = 2;
+  int32 participant_index = 3;
+  bytes payload = 4;
+}
+message AllGatherReply {
+  // Contributions in participant-index order.
+  repeated bytes contributions = 1;
+}
+
+message BroadcastRequest {
+  Scope scope = 1;
+  uint64 epoch = 2;
+  int32 participant_index = 3;
+  int32 root_index = 4;
+  bytes payload = 5;  // set only by the root participant
+}
+message BroadcastReply {
+  bytes payload = 1;
+}
+
+message ReduceRequest {
+  Scope scope = 1;
+  uint64 epoch = 2;
+  int32 participant_index = 3;
+  MergeOp merge_op = 4;
+  bytes payload = 5;
+}
+message ReduceReply {
+  bytes merged = 1;
+  bool merge_unsupported = 2;  // if true, agents must fall back to AllGather + local merge
+}
+
+service FabricCoordinator {
+  rpc Register(RegisterRequest) returns (RegisterReply);
+  rpc Barrier(BarrierRequest) returns (BarrierReply);
+  rpc AllGather(AllGatherRequest) returns (AllGatherReply);
+  rpc Broadcast(BroadcastRequest) returns (BroadcastReply);
+  rpc Reduce(ReduceRequest) returns (ReduceReply);
+}

@@ -14,6 +14,28 @@ add_executable(
     fabric_manager/utils/fabric_manager_utils.cpp
 )
 
+# Option (a): compile the no-MPI ServiceCoordinator backend (controller + agents, over a
+# dependency-free in-process/TCP reference transport) into run_fabric_manager. Compile-time
+# selection; the actual role is chosen at runtime via --role for testing flexibility.
+option(
+    TT_FABRIC_MANAGER_ENABLE_SERVICE_COORDINATOR
+    "Build the no-MPI ServiceCoordinator backend into run_fabric_manager"
+    ON
+)
+if(TT_FABRIC_MANAGER_ENABLE_SERVICE_COORDINATOR)
+    find_package(Threads REQUIRED)
+    target_sources(
+        run_fabric_manager
+        PRIVATE
+            fabric_manager/coordination/controller.cpp
+            fabric_manager/coordination/service_coordinator.cpp
+            fabric_manager/coordination/tcp_transport.cpp
+            fabric_manager/coordination/coordinator_cli.cpp
+    )
+    target_compile_definitions(run_fabric_manager PRIVATE FABRIC_MANAGER_WITH_SERVICE_COORDINATOR=1)
+    target_link_libraries(run_fabric_manager PRIVATE Threads::Threads)
+endif()
+
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)

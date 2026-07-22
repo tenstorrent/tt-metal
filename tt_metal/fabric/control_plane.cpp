@@ -41,6 +41,8 @@
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/system_coordinator.hpp>
+#include "tt_metal/fabric/coordination/collective_coordinator.hpp"
 #include "hal_types.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -226,25 +228,52 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             // Collect row and column mins from all hosts in a BigMesh
             auto rows_min = *std::min_element(row_min_planes.begin(), row_min_planes.end());
             auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
-            std::vector<size_t> rows_min_buf(*distributed_context.size());
-            std::vector<size_t> cols_min_buf(*distributed_context.size());
-            distributed_context.all_gather(
-                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
-                ttsl::as_writable_bytes(ttsl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
-            distributed_context.all_gather(
-                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
-                ttsl::as_writable_bytes(ttsl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
-            distributed_context.barrier();
-            const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
-            const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
+            size_t global_rows_min_val = rows_min;
+            size_t global_cols_min_val = cols_min;
+
+            // Under a no-MPI ServiceCoordinator the BigMesh min-plane reduction across hosts must go
+            // through the coordinator (each agent's local DistributedContext is size-1). We gather both
+            // mins in one exchange over the world scope and take the global minimum. The legacy
+            // DistributedContext all_gather path is preserved verbatim when no coordinator is injected.
+            if (coordinator_) {
+                const auto scope = coordination::Scope::world();
+                if (coordinator_->is_distributed() && coordinator_->participant_count(scope) > 1) {
+                    coordination::Bytes local(2 * sizeof(size_t));
+                    std::memcpy(local.data(), &rows_min, sizeof(size_t));
+                    std::memcpy(local.data() + sizeof(size_t), &cols_min, sizeof(size_t));
+                    auto gathered = coordinator_->all_gather(local, scope);
+                    for (const auto& bytes : gathered) {
+                        TT_FATAL(bytes.size() == 2 * sizeof(size_t), "routing-plane min all_gather: bad payload size");
+                        size_t r = 0;
+                        size_t c = 0;
+                        std::memcpy(&r, bytes.data(), sizeof(size_t));
+                        std::memcpy(&c, bytes.data() + sizeof(size_t), sizeof(size_t));
+                        global_rows_min_val = std::min(global_rows_min_val, r);
+                        global_cols_min_val = std::min(global_cols_min_val, c);
+                    }
+                    coordinator_->barrier(scope);
+                }
+            } else {
+                std::vector<size_t> rows_min_buf(*distributed_context.size());
+                std::vector<size_t> cols_min_buf(*distributed_context.size());
+                distributed_context.all_gather(
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
+                    ttsl::as_writable_bytes(ttsl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
+                distributed_context.all_gather(
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
+                    ttsl::as_writable_bytes(ttsl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
+                distributed_context.barrier();
+                global_rows_min_val = *std::min_element(rows_min_buf.begin(), rows_min_buf.end());
+                global_cols_min_val = *std::min_element(cols_min_buf.begin(), cols_min_buf.end());
+            }
             // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
-                auto global_mesh_min = std::min(*global_rows_min, *global_cols_min);
+                auto global_mesh_min = std::min(global_rows_min_val, global_cols_min_val);
                 std::fill(row_min_planes.begin(), row_min_planes.end(), global_mesh_min);
                 std::fill(col_min_planes.begin(), col_min_planes.end(), global_mesh_min);
             } else {
-                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_rows_min);
-                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_cols_min);
+                std::fill(row_min_planes.begin(), row_min_planes.end(), global_rows_min_val);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), global_cols_min_val);
             }
 
             // Second pass: Apply minimums to each device
@@ -332,7 +361,53 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
 }
 
 void ControlPlane::initialize_distributed_contexts() {
+    // Option B2-i: once the per-mesh sub-contexts exist, hand them to the injected coordinator so
+    // mesh-scoped coordinator ops resolve to the matching sub-communicator. Only the tt_metal-native
+    // CollectiveCoordinator consumes DistributedContext sub-contexts; other backends (e.g. the
+    // service/gRPC coordinator) resolve mesh scope via the controller and ignore this.
+    auto register_mesh_contexts_with_coordinator = [this]() {
+        auto* collective = dynamic_cast<coordination::CollectiveCoordinator*>(coordinator_.get());
+        if (collective == nullptr) {
+            return;
+        }
+        for (const auto& [mesh_id, ctx] : distributed_contexts_) {
+            collective->register_mesh_context(mesh_id, ctx);
+        }
+    };
+
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    // Under a no-MPI ServiceCoordinator each agent's local DistributedContext is size-1, so the
+    // system is "multi-host" only from the coordinator's perspective. We still must populate
+    // global_logical_bindings_ / mpi_ranks_ (consumed by the multi-host intermesh path: neighbor
+    // lookup in generate_port_descriptors_for_exit_nodes and the controller-side merges) from the
+    // mesh graph + topology mapper (which already resolved mesh-host-rank -> global rank through the
+    // coordinator). No MPI sub-contexts are created: mesh-scoped collectives resolve via the
+    // controller, so every local mesh maps to the size-1 global context.
+    // Only the no-MPI service case (size-1 local context) takes this branch. An MPI-backed
+    // CollectiveCoordinator wraps a genuinely multi-rank context and must still create real MPI
+    // sub-contexts below (and register them with the coordinator), so it is excluded here.
+    const bool coordinator_distributed = coordinator_ != nullptr && coordinator_->is_distributed() &&
+                                         coordinator_->participant_count(coordination::Scope::world()) > 1 &&
+                                         *global_context->size() == 1;
+    if (coordinator_distributed) {
+        host_local_context_ = global_context;
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
+            for (const auto& [_, mesh_host_rank] : host_ranks) {
+                int global_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
+                auto rank = tt::tt_metal::distributed::multihost::Rank{global_rank};
+                mpi_ranks_[mesh_id][mesh_host_rank] = rank;
+                global_logical_bindings_[rank] = {mesh_id, mesh_host_rank};
+            }
+        }
+        for (const auto local_mesh_id : local_mesh_binding_.mesh_ids) {
+            distributed_contexts_.emplace(local_mesh_id, global_context);
+        }
+        register_mesh_contexts_with_coordinator();
+        return;
+    }
+
     if (*global_context->size() == 1) {
         host_local_context_ = global_context;
         std::transform(
@@ -340,6 +415,7 @@ void ControlPlane::initialize_distributed_contexts() {
             local_mesh_binding_.mesh_ids.end(),
             std::inserter(distributed_contexts_, distributed_contexts_.end()),
             [&](const MeshId& mesh_id) { return std::make_pair(mesh_id, global_context); });
+        register_mesh_contexts_with_coordinator();
         return;
     }
 
@@ -380,6 +456,8 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
         }
     }
+
+    register_mesh_contexts_with_coordinator();
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
@@ -421,16 +499,28 @@ void ControlPlane::init_control_plane(
     const auto& rtoptions = this->rtoptions_.get();
     auto fabric_config = this->get_fabric_config();
 
-    // Number of hosts
-    int world_size = *distributed_context->size();
-    int rank = *distributed_context->rank();
+    // Number of hosts / this host's index. Under a no-MPI ServiceCoordinator the local
+    // DistributedContext is size-1, so the true system-wide identity comes from the coordinator;
+    // under MPI (or no coordinator) it comes from the DistributedContext as before.
+    int world_size = (coordinator_ != nullptr) ? coordinator_->participant_count(coordination::Scope::world())
+                                               : *distributed_context->size();
+    int rank = (coordinator_ != nullptr) ? coordinator_->local_index(coordination::Scope::world())
+                                         : *distributed_context->rank();
 
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
-    auto psd =
-        tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
+    // Option B2-i: thread the (optional) domain-level coordinator into physical discovery so its
+    // cross-host exchanges go through the SystemCoordinator seam when injected; nullptr preserves
+    // the legacy DistributedContext path.
+    auto psd = tt::tt_metal::run_physical_system_discovery(
+        *driver_ref.get_cluster_description(),
+        distributed_context,
+        rtoptions.get_target_device(),
+        /*run_global_discovery=*/true,
+        /*run_live_discovery=*/true,
+        coordinator_);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -448,7 +538,8 @@ void ControlPlane::init_control_plane(
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
             logical_mesh_chip_id_to_physical_chip_id_mapping->get(),
-            topology_mapping_timeout);
+            topology_mapping_timeout,
+            coordinator_.get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         // Generate corner pinning for full host galaxy systems
@@ -489,7 +580,8 @@ void ControlPlane::init_control_plane(
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
             fixed_asic_position_pinnings,
-            topology_mapping_timeout);
+            topology_mapping_timeout,
+            coordinator_.get());
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
@@ -635,7 +727,8 @@ ControlPlane::ControlPlane(
     FabricTensixConfig fabric_tensix_config,
     FabricUDMMode fabric_udm_mode,
     FabricRouterConfig fabric_router_config,
-    FabricManagerMode fabric_manager) :
+    FabricManagerMode fabric_manager,
+    std::shared_ptr<coordination::SystemCoordinator> coordinator) :
     cluster_(cluster),
     rtoptions_(rtoptions),
     hal_(hal),
@@ -645,7 +738,8 @@ ControlPlane::ControlPlane(
     fabric_tensix_config_(fabric_tensix_config),
     fabric_udm_mode_(fabric_udm_mode),
     fabric_router_config_(fabric_router_config),
-    fabric_manager_(fabric_manager) {
+    fabric_manager_(fabric_manager),
+    coordinator_(std::move(coordinator)) {
     init_control_plane_auto_discovery();
     initialize_fabric_context();
 }
@@ -661,7 +755,8 @@ ControlPlane::ControlPlane(
     FabricTensixConfig fabric_tensix_config,
     FabricUDMMode fabric_udm_mode,
     FabricRouterConfig fabric_router_config,
-    FabricManagerMode fabric_manager) :
+    FabricManagerMode fabric_manager,
+    std::shared_ptr<coordination::SystemCoordinator> coordinator) :
     cluster_(cluster),
     rtoptions_(rtoptions),
     hal_(hal),
@@ -671,7 +766,8 @@ ControlPlane::ControlPlane(
     fabric_tensix_config_(fabric_tensix_config),
     fabric_udm_mode_(fabric_udm_mode),
     fabric_router_config_(fabric_router_config),
-    fabric_manager_(fabric_manager) {
+    fabric_manager_(fabric_manager),
+    coordinator_(std::move(coordinator)) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
     initialize_fabric_context();
 }
@@ -688,7 +784,8 @@ ControlPlane::ControlPlane(
     FabricTensixConfig fabric_tensix_config,
     FabricUDMMode fabric_udm_mode,
     FabricRouterConfig fabric_router_config,
-    FabricManagerMode fabric_manager) :
+    FabricManagerMode fabric_manager,
+    std::shared_ptr<coordination::SystemCoordinator> coordinator) :
     cluster_(cluster),
     rtoptions_(rtoptions),
     hal_(hal),
@@ -698,7 +795,8 @@ ControlPlane::ControlPlane(
     fabric_tensix_config_(fabric_tensix_config),
     fabric_udm_mode_(fabric_udm_mode),
     fabric_router_config_(fabric_router_config),
-    fabric_manager_(fabric_manager) {
+    fabric_manager_(fabric_manager),
+    coordinator_(std::move(coordinator)) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     initialize_fabric_context();
 }
@@ -2563,7 +2661,34 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     }
 }
 
+void ControlPlane::set_system_coordinator(std::shared_ptr<coordination::SystemCoordinator> coordinator) {
+    coordinator_ = std::move(coordinator);
+}
+
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
+    // When a domain-level coordinator is injected, route this exchange through
+    // it (serialize -> reduce(RouterPortDirections) -> barrier) instead of the raw
+    // DistributedContext collectives below. The legacy path is preserved verbatim in the
+    // `else`/fall-through so the workload path is unchanged when no coordinator is set.
+    if (coordinator_) {
+        const auto scope = coordination::Scope::world();
+        if (!coordinator_->is_distributed() || coordinator_->participant_count(scope) <= 1) {
+            return;
+        }
+        RouterPortDirectionsData local_data;
+        local_data.local_mesh_id = local_mesh_binding_.mesh_ids[0];
+        local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
+        local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
+
+        auto local_bytes = tt::tt_fabric::serialize_router_port_directions_to_bytes(local_data);
+        auto merged_bytes = coordinator_->reduce(local_bytes, coordination::MergeOp::RouterPortDirections, scope);
+        auto merged = tt::tt_fabric::deserialize_router_port_directions_from_bytes(merged_bytes);
+        router_port_directions_to_physical_eth_chan_map_ = std::move(merged.router_port_directions_map);
+
+        coordinator_->barrier(scope);
+        return;
+    }
+
     const auto& distributed_context = this->distributed_context_.get();
     if (*distributed_context.size() == 1) {
         // No need to collect from other hosts when running a single process
@@ -2662,7 +2787,15 @@ void ControlPlane::generate_intermesh_connectivity() {
                                                         : requested_intermesh_ports.size();
     };
 
-    if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
+    // Under a no-MPI ServiceCoordinator the local DistributedContext is size-1, so the multi-host
+    // intermesh path must be selected from the coordinator's world size instead. The cross-host
+    // exchanges inside generate_port_descriptors_for_exit_nodes / convert_...  are already routed
+    // through the coordinator (forward_descriptors_to_controller / forward_intermesh_connections_...).
+    const bool multi_host =
+        coordinator_ != nullptr
+            ? (coordinator_->is_distributed() && coordinator_->participant_count(coordination::Scope::world()) > 1)
+            : (*(this->distributed_context_.get().size()) > 1);
+    if (!generate_mapping_locally_ && multi_host) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
         intermesh_connections = this->convert_port_descriptors_to_intermesh_connections(exit_node_port_descriptors);
@@ -2688,11 +2821,6 @@ void ControlPlane::generate_intermesh_connectivity() {
 }
 
 void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
-
     auto serialize_local_map =
         [](const std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& m) {
             std::vector<uint8_t> buf;
@@ -2752,6 +2880,31 @@ void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hos
         };
 
     std::vector<uint8_t> serialized_local = serialize_local_map(intermesh_exit_fabric_node_ids_);
+
+    // Option B2-i: when a coordinator is injected, gather every participant's serialized map and
+    // merge the remote contributions locally (skip our own index). Uses only SystemCoordinator
+    // primitives; the legacy round-robin broadcast below is preserved for the no-coordinator path.
+    if (coordinator_) {
+        const auto scope = coordination::Scope::world();
+        if (!coordinator_->is_distributed() || coordinator_->participant_count(scope) <= 1) {
+            return;
+        }
+        auto gathered = coordinator_->all_gather(serialized_local, scope);
+        const int me = coordinator_->local_index(scope);
+        for (int i = 0; i < static_cast<int>(gathered.size()); ++i) {
+            if (i == me) {
+                continue;
+            }
+            merge_from_serialized(intermesh_exit_fabric_node_ids_, gathered[i]);
+        }
+        coordinator_->barrier(scope);
+        return;
+    }
+
+    const auto& distributed_context = this->distributed_context_.get();
+    if (*distributed_context.size() == 1) {
+        return;
+    }
     std::vector<uint8_t> serialized_remote;
     auto my_rank = *(distributed_context.rank());
 
@@ -2785,11 +2938,6 @@ void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hos
 }
 
 void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts() {
-    const auto& distributed_context = this->distributed_context_.get();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
-
     auto serialize_local_pair_map =
         [](const std::unordered_map<
             MeshId,
@@ -2873,6 +3021,29 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
         };
 
     std::vector<uint8_t> serialized_local = serialize_local_pair_map(intermesh_exit_peer_fabric_node_id_pairs_);
+
+    // Option B2-i: coordinator-driven all-gather + local merge (see the exit-node variant above).
+    if (coordinator_) {
+        const auto scope = coordination::Scope::world();
+        if (!coordinator_->is_distributed() || coordinator_->participant_count(scope) <= 1) {
+            return;
+        }
+        auto gathered = coordinator_->all_gather(serialized_local, scope);
+        const int me = coordinator_->local_index(scope);
+        for (int i = 0; i < static_cast<int>(gathered.size()); ++i) {
+            if (i == me) {
+                continue;
+            }
+            merge_from_serialized(intermesh_exit_peer_fabric_node_id_pairs_, gathered[i]);
+        }
+        coordinator_->barrier(scope);
+        return;
+    }
+
+    const auto& distributed_context = this->distributed_context_.get();
+    if (*distributed_context.size() == 1) {
+        return;
+    }
     std::vector<uint8_t> serialized_remote;
     auto my_rank = *(distributed_context.rank());
 
@@ -3174,6 +3345,51 @@ void ControlPlane::forward_descriptors_to_controller(
     PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t CONTROLLER_RANK = 0;
+
+    // Option B2-i: gather every participant's port-descriptor table to the coordinator (index 0),
+    // which merges the peer tables into its own using the same logic as the legacy controller-side
+    // recv loop. Non-controllers keep their local table. Uses only SystemCoordinator primitives.
+    if (coordinator_) {
+        const auto scope = coordination::Scope::world();
+        if (!coordinator_->is_distributed() || coordinator_->participant_count(scope) <= 1) {
+            return;
+        }
+        auto local_bytes = serialize_to_bytes(port_descriptors);
+        auto gathered = coordinator_->all_gather(local_bytes, scope);
+        if (coordinator_->is_coordinator(scope)) {
+            const int me = coordinator_->local_index(scope);
+            for (int i = 0; i < static_cast<int>(gathered.size()); ++i) {
+                if (i == me) {
+                    continue;
+                }
+                auto peer_port_descriptors = deserialize_port_descriptors_from_bytes(gathered[i]);
+                TT_FATAL(peer_port_descriptors.size() == 1, "Expecting peer port id table to have exactly one mesh");
+
+                const auto& neighbor_mesh_id = peer_port_descriptors.begin()->first;
+                auto& neighbor_connections = peer_port_descriptors.begin()->second;
+
+                auto& neighbor_mesh_descriptors = port_descriptors[neighbor_mesh_id];
+                if (neighbor_mesh_descriptors.empty()) {
+                    neighbor_mesh_descriptors = std::move(neighbor_connections);
+                } else {
+                    for (auto&& [dest_mesh_id, dest_port_descriptors] : neighbor_connections) {
+                        auto& dest_descriptors = neighbor_mesh_descriptors[dest_mesh_id];
+                        if (dest_descriptors.empty()) {
+                            dest_descriptors = std::move(dest_port_descriptors);
+                        } else {
+                            dest_descriptors.insert(
+                                dest_descriptors.end(),
+                                std::make_move_iterator(dest_port_descriptors.begin()),
+                                std::make_move_iterator(dest_port_descriptors.end()));
+                        }
+                    }
+                }
+            }
+        }
+        coordinator_->barrier(scope);
+        return;
+    }
+
     const auto& distributed_context = this->distributed_context_.get();
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
     std::size_t serialized_table_size = 0;
@@ -3241,6 +3457,26 @@ void ControlPlane::forward_descriptors_to_controller(
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
     using namespace tt::tt_metal::distributed::multihost;
+
+    // Option B2-i: the controller (index 0) broadcasts the finalized intermesh connections to all
+    // participants through the coordinator; non-controllers replace their local copy. Uses only
+    // SystemCoordinator primitives. Legacy send/recv fan-out preserved below.
+    if (coordinator_) {
+        const auto scope = coordination::Scope::world();
+        if (!coordinator_->is_distributed() || coordinator_->participant_count(scope) <= 1) {
+            return;
+        }
+        coordination::Bytes payload = coordinator_->is_coordinator(scope)
+                                          ? serialize_intermesh_connections_to_bytes(intermesh_connections)
+                                          : coordination::Bytes{};
+        auto out = coordinator_->broadcast(payload, /*root_index=*/0, scope);
+        if (!coordinator_->is_coordinator(scope)) {
+            intermesh_connections = deserialize_intermesh_connections_from_bytes(out);
+        }
+        coordinator_->barrier(scope);
+        return;
+    }
+
     const auto& distributed_context = this->distributed_context_.get();
     constexpr uint32_t CONTROLLER_RANK = 0;
     const auto& my_host = physical_system_descriptor_->my_host_name();
