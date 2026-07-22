@@ -47,6 +47,49 @@ static int gpu_max_depth(
     return md;
 }
 
+// Print the zones along the DEEPEST nesting path (one per level): name + gpu start/end. Reveals whether a
+// pathological nest is real zones ("T*_Zone*") or X280-STALL, and whether ENDs are missing (start==end / a
+// parent that never closes before its children).
+static void dump_deep_path(
+    const tracy::Worker& w, const tracy::Vector<tracy::short_ptr<tracy::GpuEvent>>& vec, int depth) {
+    if (depth >= kDepthCap) {
+        return;
+    }
+    const tracy::GpuEvent* best = nullptr;
+    int best_sub = -1;
+    auto consider = [&](const tracy::GpuEvent& e) {
+        int sub = (e.Child() >= 0) ? gpu_max_depth(w, w.GetGpuChildren(e.Child()), 0) : 0;
+        if (sub > best_sub) {
+            best_sub = sub;
+            best = &e;
+        }
+    };
+    if (vec.is_magic()) {
+        auto& mv = *reinterpret_cast<const tracy::Vector<tracy::GpuEvent>*>(&vec);
+        for (auto& e : mv) {
+            consider(e);
+        }
+    } else {
+        for (auto& p : vec) {
+            consider(*p);
+        }
+    }
+    if (!best) {
+        return;
+    }
+    const char* nm = w.GetZoneName(*best);
+    printf(
+        "    d=%-3d %-24s gpuStart=%lld gpuEnd=%lld dur=%lld\n",
+        depth,
+        nm ? nm : "(null)",
+        (long long)best->GpuStart(),
+        (long long)best->GpuEnd(),
+        (long long)(best->GpuEnd() - best->GpuStart()));
+    if (best->Child() >= 0) {
+        dump_deep_path(w, w.GetGpuChildren(best->Child()), depth + 1);
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <trace.tracy>\n", argv[0]);
@@ -95,6 +138,14 @@ int main(int argc, char** argv) {
                 c->period,
                 nm,
                 depth_note[0] ? depth_note : "");
+            if (ctx_max_depth > 3) {
+                for (const auto& td : c->threadData) {
+                    if (gpu_max_depth(worker, td.second.timeline, 0) > 3) {
+                        printf("  --- deepest path, tid=%llu ---\n", (unsigned long long)td.first);
+                        dump_deep_path(worker, td.second.timeline, 0);
+                    }
+                }
+            }
             total_zones += c->count;
         }
         printf("=== total gpu zones across contexts: %zu ===\n", total_zones);
