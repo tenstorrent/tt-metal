@@ -135,18 +135,25 @@ tt::tt_fabric::Topology get_axis_topology(
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 
-bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis) {
+bool logical_axis_has_only_direct_fabric_neighbors(
+    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology) {
     TT_FATAL(axis < 2, "Mesh axis must be 0 or 1, got {}", axis);
+    TT_FATAL(
+        topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Ring,
+        "Direct-neighbor axis validation requires Linear or Ring topology, got {}",
+        topology);
     auto* mesh_device = tensor.device();
     TT_FATAL(mesh_device != nullptr, "Tensor must have a MeshDevice");
     const auto shape = mesh_device->shape();
-    if (shape[axis] <= 2) {
+    const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
+    if (shape[axis] <= 1 || (is_ring && shape[axis] <= 2)) {
         return false;
     }
 
     const uint32_t group_count = shape[1 - axis];
+    const uint32_t edge_count = is_ring ? shape[axis] : shape[axis] - 1;
     for (uint32_t group = 0; group < group_count; ++group) {
-        for (uint32_t rank = 0; rank < shape[axis]; ++rank) {
+        for (uint32_t rank = 0; rank < edge_count; ++rank) {
             const uint32_t next = (rank + 1) % shape[axis];
             const MeshCoordinate src = axis == 0 ? MeshCoordinate(rank, group) : MeshCoordinate(group, rank);
             const MeshCoordinate dst = axis == 0 ? MeshCoordinate(next, group) : MeshCoordinate(group, next);
@@ -157,6 +164,10 @@ bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis) {
         }
     }
     return true;
+}
+
+bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis) {
+    return logical_axis_has_only_direct_fabric_neighbors(tensor, axis, tt::tt_fabric::Topology::Ring);
 }
 
 tt::tt_fabric::Topology get_usable_topology(

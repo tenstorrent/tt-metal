@@ -4,15 +4,23 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+#ifdef FABRIC_2D
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+namespace fabric_api = tt::tt_fabric::mesh::experimental;
+#else
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+namespace fabric_api = tt::tt_fabric::linear::experimental;
+#endif
 
 #include <array>
 #include <cstdint>
 #include <utility>
 
-// Store-and-forward AllGather is Fabric_1D only: every fabric send is a single 1-hop unicast to the neighbor.
-namespace fabric_api = tt::tt_fabric::linear::experimental;
+// Store-and-forward AllGather always terminates at the immediate physical
+// neighbor. Fabric1D encodes that as num_hops=1; Fabric2D encodes the resolved
+// neighbor node as a terminal mesh unicast destination.
 
 ////////////////////////////////////////////////////////////////
 // data_valid semaphore protocol
@@ -41,7 +49,8 @@ template <
     uint32_t output_chunks_per_stripe,
     uint32_t output_chunks_per_page,
     uint32_t output_chunk_size,
-    uint32_t num_devices>
+    uint32_t num_devices,
+    uint32_t slice_step>
 class OutputStripeIterator {
     static constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     static constexpr uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
@@ -50,6 +59,14 @@ class OutputStripeIterator {
 public:
     // Point at `stripe` for the chunk range [start, start + count).
     FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count) {
+        if constexpr (slice_step > 1) {
+            static_assert(output_chunks_per_page == 1, "strided bank-owned schedule requires matched output pages");
+            stripe_ = stripe;
+            start_ = start;
+            sent_ = 0;
+            count_ = count;
+            return;
+        }
         const uint32_t s_start = (start / output_chunks_per_stripe) * stripe_distance_chunks +
                                  (start % output_chunks_per_stripe) + stripe * output_chunks_per_stripe;
         page_id_ = s_start / output_chunks_per_page;
@@ -72,6 +89,13 @@ public:
 
     // Return {output_page_id, byte_offset} of the current chunk, then advance.
     FORCE_INLINE std::pair<uint32_t, uint32_t> next() {
+        if constexpr (slice_step > 1) {
+            const uint32_t local_chunk = start_ + sent_ * slice_step;
+            const uint32_t stripe_group = local_chunk / output_chunks_per_stripe;
+            const uint32_t chunk_in_stripe = local_chunk % output_chunks_per_stripe;
+            ++sent_;
+            return {stripe_group * stripe_distance_chunks + stripe_ * output_chunks_per_stripe + chunk_in_stripe, 0};
+        }
         std::pair<uint32_t, uint32_t> loc{page_id_, byte_off_};
         sent_++;
         if (++chunk_in_stripe_ == output_chunks_per_stripe) {
@@ -89,7 +113,7 @@ public:
     }
 
 private:
-    uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_;
+    uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_, stripe_, start_;
 };
 
 // Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one
@@ -99,10 +123,11 @@ private:
 // (one worker per direction) or a WorkerToFabricMuxSender (workers sharing a fabric mux). The send calls are
 // base sender-pointer overloads that accept either; for 1D-linear all routing is to_chip_unicast(1) set via
 // set_state, so no route-manager is needed. FabricWriter owns its two packet headers directly.
-template <uint32_t page_size, uint32_t packet_size, typename SenderT>
+template <uint32_t page_size, uint32_t packet_size, bool coalesce_contiguous_pages, typename SenderT>
 class FabricWriter {
 public:
-    FabricWriter(const Noc& noc, SenderT* sender) :
+    FabricWriter(
+        const Noc& noc, SenderT* sender, [[maybe_unused]] uint8_t dst_dev_id, [[maybe_unused]] uint16_t dst_mesh_id) :
         noc{noc},
         sender{sender},
         scatter_packet_header{PacketHeaderPool::allocate_header(1)},
@@ -113,8 +138,17 @@ public:
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
         std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
         chunk_sizes.fill(page_size);
-        constexpr uint8_t num_hops = 1;  // store-and-forward: always the immediate neighbor
+#ifdef FABRIC_2D
+        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
+            scatter_packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
 
+        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+            unicast_packet_header, dst_dev_id, dst_mesh_id);
+#else
+        constexpr uint8_t num_hops = 1;
         fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
             scatter_packet_header,
             num_hops,
@@ -122,6 +156,7 @@ public:
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, num_hops);
+#endif
     }
 
     ~FabricWriter() {
@@ -130,6 +165,21 @@ public:
 
     void async_write(uint32_t l1_addr, uint64_t remote_noc_addr) {
         if constexpr (use_scatter_write) {
+            if constexpr (coalesce_contiguous_pages) {
+                if (chunk_count > 0 && remote_noc_addr != previous_remote_noc_addr + page_size) {
+                    send_queued_chunks();
+                }
+                if (chunk_count == 0) {
+                    start_l1_addr = l1_addr;
+                }
+                previous_remote_noc_addr = remote_noc_addr;
+                first_remote_noc_addr = chunk_count == 0 ? remote_noc_addr : first_remote_noc_addr;
+                ++chunk_count;
+                if (chunk_count == pages_per_packet) {
+                    send_queued_chunks();
+                }
+                return;
+            }
             // Queue up multiple pages to send in a single packet.
             // Assumption: pages are contiguous in local memory (L1).
             // Note: currently, scatter_write necessitates chunk_count >= 2.
@@ -175,7 +225,15 @@ public:
 private:
     void send_queued_chunks() {
         noc.async_writes_flushed();
-        if (chunk_count == 1 || chunks_are_contiguous) {
+        if constexpr (coalesce_contiguous_pages) {
+            fabric_api::fabric_unicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                sender,
+                unicast_packet_header,
+                start_l1_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{first_remote_noc_addr},
+                chunk_count * page_size);
+        } else if (chunk_count == 1 || chunks_are_contiguous) {
             fabric_api::fabric_unicast_noc_unicast_write_with_state<
                 UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                 sender,
@@ -196,7 +254,9 @@ private:
     static constexpr uint32_t max_pages_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
     static constexpr uint32_t min_pages_per_packet = NOC_SCATTER_WRITE_MIN_CHUNKS;
     // When page_size < packet_size
-    static constexpr uint32_t pages_per_packet = std::min(packet_size / page_size, max_pages_per_packet);  // div_down
+    static constexpr uint32_t pages_per_packet =
+        coalesce_contiguous_pages ? packet_size / page_size
+                                  : std::min(packet_size / page_size, max_pages_per_packet);  // div_down
     // When page_size > packet_size
     static constexpr uint32_t packets_per_page = (page_size + packet_size - 1) / packet_size;  // div_up
     // Use scatter_write or unicast_write (currently scatter_write imposes a min chunk_count)
@@ -213,5 +273,7 @@ private:
     NocUnicastScatterCommandHeader scatter_header;
     uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
     uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks
+    uint64_t first_remote_noc_addr;
+    uint64_t previous_remote_noc_addr;
     bool chunks_are_contiguous;
 };

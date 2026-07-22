@@ -37,7 +37,8 @@ void kernel_main() {
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr uint32_t slice_step = get_compile_time_arg_val(9);
+    constexpr auto output_tensor_args = TensorAccessorArgs<10>();
 
 #ifdef USE_WORKER_MUX
     // Fabric-mux geometry, appended by ccl::fabric_mux_connection_ct_args (after the tensor-accessor args).
@@ -71,6 +72,8 @@ void kernel_main() {
     const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
+    [[maybe_unused]] const uint8_t neighbor_dev_id = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
     // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
@@ -139,14 +142,21 @@ void kernel_main() {
     SenderT* sender = &fabric_connection.get(0).sender;
 #endif
 
-    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender);
+    FabricWriter<output_chunk_size, packet_size, (slice_step > 1), SenderT> fabric(
+        noc, sender, neighbor_dev_id, neighbor_mesh_id);
 
     // One 1-hop atomic-inc header for both the "alive" barrier inc and the data_valid signals; destination and
     // value (chunks) are set per send. Flush keeps a data_valid inc ordered after the payload it announces.
     auto sem_packet_header = PacketHeaderPool::allocate_header(1);
+#ifdef FABRIC_2D
+    fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        sem_packet_header, neighbor_dev_id, neighbor_mesh_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+#else
     fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         sem_packet_header, /*num_hops=*/1, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+#endif
     auto atomic_inc = [&](uint64_t addr, uint32_t val) {
         fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
             UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
@@ -167,7 +177,8 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
+    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices, slice_step>
+        it;
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {

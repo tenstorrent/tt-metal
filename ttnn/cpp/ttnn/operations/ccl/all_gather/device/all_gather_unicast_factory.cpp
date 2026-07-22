@@ -14,7 +14,7 @@ namespace ttnn::operations::ccl {
 using namespace ::ttnn::ccl;
 
 ////////////////////////////////////////////////////////////////
-// Store-and-forward AllGather (Fabric_1D line/ring only)
+// Store-and-forward AllGather (Fabric1D or direct-neighbor Fabric2D line/ring)
 //
 // Every device relays stripes to its neighbor one hop at a time; a shard reaches far devices by being
 // re-forwarded at each hop. Forward and backward directions run on separate cores. Per direction: the reader
@@ -97,7 +97,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     ////////////////////////////////////////////////////////////////
 
     const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
-    TT_FATAL(!fabric_is_2d, "all_gather unicast algorithm supports Fabric_1D line/ring only, not Fabric_2D");
+    TT_FATAL(
+        !fabric_is_2d || operation_attributes.neighbor_unicast_eligible,
+        "Fabric2D all_gather neighbor unicast requires a host-proved direct physical line/ring");
 
     uint32_t active_axis = 0;
     for (uint32_t a = 0; a < 2; ++a) {
@@ -159,16 +161,15 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         workers_per_dir = 2;
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
-        // More workers only help when the op is bandwidth-bound, which needs both large NOC transactions
-        // (page size) and enough steady-state bytes. Small-page tensors (e.g. block-float) stay
-        // per-page-overhead-bound even at tens of MB, so extra workers add only mux cost.
+        // Large steady-state tensors use four workers per direction. For small
+        // row pages this also creates one worker per DRAM bank across two links,
+        // enabling the bank-owned full-packet schedule below.
         const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
         const uint64_t total_output_bytes =
             (uint64_t)output_tensor.buffer()->num_pages() * output_tensor.buffer()->aligned_page_size();
         const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
-        constexpr uint32_t bw_bound_txn_bytes = 1536;         // between block-float (<=1088) and bf16 (2048)
         constexpr uint64_t bw_bound_link_bytes = 4500000ULL;  // gathered bytes/link where fabric link saturates
-        if (txn_bytes >= bw_bound_txn_bytes && per_link_bytes >= bw_bound_link_bytes) {
+        if (txn_bytes > 0 && per_link_bytes >= bw_bound_link_bytes) {
             workers_per_dir = 4;
         } else {
             workers_per_dir = 2;
@@ -366,6 +367,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
     TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
 
+    const uint32_t total_slices = num_links * workers_per_dir;
+    const uint32_t num_dram_banks = mesh_device->num_dram_channels();
+    const bool bank_owned_schedule =
+        input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && input_tensor.buffer()->is_dram() &&
+        output_tensor.buffer()->is_dram() &&
+        input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        output_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        output_chunks_per_page == 1 && split_factor == 1 && output_chunks_per_stripe == num_input_pages &&
+        total_slices == num_dram_banks && num_input_pages % total_slices == 0;
+    const uint32_t slice_step = bank_owned_schedule ? total_slices : 1;
+
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
@@ -384,7 +396,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Auto-selected to half the per-worker stripe: enough pipelining without the over-signalling that hurts
     // small-page tensors at scale. Kept as a fraction of the stripe so it self-scales with tensor size, links,
     // and workers.
-    const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t outputs_per_cb_page = std::max(1u, cb_page_size / output_chunk_size);
     const uint32_t cb_pages_per_stripe = std::max(1u, (num_output_chunks / total_slices) / outputs_per_cb_page);
     const uint32_t data_valid_granularity = std::max(1u, cb_pages_per_stripe / 2u);
@@ -400,6 +411,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb0_id,                    // cb id
         cb_page_size,              // cb entry size
         do_init_barrier,           // wait for remote output allocation before relaying
+        slice_step,                // one means contiguous slices; >1 owns one interleaved DRAM bank
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -415,12 +427,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         packet_size,               // packet_size
         do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
+        slice_step,                // one means scatter packets; >1 enables contiguous full packets
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
     // When multiple workers share a fabric mux, the writer connects through it: append the mux geometry (after
     // the tensor-accessor args) and switch the kernel onto its USE_WORKER_MUX path.
     std::map<std::string, std::string> writer_defines;
+    if (fabric_is_2d) {
+        writer_defines["FABRIC_2D"] = "1";
+        writer_defines["API_TYPE_Mesh"] = "1";
+    }
     if (use_mux) {
         ttnn::ccl::fabric_mux_connection_ct_args(
             workers_per_dir, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_compile_args);
@@ -473,13 +490,18 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const uint32_t slice_idx = (link * workers_per_dir) + w;
             const uint32_t input_pages_per_slice = num_input_pages / total_slices;
             const uint32_t remainder = num_input_pages % total_slices;
-            const uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
+            const uint32_t input_tile_id_start =
+                bank_owned_schedule ? slice_idx : (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
             const uint32_t input_tile_id_end =
-                ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
+                bank_owned_schedule ? num_input_pages
+                                    : ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
             const uint32_t local_output_start =
-                (static_cast<uint64_t>(input_tile_id_start) * num_output_chunks) / num_input_pages;
+                bank_owned_schedule
+                    ? slice_idx
+                    : (static_cast<uint64_t>(input_tile_id_start) * num_output_chunks) / num_input_pages;
             const uint32_t local_output_end =
-                (static_cast<uint64_t>(input_tile_id_end) * num_output_chunks) / num_input_pages;
+                bank_owned_schedule ? local_output_start + input_pages_per_slice
+                                    : (static_cast<uint64_t>(input_tile_id_end) * num_output_chunks) / num_input_pages;
             const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
             const uint32_t half = num_worker_output_chunks / 2;
 
@@ -493,6 +515,14 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const CoreCoord mirror_core = mesh_device->worker_core_from_logical_core(core);
                 const CoreCoord partner_core = mesh_device->worker_core_from_logical_core(partner);
                 const auto neighbor = dir_neighbor(dir);
+                const auto neighbor_node =
+                    neighbor.has_value() ? mesh_device->get_fabric_node_id(*neighbor) : sender_fabric_node_id;
+                TT_FATAL(
+                    !neighbor.has_value() || !fabric_is_2d ||
+                        tt::tt_fabric::are_direct_fabric_neighbors(sender_fabric_node_id, neighbor_node),
+                    "Fabric2D neighbor-unicast edge from {} to {} is not one physical hop",
+                    sender_fabric_node_id,
+                    neighbor_node);
 
                 const uint32_t stripe_step = is_forward ? num_devices - 1 : 1;
                 const uint32_t num_iters = is_forward ? fwd_iters : bwd_iters;
@@ -513,7 +543,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 uint32_t final_start = local_output_start;
                 uint32_t final_count = num_worker_output_chunks;
                 if (ring_even_split) {
-                    final_start = is_forward ? local_output_start : (local_output_start + half);
+                    final_start = is_forward ? local_output_start : (local_output_start + half * slice_step);
                     final_count = is_forward ? half : (num_worker_output_chunks - half);
                 }
 
@@ -557,6 +587,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     (uint32_t)mirror_core.x,   // data_valid_sem target (neighbor mirror core x)
                     (uint32_t)mirror_core.y,   // data_valid_sem target (neighbor mirror core y)
                     num_granular,              // leading sends the downstream relays
+                    static_cast<uint32_t>(neighbor_node.chip_id),
+                    static_cast<uint32_t>(*neighbor_node.mesh_id),
                 };
                 TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");
                 if (num_iters > 0) {
@@ -577,7 +609,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                             term_master_vc,
                             writer_rt_args);
                     } else {
-                        std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
+                        std::vector<tt::tt_fabric::FabricNodeId> dst = {neighbor_node};
                         append_routing_plane_connection_manager_rt_args(
                             sender_fabric_node_id,
                             dst,
@@ -586,7 +618,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                             writer_kernel_id,
                             {core},
                             writer_rt_args,
-                            tt::tt_fabric::FabricApiType::Linear);
+                            fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
                     }
                 }
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);

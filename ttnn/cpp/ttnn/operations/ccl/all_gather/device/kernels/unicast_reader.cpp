@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr uint32_t slice_step = get_compile_time_arg_val(8);
+    constexpr auto input_tensor_args = TensorAccessorArgs<9>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
@@ -62,7 +63,8 @@ void kernel_main() {
     CircularBuffer cb(cb0_id);
     auto* data_valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_valid_sem);
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
+    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices, slice_step>
+        it;
 
     ///////////////////////////////////////////////////
     // MAIN
@@ -95,7 +97,7 @@ void kernel_main() {
                         {},
                         {});
                     l1_write_addr += input_page_size;
-                    ++page;
+                    page += slice_step;
                 }
                 noc.async_read_barrier();
                 cb.push_back(1);
@@ -107,7 +109,7 @@ void kernel_main() {
             const bool last = (iter == num_iters - 1);
             const uint32_t start = last ? final_start : slice_start;
             const uint32_t count = last ? final_count : slice_count;
-            const uint32_t base_chunk = (iter - 1) * slice_count + (start - slice_start);
+            const uint32_t base_chunk = (iter - 1) * slice_count + (start - slice_start) / slice_step;
             it.init(stripe, start, count);
             for (uint32_t chunks_read = 0; chunks_read < count;) {
                 const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_read);

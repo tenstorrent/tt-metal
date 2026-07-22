@@ -243,6 +243,7 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         attrs.axis_num_links,
         attrs.num_devices,
         attrs.packet_size,
+        attrs.neighbor_unicast_eligible,
         attrs.subdevice_id,
         attrs.sub_core_grid,
         attrs.receiver_policy,
@@ -392,8 +393,9 @@ AllGatherDeviceOperation::create_op_performance_model(
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& operation_attributes, const AllGatherInputs& tensor_args) {
     // Heuristics to pick the kernel algorithm.
-    // Multicast supports all Fabric topologies, unicast only supports Fabric 1D topologies.
-    // Unicast is empirically found to be faster for large tensors.
+    // Multicast is the general fallback. Native neighbor unicast supports
+    // Fabric1D and host-proved, direct-neighbor Fabric2D lines/rings and is
+    // empirically faster for large tensors.
     bool use_unicast = false;
     if (operation_attributes.batch_slice_idx.has_value() || operation_attributes.valid_gather_extent.has_value()) {
         return program_factory_t{AllGatherMulticastFactory{}};
@@ -401,12 +403,6 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     if (operation_attributes.receiver_policy.test_mode == ReceiverL1TestMode::ForceReceiver) {
         // The multicast factory owns the full safety proof and emits the
         // concrete rejection reason for an invalid forced configuration.
-        return program_factory_t{AllGatherMulticastFactory{}};
-    }
-    if (operation_attributes.receiver_policy.test_mode == ReceiverL1TestMode::Auto &&
-        tensor_args.persistent_output_tensor.has_value() &&
-        should_auto_select_receiver_l1_path(
-            operation_attributes, tensor_args, tensor_args.persistent_output_tensor.value())) {
         return program_factory_t{AllGatherMulticastFactory{}};
     }
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
@@ -427,9 +423,29 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             default: break;  // uncalibrated arch
         }
+    } else if (::tt::tt_fabric::is_2d_fabric_config(fabric_config) && operation_attributes.neighbor_unicast_eligible) {
+        // Apply the established native-ring threshold only after the host has
+        // proved that every collective edge is one physical hop.
+        const auto& input_tensor = tensor_args.input_tensor;
+        const uint64_t num_pages = input_tensor.buffer()->num_pages();
+        const bool large_page = input_tensor.buffer()->page_size() >= 4096;
+        switch (input_tensor.device()->arch()) {
+            case tt::ARCH::WORMHOLE_B0: use_unicast = num_pages >= (large_page ? 20u : 64u); break;
+            case tt::ARCH::BLACKHOLE: use_unicast = !large_page && num_pages >= 128u; break;
+            default: break;
+        }
     }
 
-    return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
+    if (use_unicast) {
+        return program_factory_t{AllGatherUnicastFactory{}};
+    }
+    if (operation_attributes.receiver_policy.test_mode == ReceiverL1TestMode::Auto &&
+        tensor_args.persistent_output_tensor.has_value() &&
+        should_auto_select_receiver_l1_path(
+            operation_attributes, tensor_args, tensor_args.persistent_output_tensor.value())) {
+        return program_factory_t{AllGatherMulticastFactory{}};
+    }
+    return program_factory_t{AllGatherMulticastFactory{}};
 }
 
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
@@ -470,6 +486,14 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
+    const uint32_t active_axis = axis_num_devices[0] > 1 ? 0 : 1;
+    const auto active_topology = axis_topology[active_axis];
+    const bool neighbor_unicast_eligible =
+        one_active_axis && axis_num_links[active_axis] > 0 &&
+        (active_topology == tt::tt_fabric::Topology::Linear || active_topology == tt::tt_fabric::Topology::Ring) &&
+        (!::tt::tt_fabric::is_2d_fabric_config(fabric_config) ||
+         ::ttnn::ccl::logical_axis_has_only_direct_fabric_neighbors(input_tensor, active_axis, active_topology));
 
     log_debug(
         tt::LogOp,
@@ -507,6 +531,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             axis_num_links,
             num_devices,
             packet_size,
+            neighbor_unicast_eligible,
             subdevice_id,
             sub_core_grid,
             receiver_policy,

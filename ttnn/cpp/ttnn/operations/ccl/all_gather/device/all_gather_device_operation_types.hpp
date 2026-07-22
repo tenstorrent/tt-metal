@@ -69,6 +69,10 @@ struct AllGatherParams {
     std::array<uint32_t, 2> axis_num_links{};
     uint32_t num_devices = 0;  // number of devices participating in the collective
     size_t packet_size = 0;
+    // Host-proved structural eligibility for the native store-and-forward
+    // transport. Under Fabric2D every logical edge, including ring wrap, must
+    // be one direct physical neighbor hop.
+    bool neighbor_unicast_eligible = false;
 
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;

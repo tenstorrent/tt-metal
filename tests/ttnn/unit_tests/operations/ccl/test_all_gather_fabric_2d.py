@@ -56,14 +56,28 @@ def _fabric_name(fabric_config):
     raise AssertionError(f"matched ring benchmark received unsupported fabric config {fabric_config}")
 
 
-def _logical_ring_route_diagnostics(mesh_device, fabric_config):
-    """Describe the physical link directions used by every multicast path variant."""
+def _logical_ring_route_diagnostics(mesh_device, fabric_config, neighbor_unicast=False):
+    """Describe physical link directions and packet lifetime for the selected ring transport."""
     direction_names = ("E", "W", "N", "S", "Z")
     ring_size = mesh_device.shape[0]
     assert mesh_device.shape[1] == 1
     forward_hops = (ring_size - 1 + 1) // 2
     backward_hops = ring_size - 1 - forward_hops
     path_variants = set()
+
+    if neighbor_unicast:
+        for source in range(ring_size):
+            for step in (1, -1):
+                neighbor = (source + step) % ring_size
+                src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(source, 0))
+                dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(neighbor, 0))
+                direction = ttnn.get_eth_forwarding_direction(src_node, dst_node)
+                assert direction is not None, f"no physical Fabric route from logical rank {source} to {neighbor}"
+                path_variants.add(direction_names[direction])
+        return (
+            "transport=neighbor_unicast packet_hops=1 relay=tensix "
+            f"edge_directions={','.join(sorted(path_variants))}"
+        )
 
     for source in range(ring_size):
         for step in (1, -1):
@@ -287,16 +301,18 @@ def test_all_gather_interleaved_bank_receiver_schedule_reference(total_pages, ro
         ) * slot_count
 
 
-def _all_gather_profile_ns(mesh_device, run_fn, expected_receiver_l1=None):
+def _all_gather_profile_ns(mesh_device, run_fn, expected_receiver_l1=None, expected_unicast=None):
     """Return one all-gather's device critical path/runtime IDs and verify its implementation path."""
     _, records = profile_realtime_program(mesh_device, run_fn, collect_all=True, record_timeout_seconds=5.0)
     programs = {}
     receiver_l1_observed = False
+    unicast_observed = False
     for record in records:
         normalized_sources = [source.replace("\\", "/") for source in record["kernel_sources"]]
         if not any("/ccl/all_gather/" in source for source in normalized_sources):
             continue
         receiver_l1_observed |= any(source.endswith("/multicast_receiver_writer.cpp") for source in normalized_sources)
+        unicast_observed |= any(source.endswith("/unicast_writer.cpp") for source in normalized_sources)
         runtime_id = record["runtime_id"]
         programs[runtime_id] = max(programs.get(runtime_id, 0.0), record["duration_ns"])
     assert programs, "realtime profiler returned no native all-gather program"
@@ -304,11 +320,13 @@ def _all_gather_profile_ns(mesh_device, run_fn, expected_receiver_l1=None):
         assert (
             receiver_l1_observed == expected_receiver_l1
         ), f"expected receiver_l1={expected_receiver_l1}, observed receiver_l1={receiver_l1_observed}"
+    if expected_unicast is not None:
+        assert unicast_observed == expected_unicast, f"expected unicast={expected_unicast}, observed={unicast_observed}"
     return sum(programs.values()), frozenset(programs)
 
 
-def _all_gather_duration_ns(mesh_device, run_fn, expected_receiver_l1=None):
-    duration_ns, _ = _all_gather_profile_ns(mesh_device, run_fn, expected_receiver_l1)
+def _all_gather_duration_ns(mesh_device, run_fn, expected_receiver_l1=None, expected_unicast=None):
+    duration_ns, _ = _all_gather_profile_ns(mesh_device, run_fn, expected_receiver_l1, expected_unicast)
     return duration_ns
 
 
@@ -618,7 +636,8 @@ def test_all_gather_matched_large_single_axis_correctness(mesh_device, dtype, wi
     if ttnn.device.IsProgramRealtimeProfilerActive():
         tt_output, records = profile_realtime_program(mesh_device, run_ag, collect_all=True, record_timeout_seconds=5.0)
         all_sources = [source.replace("\\", "/") for record in records for source in record["kernel_sources"]]
-        assert any(source.endswith("/multicast_receiver_writer.cpp") for source in all_sources)
+        assert any(source.endswith("/unicast_writer.cpp") for source in all_sources)
+        assert not any(source.endswith("/multicast_receiver_writer.cpp") for source in all_sources)
     else:
         tt_output = run_ag()
         ttnn.synchronize_device(mesh_device)
@@ -909,10 +928,13 @@ def test_all_gather_matched_sparse_mla_row_perf(mesh_device, dtype, width, expec
     perf_sub_core_grid = None
     sp = mesh_device.shape[0]
     selected_pages_per_device = valid_gather_extent or rows_per_device // rows_per_page
-    expected_receiver_l1 = True
+    expected_receiver_l1 = False
+    expected_unicast = True
     packet_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
     assert packet_payload_size == 14 * 1024, f"matched benchmark requires 14336-B payload, got {packet_payload_size}"
-    route_diagnostics = _logical_ring_route_diagnostics(mesh_device, active_fabric_config)
+    route_diagnostics = _logical_ring_route_diagnostics(
+        mesh_device, active_fabric_config, neighbor_unicast=expected_unicast
+    )
     element_size = 1 if dtype == ttnn.fp8_e4m3 else 2
     transport_page_size = ((width * rows_per_page * element_size + 63) // 64) * 64
     if transport_page_size > 14 * 1024:
@@ -964,9 +986,14 @@ def test_all_gather_matched_sparse_mla_row_perf(mesh_device, dtype, width, expec
     # untimed warmups after the callback for the first measured sample is
     # registered. Drain one profiled invocation so every reported sample owns
     # exactly one native all-gather dispatch.
-    _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=expected_receiver_l1)
+    _all_gather_profile_ns(
+        mesh_device, run_ag, expected_receiver_l1=expected_receiver_l1, expected_unicast=expected_unicast
+    )
     profile_samples = [
-        _all_gather_profile_ns(mesh_device, run_ag, expected_receiver_l1=expected_receiver_l1) for _ in range(samples)
+        _all_gather_profile_ns(
+            mesh_device, run_ag, expected_receiver_l1=expected_receiver_l1, expected_unicast=expected_unicast
+        )
+        for _ in range(samples)
     ]
     durations_ns = [duration_ns for duration_ns, _ in profile_samples]
     median_ns = statistics.median(durations_ns)
@@ -977,9 +1004,9 @@ def test_all_gather_matched_sparse_mla_row_perf(mesh_device, dtype, width, expec
     bytes_received_per_rank = selected_pages_per_device * page_size * (sp - 1)
     bandwidth_gbps = bytes_received_per_rank / median_ns
     print(
-        f"ISOLATED_AG policy=automatic path={'receiver_l1' if expected_receiver_l1 else 'direct'} "
-        f"schedule=bank_owned_interleaved batch_rows={receiver_batch_rows} "
-        f"credit=pipelined_group6 drain_riscs={receiver_drain_riscs} terminal_offload=enabled "
+        f"ISOLATED_AG policy=automatic path={'neighbor_unicast' if expected_unicast else 'multicast'} "
+        f"schedule=store_and_forward batch_rows={receiver_batch_rows} "
+        f"credit=data_valid drain_riscs={receiver_drain_riscs} terminal_offload=disabled "
         f"core_rect={perf_core_rect or 'auto'} fabric={perf_fabric_config} l1_small={perf_l1_small_size}B "
         f"packet_payload={packet_payload_size}B {route_diagnostics} "
         f"dtype={dtype} rows_per_device={rows_per_device} rows_per_page={rows_per_page} "

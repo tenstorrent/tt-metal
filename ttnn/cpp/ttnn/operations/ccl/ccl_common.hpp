@@ -42,6 +42,12 @@ tt::tt_fabric::Topology get_axis_topology(
 // is connected by one physical Fabric hop for every group on the other axis.
 bool logical_axis_is_direct_fabric_ring(const Tensor& tensor, uint32_t axis);
 
+// True when every edge used by the requested one-dimensional topology is a
+// direct physical Fabric neighbor edge. Ring validates the wrap edge; Linear
+// intentionally does not.
+bool logical_axis_has_only_direct_fabric_neighbors(
+    const Tensor& tensor, uint32_t axis, tt::tt_fabric::Topology topology);
+
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
 uint32_t get_linearized_index_from_physical_coord(
