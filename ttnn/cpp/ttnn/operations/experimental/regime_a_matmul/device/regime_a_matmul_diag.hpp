@@ -18,8 +18,8 @@ namespace ttnn::experimental::prim {
 // correctness modes — output is intentionally unchecked.
 //
 // The explicit `1u << N` values are STABLE (harness / program-cache compatibility): removed diagnostics leave
-// their bits permanently unused rather than renumbering the survivors. Currently FREE bits: 0, 1, 2, 4, 5, 6,
-// 7, 8, 9, 13, 15, 17, 20, 23, 24, and >=26. (Bits 0/1/2 were skip-in1/in0-read + skip-in0-forward ablations;
+// their bits permanently unused rather than renumbering the survivors. Currently FREE bits: 0, 1, 2, 7, 8, 9,
+// 13, 15, 17, 20, 23, 24, and >=26. (Bits 0/1/2 were skip-in1/in0-read + skip-in0-forward ablations;
 // 4 was a reserved local-feed; 5 was in0-scatter; 6/7 were in0-replicated-ring; 8/9 were in0-direct-exchange
 // — all removed after the in0-delivery study concluded the ring is optimal. Bits 13/15/17 were dominated ring
 // objectives; 20/23/24 never assigned. Recover removed variants from git history if ever needed.)
@@ -29,6 +29,28 @@ enum RegimeADiag : uint32_t {
     // compute / split-K reduce / output. Compile-gated so mask 0 has NO zone overhead (clean baseline); only
     // this bit activates the DeviceZoneScopedN markers. Perturbation = (DIAG_ZONES run - mask-0 run).
     DIAG_ZONES = 1u << 4,
+    // Ring deferred-drain (test-only): replace the phase-1 completion write-barrier with the weakest safe
+    // source-lifetime op (noc_async_writes_flushed) and defer remote-completion to the existing kernel-exit
+    // write+atomic barrier. Hypothesis: the phase-1 barrier's remote-completion is redundant with the
+    // fwd-semaphore protocol (payload->sem ordered, same NoC). Must stay PCC-exact + watcher-clean.
+    DIAG_RINGDRAIN = 1u << 5,
+    // Split-K reduction TOPOLOGY (test-only, Pk==4 ONLY): replace the linear reduction chain
+    // (kk0->kk1->kk2->kk3, critical depth 3) with a fan-in-2 balanced tree (kk0->kk1 and kk2->kk3 at level 0,
+    // then kk1->kk3 at level 1; critical depth 2). kk3 stays the root/is_top DRAM writer. Two disjoint receive
+    // CHANNELS at the root (channel 0 = kk2's partial on red_sem, channel 1 = kk1's summed partial on a second
+    // red_sem2) avoid the single-counter fungibility hazard of a shared semaphore; the root sums them serially
+    // (round 0 then round 1) into the same reduce-add math as the chain, so output is bit-identical (addition
+    // is associative). Host-side topology post-process only (factory rewrites red links + num_recv/channel);
+    // the chain remains the production default and this bit selects the tree A/B. Must stay PCC-exact.
+    // A/B OUTCOME (2026-07-22, fixed-config, 2 reversed batches x 10 relaunches, IQR-separated): the tree does
+    // NOT beat the chain on the reduction-EXPOSED primary 256x2048x1024 (Sm=2) — it REGRESSES +1.07% (the
+    // reduction tail is already overlapped by the 9us matmul floor, so the depth 3->2 saving is smaller than
+    // the tree's extra channel-1 semaphore + serial 2-round root + reduced per-channel reduce-CB buffering).
+    // It is neutral (-0.01%) on the deep-K read-bound control (32x6144x1536), but a real -4.31% WIN on the
+    // tiny shallow 32x2048x512 (Sm=1, minimal compute -> reduction depth is a larger critical-path fraction).
+    // => NOT adopted as the global default (regresses the primary); kept as this diagnostic. The 32x2048x512
+    // win is a candidate for SHAPE-SELECTIVE (picker-gated) tree use — a separate, future decision.
+    DIAG_REDTREE = 1u << 6,
     // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
     // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only

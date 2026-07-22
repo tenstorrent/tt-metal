@@ -485,3 +485,50 @@ The actionable in0 mechanisms other than deferred-drain are foreclosed (scatter/
 chunk all previously tested on this shape); the remaining open question is WHICH ring sub-component causes the
 4.9us — requires ring per-step sub-zones (spec: wrap the step==0 own-read, the noc_semaphore_wait_min recv,
 and the forward write+inc in Z_R_INJECT/Z_R_RECVWAIT/Z_R_FWD).
+
+### [Task 2 — DONE] Pk=4 fan-in-2 reduction TREE: IMPLEMENTED + FIXED-CONFIG A/B (commit dab66853bdc)
+The orchestrator-mandated topology experiment is now BUILT and MEASURED (no longer spec-only). Replaces the
+linear reduction chain (kk0->kk1->kk2->kk3, critical depth 3) with a balanced fan-in-2 tree (kk0->kk1 and
+kk2->kk3 at level 0; kk1->kk3 at level 1; critical depth 2). kk3 stays the is_top DRAM-writing root.
+
+**Implementation** (compile-gated `DIAG_REDTREE` = 1<<6; mask 0 byte-identical, 111/111 public regression):
+- Two DISJOINT root receive channels (ch0=kk2 on `red_sem`, ch1=kk1 on a new `red_sem2`) — avoids the
+  single-counter fungibility hazard of a shared semaphore. Root sums the two partials serially (round 0 then
+  round 1) into the SAME fp32-acc reduce_add math -> output bit-identical (addition associative).
+- Reduce-CB slot = `(nb*parent_nrecv + channel) % 2` matches the receiver's per-round FIFO reservation for
+  both parent kinds (inner nrecv=1 => nb%2 double-buffered like the chain; root nrecv=2 => channel-fixed
+  slots 0/1). No CB-size change; existing 2-slot cb_reduce reused (1 slot per channel at the root).
+- Host topology post-process in the factory (`TT_FATAL Pk!=4`); `build_plan` gained generalized
+  `num_recv`/`red_channel`/`red_parent_nrecv`/`red_src_idx[2]` with CHAIN defaults. Writer: dual-channel
+  serial-rounds receive loop + slot-formula forward. Compute: `num_recv` reduce-add rounds (in_place then
+  final -> out_cb). Deadlock-free by construction (credits flow kk3->kk2, kk3->kk1, kk1->kk0; no cycle).
+
+**Correctness gate PASS:** random-operand PCC 0.99999 fresh+cached (Pk4/Sm2, tree vs f32 golden);
+constant-input max_rel_err 0.00000; 10/10 watcher-clean stress relaunches; all diag-suite mask-0/ring/
+placement correctness tests unaffected; 111/111 `test_regime_a_matmul.py`.
+
+**A/B (chain mask 0 vs tree mask 64; SAME Pk=4 config; 2 reversed batches x 10 relaunches = 20 samples each;
+`tools/mm_sweep/ab_redtree.py` -> `ab_redtree_results.json`):**
+| shape | cfg (Ns,Pk,Sm,kb,nsb) | chain us | tree us | delta (tree vs chain) | IQR-separated? |
+|---|---|---|---|---|---|
+| **primary 256x2048x1024** | (1,4,2,2,4) | 22.38 [22.21,22.51] | 22.62 [22.54,22.78] | **+1.07% (SLOWER)** | yes |
+| small 32x2048x512 | (1,4,1,2,2) | 7.52 [7.48,7.58] | 7.20 [7.18,7.22] | **-4.31% (FASTER)** | yes |
+| neutral 32x6144x1536 | (1,4,1,2,3) | 42.68 [42.57,42.79] | 42.68 [42.57,42.84] | -0.01% (neutral) | no (overlap) |
+
+**Verdict — hypothesis CLOSED by A/B (REFUTED on the primary):** the depth-2 tree does NOT beat the depth-3
+chain on 256x2048x1024; it REGRESSES +1.07% (IQR-separated, not noise). Mechanism: the reduction tail is
+already overlapped by the 9us matmul floor (NO_REDUCE combined ceiling was small), so the depth 3->2 saving
+is smaller than the tree's added cost (channel-1 semaphore + serial 2-round root + 1-slot-per-channel reduce
+buffering vs the chain's 2-slot single-channel double buffer). The deferred design's ~5%/1.2us estimate does
+NOT materialize. The neutral control (-0.01%) confirms the method: where reduction fully overlaps the DRAM
+read (deep-K), the tree adds zero overhead, so the primary's +1.07% is a genuine reduction-path effect.
+
+**Decision:** NOT adopted as the global default (regresses the primary -> fails the "no regression" gate).
+Chain stays production default (already the state — the tree is compile-gated diagnostic-only). Recovery hash
+= dab66853bdc.
+
+**New finding for the orchestrator (NOT acted on — different shape):** the tree is a CONFIRMED -4.31% win on
+32x2048x512, whose PRODUCTION auto-config is already Pk=4 (2,4,1,2,1). The win concentrates on tiny/shallow
+low-AI Pk=4 shapes (Sm=1, minimal compute -> reduction depth is a larger critical-path fraction). This is a
+candidate for SHAPE-SELECTIVE (picker-gated) tree use — a separate decision, out of scope for the
+256x2048x1024 mandate.
