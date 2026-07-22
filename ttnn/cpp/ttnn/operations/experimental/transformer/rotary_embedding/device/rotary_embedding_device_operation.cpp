@@ -151,6 +151,7 @@ ttsl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
         args.seq_len,
         args.token_idx.has_value(),
         args.output_mem_config,
+        args.compute_kernel_config,
         tensor_args.input,
         tensor_args.cos,
         tensor_args.sin);
